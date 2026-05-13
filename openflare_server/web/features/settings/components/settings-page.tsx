@@ -21,9 +21,11 @@ import { getPublicStatus } from '@/features/auth/api/public';
 import {
   bindEmail,
   cleanupDatabaseObservability,
+  deleteExternalAccountBinding,
   generateAccessToken,
   getAuthSources,
   getBootstrapToken,
+  getExternalAccountBindings,
   getOptions,
   getSettingsProfile,
   lookupGeoIP,
@@ -55,6 +57,10 @@ import { formatDateTime } from '@/lib/utils/date';
 
 const settingsQueryKey = ['settings', 'options'] as const;
 const authSourcesQueryKey = ['settings', 'auth-sources'] as const;
+const externalAccountBindingsQueryKey = [
+  'settings',
+  'external-accounts',
+] as const;
 const installerScriptUrl =
   'https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh';
 
@@ -268,6 +274,11 @@ export function SettingsPage() {
   const profileQuery = useQuery({
     queryKey: ['settings', 'profile'],
     queryFn: getSettingsProfile,
+  });
+
+  const externalAccountsQuery = useQuery({
+    queryKey: externalAccountBindingsQueryKey,
+    queryFn: getExternalAccountBindings,
   });
 
   const optionsQuery = useQuery({
@@ -642,6 +653,19 @@ export function SettingsPage() {
     });
   };
 
+  const handleUnbindAuthSource = (id: number, label: string) => {
+    if (!window.confirm(`确定解绑「${label}」吗？`)) {
+      return;
+    }
+    void runBusyAction(`auth-source-unbind-${id}`, async () => {
+      await deleteExternalAccountBinding(id);
+      await queryClient.invalidateQueries({
+        queryKey: externalAccountBindingsQueryKey,
+      });
+      setFeedback({ tone: 'success', message: '第三方账号已解绑。' });
+    });
+  };
+
   const handleToggleOption = (
     key: keyof typeof systemFields,
     nextValue: boolean,
@@ -676,8 +700,21 @@ export function SettingsPage() {
       );
     }
 
+    if (externalAccountsQuery.isError) {
+      return (
+        <ErrorState
+          title="账号绑定加载失败"
+          description={getErrorMessage(externalAccountsQuery.error)}
+        />
+      );
+    }
+
     const publicStatus = publicStatusQuery.data;
     const profile = profileQuery.data;
+    const externalAccounts = externalAccountsQuery.data ?? [];
+    const externalAccountMap = new Map(
+      externalAccounts.map((account) => [account.auth_source_name, account]),
+    );
 
     if (!publicStatus || !profile) {
       return (
@@ -832,18 +869,73 @@ export function SettingsPage() {
                     登录状态下发起授权会直接绑定到当前账号。
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-3">
+                <div className="space-y-3">
                   {(publicStatus.auth_sources ?? []).length > 0 ? (
-                    publicStatus.auth_sources.map((source) => (
-                      <PrimaryButton
-                        key={source.id}
-                        type="button"
-                        onClick={() => handleBindAuthSource(source.name)}
-                        disabled={busyKey === `auth-source-bind-${source.name}`}
-                      >
-                        绑定 {source.display_name || source.name}
-                      </PrimaryButton>
-                    ))
+                    publicStatus.auth_sources.map((source) => {
+                      const binding = externalAccountMap.get(source.name);
+                      const label = source.display_name || source.name;
+
+                      return (
+                        <div
+                          key={source.id}
+                          className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] px-4 py-3"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0 space-y-1">
+                              <p className="text-sm font-medium text-[var(--foreground-primary)]">
+                                {label}
+                              </p>
+                              {binding ? (
+                                <>
+                                  <p className="text-sm break-all text-[var(--foreground-secondary)]">
+                                    已绑定：
+                                    {binding.external_username ||
+                                      binding.email ||
+                                      '第三方账号'}
+                                  </p>
+                                  {binding.email ? (
+                                    <p className="text-xs break-all text-[var(--foreground-muted)]">
+                                      邮箱：{binding.email}
+                                    </p>
+                                  ) : null}
+                                  <p className="text-xs text-[var(--foreground-muted)]">
+                                    绑定时间：
+                                    {formatDateTime(binding.created_at)}
+                                  </p>
+                                </>
+                              ) : (
+                                <p className="text-sm text-[var(--foreground-secondary)]">
+                                  未绑定
+                                </p>
+                              )}
+                            </div>
+                            {binding ? (
+                              <DangerButton
+                                type="button"
+                                onClick={() =>
+                                  handleUnbindAuthSource(binding.id, label)
+                                }
+                                disabled={
+                                  busyKey === `auth-source-unbind-${binding.id}`
+                                }
+                              >
+                                解绑
+                              </DangerButton>
+                            ) : (
+                              <PrimaryButton
+                                type="button"
+                                onClick={() => handleBindAuthSource(source.name)}
+                                disabled={
+                                  busyKey === `auth-source-bind-${source.name}`
+                                }
+                              >
+                                绑定 {label}
+                              </PrimaryButton>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
                   ) : (
                     <span className="text-sm text-[var(--foreground-secondary)]">
                       当前未启用认证源。

@@ -16,6 +16,8 @@ OpenFlare 支持通过认证源配置第三方登录入口。当前支持 GitHub
 | Client Secret | 第三方平台创建应用后提供 |
 | OIDC Discovery URL | 仅 OIDC 需要，例如 `https://idp.example.com/.well-known/openid-configuration` |
 
+**确认系统设置->通用设置->服务器地址能正确和域名匹配**
+
 认证源名称只能包含字母、数字、短横线或下划线，并且必须以字母或数字开头。认证源名称会出现在回调地址中，保存后如需修改名称，也必须同步修改第三方平台中的回调地址。
 
 ## 回调地址

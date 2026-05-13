@@ -25,6 +25,17 @@ export interface AuthSource {
   icon_url: string;
 }
 
+export interface ExternalAccountBinding {
+  id: number;
+  auth_source_id: number;
+  auth_source_name: string;
+  auth_source_type: AuthSourceType;
+  auth_source_label: string;
+  external_username: string;
+  email: string;
+  created_at: string;
+}
+
 export type AuthSourcePayload = Omit<
   AuthSource,
   'id' | 'client_secret_configured'

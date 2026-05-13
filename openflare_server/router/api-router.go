@@ -24,6 +24,12 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/:source/authorize", middleware.CriticalRateLimit(), controller.OAuthAuthorize)
 		apiRouter.GET("/oauth/:source/callback", middleware.CriticalRateLimit(), controller.OAuthCallback)
 		apiRouter.POST("/oauth/link-existing", middleware.CriticalRateLimit(), controller.LinkExistingOAuthAccount)
+		externalAccountRoute := apiRouter.Group("/oauth/external-accounts")
+		externalAccountRoute.Use(middleware.UserAuth(), middleware.NoTokenAuth())
+		{
+			externalAccountRoute.GET("/", controller.ListExternalAccounts)
+			externalAccountRoute.POST("/:id/delete", controller.DeleteExternalAccount)
+		}
 
 		userRoute := apiRouter.Group("/user")
 		{

@@ -269,6 +269,57 @@ func TestAuthSourceUpdateAcceptsClientSecret(t *testing.T) {
 	})
 }
 
+func TestExternalAccountBindingsCanBeListedAndDeleted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	loginCookie := loginAsRoot(t, engine)
+
+	source := &model.AuthSource{
+		Name:               "logto",
+		Type:               model.AuthSourceTypeOIDC,
+		DisplayName:        "Logto",
+		ClientID:           "logto-client-id",
+		ClientSecret:       "logto-client-secret",
+		OpenIDDiscoveryURL: "https://auth.example.com/.well-known/openid-configuration",
+	}
+	if err := model.CreateAuthSource(source); err != nil {
+		t.Fatalf("create auth source: %v", err)
+	}
+	if err := model.LinkExternalAccount(&model.ExternalAccount{
+		AuthSourceID:     source.ID,
+		UserID:           1,
+		ExternalID:       "logto-user-1",
+		ExternalUsername: "ryan",
+		Email:            "ryan@example.com",
+	}); err != nil {
+		t.Fatalf("link external account: %v", err)
+	}
+
+	listResp := performSessionJSONRequest(t, engine, loginCookie, http.MethodGet, "/api/oauth/external-accounts/", nil)
+	var bindings []model.ExternalAccountView
+	decodeResponseData(t, listResp, &bindings)
+	if len(bindings) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(bindings))
+	}
+	if bindings[0].AuthSourceName != "logto" || bindings[0].ExternalUsername != "ryan" {
+		t.Fatalf("unexpected binding view: %+v", bindings[0])
+	}
+
+	performSessionJSONRequest(t, engine, loginCookie, http.MethodPost, "/api/oauth/external-accounts/1/delete", nil)
+
+	listResp = performSessionJSONRequest(t, engine, loginCookie, http.MethodGet, "/api/oauth/external-accounts/", nil)
+	decodeResponseData(t, listResp, &bindings)
+	if len(bindings) != 0 {
+		t.Fatalf("expected binding to be deleted, got %+v", bindings)
+	}
+}
+
 func loginAsRoot(t *testing.T, engine http.Handler) *http.Cookie {
 	t.Helper()
 	payload, err := json.Marshal(map[string]any{

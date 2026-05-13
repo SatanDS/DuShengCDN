@@ -269,6 +269,30 @@ func LinkExistingOAuthAccount(c *gin.Context) {
 	respondSuccess(c, service.OAuthCallbackResult{Status: "linked", User: cleanUser})
 }
 
+func ListExternalAccounts(c *gin.Context) {
+	userID := c.GetInt("id")
+	accounts, err := model.ListExternalAccountsByUserID(userID)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, accounts)
+}
+
+func DeleteExternalAccount(c *gin.Context) {
+	rawID := strings.TrimSpace(c.Param("id"))
+	parsedID, err := strconv.ParseUint(rawID, 10, 64)
+	if err != nil || parsedID == 0 {
+		respondBadRequest(c, "绑定记录 ID 无效")
+		return
+	}
+	if err := model.DeleteExternalAccountForUser(uint(parsedID), c.GetInt("id")); err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccessMessage(c, "")
+}
+
 func parseAuthSourceID(c *gin.Context) (uint, error) {
 	raw := c.Param("source_id")
 	if raw == "" {

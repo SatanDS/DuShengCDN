@@ -44,6 +44,17 @@ type ExternalAccount struct {
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
+type ExternalAccountView struct {
+	ID               uint      `json:"id"`
+	AuthSourceID     uint      `json:"auth_source_id"`
+	AuthSourceName   string    `json:"auth_source_name"`
+	AuthSourceType   string    `json:"auth_source_type"`
+	AuthSourceLabel  string    `json:"auth_source_label"`
+	ExternalUsername string    `json:"external_username"`
+	Email            string    `json:"email"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 func (source *AuthSource) Normalize() {
 	source.Name = strings.TrimSpace(source.Name)
 	source.Type = strings.TrimSpace(strings.ToLower(source.Type))
@@ -215,4 +226,49 @@ func LinkExternalAccount(account *ExternalAccount) error {
 		AuthSourceID: account.AuthSourceID,
 		ExternalID:   account.ExternalID,
 	}).FirstOrCreate(account).Error
+}
+
+func ListExternalAccountsByUserID(userID int) ([]ExternalAccountView, error) {
+	if userID <= 0 {
+		return nil, errors.New("用户 ID 不能为空")
+	}
+	var accounts []ExternalAccount
+	if err := DB.Preload("AuthSource").Where("user_id = ?", userID).Order("id asc").Find(&accounts).Error; err != nil {
+		return nil, err
+	}
+	views := make([]ExternalAccountView, 0, len(accounts))
+	for _, account := range accounts {
+		label := account.AuthSource.DisplayName
+		if label == "" {
+			label = account.AuthSource.Name
+		}
+		views = append(views, ExternalAccountView{
+			ID:               account.ID,
+			AuthSourceID:     account.AuthSourceID,
+			AuthSourceName:   account.AuthSource.Name,
+			AuthSourceType:   account.AuthSource.Type,
+			AuthSourceLabel:  label,
+			ExternalUsername: account.ExternalUsername,
+			Email:            account.Email,
+			CreatedAt:        account.CreatedAt,
+		})
+	}
+	return views, nil
+}
+
+func DeleteExternalAccountForUser(id uint, userID int) error {
+	if id == 0 {
+		return errors.New("绑定记录 ID 不能为空")
+	}
+	if userID <= 0 {
+		return errors.New("用户 ID 不能为空")
+	}
+	result := DB.Where("id = ? AND user_id = ?", id, userID).Delete(&ExternalAccount{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("绑定记录不存在")
+	}
+	return nil
 }

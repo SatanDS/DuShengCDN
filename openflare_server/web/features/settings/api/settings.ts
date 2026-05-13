@@ -6,6 +6,7 @@ import type {
   AuthSourcePayload,
   DatabaseCleanupPayload,
   DatabaseCleanupResult,
+  ExternalAccountBinding,
   GeoIPLookupResult,
   OptionBatchPayload,
   OptionItem,
@@ -72,6 +73,16 @@ export function toggleAuthSource(id: number, isActive: boolean) {
 
 export function deleteAuthSource(id: number) {
   return apiRequest<void>(`/auth-sources/${id}/delete`, {
+    method: 'POST',
+  });
+}
+
+export function getExternalAccountBindings() {
+  return apiRequest<ExternalAccountBinding[]>('/oauth/external-accounts/');
+}
+
+export function deleteExternalAccountBinding(id: number) {
+  return apiRequest<void>(`/oauth/external-accounts/${id}/delete`, {
     method: 'POST',
   });
 }
