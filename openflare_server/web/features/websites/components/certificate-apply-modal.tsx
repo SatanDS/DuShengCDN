@@ -182,12 +182,21 @@ export function CertificateApplyModal({
           </ResourceField>
         </div>
 
-        <ResourceField
-          label="备注"
-          error={form.formState.errors.remark?.message}
-        >
-          <ResourceInput placeholder="可选，用于记录证书用途。" {...form.register('remark')} />
-        </ResourceField>
+        <div className="grid gap-4 md:grid-cols-1">
+          <ResourceField
+            label="备注"
+            error={form.formState.errors.remark?.message}
+          >
+            <ResourceInput placeholder="可选，用于记录证书用途。" {...form.register('remark')} />
+          </ResourceField>
+
+          <ToggleField
+            label="开启自动续签"
+            description="开启后，将在证书过期前 7 天自动续期。"
+            checked={form.watch('auto_renew')}
+            onChange={(checked) => form.setValue('auto_renew', checked)}
+          />
+        </div>
 
         <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] overflow-hidden">
           <button
