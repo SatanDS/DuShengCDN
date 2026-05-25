@@ -38,3 +38,10 @@ export function activateConfigVersion(id: number) {
     method: 'POST',
   });
 }
+
+export function cleanupConfigVersions(payload: { keep_count: number }) {
+  return apiRequest<{ deleted_count: number }>('/config-versions/cleanup', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}

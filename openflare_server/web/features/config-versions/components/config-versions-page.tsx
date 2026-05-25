@@ -17,8 +17,10 @@ import {
   getConfigVersionPreview,
   getConfigVersions,
   publishConfigVersion,
+  cleanupConfigVersions,
 } from '@/features/config-versions/api/config-versions';
 import { ConfigVersionSnapshotModal } from '@/features/config-versions/components/config-version-snapshot-modal';
+import { CleanupConfigVersionsModal } from '@/features/config-versions/components/cleanup-config-versions-modal';
 import type {
   ConfigOptionDiffItem,
   ConfigDiffResult,
@@ -404,6 +406,7 @@ export function ConfigVersionsPage() {
     diff: ConfigDiffResult;
   } | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isCleanupModalOpen, setIsCleanupModalOpen] = useState(false);
 
   const versionsQuery = useQuery({
     queryKey: versionsQueryKey,
@@ -455,6 +458,21 @@ export function ConfigVersionsPage() {
         message: `已激活版本 ${version.version}`,
       });
       setSelectedVersionId(version.id);
+      await queryClient.invalidateQueries({ queryKey: versionsQueryKey });
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+
+  const cleanupMutation = useMutation({
+    mutationFn: cleanupConfigVersions,
+    onSuccess: async (data) => {
+      setFeedback({
+        tone: 'success',
+        message: `成功清理 ${data.deleted_count} 个历史快照`,
+      });
+      setIsCleanupModalOpen(false);
       await queryClient.invalidateQueries({ queryKey: versionsQueryKey });
     },
     onError: (error) => {
@@ -535,16 +553,24 @@ export function ConfigVersionsPage() {
           title="历史版本"
           description="发布成功后会立即刷新列表，不再需要手动刷新页面。"
           action={
-            <SecondaryButton
-              type="button"
-              onClick={() =>
-                void queryClient.invalidateQueries({
-                  queryKey: versionsQueryKey,
-                })
-              }
-            >
-              刷新列表
-            </SecondaryButton>
+            <div className="flex gap-2">
+              <SecondaryButton
+                type="button"
+                onClick={() => setIsCleanupModalOpen(true)}
+              >
+                清理旧版本
+              </SecondaryButton>
+              <SecondaryButton
+                type="button"
+                onClick={() =>
+                  void queryClient.invalidateQueries({
+                    queryKey: versionsQueryKey,
+                  })
+                }
+              >
+                刷新列表
+              </SecondaryButton>
+            </div>
           }
         >
           {versionsQuery.isLoading ? (
@@ -629,6 +655,13 @@ export function ConfigVersionsPage() {
       <ConfigVersionSnapshotModal
         version={selectedVersion}
         onClose={() => setSelectedVersionId(null)}
+      />
+
+      <CleanupConfigVersionsModal
+        isOpen={isCleanupModalOpen}
+        onClose={() => setIsCleanupModalOpen(false)}
+        onConfirm={(keepCount) => cleanupMutation.mutate({ keep_count: keepCount })}
+        isPending={cleanupMutation.isPending}
       />
     </>
   );

@@ -406,6 +406,34 @@ func ActivateConfigVersion(id uint) (*model.ConfigVersion, error) {
 	return version, nil
 }
 
+func CleanupConfigVersions(keepCount int) (int64, error) {
+	if keepCount < 3 {
+		keepCount = 3
+	}
+	var versions []model.ConfigVersion
+	if err := model.DB.Select("id", "is_active").Order("id desc").Find(&versions).Error; err != nil {
+		return 0, err
+	}
+	if len(versions) <= keepCount {
+		return 0, nil
+	}
+	var deleteIDs []uint
+	for i, v := range versions {
+		if i < keepCount {
+			continue
+		}
+		if v.IsActive {
+			continue
+		}
+		deleteIDs = append(deleteIDs, v.ID)
+	}
+	if len(deleteIDs) == 0 {
+		return 0, nil
+	}
+	result := model.DB.Where("id IN ?", deleteIDs).Delete(&model.ConfigVersion{})
+	return result.RowsAffected, result.Error
+}
+
 func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 	routes, err := model.GetEnabledProxyRoutes()
 	if err != nil {

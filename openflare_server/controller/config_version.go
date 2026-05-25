@@ -189,3 +189,42 @@ func ActivateConfigVersion(c *gin.Context) {
 		"data":    version,
 	})
 }
+
+type CleanupConfigVersionRequest struct {
+	KeepCount int `json:"keep_count" binding:"required,min=3"`
+}
+
+// CleanupConfigVersions godoc
+// @Summary Cleanup old config versions
+// @Tags ConfigVersions
+// @Produce json
+// @Security BearerAuth
+// @Param request body CleanupConfigVersionRequest true "Cleanup request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/config-versions/cleanup [post]
+func CleanupConfigVersions(c *gin.Context) {
+	var req CleanupConfigVersionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "参数错误",
+		})
+		return
+	}
+
+	deletedCount, err := service.CleanupConfigVersions(req.KeepCount)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "清理成功",
+		"data":    map[string]interface{}{"deleted_count": deletedCount},
+	})
+}

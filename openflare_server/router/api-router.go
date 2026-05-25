@@ -149,6 +149,7 @@ func SetApiRouter(router *gin.Engine) {
 			configVersionRoute.GET("/:id", controller.GetConfigVersion)
 			configVersionRoute.POST("/publish", controller.PublishConfigVersion)
 			configVersionRoute.POST("/:id/activate", controller.ActivateConfigVersion)
+			configVersionRoute.POST("/cleanup", controller.CleanupConfigVersions)
 		}
 		dashboardRoute := apiRouter.Group("/dashboard")
 		dashboardRoute.Use(middleware.AdminAuth())
