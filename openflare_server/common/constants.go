@@ -71,6 +71,7 @@ var OpenRestyClientBodyTimeout = 15
 var OpenRestyClientMaxBodySize = "64m"
 var OpenRestyLargeClientHeaderBuffers = "4 16k"
 var OpenRestySendTimeout = 30
+var OpenRestyResolvers = ""
 var OpenRestyProxyConnectTimeout = 3
 var OpenRestyProxySendTimeout = 60
 var OpenRestyProxyReadTimeout = 60
@@ -127,7 +128,7 @@ http {
     gzip {{OpenRestyGzip}};
     gzip_min_length {{OpenRestyGzipMinLength}};
     gzip_comp_level {{OpenRestyGzipCompLevel}};
-{{OpenRestyCacheBlock}}    include {{OpenRestyRouteConfigInclude}};
+{{OpenRestyResolverDirective}}{{OpenRestyCacheBlock}}    include {{OpenRestyRouteConfigInclude}};
 }
 `
 

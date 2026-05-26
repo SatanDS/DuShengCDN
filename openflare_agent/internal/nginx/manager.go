@@ -213,6 +213,7 @@ func (e *DockerExecutor) runContainer(ctx context.Context) error {
 	runArgs := []string{
 		"run", "-d",
 		"--name", e.ContainerName,
+		"--restart", "always",
 		"-p", "80:80",
 		"-p", "443:443",
 		"-p", fmt.Sprintf("127.0.0.1:%d:%d", e.OpenrestyObservabilityPort, e.OpenrestyObservabilityPort),

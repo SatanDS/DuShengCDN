@@ -65,6 +65,7 @@ const defaultPerformanceFields = {
     OpenRestyCacheLockTimeout: '5s',
     OpenRestyCacheUseStale:
         'error timeout updating http_500 http_502 http_503 http_504',
+    OpenRestyResolvers: '',
 };
 
 const performanceFieldTooltips: Record<string, string> = {
@@ -114,6 +115,8 @@ const performanceFieldTooltips: Record<string, string> = {
     proxy_cache_lock_timeout: '等待缓存锁的最长时间，例如 5s。',
     proxy_cache_use_stale:
         '上游异常时允许返回旧缓存的条件列表，例如 error、timeout、http_500。',
+    resolvers:
+        '自定义 DNS 解析器，留空表示不配置。若配置，当上游源站需要动态解析且 DNS 服务器失效时，能防止容器异常挂掉。例如：1.1.1.1 8.8.8.8',
 };
 
 type PerformanceTab = 'settings' | 'editor';
@@ -256,6 +259,7 @@ export function PerformancePage() {
             OpenRestyCacheUseStale:
                 optionMap.OpenRestyCacheUseStale ??
                 'error timeout updating http_500 http_502 http_503 http_504',
+            OpenRestyResolvers: optionMap.OpenRestyResolvers ?? '',
         });
         setTemplateContent(optionMap.OpenRestyMainConfigTemplate ?? '');
     }, [optionsQuery.data]);
@@ -332,6 +336,10 @@ export function PerformancePage() {
                     [
                         'OpenRestyWorkerProcesses',
                         performanceFields.OpenRestyWorkerProcesses.trim(),
+                    ],
+                    [
+                        'OpenRestyResolvers',
+                        performanceFields.OpenRestyResolvers.trim(),
                     ],
                     [
                         'OpenRestyWorkerConnections',
@@ -689,6 +697,22 @@ export function PerformancePage() {
                         }
                     >
                         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                            <ResourceField
+                                label="自定义 DNS (resolver)"
+                                hint="例如：1.1.1.1 8.8.8.8"
+                                tooltip={performanceFieldTooltips.resolvers}
+                            >
+                                <ResourceInput
+                                    value={performanceFields.OpenRestyResolvers}
+                                    onChange={(event) =>
+                                        setPerformanceFields((previous) => ({
+                                            ...previous,
+                                            OpenRestyResolvers: event.target.value,
+                                        }))
+                                    }
+                                    placeholder="留空表示不配置"
+                                />
+                            </ResourceField>
                             <ResourceField
                                 label="worker_processes"
                                 tooltip={performanceFieldTooltips.worker_processes}

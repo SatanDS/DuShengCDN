@@ -133,6 +133,7 @@ type openRestyConfigSnapshot struct {
 	GzipEnabled              bool   `json:"gzip_enabled"`
 	GzipMinLength            int    `json:"gzip_min_length"`
 	GzipCompLevel            int    `json:"gzip_comp_level"`
+	Resolvers                string `json:"resolvers,omitempty"`
 	CacheEnabled             bool   `json:"cache_enabled"`
 	CachePath                string `json:"cache_path,omitempty"`
 	CacheLevels              string `json:"cache_levels"`
@@ -766,6 +767,7 @@ func buildOpenRestyConfigSnapshot() openRestyConfigSnapshot {
 		GzipEnabled:              common.OpenRestyGzipEnabled,
 		GzipMinLength:            common.OpenRestyGzipMinLength,
 		GzipCompLevel:            common.OpenRestyGzipCompLevel,
+		Resolvers:                common.OpenRestyResolvers,
 		CacheEnabled:             common.OpenRestyCacheEnabled,
 		CachePath:                common.OpenRestyCachePath,
 		CacheLevels:              common.OpenRestyCacheLevels,
@@ -827,6 +829,7 @@ func diffOpenRestyOptionDetails(left openRestyConfigSnapshot, right openRestyCon
 	appendIfChanged("OpenRestyGzipEnabled", fmt.Sprintf("%t", left.GzipEnabled), fmt.Sprintf("%t", right.GzipEnabled))
 	appendIfChanged("OpenRestyGzipMinLength", fmt.Sprintf("%d", left.GzipMinLength), fmt.Sprintf("%d", right.GzipMinLength))
 	appendIfChanged("OpenRestyGzipCompLevel", fmt.Sprintf("%d", left.GzipCompLevel), fmt.Sprintf("%d", right.GzipCompLevel))
+	appendIfChanged("OpenRestyResolvers", left.Resolvers, right.Resolvers)
 	appendIfChanged("OpenRestyCacheEnabled", fmt.Sprintf("%t", left.CacheEnabled), fmt.Sprintf("%t", right.CacheEnabled))
 	appendIfChanged("OpenRestyCachePath", left.CachePath, right.CachePath)
 	appendIfChanged("OpenRestyCacheLevels", left.CacheLevels, right.CacheLevels)
@@ -1063,7 +1066,7 @@ func renderMainConfigTemplate(templateText string, cfg openRestyConfigSnapshot) 
 		"{{OpenRestyGzip}}", onOff(cfg.GzipEnabled),
 		"{{OpenRestyGzipMinLength}}", fmt.Sprintf("%d", cfg.GzipMinLength),
 		"{{OpenRestyGzipCompLevel}}", fmt.Sprintf("%d", cfg.GzipCompLevel),
-		"{{OpenRestyResolverDirective}}", "",
+		"{{OpenRestyResolverDirective}}", renderTemplateDirective(cfg.Resolvers != "", fmt.Sprintf("resolver %s;", cfg.Resolvers)),
 		"{{OpenRestyCacheBlock}}", renderOpenRestyCacheTemplateBlock(cfg),
 		"{{OpenRestyRouteConfigInclude}}", nginxRouteConfigPlaceholder,
 	)

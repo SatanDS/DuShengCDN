@@ -153,11 +153,6 @@ func updateOptionMap(key string, value string) {
 		common.OptionMap = make(map[string]string)
 	}
 	common.OptionMap[key] = value
-	if key == "OpenRestyResolvers" {
-		delete(common.OptionMap, key)
-		common.OptionMapRWMutex.Unlock()
-		return
-	}
 	if strings.HasSuffix(key, "Permission") {
 		intValue, _ := strconv.Atoi(value)
 		switch key {

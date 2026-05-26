@@ -399,6 +399,7 @@ func TestDockerExecutorRunContainerMountsManagedFiles(t *testing.T) {
 	expectedArgs := []string{
 		"run", "-d",
 		"--name", "openflare-openresty",
+		"--restart", "always",
 		"-p", "80:80",
 		"-p", "443:443",
 		"-p", "127.0.0.1:18081:18081",

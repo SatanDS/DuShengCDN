@@ -133,7 +133,13 @@ func validateOpenRestyOption(key string, value string) error {
 			return fmt.Errorf("%s 仅支持 epoll、kqueue、poll、select、rtsig、/dev/poll、eventport 或留空", key)
 		}
 	case "OpenRestyResolvers":
-		return fmt.Errorf("%s 已废弃，不再支持配置 resolver", key)
+		if trimmed == "" {
+			return nil
+		}
+		if !regexp.MustCompile(`^[a-zA-Z0-9.:\-\s]+$`).MatchString(trimmed) {
+			return fmt.Errorf("%s 包含非法字符，请填入有效的 IP 地址或域名，以空格分隔", key)
+		}
+		return nil
 	case "OpenRestyEventsMultiAcceptEnabled",
 		"OpenRestyWebsocketEnabled",
 		"OpenRestyProxyRequestBufferingEnabled",
