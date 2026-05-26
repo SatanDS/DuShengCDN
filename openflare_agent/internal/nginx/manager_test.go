@@ -722,10 +722,9 @@ func TestManagerApplyWritesSupportFilesAndReplacesPlaceholder(t *testing.T) {
 		Executor:                     &fakeExecutor{},
 	}
 
-	outcome := manager.Apply(context.Background(), "include __OPENFLARE_ROUTE_CONFIG__;\n__OPENFLARE_RESOLVER_DIRECTIVE__server { listen __OPENFLARE_OBSERVABILITY_LISTEN__; }", "ssl_certificate __OPENFLARE_CERT_DIR__/1.crt;\nauth_basic_user_file __OPENFLARE_CERT_DIR__/basic_auth/site.htpasswd;", []protocol.SupportFile{
+	outcome := manager.Apply(context.Background(), "include __OPENFLARE_ROUTE_CONFIG__;\n__OPENFLARE_RESOLVER_DIRECTIVE__server { listen __OPENFLARE_OBSERVABILITY_LISTEN__; }", "ssl_certificate __OPENFLARE_CERT_DIR__/1.crt;", []protocol.SupportFile{
 		{Path: "1.crt", Content: "cert-data"},
 		{Path: "1.key", Content: "key-data"},
-		{Path: "basic_auth/site.htpasswd", Content: "admin:{PLAIN}123\n"},
 	})
 	if outcome.Status != ApplyStatusSuccess {
 		t.Fatalf("Apply failed: %#v", outcome)
@@ -737,9 +736,6 @@ func TestManagerApplyWritesSupportFilesAndReplacesPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(string(routeData), "/etc/nginx/openflare-certs/1.crt") {
 		t.Fatalf("expected placeholder replacement in route config, got %s", string(routeData))
-	}
-	if !strings.Contains(string(routeData), "/etc/nginx/openflare-certs/basic_auth/site.htpasswd") {
-		t.Fatalf("expected basic auth file placeholder replacement in route config, got %s", string(routeData))
 	}
 	renderedRoute := manager.renderRouteConfig("access_by_lua_file __OPENFLARE_LUA_DIR__/pow/check.lua;\nlocation /.within.website/x/cmd/anubis/static/ { alias __OPENFLARE_POW_STATIC_DIR__/; }\n")
 	if !strings.Contains(renderedRoute, "access_by_lua_file /etc/nginx/openflare-lua/pow/check.lua;") {
@@ -764,13 +760,6 @@ func TestManagerApplyWritesSupportFilesAndReplacesPlaceholder(t *testing.T) {
 	}
 	if string(certData) != "cert-data" {
 		t.Fatalf("unexpected cert file content: %s", string(certData))
-	}
-	basicAuthData, err := os.ReadFile(filepath.Join(manager.CertDir, "basic_auth", "site.htpasswd"))
-	if err != nil {
-		t.Fatalf("failed to read basic auth file: %v", err)
-	}
-	if string(basicAuthData) != "admin:{PLAIN}123\n" {
-		t.Fatalf("unexpected basic auth file content: %s", string(basicAuthData))
 	}
 	luaInfo, err := os.Stat(filepath.Join(manager.LuaDir, "log.lua"))
 	if err != nil {
@@ -902,7 +891,6 @@ func TestCertFileMode(t *testing.T) {
 		{path: "1.crt", want: 0o644},
 		{path: "1.pem", want: 0o644},
 		{path: "1.key", want: 0o600},
-		{path: "basic_auth/site.htpasswd", want: 0o600},
 		{path: "misc.txt", want: 0o644},
 	}
 

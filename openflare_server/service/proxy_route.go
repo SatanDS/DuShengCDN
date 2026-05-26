@@ -271,12 +271,6 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		if input.BasicAuthUsername == "" || input.BasicAuthPassword == "" {
 			return nil, errors.New("basic_auth_username and basic_auth_password cannot be empty when basic auth is enabled")
 		}
-		if strings.ContainsAny(input.BasicAuthUsername, ":\r\n") {
-			return nil, errors.New("basic_auth_username cannot contain colon or newline")
-		}
-		if strings.ContainsAny(input.BasicAuthPassword, "\r\n") {
-			return nil, errors.New("basic_auth_password cannot contain newline")
-		}
 	} else {
 		input.BasicAuthUsername = ""
 		input.BasicAuthPassword = ""

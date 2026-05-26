@@ -43,41 +43,6 @@ func TestGetActiveConfigForAgentIncludesPoWConfig(t *testing.T) {
 	}
 }
 
-func TestGetActiveConfigForAgentIncludesBasicAuthFile(t *testing.T) {
-	setupServiceTestDB(t)
-
-	_, err := CreateProxyRoute(ProxyRouteInput{
-		Domain:            "basic-agent.example.com",
-		OriginURL:         "https://origin.internal",
-		Enabled:           true,
-		BasicAuthEnabled:  true,
-		BasicAuthUsername: "admin",
-		BasicAuthPassword: "123",
-	})
-	if err != nil {
-		t.Fatalf("CreateProxyRoute failed: %v", err)
-	}
-
-	if _, err := PublishConfigVersion("root", false); err != nil {
-		t.Fatalf("PublishConfigVersion failed: %v", err)
-	}
-
-	activeConfig, err := GetActiveConfigForAgent()
-	if err != nil {
-		t.Fatalf("GetActiveConfigForAgent failed: %v", err)
-	}
-
-	for _, file := range activeConfig.SupportFiles {
-		if file.Path == "basic_auth/backend_basic_agent_example_com_1.htpasswd" {
-			if file.Content != "admin:{PLAIN}123\n" {
-				t.Fatalf("unexpected basic auth file content: %q", file.Content)
-			}
-			return
-		}
-	}
-	t.Fatal("expected agent config to include basic auth htpasswd support file")
-}
-
 func TestGetActiveConfigForAgentUsesTenMinutePoWSessionDefault(t *testing.T) {
 	setupServiceTestDB(t)
 

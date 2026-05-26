@@ -1060,14 +1060,11 @@ func TestPublishConfigVersionRendersBasicAuthWithPoW(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishConfigVersion failed: %v", err)
 	}
-	if strings.Contains(result.Version.RenderedConfig, "rewrite_by_lua_block") {
-		t.Fatal("expected basic auth to use native nginx auth_basic instead of lua authorization checks")
+	if !strings.Contains(result.Version.RenderedConfig, `if auth ~= "Basic YWRtaW46MTIz" then`) {
+		t.Fatal("expected rendered config to include encoded basic auth credentials")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, `auth_basic "Restricted";`) {
-		t.Fatal("expected rendered config to enable native basic auth")
-	}
-	if !strings.Contains(result.Version.RenderedConfig, "auth_basic_user_file __OPENFLARE_CERT_DIR__/basic_auth/backend_xbot_example_com_1.htpasswd;") {
-		t.Fatal("expected rendered config to reference managed htpasswd file")
+	if !strings.Contains(result.Version.RenderedConfig, "                return ngx.exit(401)\n            end\n        }\n") {
+		t.Fatal("expected rendered basic auth Lua block to close the if statement before the nginx block")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "    access_by_lua_file __OPENFLARE_LUA_DIR__/pow/check.lua;") {
 		t.Fatal("expected PoW access handler to remain at server scope")
@@ -1083,23 +1080,6 @@ func TestPublishConfigVersionRendersBasicAuthWithPoW(t *testing.T) {
 	}
 	if !strings.Contains(result.Version.SnapshotJSON, `"basic_auth_password":"123"`) {
 		t.Fatal("expected snapshot to include basic auth password")
-	}
-	var supportFiles []SupportFile
-	if err := json.Unmarshal([]byte(result.Version.SupportFilesJSON), &supportFiles); err != nil {
-		t.Fatalf("failed to decode support files: %v", err)
-	}
-	foundBasicAuthFile := false
-	for _, file := range supportFiles {
-		if file.Path != "basic_auth/backend_xbot_example_com_1.htpasswd" {
-			continue
-		}
-		foundBasicAuthFile = true
-		if file.Content != "admin:{PLAIN}123\n" {
-			t.Fatalf("unexpected basic auth support file content: %q", file.Content)
-		}
-	}
-	if !foundBasicAuthFile {
-		t.Fatal("expected publish to include basic auth htpasswd support file")
 	}
 }
 

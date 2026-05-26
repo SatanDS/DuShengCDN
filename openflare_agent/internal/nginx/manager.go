@@ -963,7 +963,7 @@ func certFileMode(relativePath string) fs.FileMode {
 	switch strings.ToLower(filepath.Ext(strings.TrimSpace(relativePath))) {
 	case ".crt", ".pem":
 		return 0o644
-	case ".key", ".htpasswd":
+	case ".key":
 		return 0o600
 	default:
 		return 0o644
