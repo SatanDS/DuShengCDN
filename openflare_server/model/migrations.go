@@ -1369,6 +1369,25 @@ func validateDatabaseSchemaV11(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV12 adds basic authentication fields to proxy_routes.
+func migrateV12(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	// Default values will be applied by gorm for new columns automatically during AutoMigrate.
+	return nil
+}
+
+func validateDatabaseSchemaV12(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV11(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "basic_auth_enabled") {
+		return fmt.Errorf("column proxy_routes.basic_auth_enabled is missing")
+	}
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1381,6 +1400,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 8, toVersion: 9, migrate: migrateV9, validate: validateDatabaseSchemaV9},
 		{fromVersion: 9, toVersion: 10, migrate: migrateV10, validate: validateDatabaseSchemaV10},
 		{fromVersion: 10, toVersion: 11, migrate: migrateV11, validate: validateDatabaseSchemaV11},
+		{fromVersion: 11, toVersion: 12, migrate: migrateV12, validate: validateDatabaseSchemaV12},
 	}
 }
 
@@ -1466,7 +1486,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureDefaultGitHubAuthSource(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV11(db, backend); err != nil {
+	if err := validateDatabaseSchemaV12(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)
