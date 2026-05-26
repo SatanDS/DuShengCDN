@@ -1026,6 +1026,54 @@ func TestPublishConfigVersionDetectsPoWChanges(t *testing.T) {
 	}
 }
 
+func TestPublishConfigVersionRendersBasicAuthWithPoW(t *testing.T) {
+	setupServiceTestDB(t)
+
+	certPEM, keyPEM := generateCertificatePair(t, []string{"xbot.example.com"})
+	certificate, err := CreateTLSCertificate(TLSCertificateInput{
+		Name:    "xbot-example",
+		CertPEM: certPEM,
+		KeyPEM:  keyPEM,
+	})
+	if err != nil {
+		t.Fatalf("CreateTLSCertificate failed: %v", err)
+	}
+
+	_, err = CreateProxyRoute(ProxyRouteInput{
+		Domain:            "xbot.example.com",
+		OriginURL:         "http://c1:36185",
+		Enabled:           true,
+		EnableHTTPS:       true,
+		CertID:            &certificate.ID,
+		RedirectHTTP:      true,
+		PoWEnabled:        true,
+		PoWConfig:         `{"difficulty":4,"algorithm":"fast","session_ttl":600,"challenge_ttl":300,"whitelist":{"ips":[],"ip_cidrs":[],"paths":[],"path_regexes":[],"user_agents":[]},"blacklist":{"ips":[],"ip_cidrs":[],"paths":[],"path_regexes":[],"user_agents":[]}}`,
+		BasicAuthEnabled:  true,
+		BasicAuthUsername: "admin",
+		BasicAuthPassword: "123",
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	result, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if !strings.Contains(result.Version.RenderedConfig, `if auth ~= "Basic YWRtaW46MTIz" then`) {
+		t.Fatal("expected rendered config to include encoded basic auth credentials")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, "                return ngx.exit(401)\n            end\n        }\n") {
+		t.Fatal("expected rendered basic auth Lua block to close the if statement before the nginx block")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, "    access_by_lua_file __OPENFLARE_LUA_DIR__/pow/check.lua;") {
+		t.Fatal("expected PoW access handler to remain at server scope")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, "proxy_pass http://backend_xbot_example_com_1;") {
+		t.Fatal("expected proxy_pass to stay in the root location after basic auth")
+	}
+}
+
 func TestRenderConfigUsesDefaultServerFallback(t *testing.T) {
 	setupServiceTestDB(t)
 

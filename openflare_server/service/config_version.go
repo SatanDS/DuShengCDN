@@ -1135,7 +1135,7 @@ func renderBasicAuthBlock(enabled bool, username, password string) string {
             if auth ~= "Basic %s" then
                 ngx.header["WWW-Authenticate"] = 'Basic realm="Restricted"'
                 return ngx.exit(401)
-            }
+            end
         }
 `, encoded)
 }
