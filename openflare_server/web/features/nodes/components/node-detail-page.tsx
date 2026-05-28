@@ -51,6 +51,7 @@ import {
 } from '@/lib/utils/metrics';
 import {
   buildNodeInstallCommand,
+  buildNodeDockerInstallCommand,
   getApplyLabel,
   getApplyVariant,
   getNodeStatusLabel,
@@ -540,6 +541,10 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const nodeInstallCommand =
     normalizedServerUrl && node.agent_token
       ? buildNodeInstallCommand(normalizedServerUrl, node.agent_token)
+      : '';
+  const nodeDockerInstallCommand =
+    normalizedServerUrl && node.agent_token
+      ? buildNodeDockerInstallCommand(normalizedServerUrl, node.agent_token)
       : '';
   const updateMode = getUpdateMode(node);
   const selectedAgentRelease =
@@ -1536,19 +1541,34 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
               <AppCard
                 title="节点标识与部署"
                 action={
-                  nodeInstallCommand ? (
-                    <PrimaryButton
-                      type="button"
-                      onClick={() =>
-                        void handleCopy(
-                          nodeInstallCommand,
-                          '节点专属部署命令已复制。',
-                        )
-                      }
-                    >
-                      复制部署命令
-                    </PrimaryButton>
-                  ) : null
+                  <div className="flex gap-2">
+                    {nodeInstallCommand ? (
+                      <PrimaryButton
+                        type="button"
+                        onClick={() =>
+                          void handleCopy(
+                            nodeInstallCommand,
+                            '脚本部署命令已复制。',
+                          )
+                        }
+                      >
+                        复制脚本命令
+                      </PrimaryButton>
+                    ) : null}
+                    {nodeDockerInstallCommand ? (
+                      <PrimaryButton
+                        type="button"
+                        onClick={() =>
+                          void handleCopy(
+                            nodeDockerInstallCommand,
+                            'Docker 部署命令已复制。',
+                          )
+                        }
+                      >
+                        复制 Docker 命令
+                      </PrimaryButton>
+                    ) : null}
+                  </div>
                 }
               >
                 <div className="space-y-4">
@@ -1582,9 +1602,21 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   </ResourceField>
 
                   {nodeInstallCommand ? (
-                    <CodeBlock className="whitespace-pre-wrap">
-                      {nodeInstallCommand}
-                    </CodeBlock>
+                    <div>
+                      <p className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">脚本部署 (Linux / macOS)</p>
+                      <CodeBlock className="whitespace-pre-wrap">
+                        {nodeInstallCommand}
+                      </CodeBlock>
+                    </div>
+                  ) : null}
+
+                  {nodeDockerInstallCommand ? (
+                    <div>
+                      <p className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">Docker 部署</p>
+                      <CodeBlock className="whitespace-pre-wrap">
+                        {nodeDockerInstallCommand}
+                      </CodeBlock>
+                    </div>
                   ) : null}
                 </div>
               </AppCard>

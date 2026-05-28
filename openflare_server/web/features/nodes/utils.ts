@@ -167,3 +167,13 @@ export function buildNodeInstallCommand(serverUrl: string, agentToken: string) {
     `  --agent-token ${agentToken}`,
   ].join('\n');
 }
+
+export function buildNodeDockerInstallCommand(serverUrl: string, agentToken: string) {
+  return [
+    `docker run -d --name openflare-agent --restart unless-stopped \\`,
+    `  -p 80:80 -p 443:443 -p 127.0.0.1:18081:18081 \\`,
+    `  -e OPENFLARE_SERVER_URL=${serverUrl} \\`,
+    `  -e OPENFLARE_AGENT_TOKEN=${agentToken} \\`,
+    `  ghcr.io/rain-kl/openflare-agent:latest`
+  ].join('\n');
+}
