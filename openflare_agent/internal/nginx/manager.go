@@ -260,6 +260,11 @@ func (m *Manager) CheckHealth(ctx context.Context) error {
 	if m.Executor == nil {
 		return errors.New("executor 未配置")
 	}
+	if m.MainConfigPath != "" {
+		if _, err := os.Stat(m.MainConfigPath); os.IsNotExist(err) {
+			return errors.New("openresty config not exists: waiting for initial sync")
+		}
+	}
 	return m.Executor.CheckHealth(ctx)
 }
 

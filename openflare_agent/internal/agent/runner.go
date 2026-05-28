@@ -268,6 +268,9 @@ func (r *Runner) refreshOpenrestyHealth(ctx context.Context) {
 		return
 	}
 	if err := r.RuntimeManager.CheckHealth(ctx); err != nil {
+		if strings.Contains(err.Error(), "openresty config not exists") {
+			return
+		}
 		r.recordOpenrestyUnhealthy(err, true)
 		return
 	}
