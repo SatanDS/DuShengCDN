@@ -788,6 +788,7 @@ func (m *Manager) checkStubStatus(ctx context.Context) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("openresty health endpoint returned %s", resp.Status)
 	}
+	slog.Debug("openresty health endpoint is healthy", "url", openrestyStubUrl)
 	return nil
 }
 
