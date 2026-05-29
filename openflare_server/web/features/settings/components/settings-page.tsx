@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { EmptyState } from '@/components/feedback/empty-state';
@@ -53,7 +54,9 @@ import {
   SecondaryButton,
   ToggleField,
 } from '@/features/shared/components/resource-primitives';
+import { ApiError } from '@/lib/api/client';
 import { formatDateTime } from '@/lib/utils/date';
+import { cn } from '@/lib/utils/cn';
 
 const settingsQueryKey = ['settings', 'options'] as const;
 const authSourcesQueryKey = ['settings', 'auth-sources'] as const;
@@ -156,6 +159,7 @@ const defaultProfileFields: UpdateSelfPayload = {
 type FeedbackState = {
   tone: 'info' | 'success' | 'danger';
   message: string;
+  detail?: string;
 };
 
 type CleanupModalState = {
@@ -167,6 +171,20 @@ type SettingsTab = 'personal' | 'operation' | 'database' | 'system' | 'other';
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
+}
+
+function getDetailedErrorMessage(error: unknown) {
+  const message = getErrorMessage(error);
+
+  if (error instanceof ApiError) {
+    return `HTTP ${error.status}：${message}`;
+  }
+
+  return message;
+}
+
+function formatActionError(action: string, error: unknown) {
+  return `${action}失败：${getDetailedErrorMessage(error)}`;
 }
 
 function optionsToMap(options: OptionItem[] | undefined) {
@@ -241,6 +259,63 @@ async function copyToClipboard(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
+const feedbackToneClasses = {
+  info: 'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info-foreground)]',
+  success:
+    'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success-foreground)]',
+  danger:
+    'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger-foreground)]',
+} satisfies Record<FeedbackState['tone'], string>;
+
+const feedbackToneIcons = {
+  info: Info,
+  success: CheckCircle2,
+  danger: AlertCircle,
+} satisfies Record<FeedbackState['tone'], typeof Info>;
+
+function FloatingFeedback({
+  feedback,
+  onClose,
+}: {
+  feedback: FeedbackState;
+  onClose: () => void;
+}) {
+  const Icon = feedbackToneIcons[feedback.tone];
+
+  return (
+    <div className="pointer-events-none fixed top-24 right-4 z-50 flex w-[min(calc(100vw-2rem),34rem)] justify-end md:right-8">
+      <div
+        className={cn(
+          'pointer-events-auto max-w-full rounded-2xl border px-4 py-3 text-sm leading-6 shadow-2xl shadow-black/30 backdrop-blur',
+          feedbackToneClasses[feedback.tone],
+        )}
+        role="status"
+        aria-live={feedback.tone === 'danger' ? 'assertive' : 'polite'}
+      >
+        <div className="flex items-start gap-3">
+          <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <p className="break-words font-medium">{feedback.message}</p>
+            {feedback.detail ? (
+              <p className="mt-1 break-words text-xs leading-5 opacity-85">
+                {feedback.detail}
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 rounded-full p-1 opacity-70 transition hover:bg-white/10 hover:opacity-100"
+            aria-label="关闭提示"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const { refreshUser, user } = useAuth();
@@ -265,6 +340,18 @@ export function SettingsPage() {
   const [cleanupRetentionDays, setCleanupRetentionDays] = useState('');
 
   const isRoot = (user?.role ?? 0) >= 100;
+
+  useEffect(() => {
+    if (!feedback) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setFeedback(null);
+    }, 8000);
+
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
 
   const publicStatusQuery = useQuery({
     queryKey: ['public-status'],
@@ -480,7 +567,10 @@ export function SettingsPage() {
       }
     },
     onError: (error) => {
-      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+      setFeedback({
+        tone: 'danger',
+        message: formatActionError('重新生成 Discovery Token', error),
+      });
     },
   });
 
@@ -494,7 +584,10 @@ export function SettingsPage() {
       });
     },
     onError: (error) => {
-      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+      setFeedback({
+        tone: 'danger',
+        message: formatActionError('重置访问令牌', error),
+      });
     },
   });
 
@@ -516,7 +609,10 @@ export function SettingsPage() {
       });
     },
     onError: (error) => {
-      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+      setFeedback({
+        tone: 'danger',
+        message: formatActionError('清理数据库观测数据', error),
+      });
     },
   });
 
@@ -561,14 +657,21 @@ export function SettingsPage() {
     [isRoot],
   );
 
-  const runBusyAction = async (key: string, action: () => Promise<void>) => {
+  const runBusyAction = async (
+    key: string,
+    action: () => Promise<void>,
+    errorContext = '执行操作',
+  ) => {
     setBusyKey(key);
     setFeedback(null);
 
     try {
       await action();
     } catch (error) {
-      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+      setFeedback({
+        tone: 'danger',
+        message: formatActionError(errorContext, error),
+      });
     } finally {
       setBusyKey(null);
     }
@@ -597,19 +700,23 @@ export function SettingsPage() {
     geoIPLookupMutation.data;
 
   const handleProfileSave = () => {
-    void runBusyAction('profile', async () => {
-      await updateSelf({
-        username: profileFields.username.trim(),
-        display_name: profileFields.display_name.trim(),
-        password: profileFields.password,
-      });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['settings', 'profile'] }),
-        refreshUser(),
-      ]);
-      setProfileFields((previous) => ({ ...previous, password: '' }));
-      setFeedback({ tone: 'success', message: '个人资料已更新。' });
-    });
+    void runBusyAction(
+      'profile',
+      async () => {
+        await updateSelf({
+          username: profileFields.username.trim(),
+          display_name: profileFields.display_name.trim(),
+          password: profileFields.password,
+        });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['settings', 'profile'] }),
+          refreshUser(),
+        ]);
+        setProfileFields((previous) => ({ ...previous, password: '' }));
+        setFeedback({ tone: 'success', message: '个人资料已更新。' });
+      },
+      '保存个人资料',
+    );
   };
 
   const handleEmailVerification = () => {
@@ -623,13 +730,17 @@ export function SettingsPage() {
       return;
     }
 
-    void runBusyAction('email-send', async () => {
-      await sendEmailVerification(
-        emailAddress.trim(),
-        emailTurnstileToken || undefined,
-      );
-      setFeedback({ tone: 'success', message: '验证码已发送，请检查邮箱。' });
-    });
+    void runBusyAction(
+      'email-send',
+      async () => {
+        await sendEmailVerification(
+          emailAddress.trim(),
+          emailTurnstileToken || undefined,
+        );
+        setFeedback({ tone: 'success', message: '验证码已发送，请检查邮箱。' });
+      },
+      '发送邮箱验证码',
+    );
   };
 
   const handleBindEmail = () => {
@@ -638,35 +749,47 @@ export function SettingsPage() {
       return;
     }
 
-    void runBusyAction('email-bind', async () => {
-      await bindEmail(emailAddress.trim(), emailCode.trim());
-      setEmailCode('');
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['settings', 'profile'] }),
-        refreshUser(),
-      ]);
-      setFeedback({ tone: 'success', message: '邮箱已绑定。' });
-    });
+    void runBusyAction(
+      'email-bind',
+      async () => {
+        await bindEmail(emailAddress.trim(), emailCode.trim());
+        setEmailCode('');
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['settings', 'profile'] }),
+          refreshUser(),
+        ]);
+        setFeedback({ tone: 'success', message: '邮箱已绑定。' });
+      },
+      '绑定邮箱',
+    );
   };
 
   const handleBindAuthSource = (sourceName: string) => {
-    void runBusyAction(`auth-source-bind-${sourceName}`, async () => {
-      const result = await getOAuthAuthorizeUrl(sourceName);
-      window.location.href = result.authorize_url;
-    });
+    void runBusyAction(
+      `auth-source-bind-${sourceName}`,
+      async () => {
+        const result = await getOAuthAuthorizeUrl(sourceName);
+        window.location.href = result.authorize_url;
+      },
+      '发起第三方账号绑定',
+    );
   };
 
   const handleUnbindAuthSource = (id: number, label: string) => {
     if (!window.confirm(`确定解绑「${label}」吗？`)) {
       return;
     }
-    void runBusyAction(`auth-source-unbind-${id}`, async () => {
-      await deleteExternalAccountBinding(id);
-      await queryClient.invalidateQueries({
-        queryKey: externalAccountBindingsQueryKey,
-      });
-      setFeedback({ tone: 'success', message: '第三方账号已解绑。' });
-    });
+    void runBusyAction(
+      `auth-source-unbind-${id}`,
+      async () => {
+        await deleteExternalAccountBinding(id);
+        await queryClient.invalidateQueries({
+          queryKey: externalAccountBindingsQueryKey,
+        });
+        setFeedback({ tone: 'success', message: '第三方账号已解绑。' });
+      },
+      '解绑第三方账号',
+    );
   };
 
   const handleToggleOption = (
@@ -675,9 +798,13 @@ export function SettingsPage() {
   ) => {
     setSystemFields((previous) => ({ ...previous, [key]: nextValue }));
 
-    void runBusyAction(`toggle-${key}`, async () => {
-      await saveOptionEntries([[key, String(nextValue)]], '系统开关已更新。');
-    });
+    void runBusyAction(
+      `toggle-${key}`,
+      async () => {
+        await saveOptionEntries([[key, String(nextValue)]], '系统开关已更新。');
+      },
+      '更新系统开关',
+    );
   };
 
   const renderTabContent = () => {
@@ -1044,42 +1171,46 @@ export function SettingsPage() {
                 <PrimaryButton
                   type="button"
                   onClick={() =>
-                    void runBusyAction('operation-settings', async () => {
-                      const heartbeat = Number.parseInt(
-                        operationFields.AgentHeartbeatInterval,
-                        10,
-                      );
-                      const offline = Number.parseInt(
-                        operationFields.NodeOfflineThreshold,
-                        10,
-                      );
+                    void runBusyAction(
+                      'operation-settings',
+                      async () => {
+                        const heartbeat = Number.parseInt(
+                          operationFields.AgentHeartbeatInterval,
+                          10,
+                        );
+                        const offline = Number.parseInt(
+                          operationFields.NodeOfflineThreshold,
+                          10,
+                        );
 
-                      if (Number.isNaN(heartbeat) || heartbeat < 5000) {
-                        throw new Error('心跳间隔不能小于 5000 毫秒。');
-                      }
-                      if (Number.isNaN(offline) || offline < 10000) {
-                        throw new Error('离线阈值不能小于 10000 毫秒。');
-                      }
+                        if (Number.isNaN(heartbeat) || heartbeat < 5000) {
+                          throw new Error('心跳间隔不能小于 5000 毫秒。');
+                        }
+                        if (Number.isNaN(offline) || offline < 10000) {
+                          throw new Error('离线阈值不能小于 10000 毫秒。');
+                        }
 
-                      await saveOptionEntries(
-                        [
-                          ['AgentHeartbeatInterval', String(heartbeat)],
+                        await saveOptionEntries(
                           [
-                            'AgentWebsocketUpgradeEnabled',
-                            String(
-                              operationFields.AgentWebsocketUpgradeEnabled,
-                            ),
+                            ['AgentHeartbeatInterval', String(heartbeat)],
+                            [
+                              'AgentWebsocketUpgradeEnabled',
+                              String(
+                                operationFields.AgentWebsocketUpgradeEnabled,
+                              ),
+                            ],
+                            ['NodeOfflineThreshold', String(offline)],
+                            [
+                              'AgentUpdateRepo',
+                              operationFields.AgentUpdateRepo.trim(),
+                            ],
+                            ['GeoIPProvider', operationFields.GeoIPProvider],
                           ],
-                          ['NodeOfflineThreshold', String(offline)],
-                          [
-                            'AgentUpdateRepo',
-                            operationFields.AgentUpdateRepo.trim(),
-                          ],
-                          ['GeoIPProvider', operationFields.GeoIPProvider],
-                        ],
-                        '运维设置已保存。',
-                      );
-                    })
+                          '运维设置已保存。',
+                        );
+                      },
+                      '保存运维设置',
+                    )
                   }
                 >
                   {busyKey === 'operation-settings' ? '保存中...' : '保存设置'}
@@ -1396,28 +1527,32 @@ export function SettingsPage() {
               <PrimaryButton
                 type="button"
                 onClick={() =>
-                  void runBusyAction('database-auto-cleanup', async () => {
-                    const retentionDays = Number.parseInt(
-                      databaseFields.DatabaseAutoCleanupRetentionDays,
-                      10,
-                    );
-                    if (Number.isNaN(retentionDays) || retentionDays < 1) {
-                      throw new Error('自动清理保留天数至少为 1 天。');
-                    }
-                    await saveOptionEntries(
-                      [
+                  void runBusyAction(
+                    'database-auto-cleanup',
+                    async () => {
+                      const retentionDays = Number.parseInt(
+                        databaseFields.DatabaseAutoCleanupRetentionDays,
+                        10,
+                      );
+                      if (Number.isNaN(retentionDays) || retentionDays < 1) {
+                        throw new Error('自动清理保留天数至少为 1 天。');
+                      }
+                      await saveOptionEntries(
                         [
-                          'DatabaseAutoCleanupEnabled',
-                          String(databaseFields.DatabaseAutoCleanupEnabled),
+                          [
+                            'DatabaseAutoCleanupEnabled',
+                            String(databaseFields.DatabaseAutoCleanupEnabled),
+                          ],
+                          [
+                            'DatabaseAutoCleanupRetentionDays',
+                            String(retentionDays),
+                          ],
                         ],
-                        [
-                          'DatabaseAutoCleanupRetentionDays',
-                          String(retentionDays),
-                        ],
-                      ],
-                      '数据库自动清理设置已保存。',
-                    );
-                  })
+                        '数据库自动清理设置已保存。',
+                      );
+                    },
+                    '保存数据库自动清理设置',
+                  )
                 }
                 disabled={busyKey === 'database-auto-cleanup'}
               >
@@ -1619,17 +1754,21 @@ export function SettingsPage() {
                   <PrimaryButton
                     type="button"
                     onClick={() =>
-                      void runBusyAction('system-general', async () => {
-                        await saveOptionEntries(
-                          [
+                      void runBusyAction(
+                        'system-general',
+                        async () => {
+                          await saveOptionEntries(
                             [
-                              'ServerAddress',
-                              normalizeServerUrl(systemFields.ServerAddress),
+                              [
+                                'ServerAddress',
+                                normalizeServerUrl(systemFields.ServerAddress),
+                              ],
                             ],
-                          ],
-                          '通用设置已保存。',
-                        );
-                      })
+                            '通用设置已保存。',
+                          );
+                        },
+                        '保存通用设置',
+                      )
                     }
                     disabled={busyKey === 'system-general'}
                   >
@@ -1661,17 +1800,21 @@ export function SettingsPage() {
                 <PrimaryButton
                   type="button"
                   onClick={() =>
-                    void runBusyAction('system-smtp', async () => {
-                      await saveOptionEntries(
-                        [
-                          ['SMTPServer', systemFields.SMTPServer.trim()],
-                          ['SMTPPort', systemFields.SMTPPort.trim()],
-                          ['SMTPAccount', systemFields.SMTPAccount.trim()],
-                          ['SMTPToken', systemFields.SMTPToken.trim()],
-                        ],
-                        'SMTP 设置已保存。',
-                      );
-                    })
+                    void runBusyAction(
+                      'system-smtp',
+                      async () => {
+                        await saveOptionEntries(
+                          [
+                            ['SMTPServer', systemFields.SMTPServer.trim()],
+                            ['SMTPPort', systemFields.SMTPPort.trim()],
+                            ['SMTPAccount', systemFields.SMTPAccount.trim()],
+                            ['SMTPToken', systemFields.SMTPToken.trim()],
+                          ],
+                          'SMTP 设置已保存。',
+                        );
+                      },
+                      '保存 SMTP 设置',
+                    )
                   }
                   disabled={busyKey === 'system-smtp'}
                 >
@@ -1742,68 +1885,72 @@ export function SettingsPage() {
               <PrimaryButton
                 type="button"
                 onClick={() =>
-                  void runBusyAction('operation-rate-limit', async () => {
-                    const entries = [
-                      [
-                        'GlobalApiRateLimitNum',
-                        operationFields.GlobalApiRateLimitNum,
-                      ],
-                      [
-                        'GlobalApiRateLimitDuration',
-                        operationFields.GlobalApiRateLimitDuration,
-                      ],
-                      [
-                        'GlobalWebRateLimitNum',
-                        operationFields.GlobalWebRateLimitNum,
-                      ],
-                      [
-                        'GlobalWebRateLimitDuration',
-                        operationFields.GlobalWebRateLimitDuration,
-                      ],
-                      [
-                        'UploadRateLimitNum',
-                        operationFields.UploadRateLimitNum,
-                      ],
-                      [
-                        'UploadRateLimitDuration',
-                        operationFields.UploadRateLimitDuration,
-                      ],
-                      [
-                        'DownloadRateLimitNum',
-                        operationFields.DownloadRateLimitNum,
-                      ],
-                      [
-                        'DownloadRateLimitDuration',
-                        operationFields.DownloadRateLimitDuration,
-                      ],
-                      [
-                        'CriticalRateLimitNum',
-                        operationFields.CriticalRateLimitNum,
-                      ],
-                      [
-                        'CriticalRateLimitDuration',
-                        operationFields.CriticalRateLimitDuration,
-                      ],
-                    ] as const;
+                  void runBusyAction(
+                    'operation-rate-limit',
+                    async () => {
+                      const entries = [
+                        [
+                          'GlobalApiRateLimitNum',
+                          operationFields.GlobalApiRateLimitNum,
+                        ],
+                        [
+                          'GlobalApiRateLimitDuration',
+                          operationFields.GlobalApiRateLimitDuration,
+                        ],
+                        [
+                          'GlobalWebRateLimitNum',
+                          operationFields.GlobalWebRateLimitNum,
+                        ],
+                        [
+                          'GlobalWebRateLimitDuration',
+                          operationFields.GlobalWebRateLimitDuration,
+                        ],
+                        [
+                          'UploadRateLimitNum',
+                          operationFields.UploadRateLimitNum,
+                        ],
+                        [
+                          'UploadRateLimitDuration',
+                          operationFields.UploadRateLimitDuration,
+                        ],
+                        [
+                          'DownloadRateLimitNum',
+                          operationFields.DownloadRateLimitNum,
+                        ],
+                        [
+                          'DownloadRateLimitDuration',
+                          operationFields.DownloadRateLimitDuration,
+                        ],
+                        [
+                          'CriticalRateLimitNum',
+                          operationFields.CriticalRateLimitNum,
+                        ],
+                        [
+                          'CriticalRateLimitDuration',
+                          operationFields.CriticalRateLimitDuration,
+                        ],
+                      ] as const;
 
-                    for (const [key, rawValue] of entries) {
-                      const parsedValue = Number.parseInt(rawValue, 10);
-                      if (Number.isNaN(parsedValue) || parsedValue <= 0) {
-                        throw new Error(`${key} 必须为大于 0 的整数。`);
+                      for (const [key, rawValue] of entries) {
+                        const parsedValue = Number.parseInt(rawValue, 10);
+                        if (Number.isNaN(parsedValue) || parsedValue <= 0) {
+                          throw new Error(`${key} 必须为大于 0 的整数。`);
+                        }
+                        if (key.endsWith('Duration') && parsedValue > 1200) {
+                          throw new Error(`${key} 不能超过 1200 秒。`);
+                        }
                       }
-                      if (key.endsWith('Duration') && parsedValue > 1200) {
-                        throw new Error(`${key} 不能超过 1200 秒。`);
-                      }
-                    }
 
-                    await saveOptionEntries(
-                      entries.map(([key, value]) => [
-                        key,
-                        String(Number.parseInt(value, 10)),
-                      ]),
-                      '限流设置已保存。',
-                    );
-                  })
+                      await saveOptionEntries(
+                        entries.map(([key, value]) => [
+                          key,
+                          String(Number.parseInt(value, 10)),
+                        ]),
+                        '限流设置已保存。',
+                      );
+                    },
+                    '保存限流设置',
+                  )
                 }
                 disabled={busyKey === 'operation-rate-limit'}
               >
@@ -2003,17 +2150,21 @@ export function SettingsPage() {
               <PrimaryButton
                 type="button"
                 onClick={() =>
-                  void runBusyAction('other-brand', async () => {
-                    await saveOptionEntries(
-                      [
-                        ['Notice', otherFields.Notice],
-                        ['SystemName', otherFields.SystemName.trim()],
-                        ['HomePageLink', otherFields.HomePageLink.trim()],
-                        ['Footer', otherFields.Footer],
-                      ],
-                      '公告与品牌设置已保存。',
-                    );
-                  })
+                  void runBusyAction(
+                    'other-brand',
+                    async () => {
+                      await saveOptionEntries(
+                        [
+                          ['Notice', otherFields.Notice],
+                          ['SystemName', otherFields.SystemName.trim()],
+                          ['HomePageLink', otherFields.HomePageLink.trim()],
+                          ['Footer', otherFields.Footer],
+                        ],
+                        '公告与品牌设置已保存。',
+                      );
+                    },
+                    '保存公告与品牌设置',
+                  )
                 }
                 disabled={busyKey === 'other-brand'}
               >
@@ -2080,12 +2231,16 @@ export function SettingsPage() {
               <PrimaryButton
                 type="button"
                 onClick={() =>
-                  void runBusyAction('other-about', async () => {
-                    await saveOptionEntries(
-                      [['About', otherFields.About]],
-                      '关于页内容已保存。',
-                    );
-                  })
+                  void runBusyAction(
+                    'other-about',
+                    async () => {
+                      await saveOptionEntries(
+                        [['About', otherFields.About]],
+                        '关于页内容已保存。',
+                      );
+                    },
+                    '保存关于页内容',
+                  )
                 }
                 disabled={busyKey === 'other-about'}
               >
@@ -2122,7 +2277,10 @@ export function SettingsPage() {
       <PageHeader title="设置" />
 
       {feedback ? (
-        <InlineMessage tone={feedback.tone} message={feedback.message} />
+        <FloatingFeedback
+          feedback={feedback}
+          onClose={() => setFeedback(null)}
+        />
       ) : null}
 
       <div className="flex flex-wrap gap-3">
@@ -2191,10 +2349,15 @@ export function SettingsPage() {
                 const trimmed = cleanupRetentionDays.trim();
                 if (trimmed !== '') {
                   const retentionDays = Number.parseInt(trimmed, 10);
-                  if (Number.isNaN(retentionDays) || retentionDays < 1) {
+                  if (
+                    !/^\d+$/.test(trimmed) ||
+                    Number.isNaN(retentionDays) ||
+                    retentionDays < 1
+                  ) {
                     setFeedback({
                       tone: 'danger',
                       message: '手动清理保留天数至少为 1 天。',
+                      detail: `当前输入：${trimmed}`,
                     });
                     return;
                   }
