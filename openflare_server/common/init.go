@@ -22,7 +22,7 @@ var UploadPath = "upload"
 func printHelp() {
 	fmt.Println("OpenFlare " + Version + " - Internal OpenResty Control Plane.")
 	fmt.Println("Copyright (C) 2023 JustSong. All rights reserved.")
-	fmt.Println("GitHub: https://github.com/Rain-kl/OpenFlare")
+	fmt.Println("GitHub: https://github.com/SatanDS/OpenCDN")
 	fmt.Println("Usage: openflare [--port <port>] [--log-dir <log directory>] [--version] [--help]")
 }
 

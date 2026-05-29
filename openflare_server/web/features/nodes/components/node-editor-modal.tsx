@@ -204,7 +204,7 @@ function toPayload(values: NodeEditorValues): NodeMutationPayload {
     return {
       name: values.name.trim(),
       ip: values.ip.trim(),
-      auto_update_enabled: values.auto_update_enabled,
+      auto_update_enabled: false,
       geo_manual_override: false,
       geo_name: '',
       geo_latitude: null,
@@ -215,7 +215,7 @@ function toPayload(values: NodeEditorValues): NodeMutationPayload {
   return {
     name: values.name.trim(),
     ip: values.ip.trim(),
-    auto_update_enabled: values.auto_update_enabled,
+    auto_update_enabled: false,
     geo_manual_override: true,
     geo_name: values.geo_name.trim(),
     geo_latitude:
@@ -249,10 +249,6 @@ export function NodeEditorModal({
     defaultValues,
   });
 
-  const watchedAutoUpdate = useWatch({
-    control: form.control,
-    name: 'auto_update_enabled',
-  });
   const watchedGeoManualOverride = useWatch({
     control: form.control,
     name: 'geo_manual_override',
@@ -314,18 +310,6 @@ export function NodeEditorModal({
         >
           <ResourceInput placeholder="203.0.113.10" {...form.register('ip')} />
         </ResourceField>
-
-        <ToggleField
-          label="启用自动更新"
-          description="开启后 Agent 心跳返回会提示节点自动执行自更新。"
-          checked={watchedAutoUpdate}
-          onChange={(checked) =>
-            form.setValue('auto_update_enabled', checked, {
-              shouldDirty: true,
-              shouldValidate: true,
-            })
-          }
-        />
 
         <ToggleField
           label="手动指定地图地区"

@@ -34,7 +34,7 @@ func TestLatestReleaseProxy(t *testing.T) {
 	originalClient := service.UpdateHTTPClientForTest()
 	service.SetUpdateHTTPClientForTest(&http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.String() != "https://api.github.com/repos/Rain-kl/OpenFlare/releases/latest" {
+			if req.URL.String() != "https://api.github.com/repos/SatanDS/OpenCDN/releases/latest" {
 				t.Fatalf("unexpected request url: %s", req.URL.String())
 			}
 			if req.Header.Get("Accept") != "application/vnd.github+json" {
@@ -49,7 +49,7 @@ func TestLatestReleaseProxy(t *testing.T) {
 				Body: io.NopCloser(strings.NewReader(`{
 					"tag_name":"v1.2.3",
 					"body":"release notes",
-					"html_url":"https://github.com/Rain-kl/OpenFlare/releases/tag/v1.2.3",
+					"html_url":"https://github.com/SatanDS/OpenCDN/releases/tag/v1.2.3",
 					"published_at":"2026-03-11T00:00:00Z"
 				}`)),
 			}, nil

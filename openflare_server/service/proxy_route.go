@@ -16,6 +16,7 @@ import (
 
 var proxyHeaderKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var proxyRouteLimitRatePattern = regexp.MustCompile(`^\d+(?:[kKmM])?$`)
+var proxyRouteDomainLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 const (
 	proxyRouteCachePolicyURL        = "url"
@@ -444,7 +445,7 @@ func normalizeProxyRouteDomains(rawDomains []string) ([]string, error) {
 		if domain == "" {
 			continue
 		}
-		if strings.Contains(domain, "://") || strings.Contains(domain, "/") {
+		if !isValidProxyRouteDomain(domain) {
 			return nil, errors.New("domain format is invalid")
 		}
 		if _, ok := seen[domain]; ok {
@@ -457,6 +458,36 @@ func normalizeProxyRouteDomains(rawDomains []string) ([]string, error) {
 		return nil, errors.New("at least one domain is required")
 	}
 	return normalized, nil
+}
+
+func isValidProxyRouteDomain(domain string) bool {
+	if domain == "" || len(domain) > 253 {
+		return false
+	}
+	if strings.ContainsAny(domain, " \t\r\n;{}\"'`$:\\/") || strings.Contains(domain, "://") {
+		return false
+	}
+	if strings.HasSuffix(domain, ".") {
+		domain = strings.TrimSuffix(domain, ".")
+	}
+	if strings.HasPrefix(domain, "*.") {
+		domain = strings.TrimPrefix(domain, "*.")
+		if domain == "" {
+			return false
+		}
+	} else if strings.Contains(domain, "*") {
+		return false
+	}
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if !proxyRouteDomainLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateProxyRouteSiteName(siteName string) error {

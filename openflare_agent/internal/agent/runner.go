@@ -404,7 +404,7 @@ func (r *Runner) tryRestartOpenresty(ctx context.Context) {
 
 func (r *Runner) tryAutoUpdate(ctx context.Context) {
 	force := r.updateNow
-	shouldCheck := r.autoUpdate || force
+	shouldCheck := force
 	r.updateNow = false
 	r.updateTag = strings.TrimSpace(r.updateTag)
 	if !shouldCheck || r.Updater == nil || r.updateRepo == "" {

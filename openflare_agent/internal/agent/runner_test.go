@@ -80,6 +80,19 @@ type fakeRuntimeManager struct {
 	clearHealthOnRestart bool
 }
 
+type fakeUpdater struct {
+	calls   int
+	repo    string
+	options UpdateOptions
+}
+
+func (f *fakeUpdater) CheckAndUpdate(ctx context.Context, repo string, options UpdateOptions) error {
+	f.calls++
+	f.repo = repo
+	f.options = options
+	return nil
+}
+
 func (f *fakeRuntimeManager) CheckHealth(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -599,6 +612,66 @@ func TestRunnerHandlesWebSocketSettingsDisabled(t *testing.T) {
 	}
 	if runner.websocketUpgradeEnabled {
 		t.Fatal("expected websocket upgrade to be disabled")
+	}
+}
+
+func TestRunnerIgnoresAutoUpdateSettingWithoutManualRequest(t *testing.T) {
+	updater := &fakeUpdater{}
+	runner := &Runner{
+		Updater:                 updater,
+		websocketUpgradeEnabled: true,
+	}
+	payload, err := json.Marshal(protocol.AgentSettings{
+		WebsocketUpgradeEnabled: true,
+		AutoUpdate:              true,
+		UpdateRepo:              "SatanDS/OpenCDN",
+	})
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+
+	if _, err = runner.handleWebSocketMessage(context.Background(), protocol.WSMessage{
+		Type:    protocol.WSMessageTypeSettings,
+		Payload: payload,
+	}, &fakeWebSocketConnection{}); err != nil {
+		t.Fatalf("handle websocket settings: %v", err)
+	}
+	if updater.calls != 0 {
+		t.Fatalf("expected auto_update setting to be ignored, got %d updater calls", updater.calls)
+	}
+}
+
+func TestRunnerHonorsManualUpdateRequest(t *testing.T) {
+	updater := &fakeUpdater{}
+	runner := &Runner{
+		Updater:                 updater,
+		websocketUpgradeEnabled: true,
+	}
+	payload, err := json.Marshal(protocol.AgentSettings{
+		WebsocketUpgradeEnabled: true,
+		UpdateNow:               true,
+		UpdateRepo:              "SatanDS/OpenCDN",
+		UpdateChannel:           "preview",
+		UpdateTag:               "v1.2.3-rc.1",
+	})
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+
+	if _, err = runner.handleWebSocketMessage(context.Background(), protocol.WSMessage{
+		Type:    protocol.WSMessageTypeSettings,
+		Payload: payload,
+	}, &fakeWebSocketConnection{}); err != nil {
+		t.Fatalf("handle websocket settings: %v", err)
+	}
+	if updater.calls != 1 {
+		t.Fatalf("expected one manual update call, got %d", updater.calls)
+	}
+	if updater.repo != "SatanDS/OpenCDN" {
+		t.Fatalf("unexpected update repo: %s", updater.repo)
+	}
+	if updater.options.Channel != "preview" || updater.options.TagName != "v1.2.3-rc.1" || !updater.options.Force {
+		t.Fatalf("unexpected update options: %+v", updater.options)
 	}
 }
 

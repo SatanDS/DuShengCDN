@@ -539,7 +539,7 @@ func TestManagerEnsureLuaAssetsWritesReadableFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to stat lua file: %v", err)
 	}
-	if luaInfo.Mode().Perm() != 0o644 {
+	if runtime.GOOS != "windows" && luaInfo.Mode().Perm() != 0o644 {
 		t.Fatalf("unexpected lua mode: %o", luaInfo.Mode().Perm())
 	}
 	if _, err := os.Stat(filepath.Join(manager.LuaDir, "pow", "check.lua")); err != nil {

@@ -3,12 +3,12 @@ set -euo pipefail
 
 # OpenFlare Agent Installer
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+#   curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh | bash -s -- \
 #     --server-url http://your-server:3000 \
 #     --discovery-token your-token
 
 INSTALL_DIR="/opt/openflare-agent"
-REPO="Rain-kl/OpenFlare"
+REPO="SatanDS/OpenCDN"
 SERVER_URL=""
 DISCOVERY_TOKEN=""
 AGENT_TOKEN=""
@@ -29,7 +29,7 @@ Options:
   --agent-token TOKEN       Node-specific agent token
   --install-dir DIR         Installation directory (default: /opt/openflare-agent)
   --openresty-path PATH     OpenResty binary path (default: auto-detect from PATH)
-  --repo REPO               GitHub repository (default: Rain-kl/OpenFlare)
+  --repo REPO               GitHub repository (default: SatanDS/OpenCDN)
   --no-service              Do not create systemd service
   -h, --help                Show this help message
 

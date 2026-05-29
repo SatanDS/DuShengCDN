@@ -69,7 +69,7 @@ func CreateNode(input NodeInput) (*NodeView, error) {
 		AgentVersion:      "",
 		NginxVersion:      "",
 		Status:            NodeStatusPending,
-		AutoUpdateEnabled: input.AutoUpdateEnabled,
+		AutoUpdateEnabled: false,
 	}
 	node.NodeID, err = newServerNodeID()
 	if err != nil {
@@ -108,7 +108,7 @@ func UpdateNode(id uint, input NodeInput) (*NodeView, error) {
 	node.GeoLatitude = geoLatitude
 	node.GeoLongitude = geoLongitude
 	node.GeoManualOverride = geoManualOverride
-	node.AutoUpdateEnabled = input.AutoUpdateEnabled
+	node.AutoUpdateEnabled = false
 	if !node.GeoManualOverride {
 		applyGeoInfoFromIP(node, strings.TrimSpace(node.IP))
 	}

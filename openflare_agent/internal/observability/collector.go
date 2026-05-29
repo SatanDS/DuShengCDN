@@ -9,11 +9,9 @@ import (
 	"openflare-agent/internal/protocol"
 	"openflare-agent/internal/state"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -367,24 +365,6 @@ func shouldSkipDiskDevice(device string) bool {
 	default:
 		return false
 	}
-}
-
-func statFilesystem(path string) (int64, int64) {
-	if strings.TrimSpace(path) == "" {
-		path = string(os.PathSeparator)
-	}
-	absPath := filepath.Clean(path)
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(absPath, &stat); err != nil {
-		return 0, 0
-	}
-	total := int64(stat.Blocks) * int64(stat.Bsize)
-	free := int64(stat.Bavail) * int64(stat.Bsize)
-	used := total - free
-	if used < 0 {
-		used = 0
-	}
-	return total, used
 }
 
 func readFirstLine(path string) string {

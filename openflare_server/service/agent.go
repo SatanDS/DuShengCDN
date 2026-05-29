@@ -185,17 +185,13 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 }
 
 func buildAgentSettings(node *model.Node, updateNow bool, updateChannel string, updateTag string, restartOpenrestyNow bool) *AgentSettings {
-	autoUpdate := false
-	if node != nil {
-		autoUpdate = node.AutoUpdateEnabled
-	}
 	if strings.TrimSpace(updateChannel) == "" {
 		updateChannel = ReleaseChannelStable.String()
 	}
 	return &AgentSettings{
 		HeartbeatInterval:       common.AgentHeartbeatInterval,
 		WebsocketUpgradeEnabled: common.AgentWebsocketUpgradeEnabled,
-		AutoUpdate:              autoUpdate,
+		AutoUpdate:              false,
 		UpdateRepo:              common.AgentUpdateRepo,
 		UpdateNow:               updateNow,
 		UpdateChannel:           updateChannel,

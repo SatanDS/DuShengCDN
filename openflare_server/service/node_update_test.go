@@ -270,6 +270,9 @@ func TestUpdateNodeValidatesAndPersistsGeoMetadata(t *testing.T) {
 	if updated.GeoName != "San Francisco" || updated.GeoLatitude == nil || updated.GeoLongitude == nil {
 		t.Fatalf("expected geo metadata in view, got %+v", updated)
 	}
+	if updated.AutoUpdateEnabled {
+		t.Fatal("expected auto update to remain disabled")
+	}
 
 	stored, err := model.GetNodeByID(node.ID)
 	if err != nil {
@@ -277,6 +280,9 @@ func TestUpdateNodeValidatesAndPersistsGeoMetadata(t *testing.T) {
 	}
 	if stored.GeoName != "San Francisco" || stored.GeoLatitude == nil || stored.GeoLongitude == nil {
 		t.Fatalf("expected geo metadata persisted, got %+v", stored)
+	}
+	if stored.AutoUpdateEnabled {
+		t.Fatal("expected auto update to remain disabled in storage")
 	}
 }
 

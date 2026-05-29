@@ -3,8 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"io"
-	"net/http"
 	"openflare/common"
 	"os"
 	"path/filepath"
@@ -13,12 +11,6 @@ import (
 	"testing"
 	"time"
 )
-
-type serverUpdateRoundTripFunc func(req *http.Request) (*http.Response, error)
-
-func (f serverUpdateRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
 
 func resetServerUpgradeTestState(t *testing.T) {
 	t.Helper()
@@ -85,7 +77,7 @@ func TestBuildLatestServerReleaseView(t *testing.T) {
 	view := buildLatestServerReleaseView(&githubReleaseResponse{
 		TagName:     "v0.5.0",
 		Body:        "release notes",
-		HTMLURL:     "https://github.com/Rain-kl/OpenFlare/releases/tag/v0.5.0",
+		HTMLURL:     "https://github.com/SatanDS/OpenCDN/releases/tag/v0.5.0",
 		PublishedAt: "2026-03-11T00:00:00Z",
 	}, ReleaseChannelStable)
 
@@ -339,76 +331,11 @@ func TestBuildLatestServerReleaseViewIncludesUpgradeLogs(t *testing.T) {
 }
 
 func TestScheduleServerUpgradeUsesDownloadedBinaryValidation(t *testing.T) {
-	originalVersion := common.Version
-	originalClient := UpdateHTTPClientForTest()
-	originalExecutor := ServerBinaryUpgradeExecutorForTest()
-	originalDelay := ServerUpgradeDispatchDelayForTest()
-	common.Version = "v0.4.0"
-	called := make(chan string, 1)
-
-	SetUpdateHTTPClientForTest(&http.Client{
-		Transport: serverUpdateRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-			switch req.URL.String() {
-			case "https://api.github.com/repos/Rain-kl/OpenFlare/releases/latest":
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Header:     make(http.Header),
-					Body: io.NopCloser(strings.NewReader(`{
-						"tag_name":"v0.5.0",
-						"body":"release notes",
-						"html_url":"https://github.com/Rain-kl/OpenFlare/releases/tag/v0.5.0",
-						"published_at":"2026-03-11T00:00:00Z",
-						"assets":[{"name":"openflare-server-` + runtime.GOOS + `-` + runtime.GOARCH + `","browser_download_url":"https://downloads.example.com/openflare-server"}]
-					}`)),
-				}, nil
-			case "https://downloads.example.com/openflare-server":
-				_, content := fakeServerBinaryFixture("v0.5.0")
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Header:     make(http.Header),
-					Body:       io.NopCloser(bytes.NewReader(content)),
-				}, nil
-			default:
-				t.Fatalf("unexpected request url: %s", req.URL.String())
-				return nil, nil
-			}
-		}),
-	})
-	SetServerBinaryUpgradeExecutorForTest(func(execPath string, tempPath string) error {
-		called <- tempPath
-		return nil
-	})
-	SetServerUpgradeDispatchDelayForTest(0)
-	t.Cleanup(func() {
-		common.Version = originalVersion
-		SetUpdateHTTPClientForTest(originalClient)
-		SetServerBinaryUpgradeExecutorForTest(originalExecutor)
-		SetServerUpgradeDispatchDelayForTest(originalDelay)
-		resetServerUpgradeTestState(t)
-	})
-
-	release, err := ScheduleServerUpgrade("stable")
-	if err != nil {
-		t.Fatalf("expected schedule to succeed: %v", err)
+	_, err := ScheduleServerUpgrade("stable")
+	if err == nil {
+		t.Fatal("expected automatic release upgrade to be disabled")
 	}
-	if !release.InProgress {
-		t.Fatal("expected release to report in-progress upgrade")
-	}
-
-	select {
-	case tempPath := <-called:
-		if tempPath == "" {
-			t.Fatal("expected upgrade executor to receive temp path")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("expected automatic upgrade executor to be called")
-	}
-
-	_, status, logs := snapshotServerUpgradeState()
-	if status != "succeeded" {
-		t.Fatalf("expected succeeded status after executor call, got %s", status)
-	}
-	if len(logs) == 0 {
-		t.Fatal("expected upgrade logs to be recorded")
+	if !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

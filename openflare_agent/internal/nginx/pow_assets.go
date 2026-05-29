@@ -3,7 +3,6 @@ package nginx
 import (
 	"embed"
 	"openflare-agent/internal/protocol"
-	"path/filepath"
 	"strings"
 )
 
@@ -493,7 +492,7 @@ func ManagedPowStaticFiles() ([]protocol.SupportFile, error) {
 			return err
 		}
 		for _, entry := range entries {
-			fullPath := filepath.Join(dir, entry.Name())
+			fullPath := dir + "/" + entry.Name()
 			if entry.IsDir() {
 				if err := walk(fullPath); err != nil {
 					return err
@@ -514,7 +513,7 @@ func ManagedPowStaticFiles() ([]protocol.SupportFile, error) {
 		return nil
 	}
 	for _, entry := range entries {
-		fullPath := filepath.Join("pow_static", entry.Name())
+		fullPath := "pow_static/" + entry.Name()
 		if entry.IsDir() {
 			if err := walk(fullPath); err != nil {
 				return nil, err

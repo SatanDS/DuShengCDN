@@ -62,7 +62,7 @@ const externalAccountBindingsQueryKey = [
   'external-accounts',
 ] as const;
 const installerScriptUrl =
-  'https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh';
+  'https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh';
 
 const defaultSystemFields = {
   ServerAddress: '',
@@ -89,7 +89,7 @@ const defaultOperationFields = {
   AgentHeartbeatInterval: '10000',
   AgentWebsocketUpgradeEnabled: true,
   NodeOfflineThreshold: '120000',
-  AgentUpdateRepo: 'Rain-kl/OpenFlare',
+  AgentUpdateRepo: 'SatanDS/OpenCDN',
   GeoIPProvider: 'ipinfo',
   OpenRestyWorkerProcesses: 'auto',
   OpenRestyWorkerConnections: '4096',
@@ -385,7 +385,7 @@ export function SettingsPage() {
         true,
       ),
       NodeOfflineThreshold: optionMap.NodeOfflineThreshold ?? '120000',
-      AgentUpdateRepo: optionMap.AgentUpdateRepo ?? 'Rain-kl/OpenFlare',
+      AgentUpdateRepo: optionMap.AgentUpdateRepo ?? 'SatanDS/OpenCDN',
       GeoIPProvider: optionMap.GeoIPProvider ?? 'ipinfo',
       OpenRestyWorkerProcesses: optionMap.OpenRestyWorkerProcesses ?? 'auto',
       OpenRestyWorkerConnections:
@@ -1158,7 +1158,7 @@ export function SettingsPage() {
                             AgentUpdateRepo: event.target.value,
                           }))
                         }
-                        placeholder="Rain-kl/OpenFlare"
+                        placeholder="SatanDS/OpenCDN"
                       />
                     </ResourceField>
                   </div>

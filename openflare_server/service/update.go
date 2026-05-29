@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	serverReleaseRepo     = "Rain-kl/OpenFlare"
+	serverReleaseRepo     = "SatanDS/OpenCDN"
 	githubReleasesAPIBase = "https://api.github.com/repos/%s/releases"
 )
 
@@ -139,6 +139,10 @@ func GetLatestServerRelease(ctx context.Context, channel string) (*LatestServerR
 }
 
 func ScheduleServerUpgrade(channel string) (*LatestServerRelease, error) {
+	return nil, fmt.Errorf("server automatic upgrade is disabled in this fork; upload a reviewed server binary for manual upgrade")
+}
+
+func scheduleServerUpgradeFromRelease(channel string) (*LatestServerRelease, error) {
 	normalizedChannel := normalizeReleaseChannel(channel)
 	serverUpgradeState.Lock()
 	if serverUpgradeState.inProgress {

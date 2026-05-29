@@ -7,14 +7,14 @@
 </div>
 
 <p align="center
-  <a href="https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/LICENSE">
-    <img src="https://img.shields.io/github/license/Rain-kl/OpenFlare?color=brightgreen" alt="license">
+  <a href="https://raw.githubusercontent.com/SatanDS/OpenCDN/main/LICENSE">
+    <img src="https://img.shields.io/github/license/SatanDS/OpenCDN?color=brightgreen" alt="license">
   </a>
-  <a href="https://github.com/Rain-kl/OpenFlare/releases/latest">
-    <img src="https://img.shields.io/github/v/release/Rain-kl/OpenFlare?color=brightgreen&include_prereleases" alt="release">
+  <a href="https://github.com/SatanDS/OpenCDN/releases/latest">
+    <img src="https://img.shields.io/github/v/release/SatanDS/OpenCDN?color=brightgreen&include_prereleases" alt="release">
   </a>
-  <a href="https://github.com/Rain-kl/OpenFlare/pkgs/container/openflare">
-    <img src="https://img.shields.io/badge/GHCR-ghcr.io%2Frain--kl%2Fopenflare-brightgreen" alt="ghcr">
+  <a href="https://github.com/SatanDS/OpenCDN/pkgs/container/opencdn">
+    <img src="https://img.shields.io/badge/GHCR-ghcr.io%2Fsatands%2Fopencdn-brightgreen" alt="ghcr">
   </a>
 </p>
 
@@ -63,7 +63,7 @@ services:
       retries: 5
 
   openflare:
-    image: ghcr.io/rain-kl/openflare:latest
+    image: ghcr.io/satands/opencdn:latest
     restart: unless-stopped
     depends_on:
       postgres:
@@ -105,7 +105,7 @@ docker run -d --name openflare-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
   -e OPENFLARE_SERVER_URL=http://your-server:3000 \
   -e OPENFLARE_AGENT_TOKEN=YOUR_AGENT_TOKEN \
-  ghcr.io/rain-kl/openflare-agent:latest
+  ghcr.io/satands/opencdn-agent:latest
 ```
 
 #### 本地部署
@@ -113,7 +113,7 @@ docker run -d --name openflare-agent --restart unless-stopped \
 使用 `discovery_token` 接入：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --discovery-token YOUR_DISCOVERY_TOKEN
 ```
@@ -121,7 +121,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 使用节点专属 `agent_token`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
@@ -133,7 +133,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 如需彻底卸载 Agent 并清空本地数据，可执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/uninstall-agent.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/uninstall-agent.sh | bash
 ```
 
 卸载脚本会先停止并移除 `openflare-agent.service`、删除整个 `/opt/openflare-agent` 目录，不会删除本机 OpenResty。
@@ -187,8 +187,8 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/unin
 
 <a href="https://www.star-history.com/?repos=Rain-kl%2FOpenFlare&type=date&legend=bottom-right">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Rain-kl/OpenFlare&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Rain-kl/OpenFlare&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Rain-kl/OpenFlare&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=SatanDS/OpenCDN&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=SatanDS/OpenCDN&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=SatanDS/OpenCDN&type=date&legend=top-left" />
  </picture>
 </a>

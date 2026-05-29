@@ -68,12 +68,12 @@ export function AboutPage() {
           <div className='rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)] px-4 py-4'>
             <p className='text-xs uppercase tracking-[0.2em] text-[var(--foreground-muted)]'>项目仓库</p>
             <a
-              href='https://github.com/Rain-kl/OpenFlare'
+              href='https://github.com/SatanDS/OpenCDN'
               target='_blank'
               rel='noreferrer'
               className='mt-2 block text-sm font-medium text-[var(--brand-primary)] transition hover:opacity-80'
             >
-              github.com/Rain-kl/OpenFlare
+              github.com/SatanDS/OpenCDN
             </a>
           </div>
         </div>

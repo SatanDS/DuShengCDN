@@ -168,7 +168,7 @@ export function getServerUrl(value: string) {
 }
 
 const installerScriptUrl =
-  'https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh';
+  'https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh';
 
 export function buildNodeInstallCommand(serverUrl: string, agentToken: string) {
   return [
@@ -184,6 +184,6 @@ export function buildNodeDockerInstallCommand(serverUrl: string, agentToken: str
     `  -p 80:80 -p 443:443 \\`,
     `  -e OPENFLARE_SERVER_URL=${serverUrl} \\`,
     `  -e OPENFLARE_AGENT_TOKEN=${agentToken} \\`,
-    `  ghcr.io/rain-kl/openflare-agent:latest`
+    `  ghcr.io/satands/opencdn-agent:latest`
   ].join('\n');
 }
