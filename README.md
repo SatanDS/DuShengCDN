@@ -93,7 +93,7 @@ docker compose up -d
 
 ### 2. 安装 Agent
 
-安装 Agent 前请先在节点上安装 OpenResty，或改用内置 OpenResty 的 Agent Docker 镜像。
+本地安装脚本会自动检测 Linux / macOS 环境，缺少 OpenResty 时会尝试通过系统包管理器安装；Docker 方式则使用内置 OpenResty 的 Agent 镜像。
 你可以在控制面板的节点管理->详情->节点信息->节点标识与部署复制安装命令，或直接使用下面的脚本：
 
 #### Docker 部署
@@ -126,7 +126,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/instal
   --agent-token YOUR_AGENT_TOKEN
 ```
 
-安装脚本默认写入 `/opt/openflare-agent`，创建 `openflare-agent.service`，自动查找 `openresty`，并可重复执行以重装或升级 Agent。
+安装脚本默认写入 `/opt/openflare-agent`，创建 `openflare-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
 
 ### 3. 卸载 Agent
 

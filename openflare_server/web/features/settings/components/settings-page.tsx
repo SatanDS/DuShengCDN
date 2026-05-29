@@ -1279,7 +1279,7 @@ export function SettingsPage() {
 
             <AppCard
               title="Discovery Token 与部署命令"
-              description="适用于新节点首次接入。可直接复制一键安装命令。"
+              description="适用于新节点首次接入。安装脚本会自动检测 Linux / macOS 环境，并尝试补齐缺少的 OpenResty 或源码构建依赖。"
               action={
                 <div className="flex flex-wrap gap-2">
                   <SecondaryButton
@@ -1335,7 +1335,7 @@ export function SettingsPage() {
                   </div>
                   <ResourceField
                     label="一键部署命令"
-                    hint="命令会使用安装脚本自动注册 Agent。"
+                    hint="命令会使用安装脚本自动注册 Agent，并默认安装缺少的运行依赖；没有 Release 时会从源码构建。"
                   >
                     <CodeBlock className="break-all whitespace-pre-wrap">
                       {discoveryCommand || '请先填写可访问的 Server URL。'}
