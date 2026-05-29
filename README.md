@@ -6,7 +6,7 @@
 
 </div>
 
-<p align="center">
+<p align="center
   <a href="https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/LICENSE">
     <img src="https://img.shields.io/github/license/Rain-kl/OpenFlare?color=brightgreen" alt="license">
   </a>

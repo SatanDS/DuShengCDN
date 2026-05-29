@@ -143,6 +143,8 @@ journalctl -u openflare-agent -f
 
 注意：某个目标 `version + checksum` 一旦应用失败并回退，Agent 会在本地状态中阻断该目标重复应用。修正配置后需要重新发布生成新的 checksum，或激活旧版本回滚。
 
+如果这是 Agent 首次应用配置，且本地没有历史 `nginx.conf` 可回滚，失败目标仍会被阻断，但 Agent 会尝试进入安全兜底运行态。此时应用记录和 Agent 日志会包含 `fallback runtime started`，OpenResty 只监听 `80` 端口并统一返回 `503` 与 `OpenFlare: No Valid Configuration`。修正配置并重新发布新版本后，Agent 会覆盖兜底配置并恢复正常代理。
+
 ## OpenResty 应用失败
 
 常见原因：

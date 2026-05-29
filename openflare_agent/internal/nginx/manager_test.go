@@ -29,6 +29,8 @@ type fakeExecutor struct {
 }
 
 type scriptedExecutor struct {
+	testErrors   []error
+	testCalls    int
 	reloadErrors []error
 	reloadCalls  int
 }
@@ -62,7 +64,12 @@ func (e *fakeExecutor) Restart(ctx context.Context) error {
 }
 
 func (e *scriptedExecutor) Test(ctx context.Context) error {
-	return nil
+	index := e.testCalls
+	e.testCalls++
+	if index >= len(e.testErrors) {
+		return nil
+	}
+	return e.testErrors[index]
 }
 
 func (e *scriptedExecutor) Reload(ctx context.Context) error {
@@ -730,6 +737,48 @@ func TestManagerApplyReturnsWarningWhenRollbackRecoversRuntime(t *testing.T) {
 	}
 	if string(mainData) != "old-main" {
 		t.Fatalf("expected main rollback, got %s", string(mainData))
+	}
+}
+
+func TestManagerApplyStartsSafeFallbackWhenNoRollbackConfigExists(t *testing.T) {
+	tempDir := t.TempDir()
+	routePath := filepath.Join(tempDir, "routes.conf")
+	mainPath := filepath.Join(tempDir, "nginx.conf")
+	executor := &scriptedExecutor{
+		testErrors: []error{errors.New("target config failed"), errors.New("rollback config missing"), nil},
+	}
+	manager := &Manager{
+		MainConfigPath:  mainPath,
+		RouteConfigPath: routePath,
+		Executor:        executor,
+	}
+
+	outcome := manager.Apply(context.Background(), "bad-main", "bad-route", nil)
+	if outcome.Status != ApplyStatusWarning {
+		t.Fatalf("expected warning apply outcome, got %#v", outcome)
+	}
+	if !strings.Contains(outcome.Message, "fallback runtime started") {
+		t.Fatalf("expected fallback message, got %q", outcome.Message)
+	}
+	if executor.testCalls != 3 {
+		t.Fatalf("expected target, rollback, and fallback tests, got %d", executor.testCalls)
+	}
+	mainData, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("failed to read main config: %v", err)
+	}
+	if !strings.Contains(string(mainData), "OpenFlare: No Valid Configuration") {
+		t.Fatalf("expected safe fallback main config, got %s", string(mainData))
+	}
+	if !strings.Contains(string(mainData), "listen 80 default_server") {
+		t.Fatalf("expected fallback to listen on port 80, got %s", string(mainData))
+	}
+	routeData, err := os.ReadFile(routePath)
+	if err != nil {
+		t.Fatalf("failed to read route config: %v", err)
+	}
+	if len(routeData) != 0 {
+		t.Fatalf("expected fallback route config to be empty, got %q", string(routeData))
 	}
 }
 

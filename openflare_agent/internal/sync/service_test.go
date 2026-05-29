@@ -28,7 +28,9 @@ type fakeManager struct {
 	currentChecksum    string
 	currentChecksumErr error
 	ensureErr          error
+	fallbackErr        error
 	ensureCalls        []bool
+	fallbackReasons    []string
 	applyMainContents  []string
 	applyRouteContents []string
 	applyFiles         [][]protocol.SupportFile
@@ -77,6 +79,11 @@ func (m *fakeManager) Apply(ctx context.Context, mainConfig string, routeConfig 
 func (m *fakeManager) EnsureRuntime(ctx context.Context, recreate bool) error {
 	m.ensureCalls = append(m.ensureCalls, recreate)
 	return m.ensureErr
+}
+
+func (m *fakeManager) EnsureSafeFallbackRuntime(ctx context.Context, reason string) error {
+	m.fallbackReasons = append(m.fallbackReasons, reason)
+	return m.fallbackErr
 }
 
 func (m *fakeManager) CurrentChecksum() (string, error) {
@@ -477,6 +484,120 @@ func TestSyncOnStartupKeepsBlockedVersionSuppressedUntilNewTargetArrives(t *test
 	}
 	if snapshot.OpenrestyStatus != protocol.OpenrestyStatusHealthy {
 		t.Fatalf("expected startup runtime recovery to mark openresty healthy, got %q", snapshot.OpenrestyStatus)
+	}
+}
+
+func TestSyncOnStartupStartsFallbackWhenBlockedVersionHasNoLocalConfig(t *testing.T) {
+	client := &fakeClient{
+		config: protocol.ActiveConfigResponse{
+			Version:        "20260309-007",
+			Checksum:       "checksum-7",
+			MainConfig:     "worker_processes 7;",
+			RouteConfig:    "server { listen 87; }",
+			RenderedConfig: "server { listen 87; }",
+			CreatedAt:      time.Now().Format(time.RFC3339),
+		},
+	}
+	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	nodeID, err := stateStore.EnsureNodeID()
+	if err != nil {
+		t.Fatalf("EnsureNodeID failed: %v", err)
+	}
+	if err = stateStore.Save(&state.Snapshot{
+		NodeID:           nodeID,
+		BlockedVersion:   "20260309-007",
+		BlockedChecksum:  "checksum-7",
+		BlockedReason:    "apply failed, but fallback runtime started",
+		OpenrestyStatus:  protocol.OpenrestyStatusUnhealthy,
+		OpenrestyMessage: "apply failed, but fallback runtime started",
+		LastError:        "apply failed, but fallback runtime started",
+	}); err != nil {
+		t.Fatalf("failed to seed state: %v", err)
+	}
+
+	manager := &fakeManager{}
+	service := New(client, manager, stateStore)
+	if err = service.SyncOnStartup(context.Background(), &protocol.ActiveConfigMeta{
+		Version:  "20260309-007",
+		Checksum: "checksum-7",
+	}); err != nil {
+		t.Fatalf("expected blocked startup target to start fallback, got %v", err)
+	}
+	if len(manager.fallbackReasons) != 1 {
+		t.Fatalf("expected fallback runtime to be started once, got %d", len(manager.fallbackReasons))
+	}
+	if client.fetchCalls != 0 {
+		t.Fatalf("expected blocked startup target to skip fetch, got %d", client.fetchCalls)
+	}
+	if len(client.reports) != 0 {
+		t.Fatal("expected blocked startup target to skip duplicate apply report")
+	}
+	snapshot, err := stateStore.Load()
+	if err != nil {
+		t.Fatalf("failed to load state: %v", err)
+	}
+	if snapshot.BlockedVersion != "20260309-007" || snapshot.BlockedChecksum != "checksum-7" {
+		t.Fatalf("expected blocked target to remain recorded, got %+v", snapshot)
+	}
+	if snapshot.OpenrestyStatus != protocol.OpenrestyStatusHealthy {
+		t.Fatalf("expected fallback startup recovery to mark openresty healthy, got %q", snapshot.OpenrestyStatus)
+	}
+	if snapshot.OpenrestyMessage != "safe default fallback runtime started" {
+		t.Fatalf("expected fallback status message, got %q", snapshot.OpenrestyMessage)
+	}
+}
+
+func TestSyncOnStartupStartsFallbackWhenResidualConfigCannotRecover(t *testing.T) {
+	client := &fakeClient{
+		config: protocol.ActiveConfigResponse{
+			Version:        "20260309-007",
+			Checksum:       "checksum-7",
+			MainConfig:     "worker_processes 7;",
+			RouteConfig:    "server { listen 87; }",
+			RenderedConfig: "server { listen 87; }",
+			CreatedAt:      time.Now().Format(time.RFC3339),
+		},
+	}
+	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	nodeID, err := stateStore.EnsureNodeID()
+	if err != nil {
+		t.Fatalf("EnsureNodeID failed: %v", err)
+	}
+	if err = stateStore.Save(&state.Snapshot{
+		NodeID:          nodeID,
+		BlockedVersion:  "20260309-007",
+		BlockedChecksum: "checksum-7",
+		BlockedReason:   "apply failed, but fallback runtime started",
+	}); err != nil {
+		t.Fatalf("failed to seed state: %v", err)
+	}
+
+	manager := &fakeManager{
+		currentChecksum: "residual-checksum",
+		ensureErr:       context.DeadlineExceeded,
+	}
+	service := New(client, manager, stateStore)
+	if err = service.SyncOnStartup(context.Background(), &protocol.ActiveConfigMeta{
+		Version:  "20260309-007",
+		Checksum: "checksum-7",
+	}); err != nil {
+		t.Fatalf("expected residual config failure to start fallback, got %v", err)
+	}
+	if len(manager.ensureCalls) != 1 {
+		t.Fatalf("expected residual config to be tested once, got %d", len(manager.ensureCalls))
+	}
+	if len(manager.fallbackReasons) != 1 {
+		t.Fatalf("expected fallback runtime to be started once, got %d", len(manager.fallbackReasons))
+	}
+	snapshot, err := stateStore.Load()
+	if err != nil {
+		t.Fatalf("failed to load state: %v", err)
+	}
+	if snapshot.OpenrestyStatus != protocol.OpenrestyStatusHealthy {
+		t.Fatalf("expected fallback startup recovery to mark openresty healthy, got %q", snapshot.OpenrestyStatus)
+	}
+	if snapshot.BlockedVersion != "20260309-007" || snapshot.BlockedChecksum != "checksum-7" {
+		t.Fatalf("expected blocked target to remain recorded, got %+v", snapshot)
 	}
 }
 

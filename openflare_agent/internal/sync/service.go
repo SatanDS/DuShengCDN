@@ -27,6 +27,7 @@ type ConfigClient interface {
 type NginxManager interface {
 	Apply(ctx context.Context, mainConfig string, routeConfig string, supportFiles []protocol.SupportFile) nginx.ApplyOutcome
 	EnsureRuntime(ctx context.Context, recreate bool) error
+	EnsureSafeFallbackRuntime(ctx context.Context, reason string) error
 	CurrentChecksum() (string, error)
 }
 
@@ -264,10 +265,29 @@ func outcomeError(version string, message string) error {
 func (s *Service) ensureRuntimeForCurrentConfig(ctx context.Context, mode string, snapshot *state.Snapshot, currentChecksum string) error {
 	if strings.TrimSpace(currentChecksum) == "" {
 		slog.Warn("blocked config cannot be retried and no local checksum is available for runtime recovery", "mode", mode, "blocked_version", snapshot.BlockedVersion)
+		reason := fmt.Sprintf("blocked config %s has no valid local config available for runtime recovery", strings.TrimSpace(snapshot.BlockedVersion))
+		if err := s.nginxManager.EnsureSafeFallbackRuntime(ctx, reason); err != nil {
+			snapshot.OpenrestyStatus = protocol.OpenrestyStatusUnhealthy
+			snapshot.OpenrestyMessage = err.Error()
+			_ = s.stateStore.Save(snapshot)
+			return err
+		}
+		snapshot.OpenrestyStatus = protocol.OpenrestyStatusHealthy
+		snapshot.OpenrestyMessage = "safe default fallback runtime started"
 		return nil
 	}
 	slog.Info("ensuring runtime with current local config while active target remains blocked", "mode", mode, "current_version", snapshot.CurrentVersion, "current_checksum", currentChecksum, "blocked_version", snapshot.BlockedVersion)
 	if err := s.nginxManager.EnsureRuntime(ctx, true); err != nil {
+		if strings.TrimSpace(snapshot.CurrentChecksum) == "" {
+			reason := fmt.Sprintf("blocked config %s has no historical config and current local config cannot start: %v", strings.TrimSpace(snapshot.BlockedVersion), err)
+			if fallbackErr := s.nginxManager.EnsureSafeFallbackRuntime(ctx, reason); fallbackErr == nil {
+				snapshot.OpenrestyStatus = protocol.OpenrestyStatusHealthy
+				snapshot.OpenrestyMessage = "safe default fallback runtime started"
+				return nil
+			} else {
+				err = fmt.Errorf("%v; fallback recovery failed: %w", err, fallbackErr)
+			}
+		}
 		snapshot.OpenrestyStatus = protocol.OpenrestyStatusUnhealthy
 		snapshot.OpenrestyMessage = err.Error()
 		_ = s.stateStore.Save(snapshot)
