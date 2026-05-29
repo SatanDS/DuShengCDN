@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
@@ -206,6 +207,18 @@ export function NodesPage() {
 
         {feedback ? (
           <InlineMessage tone={feedback.tone} message={feedback.message} />
+        ) : null}
+
+        {riskFilter !== 'all' ? (
+          <div className="flex items-center">
+            <Link
+              href="/node"
+              className="inline-flex items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--control-background)] px-3 py-1.5 text-xs font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+              返回全部节点
+            </Link>
+          </div>
         ) : null}
 
         <AppCard
