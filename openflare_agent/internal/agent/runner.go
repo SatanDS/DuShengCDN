@@ -23,6 +23,7 @@ type HeartbeatService interface {
 type SyncService interface {
 	SyncOnStartup(ctx context.Context, target *protocol.ActiveConfigMeta) error
 	SyncOnce(ctx context.Context, target *protocol.ActiveConfigMeta) error
+	ForceSyncOnce(ctx context.Context, target *protocol.ActiveConfigMeta) error
 }
 
 type Updater interface {
@@ -292,6 +293,18 @@ func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WS
 		if err := r.SyncService.SyncOnce(ctx, &target); err != nil {
 			r.recordSyncError(err)
 			slog.Error("agent ws triggered sync failed", "version", target.Version, "error", err)
+		}
+		return false, nil
+	case protocol.WSMessageTypeForceSyncConfig:
+		var target protocol.ActiveConfigMeta
+		if err := json.Unmarshal(message.Payload, &target); err != nil {
+			slog.Debug("agent ws force sync config decode failed", "error", err)
+			return false, nil
+		}
+		slog.Debug("agent ws force sync config received", "version", target.Version, "checksum", target.Checksum, "trigger_sync", true)
+		if err := r.SyncService.ForceSyncOnce(ctx, &target); err != nil {
+			r.recordSyncError(err)
+			slog.Error("agent ws triggered force sync failed", "version", target.Version, "error", err)
 		}
 		return false, nil
 	case protocol.WSMessageTypePing:

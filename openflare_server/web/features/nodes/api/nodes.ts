@@ -63,6 +63,12 @@ export function requestNodeAgentUpdate(
   });
 }
 
+export function requestNodeForceSync(id: number) {
+	return apiRequest<NodeItem>(`/nodes/${id}/force-sync`, {
+		method: 'POST',
+	});
+}
+
 export function requestNodeOpenrestyRestart(id: number) {
   return apiRequest<NodeItem>(`/nodes/${id}/openresty-restart`, {
     method: 'POST',

@@ -188,6 +188,30 @@ func RequestNodeOpenrestyRestart(c *gin.Context) {
 	respondSuccess(c, node)
 }
 
+// RequestNodeForceSync godoc
+// @Summary Request force sync config on node
+// @Tags Nodes
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Node ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/nodes/{id}/force-sync [post]
+func RequestNodeForceSync(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		respondBadRequest(c, "")
+		return
+	}
+
+	node, err := service.RequestNodeForceSync(uint(id))
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, node)
+}
+
 // GetNodeAgentRelease godoc
 // @Summary Check latest agent release for node
 // @Tags Nodes

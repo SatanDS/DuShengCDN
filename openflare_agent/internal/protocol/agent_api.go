@@ -33,11 +33,12 @@ type AgentSettings struct {
 }
 
 const (
-	WSMessageTypeStatus       = "status"
-	WSMessageTypeSettings     = "settings"
-	WSMessageTypeActiveConfig = "active_config"
-	WSMessageTypePing         = "ping"
-	WSMessageTypePong         = "pong"
+	WSMessageTypeStatus          = "status"
+	WSMessageTypeSettings        = "settings"
+	WSMessageTypeActiveConfig    = "active_config"
+	WSMessageTypeForceSyncConfig = "force_sync_config"
+	WSMessageTypePing            = "ping"
+	WSMessageTypePong            = "pong"
 )
 
 type WSMessage struct {

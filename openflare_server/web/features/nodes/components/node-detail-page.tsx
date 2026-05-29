@@ -25,8 +25,10 @@ import {
   getNodeAgentRelease,
   getNodeObservability,
   getNodes,
+  requestNodeForceSync,
   requestNodeOpenrestyRestart,
   requestNodeAgentUpdate,
+  rotateNodeBootstrapToken,
   updateNode,
 } from '@/features/nodes/api/nodes';
 import { NodeEditorModal } from '@/features/nodes/components/node-editor-modal';
@@ -365,6 +367,20 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     },
   });
 
+  const forceSyncMutation = useMutation({
+    mutationFn: () => requestNodeForceSync(Number(nodeId)),
+    onSuccess: async (updatedNode) => {
+      setFeedback({
+        tone: 'success',
+        message: `已向节点 ${updatedNode.name} 下发强制同步指令，无视当前错误拦截。`,
+      });
+      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => deleteNode(Number(nodeId)),
     onSuccess: async () => {
@@ -649,6 +665,16 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                 disabled={isRefreshing}
               >
                 {isRefreshing ? '刷新中...' : '刷新'}
+              </SecondaryButton>
+              <SecondaryButton
+                type="button"
+                onClick={() => {
+                  setFeedback(null);
+                  forceSyncMutation.mutate();
+                }}
+                disabled={forceSyncMutation.isPending}
+              >
+                {forceSyncMutation.isPending ? '同步中...' : '同步'}
               </SecondaryButton>
               <PrimaryButton
                 type="button"

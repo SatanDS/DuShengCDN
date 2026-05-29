@@ -189,6 +189,22 @@ func RequestNodeOpenrestyRestart(id uint) (*NodeView, error) {
 	return buildNodeView(node), nil
 }
 
+func RequestNodeForceSync(id uint) (*NodeView, error) {
+	node, err := model.GetNodeByID(id)
+	if err != nil {
+		return nil, err
+	}
+	activeConfig, err := GetActiveConfigMetaForAgent()
+	if err != nil {
+		return nil, errors.New("无法获取当前激活的配置版本：" + err.Error())
+	}
+	if !SendAgentWSForceSyncConfig(node.NodeID, activeConfig) {
+		return nil, errors.New("节点不在线或通过 WebSocket 发送同步指令失败")
+	}
+	slog.Info("force sync requested via ws", "node_id", node.NodeID, "name", node.Name)
+	return buildNodeView(node), nil
+}
+
 func AuthenticateAgentToken(token string) (*model.Node, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {

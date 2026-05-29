@@ -7,11 +7,12 @@ import (
 )
 
 const (
-	AgentWSMessageTypeStatus       = "status"
-	AgentWSMessageTypeSettings     = "settings"
-	AgentWSMessageTypeActiveConfig = "active_config"
-	AgentWSMessageTypePing         = "ping"
-	AgentWSMessageTypePong         = "pong"
+	AgentWSMessageTypeStatus          = "status"
+	AgentWSMessageTypeSettings        = "settings"
+	AgentWSMessageTypeActiveConfig    = "active_config"
+	AgentWSMessageTypeForceSyncConfig = "force_sync_config"
+	AgentWSMessageTypePing            = "ping"
+	AgentWSMessageTypePong            = "pong"
 
 	AgentWSConnectedLastSeenValue = "__OPENFLARE_WS_CONNECTED__"
 )
@@ -163,6 +164,16 @@ func SendAgentWSActiveConfig(nodeID string, activeConfig *ActiveConfigMeta) bool
 	}
 	return sendAgentWSMessage(nodeID, AgentWSOutboundMessage{
 		Type:    AgentWSMessageTypeActiveConfig,
+		Payload: activeConfig,
+	})
+}
+
+func SendAgentWSForceSyncConfig(nodeID string, activeConfig *ActiveConfigMeta) bool {
+	if activeConfig == nil {
+		return false
+	}
+	return sendAgentWSMessage(nodeID, AgentWSOutboundMessage{
+		Type:    AgentWSMessageTypeForceSyncConfig,
 		Payload: activeConfig,
 	})
 }

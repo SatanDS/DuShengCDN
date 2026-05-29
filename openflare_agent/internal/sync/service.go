@@ -137,6 +137,18 @@ func (s *Service) sync(ctx context.Context, startup bool, target *protocol.Activ
 	return s.applyIfNeeded(ctx, mode, startup, snapshot, currentChecksum, target, config)
 }
 
+func (s *Service) ForceSyncOnce(ctx context.Context, target *protocol.ActiveConfigMeta) error {
+	snapshot, err := s.stateStore.Load()
+	if err != nil {
+		return err
+	}
+	if hasBlockedTarget(snapshot) {
+		clearBlockedTarget(snapshot)
+		_ = s.stateStore.Save(snapshot)
+	}
+	return s.SyncOnce(ctx, target)
+}
+
 func (s *Service) applyIfNeeded(ctx context.Context, mode string, startup bool, snapshot *state.Snapshot, currentChecksum string, target *protocol.ActiveConfigMeta, config *protocol.ActiveConfigResponse) error {
 	if currentChecksum == config.Checksum {
 		slog.Debug("local openresty config already up to date", "mode", mode, "version", config.Version)
