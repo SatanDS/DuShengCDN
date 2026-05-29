@@ -2,6 +2,9 @@ name: Release
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
     inputs:
@@ -21,7 +24,7 @@ jobs:
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -65,12 +68,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
@@ -85,7 +88,7 @@ jobs:
           NEXT_PUBLIC_APP_VERSION="$VERSION" pnpm build
 
       - name: Upload Frontend Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-build
           path: openflare_server/web/build
@@ -119,20 +122,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Download Frontend Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-build
           path: openflare_server/web/build
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: openflare_server/go.mod
+          cache-dependency-path: openflare_server/go.sum
 
       - name: Build Server
         working-directory: openflare_server
@@ -148,7 +152,7 @@ jobs:
           go build -trimpath -ldflags "-s -w -X 'openflare/common.Version=$VERSION'" -o "../dist/$ASSET_NAME" .
 
       - name: Upload Binary Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: server-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/${{ matrix.asset_name }}
@@ -177,14 +181,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: openflare_agent/go.mod
+          cache-dependency-path: openflare_agent/go.sum
 
       - name: Build Agent
         working-directory: openflare_agent
@@ -201,7 +206,7 @@ jobs:
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
 
       - name: Upload Agent Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -218,21 +223,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Server Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "server-*"
           path: dist
           merge-multiple: true
 
       - name: Download Agent Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "agent-*"
           path: dist
           merge-multiple: true
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.version }}
           name: ${{ needs.prepare.outputs.version }}
@@ -240,6 +245,7 @@ jobs:
           files: dist/*
           draft: false
           prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          make_latest: ${{ needs.prepare.outputs.is_prerelease == 'true' && 'false' || 'true' }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
