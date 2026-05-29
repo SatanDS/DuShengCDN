@@ -275,7 +275,7 @@ func buildNodeView(node *model.Node) *NodeView {
 		OpenrestyMessage:          strings.TrimSpace(node.OpenrestyMessage),
 		Status:                    status,
 		CurrentVersion:            node.CurrentVersion,
-		LastSeenAt:                node.LastSeenAt,
+		LastSeenAt:                nodeViewLastSeenAt(node),
 		LastError:                 node.LastError,
 		CreatedAt:                 node.CreatedAt,
 		UpdatedAt:                 node.UpdatedAt,
@@ -286,6 +286,16 @@ func buildNodeView(node *model.Node) *NodeView {
 		view.UpdateChannel = ReleaseChannelStable.String()
 	}
 	return view
+}
+
+func nodeViewLastSeenAt(node *model.Node) any {
+	if node != nil && IsAgentWSConnected(node.NodeID) {
+		return AgentWSConnectedLastSeenValue
+	}
+	if node == nil {
+		return time.Time{}
+	}
+	return node.LastSeenAt
 }
 
 func normalizeNodeInput(input NodeInput) (string, string, string, *float64, *float64, bool, error) {

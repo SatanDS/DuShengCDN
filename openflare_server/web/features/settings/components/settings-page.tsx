@@ -87,6 +87,7 @@ const defaultSystemFields = {
 
 const defaultOperationFields = {
   AgentHeartbeatInterval: '10000',
+  AgentWebsocketUpgradeEnabled: true,
   NodeOfflineThreshold: '120000',
   AgentUpdateRepo: 'Rain-kl/OpenFlare',
   GeoIPProvider: 'ipinfo',
@@ -379,6 +380,10 @@ export function SettingsPage() {
 
     setOperationFields({
       AgentHeartbeatInterval: optionMap.AgentHeartbeatInterval ?? '10000',
+      AgentWebsocketUpgradeEnabled: toBoolean(
+        optionMap.AgentWebsocketUpgradeEnabled,
+        true,
+      ),
       NodeOfflineThreshold: optionMap.NodeOfflineThreshold ?? '120000',
       AgentUpdateRepo: optionMap.AgentUpdateRepo ?? 'Rain-kl/OpenFlare',
       GeoIPProvider: optionMap.GeoIPProvider ?? 'ipinfo',
@@ -1059,6 +1064,12 @@ export function SettingsPage() {
                       await saveOptionEntries(
                         [
                           ['AgentHeartbeatInterval', String(heartbeat)],
+                          [
+                            'AgentWebsocketUpgradeEnabled',
+                            String(
+                              operationFields.AgentWebsocketUpgradeEnabled,
+                            ),
+                          ],
                           ['NodeOfflineThreshold', String(offline)],
                           [
                             'AgentUpdateRepo',
@@ -1115,6 +1126,17 @@ export function SettingsPage() {
                       />
                     </ResourceField>
                   </div>
+                  <ToggleField
+                    label="开启 WS 连接升级"
+                    description="开启后 Agent 会在 HTTP 心跳成功后尝试升级为 WebSocket，发布配置时可立即收到同步通知。"
+                    checked={operationFields.AgentWebsocketUpgradeEnabled}
+                    onChange={(checked) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AgentWebsocketUpgradeEnabled: checked,
+                      }))
+                    }
+                  />
                 </div>
 
                 <div className="border-t border-[var(--border-default)] pt-6">

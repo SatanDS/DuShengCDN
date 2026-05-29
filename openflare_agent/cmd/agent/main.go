@@ -17,6 +17,7 @@ import (
 	"openflare-agent/internal/state"
 	syncservice "openflare-agent/internal/sync"
 	"openflare-agent/internal/updater"
+	"openflare-agent/internal/wsclient"
 )
 
 func main() {
@@ -56,6 +57,7 @@ func main() {
 	)
 
 	client := httpclient.New(cfg.ServerURL, cfg.InitialAuthToken(), cfg.RequestTimeout.Duration())
+	wsClient := wsclient.New(cfg.ServerURL, cfg.InitialAuthToken(), cfg.RequestTimeout.Duration())
 	stateStore := state.NewStore(cfg.StatePath)
 	observabilityBuffer := state.NewObservabilityBufferStore(cfg.ObservabilityBufferPath)
 	runtimeManager := &nginx.Manager{
@@ -93,6 +95,7 @@ func main() {
 		SyncService:         syncservice.New(client, runtimeManager, stateStore),
 		Updater:             updater.New(),
 		RuntimeManager:      runtimeManager,
+		WebSocketService:    wsClient,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

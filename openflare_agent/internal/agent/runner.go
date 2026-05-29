@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -33,6 +34,12 @@ type RuntimeManager interface {
 	Restart(ctx context.Context) error
 }
 
+type WebSocketService interface {
+	Connect(ctx context.Context) (protocol.WebSocketConnection, error)
+	SetToken(token string)
+	URL() string
+}
+
 type UpdateOptions struct {
 	Channel string
 	TagName string
@@ -47,13 +54,15 @@ type Runner struct {
 	SyncService         SyncService
 	Updater             Updater
 	RuntimeManager      RuntimeManager
+	WebSocketService    WebSocketService
 
-	autoUpdate          bool
-	updateNow           bool
-	updateRepo          string
-	updateChan          string
-	updateTag           string
-	restartOpenrestyNow bool
+	autoUpdate              bool
+	updateNow               bool
+	updateRepo              string
+	updateChan              string
+	updateTag               string
+	restartOpenrestyNow     bool
+	websocketUpgradeEnabled bool
 }
 
 func (r *Runner) Run(ctx context.Context) error {
@@ -63,26 +72,8 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	slog.Info("agent runner started", "node_id", nodeID, "node", r.Config.NodeName, "ip", r.Config.NodeIP)
 	if r.hasAgentToken() {
-		r.refreshOpenrestyHealth(ctx)
-		payload, ackWindows := r.prepareHeartbeatPayload(nodeID)
-		heartbeatResult, hbErr := r.HeartbeatService.Heartbeat(ctx, payload)
-		if hbErr != nil {
+		if _, hbErr := r.performHeartbeatCycle(ctx, nodeID, true); hbErr != nil {
 			slog.Error("agent startup heartbeat failed", "error", hbErr)
-		} else {
-			r.ackObservabilityWindows(ackWindows)
-			if heartbeatResult == nil {
-				heartbeatResult = &protocol.HeartbeatResult{}
-			}
-			slog.Debug("agent startup heartbeat succeeded", "node_id", nodeID)
-			r.applySettings(heartbeatResult.AgentSettings)
-			if err = r.SyncService.SyncOnStartup(ctx, heartbeatResult.ActiveConfig); err != nil {
-				r.recordSyncError(err)
-				slog.Error("agent startup sync failed", "error", err)
-			} else {
-				slog.Debug("agent startup sync completed")
-			}
-			r.tryRestartOpenresty(ctx)
-			r.tryAutoUpdate(ctx)
 		}
 	} else if err = r.tryRegister(ctx, &nodeID); err != nil {
 		slog.Error("agent initial discovery register failed", "error", err)
@@ -90,40 +81,263 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	heartbeatTicker := time.NewTicker(r.Config.HeartbeatInterval.Duration())
 	defer heartbeatTicker.Stop()
+	var wsDone <-chan error
+	wsBackoff := newWebSocketBackoff()
+	nextWSAttempt := time.Now()
+	tryStartWebSocket := func() {
+		if wsDone != nil || !r.shouldUseWebSocket() || time.Now().Before(nextWSAttempt) {
+			return
+		}
+		done, startErr := r.startWebSocket(ctx, nodeID)
+		if startErr != nil {
+			delay := wsBackoff.Next()
+			nextWSAttempt = time.Now().Add(delay)
+			slog.Debug("agent ws upgrade failed; falling back to http heartbeat",
+				"enabled", r.websocketUpgradeEnabled,
+				"url", r.websocketURL(),
+				"retry_after", delay,
+				"error", startErr,
+			)
+			return
+		}
+		wsBackoff.Reset()
+		wsDone = done
+		slog.Debug("agent switched to websocket mode", "url", r.websocketURL())
+	}
+	tryStartWebSocket()
 
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("agent runner shutting down", "error", ctx.Err())
 			return ctx.Err()
+		case wsErr := <-wsDone:
+			wsDone = nil
+			delay := wsBackoff.Next()
+			nextWSAttempt = time.Now().Add(delay)
+			slog.Debug("agent ws disconnected; resuming http heartbeat", "retry_after", delay, "error", wsErr)
+			if r.hasAgentToken() {
+				if _, hbErr := r.performHeartbeatCycle(ctx, nodeID, false); hbErr != nil {
+					slog.Error("agent heartbeat after ws disconnect failed", "error", hbErr)
+				}
+			}
 		case <-heartbeatTicker.C:
+			if wsDone != nil {
+				continue
+			}
 			if !r.hasAgentToken() {
 				if err = r.tryRegister(ctx, &nodeID); err != nil {
 					slog.Error("agent discovery register failed", "error", err)
 				}
 				continue
 			}
-			r.refreshOpenrestyHealth(ctx)
-			payload, ackWindows := r.prepareHeartbeatPayload(nodeID)
-			heartbeatResult, hbErr := r.HeartbeatService.Heartbeat(ctx, payload)
-			if hbErr != nil {
+			if changed, hbErr := r.performHeartbeatCycle(ctx, nodeID, false); hbErr != nil {
 				slog.Error("agent heartbeat failed", "error", hbErr)
 			} else {
-				r.ackObservabilityWindows(ackWindows)
-				if heartbeatResult == nil {
-					heartbeatResult = &protocol.HeartbeatResult{}
-				}
-				if changed := r.applySettings(heartbeatResult.AgentSettings); changed {
+				if changed {
 					heartbeatTicker.Reset(r.Config.HeartbeatInterval.Duration())
 				}
-				if err = r.SyncService.SyncOnce(ctx, heartbeatResult.ActiveConfig); err != nil {
-					r.recordSyncError(err)
-					slog.Error("agent sync failed", "error", err)
-				}
-				r.tryRestartOpenresty(ctx)
-				r.tryAutoUpdate(ctx)
+				tryStartWebSocket()
 			}
 		}
+	}
+}
+
+func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, startup bool) (bool, error) {
+	r.refreshOpenrestyHealth(ctx)
+	payload, ackWindows := r.prepareHeartbeatPayload(nodeID)
+	heartbeatResult, err := r.HeartbeatService.Heartbeat(ctx, payload)
+	if err != nil {
+		return false, err
+	}
+	r.ackObservabilityWindows(ackWindows)
+	if heartbeatResult == nil {
+		heartbeatResult = &protocol.HeartbeatResult{}
+	}
+	mode := "periodic"
+	if startup {
+		mode = "startup"
+	}
+	slog.Debug("agent heartbeat succeeded", "mode", mode, "node_id", nodeID)
+	changed := r.applySettings(heartbeatResult.AgentSettings)
+	if startup {
+		if err = r.SyncService.SyncOnStartup(ctx, heartbeatResult.ActiveConfig); err != nil {
+			r.recordSyncError(err)
+			slog.Error("agent startup sync failed", "error", err)
+		} else {
+			slog.Debug("agent startup sync completed")
+		}
+	} else if err = r.SyncService.SyncOnce(ctx, heartbeatResult.ActiveConfig); err != nil {
+		r.recordSyncError(err)
+		slog.Error("agent sync failed", "error", err)
+	}
+	r.tryRestartOpenresty(ctx)
+	r.tryAutoUpdate(ctx)
+	return changed, nil
+}
+
+func (r *Runner) shouldUseWebSocket() bool {
+	enabled := r.WebSocketService != nil && r.websocketUpgradeEnabled && r.hasAgentToken()
+	slog.Debug("agent ws upgrade eligibility checked", "enabled", enabled, "server_enabled", r.websocketUpgradeEnabled, "url", r.websocketURL())
+	return enabled
+}
+
+func (r *Runner) websocketURL() string {
+	if r.WebSocketService == nil {
+		return ""
+	}
+	return r.WebSocketService.URL()
+}
+
+func (r *Runner) startWebSocket(ctx context.Context, nodeID string) (<-chan error, error) {
+	if r.WebSocketService == nil {
+		return nil, errors.New("websocket service is not configured")
+	}
+	conn, err := r.WebSocketService.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			_ = conn.Close()
+		}()
+		done <- r.runWebSocket(ctx, nodeID, conn)
+	}()
+	return done, nil
+}
+
+func (r *Runner) runWebSocket(ctx context.Context, nodeID string, conn protocol.WebSocketConnection) error {
+	slog.Debug("agent ws connected", "url", conn.URL(), "node_id", nodeID)
+	statusTicker := time.NewTicker(r.Config.HeartbeatInterval.Duration())
+	defer statusTicker.Stop()
+
+	messages := make(chan protocol.WSMessage, 8)
+	readDone := make(chan error, 1)
+	go func() {
+		for {
+			message, err := conn.Receive()
+			if err != nil {
+				readDone <- err
+				return
+			}
+			select {
+			case messages <- message:
+			case <-ctx.Done():
+				readDone <- ctx.Err()
+				return
+			}
+		}
+	}()
+
+	if err := r.sendWebSocketStatus(ctx, nodeID, conn); err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-readDone:
+			return err
+		case <-statusTicker.C:
+			if err := r.sendWebSocketStatus(ctx, nodeID, conn); err != nil {
+				return err
+			}
+		case message := <-messages:
+			changed, err := r.handleWebSocketMessage(ctx, message, conn)
+			if err != nil {
+				return err
+			}
+			if changed {
+				statusTicker.Reset(r.Config.HeartbeatInterval.Duration())
+			}
+		}
+	}
+}
+
+func (r *Runner) sendWebSocketStatus(ctx context.Context, nodeID string, conn protocol.WebSocketConnection) error {
+	r.refreshOpenrestyHealth(ctx)
+	payload, ackWindows := r.prepareHeartbeatPayload(nodeID)
+	if err := conn.SendStatus(payload); err != nil {
+		return err
+	}
+	r.ackObservabilityWindows(ackWindows)
+	return nil
+}
+
+func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WSMessage, conn protocol.WebSocketConnection) (bool, error) {
+	switch message.Type {
+	case protocol.WSMessageTypeSettings:
+		var settings protocol.AgentSettings
+		if err := json.Unmarshal(message.Payload, &settings); err != nil {
+			slog.Debug("agent ws settings decode failed", "error", err)
+			return false, nil
+		}
+		changed := r.applySettings(&settings)
+		r.tryRestartOpenresty(ctx)
+		r.tryAutoUpdate(ctx)
+		if !r.websocketUpgradeEnabled {
+			slog.Debug("agent ws disabled by server settings; falling back to http heartbeat")
+			return changed, errors.New("websocket upgrade disabled by server")
+		}
+		return changed, nil
+	case protocol.WSMessageTypeActiveConfig:
+		var target protocol.ActiveConfigMeta
+		if err := json.Unmarshal(message.Payload, &target); err != nil {
+			slog.Debug("agent ws active config decode failed", "error", err)
+			return false, nil
+		}
+		slog.Debug("agent ws active config received", "version", target.Version, "checksum", target.Checksum, "trigger_sync", true)
+		if err := r.SyncService.SyncOnce(ctx, &target); err != nil {
+			r.recordSyncError(err)
+			slog.Error("agent ws triggered sync failed", "version", target.Version, "error", err)
+		}
+		return false, nil
+	case protocol.WSMessageTypePing:
+		slog.Debug("agent ws ping received")
+		return false, conn.SendPong()
+	case protocol.WSMessageTypePong:
+		slog.Debug("agent ws pong received")
+		return false, nil
+	default:
+		slog.Debug("agent ws unsupported message type", "type", message.Type)
+		return false, nil
+	}
+}
+
+type webSocketBackoff struct {
+	delays []time.Duration
+	index  int
+}
+
+func newWebSocketBackoff() *webSocketBackoff {
+	return &webSocketBackoff{
+		delays: []time.Duration{
+			time.Second,
+			2 * time.Second,
+			5 * time.Second,
+			10 * time.Second,
+			30 * time.Second,
+		},
+	}
+}
+
+func (backoff *webSocketBackoff) Next() time.Duration {
+	if backoff == nil || len(backoff.delays) == 0 {
+		return 30 * time.Second
+	}
+	if backoff.index >= len(backoff.delays) {
+		return backoff.delays[len(backoff.delays)-1]
+	}
+	delay := backoff.delays[backoff.index]
+	backoff.index++
+	return delay
+}
+
+func (backoff *webSocketBackoff) Reset() {
+	if backoff != nil {
+		backoff.index = 0
 	}
 }
 
@@ -144,6 +358,10 @@ func (r *Runner) applySettings(settings *protocol.AgentSettings) bool {
 			changed = true
 		}
 	}
+	if settings.WebsocketUpgradeEnabled != r.websocketUpgradeEnabled {
+		slog.Debug("agent websocket upgrade setting updated", "from", r.websocketUpgradeEnabled, "to", settings.WebsocketUpgradeEnabled)
+	}
+	r.websocketUpgradeEnabled = settings.WebsocketUpgradeEnabled
 	r.autoUpdate = settings.AutoUpdate
 	r.updateNow = settings.UpdateNow
 	r.updateRepo = strings.TrimSpace(settings.UpdateRepo)
@@ -222,6 +440,9 @@ func (r *Runner) tryRegister(ctx context.Context, nodeID *string) error {
 		return err
 	}
 	r.HeartbeatService.SetToken(response.AgentToken)
+	if r.WebSocketService != nil {
+		r.WebSocketService.SetToken(response.AgentToken)
+	}
 	*nodeID = response.NodeID
 	slog.Info("agent discovery registration succeeded", "node_id", response.NodeID)
 	r.refreshOpenrestyHealth(ctx)

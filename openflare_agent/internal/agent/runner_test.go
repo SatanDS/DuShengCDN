@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -67,6 +68,7 @@ type fakeSyncService struct {
 	syncOnceErr    error
 	startupCalls   int
 	syncOnceCalls  int
+	lastTarget     *protocol.ActiveConfigMeta
 	onSyncOnceCall func(int)
 }
 
@@ -104,6 +106,10 @@ func (f *fakeSyncService) SyncOnStartup(ctx context.Context, target *protocol.Ac
 func (f *fakeSyncService) SyncOnce(ctx context.Context, target *protocol.ActiveConfigMeta) error {
 	f.mu.Lock()
 	f.syncOnceCalls++
+	if target != nil {
+		copied := *target
+		f.lastTarget = &copied
+	}
 	callIndex := f.syncOnceCalls
 	callback := f.onSyncOnceCall
 	f.mu.Unlock()
@@ -111,6 +117,31 @@ func (f *fakeSyncService) SyncOnce(ctx context.Context, target *protocol.ActiveC
 		callback(callIndex)
 	}
 	return f.syncOnceErr
+}
+
+type fakeWebSocketConnection struct {
+	pongCalls int
+}
+
+func (f *fakeWebSocketConnection) URL() string {
+	return "ws://127.0.0.1/api/agent/ws"
+}
+
+func (f *fakeWebSocketConnection) SendStatus(payload protocol.NodePayload) error {
+	return nil
+}
+
+func (f *fakeWebSocketConnection) SendPong() error {
+	f.pongCalls++
+	return nil
+}
+
+func (f *fakeWebSocketConnection) Receive() (protocol.WSMessage, error) {
+	return protocol.WSMessage{}, errors.New("not implemented")
+}
+
+func (f *fakeWebSocketConnection) Close() error {
+	return nil
 }
 
 func TestRunnerKeepsHeartbeatWhenStartupSyncFails(t *testing.T) {
@@ -493,5 +524,85 @@ func TestRunnerDiscoveryRegisterUpdatesTokenAndNodeID(t *testing.T) {
 	}
 	if runner.Config.AgentToken != "agent-token-issued" || runner.Config.DiscoveryToken != "" {
 		t.Fatal("expected config token rotation to complete")
+	}
+}
+
+func TestRunnerHandlesWebSocketActiveConfigMessage(t *testing.T) {
+	syncService := &fakeSyncService{}
+	runner := &Runner{SyncService: syncService}
+	payload, err := json.Marshal(protocol.ActiveConfigMeta{
+		Version:  "20260529-001",
+		Checksum: "checksum-ws",
+	})
+	if err != nil {
+		t.Fatalf("marshal active config: %v", err)
+	}
+
+	changed, err := runner.handleWebSocketMessage(context.Background(), protocol.WSMessage{
+		Type:    protocol.WSMessageTypeActiveConfig,
+		Payload: payload,
+	}, &fakeWebSocketConnection{})
+	if err != nil {
+		t.Fatalf("handle websocket active config: %v", err)
+	}
+	if changed {
+		t.Fatal("active config message should not change heartbeat interval")
+	}
+	if syncService.syncOnceCalls != 1 {
+		t.Fatalf("expected one sync call, got %d", syncService.syncOnceCalls)
+	}
+	if syncService.lastTarget == nil || syncService.lastTarget.Version != "20260529-001" || syncService.lastTarget.Checksum != "checksum-ws" {
+		t.Fatalf("unexpected sync target: %+v", syncService.lastTarget)
+	}
+}
+
+func TestRunnerHandlesWebSocketSettingsDisabled(t *testing.T) {
+	runner := &Runner{
+		Config: &config.Config{
+			HeartbeatInterval: config.MillisecondDuration(10 * time.Second),
+		},
+		websocketUpgradeEnabled: true,
+	}
+	payload, err := json.Marshal(protocol.AgentSettings{
+		HeartbeatInterval:       15000,
+		WebsocketUpgradeEnabled: false,
+	})
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+
+	changed, err := runner.handleWebSocketMessage(context.Background(), protocol.WSMessage{
+		Type:    protocol.WSMessageTypeSettings,
+		Payload: payload,
+	}, &fakeWebSocketConnection{})
+	if err == nil {
+		t.Fatal("expected disabled websocket setting to request fallback")
+	}
+	if !changed {
+		t.Fatal("expected heartbeat interval change to be reported")
+	}
+	if runner.websocketUpgradeEnabled {
+		t.Fatal("expected websocket upgrade to be disabled")
+	}
+}
+
+func TestWebSocketBackoffSequence(t *testing.T) {
+	backoff := newWebSocketBackoff()
+	expected := []time.Duration{
+		time.Second,
+		2 * time.Second,
+		5 * time.Second,
+		10 * time.Second,
+		30 * time.Second,
+		30 * time.Second,
+	}
+	for _, want := range expected {
+		if got := backoff.Next(); got != want {
+			t.Fatalf("unexpected backoff: got %s want %s", got, want)
+		}
+	}
+	backoff.Reset()
+	if got := backoff.Next(); got != time.Second {
+		t.Fatalf("expected reset backoff to return 1s, got %s", got)
 	}
 }

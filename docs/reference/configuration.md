@@ -72,6 +72,7 @@ go run . --port 3000 --log-dir ./logs
 | 配置项 | 作用 | 默认值 |
 | --- | --- | --- |
 | `AgentHeartbeatInterval` | Agent 心跳间隔（毫秒） | `10000` |
+| `AgentWebsocketUpgradeEnabled` | 是否允许 Agent 在 HTTP 心跳成功后升级为 WebSocket | `true` |
 | `NodeOfflineThreshold` | 节点离线阈值（毫秒） | `120000` |
 | `AgentUpdateRepo` | Agent 自更新仓库 | `Rain-kl/OpenFlare` |
 | `GeoIPProvider` | 节点/IP 归属解析方式 | `ipinfo` |
@@ -186,6 +187,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 
 * `agent_token` 与 `discovery_token` 不能同时为空。
 * `heartbeat_interval` 与 `request_timeout` 支持毫秒整数或 Go duration 字符串。
+* Server 运行时配置 `AgentWebsocketUpgradeEnabled` 开启时，Agent 会在 HTTP 心跳成功后尝试升级为 WebSocket；连接失败或断开后自动退回 HTTP 心跳。
 * 未配置 `openresty_path` 时默认调用 `openresty`。
 * 如果 `agent.json` 不存在，但 `OPENFLARE_SERVER_URL` 与 Token 等环境变量足够，Agent 可以直接启动；两者同时存在时环境变量优先。
 * Agent 自动探测到私网 `node_ip` 时，Server 会在注册/心跳阶段优先保留 Agent 直连来源的公网地址，避免 NAT/多网卡场景误登记内网网卡地址。

@@ -1,5 +1,7 @@
 package protocol
 
+import "encoding/json"
+
 type APIResponse[T any] struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
@@ -20,13 +22,40 @@ type HeartbeatResult struct {
 }
 
 type AgentSettings struct {
-	HeartbeatInterval   int    `json:"heartbeat_interval"`
-	AutoUpdate          bool   `json:"auto_update"`
-	UpdateRepo          string `json:"update_repo"`
-	UpdateNow           bool   `json:"update_now"`
-	UpdateChannel       string `json:"update_channel"`
-	UpdateTag           string `json:"update_tag"`
-	RestartOpenrestyNow bool   `json:"restart_openresty_now"`
+	HeartbeatInterval       int    `json:"heartbeat_interval"`
+	WebsocketUpgradeEnabled bool   `json:"websocket_upgrade_enabled"`
+	AutoUpdate              bool   `json:"auto_update"`
+	UpdateRepo              string `json:"update_repo"`
+	UpdateNow               bool   `json:"update_now"`
+	UpdateChannel           string `json:"update_channel"`
+	UpdateTag               string `json:"update_tag"`
+	RestartOpenrestyNow     bool   `json:"restart_openresty_now"`
+}
+
+const (
+	WSMessageTypeStatus       = "status"
+	WSMessageTypeSettings     = "settings"
+	WSMessageTypeActiveConfig = "active_config"
+	WSMessageTypePing         = "ping"
+	WSMessageTypePong         = "pong"
+)
+
+type WSMessage struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type WSOutboundMessage struct {
+	Type    string `json:"type"`
+	Payload any    `json:"payload,omitempty"`
+}
+
+type WebSocketConnection interface {
+	URL() string
+	SendStatus(payload NodePayload) error
+	SendPong() error
+	Receive() (WSMessage, error)
+	Close() error
 }
 
 const (

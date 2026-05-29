@@ -1,11 +1,17 @@
 package controller
 
 import (
+	"encoding/json"
+	"log/slog"
+	"net"
+	"openflare/common"
 	"openflare/model"
 	"openflare/service"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/websocket"
 )
 
 // AgentRegister godoc
@@ -120,6 +126,121 @@ func AgentReportApplyLog(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, log)
+}
+
+// AgentWebSocket godoc
+// @Summary Upgrade agent connection to websocket
+// @Tags Agent
+// @Security AgentTokenAuth
+// @Router /api/agent/ws [get]
+func AgentWebSocket(c *gin.Context) {
+	authNode, ok := c.Get("agent_node")
+	if !ok {
+		respondUnauthorized(c, "无权进行此操作，Agent Token 无效")
+		return
+	}
+	node := authNode.(*model.Node)
+	slog.Debug("agent ws upgrade requested", "node_id", node.NodeID, "remote", c.Request.RemoteAddr)
+	websocket.Handler(func(conn *websocket.Conn) {
+		client := service.RegisterAgentWSClient(node.NodeID)
+		defer service.UnregisterAgentWSClient(client)
+		defer func() {
+			_ = conn.Close()
+			slog.Debug("agent ws connection closed", "node_id", node.NodeID)
+		}()
+
+		slog.Debug("agent ws upgrade succeeded", "node_id", node.NodeID, "remote", c.Request.RemoteAddr)
+		go streamAgentWSMessages(c, conn, client)
+
+		for {
+			var message service.AgentWSInboundMessage
+			_ = conn.SetReadDeadline(time.Now().Add(agentWSReadTimeout()))
+			if err := websocket.JSON.Receive(conn, &message); err != nil {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					slog.Debug("agent ws receive timeout waiting for status or pong", "node_id", node.NodeID, "timeout", agentWSReadTimeout())
+					return
+				}
+				slog.Debug("agent ws receive failed", "node_id", node.NodeID, "error", err)
+				return
+			}
+			slog.Debug("agent ws message received", "node_id", node.NodeID, "type", message.Type)
+			switch message.Type {
+			case service.AgentWSMessageTypeStatus:
+				handleAgentWSStatus(c, node, message)
+			case service.AgentWSMessageTypePing:
+				if !service.SendAgentWSPong(node.NodeID) {
+					slog.Debug("agent ws pong enqueue failed", "node_id", node.NodeID)
+				}
+			case service.AgentWSMessageTypePong:
+				slog.Debug("agent ws pong received", "node_id", node.NodeID)
+			default:
+				slog.Debug("agent ws unsupported message type", "node_id", node.NodeID, "type", message.Type)
+			}
+		}
+	}).ServeHTTP(c.Writer, c.Request)
+}
+
+func agentWSReadTimeout() time.Duration {
+	timeout := time.Duration(common.AgentHeartbeatInterval) * time.Millisecond * 3
+	if timeout < 30*time.Second {
+		return 30 * time.Second
+	}
+	return timeout
+}
+
+func streamAgentWSMessages(c *gin.Context, conn *websocket.Conn, client *service.AgentWSClient) {
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+	for {
+		select {
+		case message := <-client.Messages():
+			slog.Debug("agent ws sending message", "node_id", client.NodeID(), "type", message.Type)
+			if err := websocket.JSON.Send(conn, message); err != nil {
+				slog.Debug("agent ws send failed", "node_id", client.NodeID(), "type", message.Type, "error", err)
+				client.Close()
+				return
+			}
+		case <-pingTicker.C:
+			message := service.AgentWSOutboundMessage{Type: service.AgentWSMessageTypePing}
+			slog.Debug("agent ws sending ping", "node_id", client.NodeID())
+			if err := websocket.JSON.Send(conn, message); err != nil {
+				slog.Debug("agent ws ping failed", "node_id", client.NodeID(), "error", err)
+				client.Close()
+				return
+			}
+		case <-client.Done():
+			return
+		case <-c.Request.Context().Done():
+			client.Close()
+			return
+		}
+	}
+}
+
+func handleAgentWSStatus(c *gin.Context, node *model.Node, message service.AgentWSInboundMessage) {
+	var payload service.AgentNodePayload
+	if err := json.Unmarshal(message.Payload, &payload); err != nil {
+		slog.Debug("agent ws status payload decode failed", "node_id", node.NodeID, "error", err)
+		return
+	}
+	payload.IP = service.ResolveReportedNodeIP(payload.IP, c.Request.RemoteAddr)
+	response, err := service.HeartbeatNode(node, payload)
+	if err != nil {
+		slog.Debug("agent ws status handling failed", "node_id", node.NodeID, "error", err)
+		return
+	}
+	settingsSent := service.SendAgentWSSettings(node.NodeID, response.AgentSettings)
+	activeConfigSent := false
+	if response.ActiveConfig != nil {
+		activeConfigSent = service.SendAgentWSActiveConfig(node.NodeID, response.ActiveConfig)
+	}
+	slog.Debug("agent ws status processed",
+		"node_id", node.NodeID,
+		"current_version", payload.CurrentVersion,
+		"openresty_status", payload.OpenrestyStatus,
+		"settings_sent", settingsSent,
+		"active_config_sent", activeConfigSent,
+	)
 }
 
 // GetNodes godoc

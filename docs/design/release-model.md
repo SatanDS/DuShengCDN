@@ -35,7 +35,7 @@ Server 发布时必须：
 
 全局同时只能有一个激活版本。当前不做按节点分组的差异化版本。
 
-Agent 通过 heartbeat 获取激活版本摘要；当远端版本或 checksum 与本地状态不一致时，Agent 才进入同步流程。
+Agent 通过 heartbeat 获取激活版本摘要；当远端版本或 checksum 与本地状态不一致时，Agent 才进入同步流程。当 Agent WS 连接升级开启且连接可用时，Server 在发布或激活版本成功后会广播最新激活版本摘要，Agent 收到后复用普通同步流程立即拉取并应用配置。WS 不可用时仍按 HTTP heartbeat 间隔发现变更。
 
 ## 不可变历史
 

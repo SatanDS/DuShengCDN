@@ -89,6 +89,8 @@ Agent 执行 OpenResty 校验与 reload
 Agent 上报应用结果
 ```
 
+默认启用 WS 连接升级时，Agent 会先通过 HTTP heartbeat 获取设置，随后尝试连接 Agent WebSocket。WS 成功后，周期性状态上报改由 WS 承载；Server 发布或激活版本后会向已连接 Agent 广播激活版本摘要，使 Agent 立即进入既有同步流程。WS 断开或建立失败时，Agent 自动退回 HTTP heartbeat。
+
 ### 反向代理流
 
 ```text

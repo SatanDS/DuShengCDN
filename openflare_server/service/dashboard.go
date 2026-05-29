@@ -48,23 +48,23 @@ type DashboardTrends struct {
 }
 
 type DashboardNodeHealth struct {
-	ID                  uint      `json:"id"`
-	NodeID              string    `json:"node_id"`
-	Name                string    `json:"name"`
-	GeoName             string    `json:"geo_name"`
-	GeoLatitude         *float64  `json:"geo_latitude"`
-	GeoLongitude        *float64  `json:"geo_longitude"`
-	Status              string    `json:"status"`
-	OpenrestyStatus     string    `json:"openresty_status"`
-	CurrentVersion      string    `json:"current_version"`
-	LastSeenAt          time.Time `json:"last_seen_at"`
-	ActiveEventCount    int       `json:"active_event_count"`
-	CPUUsagePercent     float64   `json:"cpu_usage_percent"`
-	MemoryUsagePercent  float64   `json:"memory_usage_percent"`
-	StorageUsagePercent float64   `json:"storage_usage_percent"`
-	RequestCount        int64     `json:"request_count"`
-	ErrorCount          int64     `json:"error_count"`
-	UniqueVisitorCount  int64     `json:"unique_visitor_count"`
+	ID                  uint     `json:"id"`
+	NodeID              string   `json:"node_id"`
+	Name                string   `json:"name"`
+	GeoName             string   `json:"geo_name"`
+	GeoLatitude         *float64 `json:"geo_latitude"`
+	GeoLongitude        *float64 `json:"geo_longitude"`
+	Status              string   `json:"status"`
+	OpenrestyStatus     string   `json:"openresty_status"`
+	CurrentVersion      string   `json:"current_version"`
+	LastSeenAt          any      `json:"last_seen_at"`
+	ActiveEventCount    int      `json:"active_event_count"`
+	CPUUsagePercent     float64  `json:"cpu_usage_percent"`
+	MemoryUsagePercent  float64  `json:"memory_usage_percent"`
+	StorageUsagePercent float64  `json:"storage_usage_percent"`
+	RequestCount        int64    `json:"request_count"`
+	ErrorCount          int64    `json:"error_count"`
+	UniqueVisitorCount  int64    `json:"unique_visitor_count"`
 }
 
 func GetDashboardOverview() (*DashboardOverviewView, error) {
@@ -139,7 +139,7 @@ func GetDashboardOverview() (*DashboardOverviewView, error) {
 			Status:           computedStatus,
 			OpenrestyStatus:  node.OpenrestyStatus,
 			CurrentVersion:   node.CurrentVersion,
-			LastSeenAt:       node.LastSeenAt,
+			LastSeenAt:       nodeViewLastSeenAt(node),
 			ActiveEventCount: len(nodeActiveEvents),
 		}
 

@@ -1,7 +1,17 @@
 import type { NodeItem } from '@/features/nodes/types';
 
+export const WS_CONNECTED_LAST_SEEN = '__OPENFLARE_WS_CONNECTED__';
+
+export function isWSConnectedLastSeen(value: string | null | undefined) {
+  return value === WS_CONNECTED_LAST_SEEN;
+}
+
 export function isMeaningfulTime(value: string | null | undefined) {
-  return Boolean(value) && !String(value).startsWith('0001-01-01');
+  return (
+    Boolean(value) &&
+    !isWSConnectedLastSeen(value) &&
+    !String(value).startsWith('0001-01-01')
+  );
 }
 
 export function getNodeStatusVariant(status: NodeItem['status']) {

@@ -234,6 +234,7 @@ Agent 必须满足：
 * 启动后读取或生成本地 `node_id`。
 * 周期性心跳与同步。
 * 常规同步优先依据 heartbeat 返回的版本摘要判断。
+* WS 连接升级开启且连接成功时，Agent 可通过 WS 接收激活版本摘要并立即同步；WS 失败或断开必须退回 HTTP heartbeat。
 * 发现新版本时先备份旧文件。
 * 写入主配置、路由配置与必要证书文件。
 * 写入新配置后执行 `openresty -t -c <main_config_path>`，再 reload；reload 发现运行时未启动时允许直接启动 OpenResty。

@@ -197,6 +197,7 @@ func SetApiRouter(router *gin.Engine) {
 			authorizedRoute := agentRoute.Group("/")
 			authorizedRoute.Use(middleware.AgentAuth())
 			{
+				authorizedRoute.GET("/ws", controller.AgentWebSocket)
 				authorizedRoute.POST("/nodes/heartbeat", controller.AgentHeartbeat)
 				authorizedRoute.GET("/config-versions/active", controller.AgentGetActiveConfig)
 				authorizedRoute.POST("/apply-logs", controller.AgentReportApplyLog)

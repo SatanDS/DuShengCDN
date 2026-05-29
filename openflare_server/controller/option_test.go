@@ -46,3 +46,15 @@ func TestValidateOpenRestyOption(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateAgentOption(t *testing.T) {
+	if err := validateAgentOption("AgentWebsocketUpgradeEnabled", "true"); err != nil {
+		t.Fatalf("expected websocket upgrade option to accept true: %v", err)
+	}
+	if err := validateAgentOption("AgentWebsocketUpgradeEnabled", "false"); err != nil {
+		t.Fatalf("expected websocket upgrade option to accept false: %v", err)
+	}
+	if err := validateAgentOption("AgentWebsocketUpgradeEnabled", "on"); err == nil {
+		t.Fatal("expected websocket upgrade option to reject non-boolean value")
+	}
+}

@@ -615,6 +615,43 @@ func TestListNodeViewsDoesNotPersistComputedStatus(t *testing.T) {
 	}
 }
 
+func TestAgentWSConnectionMarksNodeViewOnline(t *testing.T) {
+	node := &model.Node{
+		ID:         99,
+		NodeID:     "node-ws-view",
+		Name:       "edge-ws",
+		IP:         "10.0.0.9",
+		Status:     NodeStatusOffline,
+		LastSeenAt: time.Now().Add(-common.NodeOfflineThreshold - time.Minute),
+	}
+	client := RegisterAgentWSClient(node.NodeID)
+	defer UnregisterAgentWSClient(client)
+
+	view := buildNodeView(node)
+	if view.Status != NodeStatusOnline {
+		t.Fatalf("expected websocket-connected node to be online, got %s", view.Status)
+	}
+	if view.LastSeenAt != AgentWSConnectedLastSeenValue {
+		t.Fatalf("expected websocket special last_seen_at, got %#v", view.LastSeenAt)
+	}
+
+	result := BroadcastAgentWSActiveConfig(&ActiveConfigMeta{
+		Version:  "20260529-001",
+		Checksum: "checksum-ws",
+	})
+	if result.ClientCount != 1 || result.SuccessCount != 1 || len(result.FailedNodes) != 0 {
+		t.Fatalf("unexpected broadcast result: %+v", result)
+	}
+	select {
+	case message := <-client.Messages():
+		if message.Type != AgentWSMessageTypeActiveConfig {
+			t.Fatalf("unexpected websocket message type: %s", message.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected websocket broadcast message")
+	}
+}
+
 func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	setupServiceTestDB(t)
 	withFakeAccessLogGeoProvider(t, &geoip.GeoInfo{

@@ -138,7 +138,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/unin
 1. 登录管理端并新增反代规则
 2. 在发布前查看预览或变更摘要
 3. 激活新版本
-4. 等待 Agent 在后续 heartbeat 中拉取并应用配置
+4. Agent 通过 WebSocket 通知或后续 heartbeat 拉取并应用配置
 
 版本号格式固定为 `YYYYMMDD-NNN`，历史版本不可变，回滚通过重新激活旧版本完成。
 

@@ -89,13 +89,14 @@ type AgentConfigResponse struct {
 }
 
 type AgentSettings struct {
-	HeartbeatInterval   int    `json:"heartbeat_interval"`
-	AutoUpdate          bool   `json:"auto_update"`
-	UpdateRepo          string `json:"update_repo"`
-	UpdateNow           bool   `json:"update_now"`
-	UpdateChannel       string `json:"update_channel"`
-	UpdateTag           string `json:"update_tag"`
-	RestartOpenrestyNow bool   `json:"restart_openresty_now"`
+	HeartbeatInterval       int    `json:"heartbeat_interval"`
+	WebsocketUpgradeEnabled bool   `json:"websocket_upgrade_enabled"`
+	AutoUpdate              bool   `json:"auto_update"`
+	UpdateRepo              string `json:"update_repo"`
+	UpdateNow               bool   `json:"update_now"`
+	UpdateChannel           string `json:"update_channel"`
+	UpdateTag               string `json:"update_tag"`
+	RestartOpenrestyNow     bool   `json:"restart_openresty_now"`
 }
 
 type ActiveConfigMeta struct {
@@ -130,7 +131,7 @@ type NodeView struct {
 	OpenrestyMessage          string     `json:"openresty_message"`
 	Status                    string     `json:"status"`
 	CurrentVersion            string     `json:"current_version"`
-	LastSeenAt                time.Time  `json:"last_seen_at"`
+	LastSeenAt                any        `json:"last_seen_at"`
 	LastError                 string     `json:"last_error"`
 	LatestApplyResult         string     `json:"latest_apply_result"`
 	LatestApplyMessage        string     `json:"latest_apply_message"`
@@ -177,18 +178,30 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 		return nil, err
 	}
 	return &HeartbeatResponse{
-		Node: node,
-		AgentSettings: &AgentSettings{
-			HeartbeatInterval:   common.AgentHeartbeatInterval,
-			AutoUpdate:          node.AutoUpdateEnabled,
-			UpdateRepo:          common.AgentUpdateRepo,
-			UpdateNow:           updateNow,
-			UpdateChannel:       updateChannel.String(),
-			UpdateTag:           updateTag,
-			RestartOpenrestyNow: restartOpenrestyNow,
-		},
-		ActiveConfig: activeConfig,
+		Node:          node,
+		AgentSettings: buildAgentSettings(node, updateNow, updateChannel.String(), updateTag, restartOpenrestyNow),
+		ActiveConfig:  activeConfig,
 	}, nil
+}
+
+func buildAgentSettings(node *model.Node, updateNow bool, updateChannel string, updateTag string, restartOpenrestyNow bool) *AgentSettings {
+	autoUpdate := false
+	if node != nil {
+		autoUpdate = node.AutoUpdateEnabled
+	}
+	if strings.TrimSpace(updateChannel) == "" {
+		updateChannel = ReleaseChannelStable.String()
+	}
+	return &AgentSettings{
+		HeartbeatInterval:       common.AgentHeartbeatInterval,
+		WebsocketUpgradeEnabled: common.AgentWebsocketUpgradeEnabled,
+		AutoUpdate:              autoUpdate,
+		UpdateRepo:              common.AgentUpdateRepo,
+		UpdateNow:               updateNow,
+		UpdateChannel:           updateChannel,
+		UpdateTag:               strings.TrimSpace(updateTag),
+		RestartOpenrestyNow:     restartOpenrestyNow,
+	}
 }
 
 func GetActiveConfigMetaForAgent() (*ActiveConfigMeta, error) {
@@ -437,6 +450,9 @@ func upsertNode(payload AgentNodePayload) (*model.Node, error) {
 func computeNodeStatus(node *model.Node) string {
 	if node == nil {
 		return NodeStatusOffline
+	}
+	if IsAgentWSConnected(node.NodeID) {
+		return NodeStatusOnline
 	}
 	if node.LastSeenAt.IsZero() {
 		return NodeStatusPending

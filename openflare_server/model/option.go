@@ -54,6 +54,7 @@ func InitOptionMap() {
 	common.OptionMap["TurnstileSecretKey"] = ""
 	common.OptionMap["AgentDiscoveryToken"] = ""
 	common.OptionMap["AgentHeartbeatInterval"] = strconv.Itoa(common.AgentHeartbeatInterval)
+	common.OptionMap["AgentWebsocketUpgradeEnabled"] = strconv.FormatBool(common.AgentWebsocketUpgradeEnabled)
 	common.OptionMap["NodeOfflineThreshold"] = strconv.Itoa(int(common.NodeOfflineThreshold.Milliseconds()))
 	common.OptionMap["AgentUpdateRepo"] = common.AgentUpdateRepo
 	common.OptionMap["GeoIPProvider"] = common.GeoIPProvider
@@ -221,6 +222,8 @@ func updateOptionMap(key string, value string) {
 		if v, err := strconv.Atoi(value); err == nil && v > 0 {
 			common.AgentHeartbeatInterval = v
 		}
+	case "AgentWebsocketUpgradeEnabled":
+		common.AgentWebsocketUpgradeEnabled = value == "true"
 	case "NodeOfflineThreshold":
 		if v, err := strconv.Atoi(value); err == nil && v > 0 {
 			common.NodeOfflineThreshold = time.Duration(v) * time.Millisecond

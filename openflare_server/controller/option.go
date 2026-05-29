@@ -92,6 +92,15 @@ func validateDatabaseCleanupOption(key string, value string) error {
 	}
 }
 
+func validateAgentOption(key string, value string) error {
+	switch key {
+	case "AgentWebsocketUpgradeEnabled":
+		return validateBooleanOption(key, strings.TrimSpace(value))
+	default:
+		return nil
+	}
+}
+
 func validateOpenRestyOption(key string, value string) error {
 	trimmed := strings.TrimSpace(value)
 
@@ -245,6 +254,9 @@ func validateOptionWithState(option model.Option, state map[string]string) error
 	if err := validateDatabaseCleanupOption(option.Key, option.Value); err != nil {
 		return err
 	}
+	if err := validateAgentOption(option.Key, option.Value); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -360,6 +372,13 @@ func UpdateOption(c *gin.Context) {
 		return
 	}
 	if err = validateDatabaseCleanupOption(option.Key, option.Value); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	if err = validateAgentOption(option.Key, option.Value); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": err.Error(),

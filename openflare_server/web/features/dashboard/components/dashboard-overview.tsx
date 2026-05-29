@@ -18,6 +18,7 @@ import {
   getNodeStatusVariant,
   getOpenrestyStatusLabel,
   getOpenrestyStatusVariant,
+  isWSConnectedLastSeen,
 } from '@/features/nodes/utils';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
 import {
@@ -133,7 +134,9 @@ function NodeHealthRow({ node }: { node: DashboardNodeHealth }) {
         <p>当前版本：{node.current_version || '未应用'}</p>
         <p>
           最近心跳：
-          {node.last_seen_at
+          {isWSConnectedLastSeen(node.last_seen_at)
+            ? ' WS 已连接'
+            : node.last_seen_at
             ? ` ${formatRelativeTime(node.last_seen_at)} · ${formatDateTime(node.last_seen_at)}`
             : ' 暂无'}
         </p>

@@ -53,6 +53,7 @@ var NodeOfflineThreshold = 2 * time.Minute
 
 // V3 operational settings (hot-reloadable via Option table)
 var AgentHeartbeatInterval = 10000 // milliseconds
+var AgentWebsocketUpgradeEnabled = true
 var AgentUpdateRepo = "Rain-kl/OpenFlare"
 var GeoIPProvider = "ipinfo"
 var DatabaseAutoCleanupEnabled = false

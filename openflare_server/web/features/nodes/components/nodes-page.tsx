@@ -34,6 +34,7 @@ import {
   getOpenrestyStatusLabel,
   getOpenrestyStatusVariant,
   isMeaningfulTime,
+  isWSConnectedLastSeen,
 } from '@/features/nodes/utils';
 
 const nodesQueryKey = ['nodes'];
@@ -350,7 +351,9 @@ export function NodesPage() {
                           </div>
                         </td>
                         <td className="px-3 py-4 text-[var(--foreground-secondary)]">
-                          {isMeaningfulTime(node.last_seen_at)
+                          {isWSConnectedLastSeen(node.last_seen_at)
+                            ? 'WS 已连接'
+                            : isMeaningfulTime(node.last_seen_at)
                             ? `${formatRelativeTime(
                                 node.last_seen_at,
                               )} · ${formatDateTime(node.last_seen_at)}`

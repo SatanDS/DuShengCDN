@@ -224,6 +224,8 @@ export LOG_LEVEL='info'
 
 未配置 `openresty_path` 时，Agent 默认调用 `openresty`。
 
+默认情况下，Agent 在 HTTP 心跳成功后会尝试升级为 WebSocket。升级成功时，Server 发布或激活配置会立即通知 Agent；如果 WebSocket 无法建立或意外断开，Agent 会自动退回 HTTP 心跳同步。
+
 ## 最小联调步骤
 
 1. 启动 Server 并完成首次登录。
