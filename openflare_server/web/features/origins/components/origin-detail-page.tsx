@@ -7,8 +7,8 @@ import { useState } from 'react';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
-import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -23,10 +23,10 @@ import { formatDateTime } from '@/lib/utils/date';
 export function OriginDetailPage({ originId }: { originId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [feedback, setFeedback] = useState<{
+  const { setFeedback } = useToastFeedback<{
     tone: 'success' | 'danger';
     message: string;
-  } | null>(null);
+  }>();
   const [isEditorOpen, setIsEditorOpen] = useState(false);
 
   const originQuery = useQuery({
@@ -114,10 +114,6 @@ export function OriginDetailPage({ originId }: { originId: string }) {
             </>
           }
         />
-
-        {feedback ? (
-          <InlineMessage tone={feedback.tone} message={feedback.message} />
-        ) : null}
 
         <div className="grid gap-4 xl:grid-cols-4">
           <AppCard title="源站地址">

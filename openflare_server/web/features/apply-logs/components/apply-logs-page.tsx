@@ -7,8 +7,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppModal } from '@/components/ui/app-modal';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
-import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -84,7 +84,7 @@ export function ApplyLogsPage() {
   const [isCleanupModalOpen, setCleanupModalOpen] = useState(false);
   const [cleanupMode, setCleanupMode] = useState<'all' | 'custom'>('custom');
   const [customRetentionDays, setCustomRetentionDays] = useState('30');
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+  const { setFeedback } = useToastFeedback<FeedbackState>();
 
   const logsQuery = useQuery({
     queryKey: applyLogsQueryKey(nodeFilter, pageNo, pageSize),
@@ -192,10 +192,6 @@ export function ApplyLogsPage() {
           </div>
         }
       />
-
-      {feedback ? (
-        <InlineMessage tone={feedback.tone} message={feedback.message} />
-      ) : null}
 
       <AppCard title="日志摘要" description="后端按分页返回应用日志，页面仅展示当前页数据和总量信息。">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

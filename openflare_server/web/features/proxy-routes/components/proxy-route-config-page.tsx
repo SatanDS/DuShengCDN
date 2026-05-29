@@ -3,15 +3,15 @@
 import Link from 'next/link';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
-import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
@@ -1140,7 +1140,7 @@ export function ProxyRouteConfigPage({
   initialSection?: string;
 }) {
   const queryClient = useQueryClient();
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+  const { setFeedback } = useToastFeedback<FeedbackState>();
 
   const numericRouteID = Number(routeId);
   const currentSection = getWebsiteConfigSection(initialSection);
@@ -1265,10 +1265,6 @@ export function ProxyRouteConfigPage({
           </div>
         }
       />
-
-      {feedback ? (
-        <InlineMessage tone={feedback.tone} message={feedback.message} />
-      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="space-y-4">

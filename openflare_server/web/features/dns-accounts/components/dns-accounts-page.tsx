@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { AppModal } from '@/components/ui/app-modal';
@@ -30,7 +31,7 @@ import { formatDateTime } from '@/lib/utils/date';
 
 export function DnsAccountsPage() {
   const queryClient = useQueryClient();
-  const [feedback, setFeedback] = useState<{ tone: 'info' | 'success' | 'danger'; message: string } | null>(null);
+  const { setFeedback } = useToastFeedback<{ tone: 'info' | 'success' | 'danger'; message: string }>();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   const dnsAccountsQuery = useQuery({
@@ -79,8 +80,6 @@ export function DnsAccountsPage() {
             </div>
           }
         />
-
-        {feedback ? <InlineMessage tone={feedback.tone} message={feedback.message} /> : null}
 
         <AppCard title="DNS 账号列表">
           {dnsAccountsQuery.isLoading ? (

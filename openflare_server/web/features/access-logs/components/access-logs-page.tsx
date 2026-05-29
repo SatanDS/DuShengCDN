@@ -7,6 +7,7 @@ import { TrendChart } from '@/components/data/trend-chart';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToast } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppModal } from '@/components/ui/app-modal';
 import { AppCard } from '@/components/ui/app-card';
@@ -114,6 +115,7 @@ function buildTrendLabels(points: Array<{ bucket_started_at: string }>) {
 
 export function AccessLogsPage() {
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<ActiveTab>('detail');
   const [draft, setDraft] = useState<SearchDraft>({
     nodeId: '',
@@ -215,11 +217,18 @@ export function AccessLogsPage() {
     mutationFn: (payload: AccessLogCleanupPayload) => cleanupAccessLogs(payload),
     onSuccess: async () => {
       setCleanupModalOpen(false);
+      showToast({ tone: 'success', message: '访问日志已清理。' });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['access-logs', 'detail'] }),
         queryClient.invalidateQueries({ queryKey: ['access-logs', 'ip-summary'] }),
         queryClient.invalidateQueries({ queryKey: ['access-logs', 'ip-trend'] }),
       ]);
+    },
+    onError: (error) => {
+      showToast({
+        tone: 'danger',
+        message: `清理访问日志失败：${getErrorMessage(error)}`,
+      });
     },
   });
 

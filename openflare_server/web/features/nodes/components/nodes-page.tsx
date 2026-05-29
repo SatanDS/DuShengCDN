@@ -8,8 +8,8 @@ import { ArrowLeft } from 'lucide-react';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
-import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -60,7 +60,7 @@ function getErrorMessage(error: unknown) {
 export function NodesPage() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+  const { setFeedback } = useToastFeedback<FeedbackState>();
   const [editingNode, setEditingNode] = useState<NodeItem | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
 
@@ -204,10 +204,6 @@ export function NodesPage() {
             </>
           }
         />
-
-        {feedback ? (
-          <InlineMessage tone={feedback.tone} message={feedback.message} />
-        ) : null}
 
         {riskFilter !== 'all' ? (
           <div className="flex items-center">

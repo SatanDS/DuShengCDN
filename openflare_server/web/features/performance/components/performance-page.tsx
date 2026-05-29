@@ -5,8 +5,8 @@ import {useQuery, useQueryClient} from '@tanstack/react-query';
 
 import {EmptyState} from '@/components/feedback/empty-state';
 import {ErrorState} from '@/components/feedback/error-state';
-import {InlineMessage} from '@/components/feedback/inline-message';
 import {LoadingState} from '@/components/feedback/loading-state';
+import {useToastFeedback} from '@/components/feedback/toast-provider';
 import {PageHeader} from '@/components/layout/page-header';
 import {useAuth} from '@/components/providers/auth-provider';
 import {AppCard} from '@/components/ui/app-card';
@@ -173,7 +173,7 @@ export function PerformancePage() {
     const queryClient = useQueryClient();
     const {user} = useAuth();
     const [activeTab, setActiveTab] = useState<PerformanceTab>('settings');
-    const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+    const {setFeedback} = useToastFeedback<FeedbackState>();
     const [busyKey, setBusyKey] = useState<string | null>(null);
     const [performanceFields, setPerformanceFields] = useState(
         defaultPerformanceFields,
@@ -613,10 +613,6 @@ export function PerformancePage() {
                 title="性能"
                 description="统一维护Nginx结构化性能参数和主配置模板。"
             />
-
-            {feedback ? (
-                <InlineMessage tone={feedback.tone} message={feedback.message}/>
-            ) : null}
 
             <div className="flex flex-wrap gap-3">
                 {[

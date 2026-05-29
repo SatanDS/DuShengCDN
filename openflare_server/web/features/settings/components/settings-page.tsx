@@ -1,13 +1,13 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToast } from '@/components/feedback/toast-provider';
 import { AppModal } from '@/components/ui/app-modal';
 import { TurnstileWidget } from '@/components/forms/turnstile-widget';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -56,7 +56,6 @@ import {
 } from '@/features/shared/components/resource-primitives';
 import { ApiError } from '@/lib/api/client';
 import { formatDateTime } from '@/lib/utils/date';
-import { cn } from '@/lib/utils/cn';
 
 const settingsQueryKey = ['settings', 'options'] as const;
 const authSourcesQueryKey = ['settings', 'auth-sources'] as const;
@@ -156,12 +155,6 @@ const defaultProfileFields: UpdateSelfPayload = {
   password: '',
 };
 
-type FeedbackState = {
-  tone: 'info' | 'success' | 'danger';
-  message: string;
-  detail?: string;
-};
-
 type CleanupModalState = {
   target: DatabaseCleanupTarget;
   label: string;
@@ -259,68 +252,11 @@ async function copyToClipboard(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
-const feedbackToneClasses = {
-  info: 'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info-foreground)]',
-  success:
-    'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success-foreground)]',
-  danger:
-    'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger-foreground)]',
-} satisfies Record<FeedbackState['tone'], string>;
-
-const feedbackToneIcons = {
-  info: Info,
-  success: CheckCircle2,
-  danger: AlertCircle,
-} satisfies Record<FeedbackState['tone'], typeof Info>;
-
-function FloatingFeedback({
-  feedback,
-  onClose,
-}: {
-  feedback: FeedbackState;
-  onClose: () => void;
-}) {
-  const Icon = feedbackToneIcons[feedback.tone];
-
-  return (
-    <div className="pointer-events-none fixed top-24 right-4 z-50 flex w-[min(calc(100vw-2rem),34rem)] justify-end md:right-8">
-      <div
-        className={cn(
-          'pointer-events-auto max-w-full rounded-2xl border px-4 py-3 text-sm leading-6 shadow-2xl shadow-black/30 backdrop-blur',
-          feedbackToneClasses[feedback.tone],
-        )}
-        role="status"
-        aria-live={feedback.tone === 'danger' ? 'assertive' : 'polite'}
-      >
-        <div className="flex items-start gap-3">
-          <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <div className="min-w-0 flex-1">
-            <p className="break-words font-medium">{feedback.message}</p>
-            {feedback.detail ? (
-              <p className="mt-1 break-words text-xs leading-5 opacity-85">
-                {feedback.detail}
-              </p>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="shrink-0 rounded-full p-1 opacity-70 transition hover:bg-white/10 hover:opacity-100"
-            aria-label="关闭提示"
-          >
-            <X className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const { refreshUser, user } = useAuth();
+  const { showToast, dismissToast } = useToast();
   const [activeTab, setActiveTab] = useState<SettingsTab>('personal');
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [profileFields, setProfileFields] = useState(defaultProfileFields);
   const [systemFields, setSystemFields] = useState(defaultSystemFields);
@@ -341,17 +277,7 @@ export function SettingsPage() {
 
   const isRoot = (user?.role ?? 0) >= 100;
 
-  useEffect(() => {
-    if (!feedback) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setFeedback(null);
-    }, 8000);
-
-    return () => window.clearTimeout(timer);
-  }, [feedback]);
+  const setFeedback = showToast;
 
   const publicStatusQuery = useQuery({
     queryKey: ['public-status'],
@@ -663,7 +589,7 @@ export function SettingsPage() {
     errorContext = '执行操作',
   ) => {
     setBusyKey(key);
-    setFeedback(null);
+    dismissToast();
 
     try {
       await action();
@@ -2275,13 +2201,6 @@ export function SettingsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="设置" />
-
-      {feedback ? (
-        <FloatingFeedback
-          feedback={feedback}
-          onClose={() => setFeedback(null)}
-        />
-      ) : null}
 
       <div className="flex flex-wrap gap-3">
         {tabs.map((tab) => (

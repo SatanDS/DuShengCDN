@@ -8,8 +8,8 @@ import { z } from 'zod';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
-import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { useAuth } from '@/components/providers/auth-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppModal } from '@/components/ui/app-modal';
@@ -101,7 +101,7 @@ export function UsersPage() {
   const [searchKeyword, setSearchKeyword] = useState('');
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+  const { setFeedback } = useToastFeedback<FeedbackState>();
 
   const form = useForm<UserFormValues>({
     resolver: zodResolver(userSchema),
@@ -284,8 +284,6 @@ export function UsersPage() {
           </PrimaryButton>
         }
       />
-
-      {feedback ? <InlineMessage tone={feedback.tone} message={feedback.message} /> : null}
 
       <AppCard
         title='用户列表'

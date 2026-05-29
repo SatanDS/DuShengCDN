@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppModal } from '@/components/ui/app-modal';
 import { AppCard } from '@/components/ui/app-card';
@@ -242,7 +243,7 @@ function SummaryStat({
 export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+  const { setFeedback } = useToastFeedback<FeedbackState>();
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isAgentUpdateModalOpen, setIsAgentUpdateModalOpen] = useState(false);
   const [isTargetSnapshotOpen, setIsTargetSnapshotOpen] = useState(false);
@@ -693,10 +694,6 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
             </>
           }
         />
-
-        {feedback ? (
-          <InlineMessage tone={feedback.tone} message={feedback.message} />
-        ) : null}
 
         <div className="flex flex-wrap gap-3">
           {tabs.map((tab) => (
