@@ -108,6 +108,44 @@ write_file_as_root() {
   rm -f "$tmp"
 }
 
+SERVICE_AUTOSTART_POLICY_CREATED="false"
+
+disable_service_autostart() {
+  if [[ "$OS" != "linux" || ! -d /usr/sbin ]]; then
+    return
+  fi
+  if [[ -e /usr/sbin/policy-rc.d ]]; then
+    return
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'POLICYEOF'
+#!/bin/sh
+exit 101
+POLICYEOF
+  run_as_root install -m 0755 "$tmp" /usr/sbin/policy-rc.d
+  rm -f "$tmp"
+  SERVICE_AUTOSTART_POLICY_CREATED="true"
+}
+
+restore_service_autostart() {
+  if [[ "$SERVICE_AUTOSTART_POLICY_CREATED" == "true" ]]; then
+    run_as_root rm -f /usr/sbin/policy-rc.d
+    SERVICE_AUTOSTART_POLICY_CREATED="false"
+  fi
+}
+
+with_service_autostart_disabled() {
+  disable_service_autostart
+  set +e
+  "$@"
+  local status=$?
+  set -e
+  restore_service_autostart
+  return "$status"
+}
+
 validate_install_dir() {
   while [[ "$INSTALL_DIR" != "/" && "$INSTALL_DIR" == */ ]]; do
     INSTALL_DIR="${INSTALL_DIR%/}"
@@ -147,6 +185,36 @@ find_openresty_path() {
   done
 
   return 1
+}
+
+openresty_package_needs_configure() {
+  if ! command -v dpkg-query >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local status
+  status="$(dpkg-query -W -f='${db:Status-Abbrev}' openresty 2>/dev/null || true)"
+  if [[ -z "$status" || "$status" == ii* ]]; then
+    return 1
+  fi
+  return 0
+}
+
+finish_pending_openresty_package_configuration() {
+  if ! openresty_package_needs_configure; then
+    return
+  fi
+
+  log "Completing pending OpenResty package configuration without auto-starting the default service..."
+  with_service_autostart_disabled run_as_root dpkg --configure -a
+}
+
+remove_temporary_trusted_openresty_source() {
+  local source_file="/etc/apt/sources.list.d/openresty.list"
+  if [[ -f "$source_file" ]] && grep -q "trusted=yes" "$source_file"; then
+    log "Removing temporary trusted OpenResty apt source."
+    run_as_root rm -f "$source_file"
+  fi
 }
 
 load_os_release() {
@@ -397,10 +465,12 @@ install_openresty_with_apt() {
       die "apt update failed after enabling the OpenResty repository."
     fi
   fi
-  if ! run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y openresty; then
+  if ! with_service_autostart_disabled run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y openresty; then
     if [[ "$used_trusted_openresty_source" == "true" ]]; then
       log "Retrying OpenResty install with --allow-unauthenticated because Debian rejected the repository signature policy."
-      run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated openresty
+      if ! with_service_autostart_disabled run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated openresty; then
+        die "OpenResty package installation failed."
+      fi
     else
       die "OpenResty package installation failed."
     fi
@@ -539,6 +609,8 @@ ensure_openresty() {
   fi
 
   if OPENRESTY_PATH="$(find_openresty_path)"; then
+    finish_pending_openresty_package_configuration
+    remove_temporary_trusted_openresty_source
     return
   fi
 
