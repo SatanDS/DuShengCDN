@@ -373,6 +373,20 @@ func TestResolveReportedNodeIPKeepsPrivateReportedAddrWhenRemoteIsPrivate(t *tes
 	}
 }
 
+func TestResolveReportedNodeIPPrefersForwardedPublicAddrFromTrustedProxy(t *testing.T) {
+	resolved := ResolveReportedNodeIP("10.0.0.8", "172.16.1.10:9000", "8.8.8.8, 172.16.1.10")
+	if resolved != "8.8.8.8" {
+		t.Fatalf("expected forwarded public ip to override private reported ip, got %q", resolved)
+	}
+}
+
+func TestResolveReportedNodeIPIgnoresForwardedAddrFromPublicRemote(t *testing.T) {
+	resolved := ResolveReportedNodeIP("10.0.0.8", "1.1.1.1:9000", "8.8.8.8")
+	if resolved != "1.1.1.1" {
+		t.Fatalf("expected public remote ip to override spoofable forwarded ip, got %q", resolved)
+	}
+}
+
 func TestHeartbeatNodeResolvesGeoMetadataFromIPWhenNotManuallyOverridden(t *testing.T) {
 	setupServiceTestDB(t)
 	withFakeGeoIPProvider(t, &geoip.GeoInfo{

@@ -364,14 +364,21 @@ func cloneCoordinate(value *float64) *float64 {
 	return &cloned
 }
 
-func ResolveReportedNodeIP(reportedIP string, remoteAddr string) string {
+func ResolveReportedNodeIP(reportedIP string, remoteAddr string, forwardedHeaders ...string) string {
 	reported := iputil.NormalizeIP(reportedIP)
 	remote := iputil.NormalizeRemoteAddr(remoteAddr)
+	forwarded := publicNodeIPFromForwardedHeaders(remote, forwardedHeaders)
 	if reported == "" {
+		if forwarded != "" {
+			return forwarded
+		}
 		return remote
 	}
 	if !shouldPreferRemoteNodeIP(reported) {
 		return reported
+	}
+	if forwarded != "" {
+		return forwarded
 	}
 	if isPublicNodeIP(remote) {
 		return remote
@@ -385,6 +392,73 @@ func shouldPreferRemoteNodeIP(ip string) bool {
 
 func isPublicNodeIP(raw string) bool {
 	return iputil.IsPublicString(raw)
+}
+
+func publicNodeIPFromForwardedHeaders(remote string, headers []string) string {
+	if !shouldTrustForwardedNodeIP(remote) {
+		return ""
+	}
+	for _, header := range headers {
+		for _, candidate := range forwardedNodeIPCandidates(header) {
+			normalized := normalizeForwardedNodeIP(candidate)
+			if isPublicNodeIP(normalized) {
+				return normalized
+			}
+		}
+	}
+	return ""
+}
+
+func shouldTrustForwardedNodeIP(remote string) bool {
+	if remote == "" {
+		return false
+	}
+	return !isPublicNodeIP(remote)
+}
+
+func forwardedNodeIPCandidates(header string) []string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return nil
+	}
+	parts := strings.Split(header, ",")
+	candidates := make([]string, 0, len(parts))
+	for _, part := range parts {
+		candidate := strings.TrimSpace(part)
+		if candidate == "" {
+			continue
+		}
+		for _, segment := range strings.Split(candidate, ";") {
+			key, value, ok := strings.Cut(strings.TrimSpace(segment), "=")
+			if !ok {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(key), "for") {
+				candidate = strings.TrimSpace(value)
+				break
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
+}
+
+func normalizeForwardedNodeIP(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	candidate = strings.Trim(candidate, `"`)
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || strings.EqualFold(candidate, "unknown") {
+		return ""
+	}
+	if strings.HasPrefix(candidate, "[") {
+		if end := strings.Index(candidate, "]"); end > 0 {
+			return iputil.NormalizeIP(candidate[1:end])
+		}
+	}
+	if normalized := iputil.NormalizeRemoteAddr(candidate); normalized != "" {
+		return normalized
+	}
+	return iputil.NormalizeIP(candidate)
 }
 
 func buildNodeAgentReleaseView(node *model.Node, release *githubReleaseResponse, channel ReleaseChannel) *NodeAgentReleaseInfo {

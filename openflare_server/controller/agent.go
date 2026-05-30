@@ -30,7 +30,7 @@ func AgentRegister(c *gin.Context) {
 		respondBadRequest(c, "")
 		return
 	}
-	payload.IP = service.ResolveReportedNodeIP(payload.IP, c.Request.RemoteAddr)
+	payload.IP = resolveAgentNodeIP(c, payload.IP)
 
 	var (
 		result *service.AgentRegistrationResponse
@@ -64,7 +64,7 @@ func AgentHeartbeat(c *gin.Context) {
 		respondBadRequest(c, "")
 		return
 	}
-	payload.IP = service.ResolveReportedNodeIP(payload.IP, c.Request.RemoteAddr)
+	payload.IP = resolveAgentNodeIP(c, payload.IP)
 
 	authNode, ok := c.Get("agent_node")
 	if !ok {
@@ -228,7 +228,7 @@ func handleAgentWSStatus(c *gin.Context, node *model.Node, message service.Agent
 		slog.Debug("agent ws status reload node failed", "node_id", node.NodeID, "error", err)
 		return
 	}
-	payload.IP = service.ResolveReportedNodeIP(payload.IP, c.Request.RemoteAddr)
+	payload.IP = resolveAgentNodeIP(c, payload.IP)
 	response, err := service.HeartbeatNode(freshNode, payload)
 	if err != nil {
 		slog.Debug("agent ws status handling failed", "node_id", node.NodeID, "error", err)
@@ -245,6 +245,16 @@ func handleAgentWSStatus(c *gin.Context, node *model.Node, message service.Agent
 		"openresty_status", payload.OpenrestyStatus,
 		"settings_sent", settingsSent,
 		"active_config_sent", activeConfigSent,
+	)
+}
+
+func resolveAgentNodeIP(c *gin.Context, reportedIP string) string {
+	return service.ResolveReportedNodeIP(
+		reportedIP,
+		c.Request.RemoteAddr,
+		c.GetHeader("X-Forwarded-For"),
+		c.GetHeader("X-Real-IP"),
+		c.GetHeader("Forwarded"),
 	)
 }
 

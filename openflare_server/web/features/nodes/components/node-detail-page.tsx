@@ -29,7 +29,6 @@ import {
   requestNodeForceSync,
   requestNodeOpenrestyRestart,
   requestNodeAgentUpdate,
-  rotateNodeBootstrapToken,
   updateNode,
 } from '@/features/nodes/api/nodes';
 import { NodeEditorModal } from '@/features/nodes/components/node-editor-modal';
@@ -257,6 +256,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const [activeTab, setActiveTab] = useState<NodeDetailTab>('dashboard');
   const [isHealthEventCleanupModalOpen, setHealthEventCleanupModalOpen] =
     useState(false);
+  const [isManualRefreshPending, setManualRefreshPending] = useState(false);
 
   const nodesQuery = useQuery({
     queryKey: nodesQueryKey,
@@ -619,25 +619,25 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     updateAgentMutation.mutate(selectedAgentRelease ?? null);
   };
 
-  const isRefreshing =
-    nodesQuery.isFetching ||
-    applyLogsQuery.isFetching ||
-    observabilityQuery.isFetching;
-
   const handleRefresh = async () => {
     setFeedback(null);
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: nodesQueryKey }),
-      queryClient.invalidateQueries({
-        queryKey: ['apply-logs', node.node_id],
-      }),
-      queryClient.invalidateQueries({
-        queryKey: ['config-versions'],
-      }),
-      queryClient.invalidateQueries({
-        queryKey: ['node-observability', nodeId],
-      }),
-    ]);
+    setManualRefreshPending(true);
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: nodesQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: ['apply-logs', node.node_id],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['config-versions'],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['node-observability', nodeId],
+        }),
+      ]);
+    } finally {
+      setManualRefreshPending(false);
+    }
   };
 
   return (
@@ -663,9 +663,9 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
               <SecondaryButton
                 type="button"
                 onClick={() => void handleRefresh()}
-                disabled={isRefreshing}
+                disabled={isManualRefreshPending}
               >
-                {isRefreshing ? '刷新中...' : '刷新'}
+                {isManualRefreshPending ? '刷新中...' : '刷新'}
               </SecondaryButton>
               <SecondaryButton
                 type="button"
