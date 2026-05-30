@@ -33,6 +33,8 @@
 * OpenResty 主配置、性能参数、缓存参数与 Lua 资源托管
 * TLS 证书、域名资产、节点凭证与版本状态管理
 * Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换与 DDoS 自动切换橙云
+* Agent 安装环境检测、Release 二进制下载、自动更新与删除节点联动卸载
+* 节点真实 IP 识别、节点详情静默刷新、全局操作提示与主题化确认弹窗
 * 请求聚合、访问分析、资源快照、健康事件与节点详情
 
 ## 快速开始
@@ -115,7 +117,12 @@ server {
 }
 ```
 
-Nginx Proxy Manager 可在 `Proxy Hosts` -> 选择对应域名 -> `Edit Proxy Host` -> 齿轮图标或 `Advanced` -> `Custom Nginx Configuration` 中填入：
+Nginx Proxy Manager 可在 `Proxy Hosts` -> `Add Proxy Host` 或 `Edit Proxy Host` 中配置：
+
+* `Forward Hostname / IP` 填写面板容器所在机器，例如 `127.0.0.1`
+* `Forward Port` 填写宿主机映射端口，例如你使用 `3010:3000` 时这里填写 `3010`
+* 建议开启 `Websockets Support`，否则 Agent 的 WebSocket 通知可能退回到普通心跳轮询
+* 在齿轮图标或 `Advanced` -> `Custom Nginx Configuration` 中填入下面的请求头配置
 
 ```nginx
 proxy_set_header Host $host;
@@ -201,6 +208,12 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/instal
 
 安装脚本默认写入 `/opt/openflare-agent`，创建 `openflare-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
 
+依赖安装兼容性：
+
+* Linux / macOS 会自动检查 `curl`、`tar`、`OpenResty`、构建工具等运行依赖，缺少时尝试通过系统包管理器安装。
+* Debian 13 `trixie` 暂无 OpenResty 官方源时，脚本会回退到 Debian `bookworm` 源；遇到新版 apt 拒绝旧签名策略时，会临时使用 OpenResty 官方 HTTPS 源完成安装，并在安装后移除临时源。
+* 新装 OpenResty 后，脚本会阻止系统自带 `openresty` 服务自动启动，避免它提前占用 `80` / `443` 端口；端口由 `openflare-agent` 托管。
+
 ### 4. 卸载 Agent
 
 如需彻底卸载 Agent 并清空本地数据，可执行：
@@ -210,6 +223,8 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/uninst
 ```
 
 卸载脚本会先停止并移除 `openflare-agent.service`、删除整个 `/opt/openflare-agent` 目录，不会删除本机 OpenResty。
+
+在管理端删除在线节点时，Server 会通过 Agent 连接下发卸载指令；Agent 收到后会执行本机卸载流程并退出。节点离线时，面板只会删除节点记录，需要你后续在节点服务器上手动执行卸载脚本。
 
 ### 5. 发布第一份配置
 
@@ -225,22 +240,46 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/uninst
 * `源站` 页面维护的是可复用地址目录，只填写 IP、域名或主机名，例如 `10.0.0.10`、`origin.internal`，不要填写协议和端口。
 * `规则配置` 里的 `源站地址` 需要填写完整 URL，协议和端口都在这里配置，例如 `https://origin.internal:443`。
 * 多源站负载均衡时，每行一个完整 URL，并保持相同协议；多源站模式不要填写 path 或 query。
+* 界面中已统一使用 `源站地址` 命名；旧文档或旧习惯里的“上游地址”在这里都对应 `源站地址`。
+
+界面交互说明：
+
+* 操作结果提示已统一为右上角浮层，提示内容会展示更具体的错误信息，按内容自动适配宽度，并在默认 8 秒后自动消失。
+* 删除、回滚、禁用等需要确认的高风险操作会使用页面居中的主题化确认弹窗，避免浅色主题白底白字或深色主题黑底黑字。
+* 节点详情页会静默刷新运行状态，不再因为自动刷新反复显示“刷新中”；只有手动点击更新、同步等按钮时才显示操作中的状态。
+* 节点 IP 会优先结合 `X-Forwarded-For`、`X-Real-IP`、`CF-Connecting-IP` 等反代头识别真实公网 IP，所以 HTTPS 反代必须保留上面的请求头配置。
 
 ### 6. 更新面板与 Agent
+
+如果服务器上还没有源码目录，先克隆自己的仓库：
+
+```bash
+git clone https://github.com/SatanDS/OpenCDN.git /opt/opencdn
+```
 
 服务器使用 Docker Compose 部署时，更新面板端：
 
 ```bash
-cd /opt/opencdn/openflare_server && git pull origin main && docker compose up -d --build
+cd /opt/opencdn/openflare_server && git pull origin main && docker compose up -d --build && docker compose ps
 ```
 
 节点使用 Docker Compose 部署 Agent 时，更新节点端：
 
 ```bash
-cd /opt/opencdn && git pull origin main && docker compose -f docker-compose.agent.yaml up -d --build
+cd /opt/opencdn && git pull origin main && docker compose -f docker-compose.agent.yaml up -d --build && docker compose -f docker-compose.agent.yaml ps
 ```
 
 节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。
+
+### 7. 发布 Release 与 latest
+
+仓库已提供 GitHub Actions 用于生成 GitHub Release 和 GHCR 镜像，方便后续直接部署：
+
+* 发布二进制：进入 GitHub 仓库 `Actions` -> `Release` -> `Run workflow`，填写版本号，例如 `v1.0.0` 或 `v1.0.0-beta`。工作流会构建 Server、Agent 多平台二进制并上传到 Release。
+* `v1.0.0` 这类纯数字版本会作为正式 Release；`v1.0.0-beta` 这类带后缀版本会作为 prerelease。GitHub 的 `releases/latest` 会指向最新正式 Release。
+* 发布 Docker 镜像：进入 `Actions` -> `Docker image builds` -> `Run workflow`，填写同一个版本号。工作流会推送 `ghcr.io/satands/opencdn:<version>`、`ghcr.io/satands/opencdn:latest`、`ghcr.io/satands/opencdn-agent:<version>` 和 `ghcr.io/satands/opencdn-agent:latest`。
+* 安装脚本会优先读取 `https://github.com/SatanDS/OpenCDN/releases/latest` 中的 Agent 资产；没有匹配资产时才回退到源码构建。
+* GitHub Actions 已切换到支持 Node.js 24 的动作版本，并显式启用 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`，用于规避 Node.js 20 弃用警告。
 
 
 ## 界面预览
@@ -281,7 +320,7 @@ cd /opt/opencdn && git pull origin main && docker compose -f docker-compose.agen
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=Rain-kl%2FOpenFlare&type=date&legend=bottom-right">
+<a href="https://www.star-history.com/?repos=SatanDS%2FOpenCDN&type=date&legend=bottom-right">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=SatanDS/OpenCDN&type=date&theme=dark&legend=top-left" />
    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=SatanDS/OpenCDN&type=date&legend=top-left" />
