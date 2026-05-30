@@ -12,11 +12,11 @@ describe('navigation utils', () => {
     expect(getCurrentNavigationItem('/node/abc')?.label).toBe('节点/IP池');
     expect(getCurrentNavigationItem('/website')?.label).toBe('域名资产');
     expect(getCurrentNavigationItem('/proxy-route?section=cache')?.label).toBe(
-      '缓存策略',
+      '网站配置',
     );
     expect(
       getCurrentNavigationItem('/proxy-route/detail?id=1&section=waf')?.label,
-    ).toBe('WAF 防护');
+    ).toBe('网站配置');
     expect(getCurrentNavigationItem('/access-log')?.label).toBe('观测计量');
     expect(getCurrentNavigationItem('/performance')?.label).toBe(
       'OpenResty配置',

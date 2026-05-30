@@ -187,52 +187,10 @@ export function DashboardOverview() {
         summary={overview.summary}
         traffic={overview.traffic}
         capacity={overview.capacity}
+        metering={meteringQuery.data ?? null}
         nodes={overview.nodes}
         sourceCountries={overview.distributions.source_countries}
       />
-
-      <div className="grid gap-6 xl:grid-cols-2">
-        <AppCard
-          title="带宽峰值 P95"
-          description="来自观测计量最近窗口，用于判断 CDN 出口峰值水平。"
-        >
-          <div className="space-y-3">
-            <p className="text-3xl font-semibold text-[var(--foreground-primary)]">
-              {meteringQuery.data && meteringQuery.data.bandwidth_p95_bps > 0
-                ? formatBytesPerSecond(meteringQuery.data.bandwidth_p95_bps)
-                : '暂无数据'}
-            </p>
-            <p className="text-sm text-[var(--foreground-secondary)]">
-              {meteringQuery.data
-                ? `统计窗口 ${formatDateTime(meteringQuery.data.window_started_at)} 至 ${formatDateTime(meteringQuery.data.window_ended_at)}`
-                : meteringQuery.isLoading
-                  ? '正在读取观测计量数据...'
-                  : '暂无观测计量数据'}
-            </p>
-          </div>
-        </AppCard>
-
-        <AppCard
-          title="缓存命中率"
-          description="按 OpenResty 上报的缓存命中与可分类请求计算。"
-        >
-          <div className="space-y-3">
-            <p className="text-3xl font-semibold text-[var(--foreground-primary)]">
-              {meteringQuery.data &&
-              meteringQuery.data.cache_classified_count > 0
-                ? formatPercent(meteringQuery.data.cache_hit_rate_percent)
-                : '暂无数据'}
-            </p>
-            <p className="text-sm text-[var(--foreground-secondary)]">
-              {meteringQuery.data
-                ? `命中 ${meteringQuery.data.cache_hit_count.toLocaleString('zh-CN')} / 可分类 ${meteringQuery.data.cache_classified_count.toLocaleString('zh-CN')}`
-                : meteringQuery.isLoading
-                  ? '正在读取缓存命中统计...'
-                  : '暂无缓存命中统计'}
-            </p>
-          </div>
-        </AppCard>
-      </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
         <AppCard

@@ -13,6 +13,7 @@ import type {
   DistributionItem,
 } from '@/features/dashboard/types';
 import { cn } from '@/lib/utils/cn';
+import { formatBytesPerSecond } from '@/lib/utils/metrics';
 
 type Tone = 'healthy' | 'warning' | 'danger' | 'source';
 
@@ -28,7 +29,7 @@ function formatPercent(value: number) {
   if (!Number.isFinite(value)) {
     return '0%';
   }
-  return `${value.toFixed(value >= 100 ? 0 : 1)}%`;
+  return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(value >= 100 ? 0 : 1)}%`;
 }
 
 function HeroMetric({
@@ -116,12 +117,19 @@ export function WorldStage({
   summary,
   traffic,
   capacity,
+  metering,
   nodes,
   sourceCountries,
 }: {
   summary: DashboardSummary;
   traffic: DashboardTraffic;
   capacity: DashboardCapacity;
+  metering?: {
+    bandwidth_p95_bps: number;
+    cache_hit_count: number;
+    cache_classified_count: number;
+    cache_hit_rate_percent: number;
+  } | null;
   nodes: DashboardNodeHealth[];
   sourceCountries: DistributionItem[];
 }) {
@@ -173,6 +181,17 @@ export function WorldStage({
       typeof node.geo_latitude === 'number' &&
       typeof node.geo_longitude === 'number',
   ).length;
+  const bandwidthP95Value =
+    metering && metering.bandwidth_p95_bps > 0
+      ? formatBytesPerSecond(metering.bandwidth_p95_bps)
+      : '暂无数据';
+  const cacheHitValue =
+    metering && metering.cache_classified_count > 0
+      ? formatPercent(metering.cache_hit_rate_percent)
+      : '暂无数据';
+  const cacheHitHint = metering
+    ? `命中 ${metering.cache_hit_count.toLocaleString('zh-CN')} / 可分类 ${metering.cache_classified_count.toLocaleString('zh-CN')}`
+    : '等待观测计量上报';
 
   return (
     <section
@@ -334,6 +353,18 @@ export function WorldStage({
               label="高存储节点"
               value={capacity.high_storage_nodes.toLocaleString('zh-CN')}
               hint={`${summary.offline_nodes} 离线 · ${summary.pending_nodes} 待接入`}
+              isDark={isDark}
+            />
+            <HeroMetric
+              label="带宽峰值 P95"
+              value={bandwidthP95Value}
+              hint="观测计量最近窗口"
+              isDark={isDark}
+            />
+            <HeroMetric
+              label="缓存命中率"
+              value={cacheHitValue}
+              hint={cacheHitHint}
               isDark={isDark}
             />
           </div>
