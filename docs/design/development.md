@@ -155,10 +155,10 @@ tests/
 * `origins` 仅作为可复用源站地址目录，字段保持轻量。
 * `proxy_routes` 以“网站配置”作为聚合边界，必须包含唯一 `site_name` 与非空 `domains` 列表。
 * `proxy_routes.domains` 中的每个域名都必须全局唯一，列表第一项视为主域名。
-* `proxy_routes` 继续允许保存一个或多个上游地址用于负载均衡，但不引入独立 `origin_pool`。
+* `proxy_routes` 继续允许保存一个或多个源站地址用于负载均衡，但不引入独立 `origin_pool`。
 * 遗留 `domain` 字段只能作为 `domains[0]` 的兼容镜像；新代码不得继续以该字段作为唯一业务输入。
 * `proxy_routes` 如关联 `origins`，必须同时保存可直接渲染的 `origin_url`。
-* 上游统一使用 named `upstream` + keepalive；单上游如带 base path 或 query，应在 `proxy_pass` 上补回 URI，多上游仅允许纯 `scheme://host[:port]`。
+* 源站统一使用 named `upstream` + keepalive；单源站如带 base path 或 query，应在 `proxy_pass` 上补回 URI，多源站仅允许纯 `scheme://host[:port]`。
 * 流量限制、反向代理与缓存配置当前都归属站点级 `proxy_routes`。
 * HTTPS 证书绑定必须通过与 `domains` 平行的 `domain_cert_ids` 逐域名保存；未绑定证书的域名不得参与 HTTPS 渲染。
 * `config_versions` 必须保存完整快照与渲染结果。

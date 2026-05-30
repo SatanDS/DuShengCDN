@@ -35,6 +35,7 @@ type ProxyRoute struct {
 	DNSRecordType      string     `json:"dns_record_type" gorm:"size:16;not null;default:'A'"`
 	DNSRecordName      string     `json:"dns_record_name" gorm:"size:255;not null;default:''"`
 	DNSRecordContent   string     `json:"dns_record_content" gorm:"size:255;not null;default:''"`
+	DNSAutoTarget      bool       `json:"dns_auto_target" gorm:"not null;default:false"`
 	DNSRecordIDs       string     `json:"dns_record_ids" gorm:"type:text;not null;default:'{}'"`
 	CloudflareProxied  bool       `json:"cloudflare_proxied" gorm:"not null;default:false"`
 	DDOSProtectionMode string     `json:"ddos_protection_mode" gorm:"size:16;not null;default:'off'"`
@@ -104,6 +105,7 @@ func (route *ProxyRoute) Update() error {
 		"dns_record_type":       route.DNSRecordType,
 		"dns_record_name":       route.DNSRecordName,
 		"dns_record_content":    route.DNSRecordContent,
+		"dns_auto_target":       route.DNSAutoTarget,
 		"dns_record_ids":        route.DNSRecordIDs,
 		"cloudflare_proxied":    route.CloudflareProxied,
 		"ddos_protection_mode":  route.DDOSProtectionMode,

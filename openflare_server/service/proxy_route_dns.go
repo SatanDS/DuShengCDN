@@ -35,7 +35,7 @@ func SyncProxyRouteDNS(route *model.ProxyRoute) error {
 	}
 	recordType := normalizeDNSRecordType(route.DNSRecordType)
 	content := strings.TrimSpace(route.DNSRecordContent)
-	if content == "" {
+	if route.DNSAutoTarget || content == "" {
 		content, err = selectHealthyNodeDNSContent(recordType)
 		if err != nil {
 			recordProxyRouteDNSSyncFailure(route, err)
@@ -103,7 +103,9 @@ func SyncProxyRouteDNS(route *model.ProxyRoute) error {
 		"dns_zone_id",
 		"dns_record_type",
 		"dns_record_content",
+		"dns_auto_target",
 		"dns_record_ids",
+		"cloudflare_proxied",
 		"dns_last_sync_status",
 		"dns_last_sync_message",
 		"dns_last_synced_at",
@@ -149,10 +151,13 @@ func ReconcileCloudflareDNSAutomation() error {
 		if route == nil || !route.DNSAutoSync {
 			continue
 		}
-		previousContent := strings.TrimSpace(route.DNSRecordContent)
-		desiredContent, selectErr := selectHealthyNodeDNSContent(normalizeDNSRecordType(route.DNSRecordType))
-		if selectErr == nil && desiredContent != "" && desiredContent != previousContent {
-			route.DNSRecordContent = desiredContent
+		if route.DNSAutoTarget || strings.TrimSpace(route.DNSRecordContent) == "" {
+			previousContent := strings.TrimSpace(route.DNSRecordContent)
+			desiredContent, selectErr := selectHealthyNodeDNSContent(normalizeDNSRecordType(route.DNSRecordType))
+			if selectErr == nil && desiredContent != "" && desiredContent != previousContent {
+				route.DNSRecordContent = desiredContent
+				route.DNSAutoTarget = true
+			}
 		}
 		if route.DDOSProtectionMode == DDOSProtectionModeAuto && shouldEnableCloudflareProxyForDDOS() {
 			route.CloudflareProxied = true

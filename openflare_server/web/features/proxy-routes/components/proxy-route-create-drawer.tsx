@@ -7,6 +7,7 @@ import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { Drawer } from '@/components/ui/drawer';
+import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
 import { createProxyRoute } from '@/features/proxy-routes/api/proxy-routes';
 import {
@@ -26,6 +27,7 @@ import {
   PrimaryButton,
   ResourceField,
   ResourceInput,
+  ResourceSelect,
   ResourceTextarea,
   ToggleField,
 } from '@/features/shared/components/resource-primitives';
@@ -40,6 +42,12 @@ const createWebsiteSchema = z
     site_name: z.string().trim().max(255, '站点标识不能超过 255 个字符'),
     domain_rows: z.array(domainRowSchema).min(1),
     origin_urls_text: z.string().trim().min(1, '请至少填写一个源站地址'),
+    dns_auto_sync: z.boolean(),
+    dns_account_id: z.string(),
+    dns_record_type: z.enum(['A', 'AAAA', 'CNAME']),
+    dns_record_content: z.string(),
+    cloudflare_proxied: z.boolean(),
+    ddos_protection_mode: z.enum(['off', 'manual', 'auto']),
     enabled: z.boolean(),
     redirect_http: z.boolean(),
     remark: z.string().max(255, '备注不能超过 255 个字符'),
@@ -78,6 +86,25 @@ const createWebsiteSchema = z
         message: '启用 HTTP 跳转前，请先为域名选择证书',
       });
     }
+
+    if (value.dns_auto_sync && !value.dns_account_id) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dns_account_id'],
+        message: '启用自动 DNS 时请选择 DNS 账号',
+      });
+    }
+    if (
+      value.dns_auto_sync &&
+      value.dns_record_type === 'CNAME' &&
+      value.dns_record_content.trim() === ''
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dns_record_content'],
+        message: 'CNAME 记录必须填写目标域名',
+      });
+    }
   });
 
 type CreateWebsiteFormValues = z.infer<typeof createWebsiteSchema>;
@@ -86,6 +113,12 @@ const defaultValues: CreateWebsiteFormValues = {
   site_name: '',
   domain_rows: [{ domain: '', certificateId: '' }],
   origin_urls_text: '',
+  dns_auto_sync: false,
+  dns_account_id: '',
+  dns_record_type: 'A',
+  dns_record_content: '',
+  cloudflare_proxied: false,
+  ddos_protection_mode: 'off',
   enabled: true,
   redirect_http: false,
   remark: '',
@@ -138,6 +171,11 @@ export function ProxyRouteCreateDrawer({
     queryFn: getTlsCertificates,
     enabled: open,
   });
+  const dnsAccountsQuery = useQuery({
+    queryKey: ['dns-accounts'],
+    queryFn: getDnsAccounts,
+    enabled: open,
+  });
 
   const combinedDomainSuggestions = useMemo(
     () => [
@@ -159,6 +197,7 @@ export function ProxyRouteCreateDrawer({
       const selectedCertIDs = normalizeSelectedCertificateIDs(values.domain_rows);
       const { urls } = parseOriginUrls(values.origin_urls_text);
       const primaryOrigin = parseOriginUrl(urls[0]);
+      const dnsAccountID = Number(values.dns_account_id);
 
       return createProxyRoute({
         site_name: values.site_name.trim() || domains[0],
@@ -195,14 +234,18 @@ export function ProxyRouteCreateDrawer({
         basic_auth_enabled: false,
         basic_auth_username: '',
         basic_auth_password: '',
-        dns_auto_sync: false,
-        dns_account_id: null,
+        dns_auto_sync: values.dns_auto_sync,
+        dns_account_id:
+          values.dns_auto_sync && Number.isFinite(dnsAccountID) && dnsAccountID > 0
+            ? dnsAccountID
+            : null,
         dns_zone_id: '',
-        dns_record_type: 'A',
+        dns_record_type: values.dns_record_type,
         dns_record_name: '',
-        dns_record_content: '',
-        cloudflare_proxied: false,
-        ddos_protection_mode: 'off',
+        dns_record_content: values.dns_record_content.trim(),
+        dns_auto_target: values.dns_auto_sync && values.dns_record_content.trim() === '',
+        cloudflare_proxied: values.cloudflare_proxied,
+        ddos_protection_mode: values.ddos_protection_mode,
         remark: values.remark.trim(),
       });
     },
@@ -218,6 +261,8 @@ export function ProxyRouteCreateDrawer({
       form.reset(defaultValues);
     }
   }, [form, open]);
+  const dnsAutoSync = form.watch('dns_auto_sync');
+  const dnsRecordType = form.watch('dns_record_type');
 
   return (
     <Drawer
@@ -288,9 +333,86 @@ export function ProxyRouteCreateDrawer({
           }
         />
 
+        <ToggleField
+          label="创建时自动解析 DNS"
+          description="绑定 Cloudflare 后，创建规则时同步 DNS；记录内容留空会自动选择在线节点公网 IP。"
+          checked={dnsAutoSync}
+          onChange={(checked) =>
+            form.setValue('dns_auto_sync', checked, { shouldDirty: true })
+          }
+        />
+
+        {dnsAutoSync ? (
+          <div className="grid gap-4 md:grid-cols-2">
+            <ResourceField
+              label="DNS 账号"
+              hint="需要 Cloudflare API Token 具备 Zone Read 和 DNS Edit 权限。"
+              error={form.formState.errors.dns_account_id?.message}
+            >
+              <ResourceSelect {...form.register('dns_account_id')}>
+                <option value="">请选择 DNS 账号</option>
+                {(dnsAccountsQuery.data ?? [])
+                  .filter((account) => account.type === 'cloudflare')
+                  .map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+              </ResourceSelect>
+            </ResourceField>
+
+            <ResourceField label="记录类型">
+              <ResourceSelect {...form.register('dns_record_type')}>
+                <option value="A">A</option>
+                <option value="AAAA">AAAA</option>
+                <option value="CNAME">CNAME</option>
+              </ResourceSelect>
+            </ResourceField>
+
+            <ResourceField
+              label="记录内容"
+              hint={
+                dnsRecordType === 'CNAME'
+                  ? '填写 CNAME 目标域名。'
+                  : '留空会自动选择在线节点 IP，节点离线后自动切换。'
+              }
+              error={form.formState.errors.dns_record_content?.message}
+              className="md:col-span-2"
+            >
+              <ResourceInput
+                placeholder={
+                  dnsRecordType === 'CNAME'
+                    ? 'target.example.com'
+                    : '留空自动选择节点 IP'
+                }
+                {...form.register('dns_record_content')}
+              />
+            </ResourceField>
+
+            <ToggleField
+              label="开启 Cloudflare 代理"
+              description="创建后直接切换为橙云，适合需要隐藏源站或抗攻击的域名。"
+              checked={form.watch('cloudflare_proxied')}
+              onChange={(checked) =>
+                form.setValue('cloudflare_proxied', checked, {
+                  shouldDirty: true,
+                })
+              }
+            />
+
+            <ResourceField label="DDoS 防护模式">
+              <ResourceSelect {...form.register('ddos_protection_mode')}>
+                <option value="off">关闭</option>
+                <option value="manual">手动</option>
+                <option value="auto">自动</option>
+              </ResourceSelect>
+            </ResourceField>
+          </div>
+        ) : null}
+
         <ResourceField
           label="源站地址"
-          hint="每行一个完整 URL，端口写在这里，例如 https://origin.internal:443。第一行作为主源站，多源站模式请保持相同协议且不要包含 path 或 query。"
+          hint="每行一个完整 URL，协议和端口都在这里配置，例如 https://origin.internal:443。第一行作为主源站，多源站模式请保持相同协议且不要包含 path 或 query。"
           error={form.formState.errors.origin_urls_text?.message}
         >
           <ResourceTextarea

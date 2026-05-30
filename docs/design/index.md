@@ -96,15 +96,15 @@ OpenFlare 当前不定位为通用日志平台、服务网格、Kubernetes Ingre
 
 `proxy_routes` 可选关联一个 `origins` 记录，用于复用源站地址；规则仍保存完整 `origin_url` 快照以参与渲染与版本快照。
 
-上游约束：
+源站约束：
 
-* `proxy_routes` 至少包含一个上游地址。
-* 为兼容历史数据保留 `origin_url` 主上游字段，也允许在同一规则内补充多个上游做负载均衡。
-* 上游统一渲染为带 keepalive 的 named `upstream`。
-* 单上游可附带 base path 或 query 并在 `proxy_pass` 中追加。
-* 多上游限定为纯 `scheme://host[:port]`。
+* `proxy_routes` 至少包含一个源站地址。
+* 为兼容历史数据保留 `origin_url` 主源站字段，也允许在同一规则内补充多个源站做负载均衡。
+* 源站统一渲染为带 keepalive 的 named `upstream`。
+* 单源站可附带 base path 或 query 并在 `proxy_pass` 中追加。
+* 多源站限定为纯 `scheme://host[:port]`。
 * `proxy_routes.origin_host` 为可选字段，用于回源时覆盖 `Host` 请求头。
-* 所有上游地址都必须为合法 `http://` 或 `https://`。
+* 所有源站地址都必须为合法 `http://` 或 `https://`。
 
 ## HTTPS 约束
 

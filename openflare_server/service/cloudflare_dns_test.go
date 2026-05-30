@@ -11,7 +11,7 @@ import (
 func TestNormalizeProxyRouteDNSSettingsRequiresCloudflareAccount(t *testing.T) {
 	setupServiceTestDB(t)
 
-	if _, _, _, _, _, _, err := normalizeProxyRouteDNSSettings(ProxyRouteInput{
+	if _, _, _, _, _, _, _, err := normalizeProxyRouteDNSSettings(ProxyRouteInput{
 		DNSAutoSync: true,
 	}); err == nil {
 		t.Fatal("expected missing dns account to fail")
@@ -26,7 +26,7 @@ func TestNormalizeProxyRouteDNSSettingsRequiresCloudflareAccount(t *testing.T) {
 		t.Fatalf("insert dns account: %v", err)
 	}
 
-	accountID, zoneID, recordType, recordName, recordContent, ddosMode, err := normalizeProxyRouteDNSSettings(ProxyRouteInput{
+	accountID, zoneID, recordType, recordName, recordContent, autoTarget, ddosMode, err := normalizeProxyRouteDNSSettings(ProxyRouteInput{
 		DNSAutoSync:        true,
 		DNSAccountID:       &account.ID,
 		DNSZoneID:          "zone-a",
@@ -41,8 +41,8 @@ func TestNormalizeProxyRouteDNSSettingsRequiresCloudflareAccount(t *testing.T) {
 	if accountID == nil || *accountID != account.ID {
 		t.Fatalf("unexpected account id: %#v", accountID)
 	}
-	if zoneID != "zone-a" || recordType != "AAAA" || recordName != "app.example.com" || recordContent != "2001:4860:4860::8888" || ddosMode != DDOSProtectionModeAuto {
-		t.Fatalf("unexpected normalized values: %q %q %q %q %q", zoneID, recordType, recordName, recordContent, ddosMode)
+	if zoneID != "zone-a" || recordType != "AAAA" || recordName != "app.example.com" || recordContent != "2001:4860:4860::8888" || autoTarget || ddosMode != DDOSProtectionModeAuto {
+		t.Fatalf("unexpected normalized values: %q %q %q %q %t %q", zoneID, recordType, recordName, recordContent, autoTarget, ddosMode)
 	}
 }
 

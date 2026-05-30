@@ -13,7 +13,7 @@
 | 数据无法保存 | 数据库连接、SQLite 文件权限、PostgreSQL 健康状态 |
 | Agent 离线 | Agent 日志、Token、Server 地址、网络连通性 |
 | 发布后节点未更新 | 激活版本、节点 heartbeat、应用记录 |
-| OpenResty 应用失败 | 应用记录、Agent 日志、证书、上游地址、端口占用 |
+| OpenResty 应用失败 | 应用记录、Agent 日志、证书、源站地址、端口占用 |
 | 访问分析无数据 | OpenResty 容器状态、观测端口、Agent 补报日志 |
 
 ## Server 无法启动
@@ -152,8 +152,8 @@ journalctl -u openflare-agent -f
 | 原因 | 排查 |
 | --- | --- |
 | 域名或 server 块冲突 | 检查同一域名是否被多个网站配置使用 |
-| 上游地址不合法 | 确认所有上游都是 `http://` 或 `https://` |
-| 多上游格式不符合约束 | 多上游必须是纯 `scheme://host[:port]` |
+| 源站地址不合法 | 确认所有源站都是 `http://` 或 `https://` |
+| 多源站格式不符合约束 | 多源站必须是纯 `scheme://host[:port]` |
 | 证书缺失或路径错误 | 检查域名是否绑定证书，以及 Agent 证书目录是否可写 |
 | 端口被占用 | 检查本机 `80`、`443` 端口 |
 

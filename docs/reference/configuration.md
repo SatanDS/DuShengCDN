@@ -116,9 +116,9 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 约束：
 
 * 管理端不再暴露 `resolver` 配置。
-* 规则上游统一渲染为 named `upstream` 并启用 keepalive。
-* 单上游如带 base path 或 query，会在 `proxy_pass` 中补回原始 URI。
-* 多上游仍要求每个上游都为纯 `scheme://host[:port]`，且同一规则内协议一致。
+* 规则源站统一渲染为 named `upstream` 并启用 keepalive。
+* 单源站如带 base path 或 query，会在 `proxy_pass` 中补回原始 URI。
+* 多源站仍要求每个源站都为纯 `scheme://host[:port]`，且同一规则内协议一致。
 * `OpenRestyCacheEnabled` 用于启用缓存基础设施与全局默认参数；实际是否缓存、按 URL / 后缀 / 路径等命中策略由各条 `proxy_routes` 单独决定。
 * 默认缓存 Key 为 `$scheme$host$request_uri`。
 * 默认 `keepalive_timeout` 为 `20` 秒，默认 `proxy_connect_timeout` 为 `3` 秒。

@@ -311,6 +311,7 @@ export function buildPayloadFromRoute(
     dns_record_type: route.dns_record_type,
     dns_record_name: route.dns_record_name,
     dns_record_content: route.dns_record_content,
+    dns_auto_target: route.dns_auto_target,
     cloudflare_proxied: route.cloudflare_proxied,
     ddos_protection_mode: route.ddos_protection_mode,
     ...overrides,

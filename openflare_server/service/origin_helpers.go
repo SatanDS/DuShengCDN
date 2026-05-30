@@ -27,6 +27,14 @@ func validateOriginAddress(address string) error {
 	if ip := net.ParseIP(address); ip != nil {
 		return nil
 	}
+	if strings.Count(address, ":") == 1 {
+		parts := strings.SplitN(address, ":", 2)
+		if parts[0] != "" && parts[1] != "" {
+			if _, err := strconv.Atoi(parts[1]); err == nil {
+				return errors.New("源站目录不填写端口，端口请在规则配置的源站地址中填写")
+			}
+		}
+	}
 	if len(address) > 253 {
 		return errors.New("源站地址格式不合法")
 	}

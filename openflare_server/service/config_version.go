@@ -506,7 +506,7 @@ func buildSnapshotRoutes(routes []*model.ProxyRoute) ([]snapshotRoute, error) {
 		}
 		upstreams, err := decodeStoredUpstreams(route.Upstreams, route.OriginURL)
 		if err != nil {
-			return nil, fmt.Errorf("路由 %s 上游配置无效", route.Domain)
+			return nil, fmt.Errorf("路由 %s 源站配置无效", route.Domain)
 		}
 		cacheRules, err := decodeStoredCacheRules(route.CacheRules)
 		if err != nil {
@@ -928,7 +928,7 @@ func renderRouteConfig(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot) 
 		}
 		upstreams, err := decodeStoredUpstreams(route.Upstreams, route.OriginURL)
 		if err != nil {
-			return "", nil, fmt.Errorf("路由 %s 上游配置无效", route.Domain)
+			return "", nil, fmt.Errorf("路由 %s 源站配置无效", route.Domain)
 		}
 		cacheRules, err := decodeStoredCacheRules(route.CacheRules)
 		if err != nil {

@@ -66,6 +66,7 @@ type ProxyRouteInput struct {
 	DNSRecordType      string                        `json:"dns_record_type"`
 	DNSRecordName      string                        `json:"dns_record_name"`
 	DNSRecordContent   string                        `json:"dns_record_content"`
+	DNSAutoTarget      bool                          `json:"dns_auto_target"`
 	CloudflareProxied  bool                          `json:"cloudflare_proxied"`
 	DDOSProtectionMode string                        `json:"ddos_protection_mode"`
 	Remark             string                        `json:"remark"`
@@ -109,6 +110,7 @@ type ProxyRouteView struct {
 	DNSRecordType      string                        `json:"dns_record_type"`
 	DNSRecordName      string                        `json:"dns_record_name"`
 	DNSRecordContent   string                        `json:"dns_record_content"`
+	DNSAutoTarget      bool                          `json:"dns_auto_target"`
 	DNSRecordIDs       map[string]string             `json:"dns_record_ids"`
 	CloudflareProxied  bool                          `json:"cloudflare_proxied"`
 	DDOSProtectionMode string                        `json:"ddos_protection_mode"`
@@ -313,7 +315,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		input.BasicAuthPassword = ""
 	}
 
-	dnsAccountID, dnsZoneID, dnsRecordType, dnsRecordName, dnsRecordContent, ddosMode, err := normalizeProxyRouteDNSSettings(input)
+	dnsAccountID, dnsZoneID, dnsRecordType, dnsRecordName, dnsRecordContent, dnsAutoTarget, ddosMode, err := normalizeProxyRouteDNSSettings(input)
 	if err != nil {
 		return nil, err
 	}
@@ -352,6 +354,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.DNSRecordType = dnsRecordType
 	route.DNSRecordName = dnsRecordName
 	route.DNSRecordContent = dnsRecordContent
+	route.DNSAutoTarget = dnsAutoTarget
 	route.CloudflareProxied = input.CloudflareProxied
 	route.DDOSProtectionMode = ddosMode
 	route.Remark = remark
@@ -445,6 +448,7 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		DNSRecordType:      normalizeDNSRecordType(route.DNSRecordType),
 		DNSRecordName:      route.DNSRecordName,
 		DNSRecordContent:   route.DNSRecordContent,
+		DNSAutoTarget:      route.DNSAutoTarget,
 		DNSRecordIDs:       decodeDNSRecordIDs(route.DNSRecordIDs),
 		CloudflareProxied:  route.CloudflareProxied,
 		DDOSProtectionMode: normalizeDDOSProtectionMode(route.DDOSProtectionMode),
@@ -596,37 +600,41 @@ func validateProxyRouteIdentityUniqueness(route *model.ProxyRoute, siteName stri
 	return nil
 }
 
-func normalizeProxyRouteDNSSettings(input ProxyRouteInput) (*uint, string, string, string, string, string, error) {
+func normalizeProxyRouteDNSSettings(input ProxyRouteInput) (*uint, string, string, string, string, bool, string, error) {
 	ddosMode := normalizeDDOSProtectionMode(input.DDOSProtectionMode)
 	if !input.DNSAutoSync {
-		return nil, "", normalizeDNSRecordType(input.DNSRecordType), "", "", ddosMode, nil
+		return nil, "", normalizeDNSRecordType(input.DNSRecordType), "", "", false, ddosMode, nil
 	}
 
 	if input.DNSAccountID == nil || *input.DNSAccountID == 0 {
-		return nil, "", "", "", "", "", errors.New("启用自动 DNS 时必须选择 DNS 账号")
+		return nil, "", "", "", "", false, "", errors.New("启用自动 DNS 时必须选择 DNS 账号")
 	}
 	account, err := model.GetDnsAccountByID(*input.DNSAccountID)
 	if err != nil {
-		return nil, "", "", "", "", "", errors.New("选择的 DNS 账号不存在")
+		return nil, "", "", "", "", false, "", errors.New("选择的 DNS 账号不存在")
 	}
 	if strings.ToLower(strings.TrimSpace(account.Type)) != cloudflareDNSProviderType {
-		return nil, "", "", "", "", "", errors.New("自动 DNS 目前仅支持 Cloudflare DNS 账号")
+		return nil, "", "", "", "", false, "", errors.New("自动 DNS 目前仅支持 Cloudflare DNS 账号")
 	}
 
 	recordType := normalizeDNSRecordType(input.DNSRecordType)
 	recordName := normalizeDNSRecordName(input.DNSRecordName)
 	recordContent := strings.TrimSpace(input.DNSRecordContent)
 	if recordName != "" && !isValidProxyRouteDomain(recordName) {
-		return nil, "", "", "", "", "", errors.New("DNS 记录名格式无效")
+		return nil, "", "", "", "", false, "", errors.New("DNS 记录名格式无效")
 	}
 	if recordContent != "" {
 		if err := validateDNSRecordContent(recordType, recordContent); err != nil {
-			return nil, "", "", "", "", "", err
+			return nil, "", "", "", "", false, "", err
 		}
+	}
+	dnsAutoTarget := input.DNSAutoTarget || recordContent == ""
+	if recordType == "CNAME" && dnsAutoTarget {
+		return nil, "", "", "", "", false, "", errors.New("CNAME 记录必须手动填写记录内容")
 	}
 
 	dnsAccountID := *input.DNSAccountID
-	return &dnsAccountID, strings.TrimSpace(input.DNSZoneID), recordType, recordName, recordContent, ddosMode, nil
+	return &dnsAccountID, strings.TrimSpace(input.DNSZoneID), recordType, recordName, recordContent, dnsAutoTarget, ddosMode, nil
 }
 
 func normalizeDDOSProtectionMode(raw string) string {

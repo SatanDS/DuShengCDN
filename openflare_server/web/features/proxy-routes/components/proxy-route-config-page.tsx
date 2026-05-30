@@ -221,6 +221,7 @@ type DNSAutomationValues = {
   dns_record_type: 'A' | 'AAAA' | 'CNAME';
   dns_record_name: string;
   dns_record_content: string;
+  dns_auto_target: boolean;
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'manual' | 'auto';
 };
@@ -572,7 +573,7 @@ function ReverseProxySection({
       >
         <ResourceField
           label="源站地址"
-          hint="每行一个完整 URL，端口写在这里，例如 https://origin.internal:443。多源站模式下不要带 path 或 query。"
+          hint="每行一个完整 URL，协议和端口都在这里配置，例如 https://origin.internal:443。多源站模式下不要带 path 或 query。"
           error={form.formState.errors.origin_urls_text?.message}
         >
           <ResourceTextarea
@@ -636,6 +637,7 @@ function DNSAutomationSection({
       dns_record_type: route.dns_record_type || 'A',
       dns_record_name: route.dns_record_name || '',
       dns_record_content: route.dns_record_content || '',
+      dns_auto_target: route.dns_auto_target,
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
     },
@@ -649,6 +651,7 @@ function DNSAutomationSection({
       dns_record_type: route.dns_record_type || 'A',
       dns_record_name: route.dns_record_name || '',
       dns_record_content: route.dns_record_content || '',
+      dns_auto_target: route.dns_auto_target,
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
     });
@@ -656,6 +659,7 @@ function DNSAutomationSection({
 
   const autoSyncEnabled = form.watch('dns_auto_sync');
   const recordType = form.watch('dns_record_type');
+  const autoTarget = form.watch('dns_auto_target');
 
   return (
     <ConfigSectionShell
@@ -680,6 +684,7 @@ function DNSAutomationSection({
               dns_record_type: values.dns_record_type,
               dns_record_name: values.dns_record_name.trim(),
               dns_record_content: values.dns_record_content.trim(),
+              dns_auto_target: values.dns_auto_target,
               cloudflare_proxied: values.cloudflare_proxied,
               ddos_protection_mode: values.ddos_protection_mode,
             }),
@@ -765,15 +770,25 @@ function DNSAutomationSection({
           hint={
             recordType === 'CNAME'
               ? 'CNAME 必须手动填写目标域名。'
-              : '可留空，系统会自动选择在线节点的公网 IP；节点离线后会自动切到其他在线节点。'
+              : '启用自动选择时，系统会使用在线节点公网 IP；关闭后会固定使用你填写的内容。'
           }
         >
           <ResourceInput
-            disabled={!autoSyncEnabled}
+            disabled={!autoSyncEnabled || autoTarget}
             placeholder={recordType === 'CNAME' ? 'target.example.com' : '留空自动选择节点 IP'}
             {...form.register('dns_record_content')}
           />
         </ResourceField>
+
+        <ToggleField
+          label="自动选择在线节点 IP"
+          description="开启后节点离线会自动切换到其他在线节点；手动记录内容不会被后台任务覆盖。"
+          checked={autoTarget}
+          disabled={!autoSyncEnabled || recordType === 'CNAME'}
+          onChange={(checked) =>
+            form.setValue('dns_auto_target', checked, { shouldDirty: true })
+          }
+        />
 
         <div className="grid gap-5 md:grid-cols-2">
           <ToggleField

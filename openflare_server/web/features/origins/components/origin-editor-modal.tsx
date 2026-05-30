@@ -20,12 +20,25 @@ import {
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 
+function hasPortInOriginAddress(value: string) {
+  const normalized = value.trim();
+  const colonCount = (normalized.match(/:/g) ?? []).length;
+  return (
+    /^\[[^\]]+\]:\d{1,5}$/.test(normalized) ||
+    (colonCount === 1 && /^[^:]+:\d{1,5}$/.test(normalized))
+  );
+}
+
 const originSchema = z.object({
   name: z.string().max(255, '源站名不能超过 255 个字符'),
   address: z
     .string()
     .trim()
     .min(1, '请输入源站地址')
+    .refine(
+      (value) => !hasPortInOriginAddress(value),
+      '源站目录不填写端口；端口请在规则配置的“源站地址”里填写。',
+    )
     .refine(
       (value) => !/[/?#]/.test(value) && !value.includes('://'),
       '源站地址格式不合法，请只填写 IP、域名或主机名',
@@ -103,7 +116,7 @@ export function OriginEditorModal({
       isOpen={isOpen}
       onClose={onClose}
       title={origin ? '编辑源站' : '新增源站'}
-      description="源站会作为规则里的可复用地址目录；这里只填写 IP、域名或主机名，协议和端口在规则配置的源站地址里设置。"
+      description="源站会作为规则里的可复用地址目录；这里只填写 IP、域名或主机名，不填写协议和端口。端口请在规则配置的“源站地址”里设置。"
       footer={
         <div className="flex flex-wrap justify-end gap-3">
           <SecondaryButton type="button" onClick={onClose}>
@@ -131,7 +144,7 @@ export function OriginEditorModal({
         <div className="grid gap-4 md:grid-cols-2">
           <ResourceField
             label="源站地址"
-            hint="只填写 IP、域名或主机名，例如 10.0.0.10、origin.internal；不要填写 http://、https:// 或端口。"
+            hint="只填写 IP、域名或主机名，例如 10.0.0.10、origin.internal；不要填写 http://、https:// 或端口。端口稍后到规则配置的“源站地址”中填写完整 URL，例如 https://origin.internal:443。"
             error={form.formState.errors.address?.message}
           >
             <ResourceInput

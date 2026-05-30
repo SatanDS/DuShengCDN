@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"openflare/model"
@@ -101,5 +102,19 @@ func TestDeleteOriginRejectsReferencedOrigin(t *testing.T) {
 
 	if err = DeleteOrigin(origin.ID); err == nil {
 		t.Fatal("expected referenced origin deletion to fail")
+	}
+}
+
+func TestValidateOriginAddressRejectsPortWithHelpfulMessage(t *testing.T) {
+	if err := validateOriginAddress("2001:db8::1"); err != nil {
+		t.Fatalf("expected raw IPv6 origin address to remain valid: %v", err)
+	}
+
+	err := validateOriginAddress("origin.internal:443")
+	if err == nil {
+		t.Fatal("expected origin address with port to fail")
+	}
+	if !strings.Contains(err.Error(), "端口") {
+		t.Fatalf("expected port guidance in error, got %q", err.Error())
 	}
 }

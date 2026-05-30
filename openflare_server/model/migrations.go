@@ -1406,6 +1406,9 @@ func validateDatabaseSchemaV13(db *gorm.DB, backend string) error {
 	if !db.Migrator().HasColumn(&ProxyRoute{}, "dns_account_id") {
 		return fmt.Errorf("column proxy_routes.dns_account_id is missing")
 	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "dns_auto_target") {
+		return fmt.Errorf("column proxy_routes.dns_auto_target is missing")
+	}
 	if !db.Migrator().HasColumn(&ProxyRoute{}, "cloudflare_proxied") {
 		return fmt.Errorf("column proxy_routes.cloudflare_proxied is missing")
 	}

@@ -58,6 +58,7 @@ export interface ProxyRouteItem {
   dns_record_type: 'A' | 'AAAA' | 'CNAME';
   dns_record_name: string;
   dns_record_content: string;
+  dns_auto_target: boolean;
   dns_record_ids: Record<string, string>;
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'manual' | 'auto';
@@ -105,6 +106,7 @@ export interface ProxyRouteMutationPayload {
   dns_record_type?: 'A' | 'AAAA' | 'CNAME';
   dns_record_name?: string;
   dns_record_content?: string;
+  dns_auto_target?: boolean;
   cloudflare_proxied?: boolean;
   ddos_protection_mode?: 'off' | 'manual' | 'auto';
   remark: string;
