@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ConfirmDialogProvider } from '@/components/feedback/confirm-dialog-provider';
+import { ToastProvider } from '@/components/feedback/toast-provider';
 import { ThemeProvider } from '@/components/providers/theme-provider';
 import { ProxyRouteConfigPage } from '@/features/proxy-routes/components/proxy-route-config-page';
 import { ProxyRoutesPage } from '@/features/proxy-routes/components/proxy-routes-page';
@@ -100,7 +102,11 @@ function renderWithProviders(ui: ReactNode) {
 
   render(
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>{ui}</ThemeProvider>
+      <ThemeProvider>
+        <ToastProvider>
+          <ConfirmDialogProvider>{ui}</ConfirmDialogProvider>
+        </ToastProvider>
+      </ThemeProvider>
     </QueryClientProvider>,
   );
 }
@@ -288,7 +294,7 @@ describe('Proxy route website pages', () => {
     await user.type(within(dialog).getByLabelText('域名 2'), 'www.example.com');
 
     await user.type(
-      within(dialog).getByLabelText('上游地址'),
+      within(dialog).getByLabelText('源站地址'),
       'https://origin-a.internal:443{enter}https://origin-b.internal:443',
     );
 

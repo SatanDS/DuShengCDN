@@ -369,7 +369,7 @@ export function ProxyRoutesPage() {
 
                         <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
                           <p className="text-xs uppercase tracking-[0.18em] text-[var(--foreground-muted)]">
-                            上游摘要
+                            源站摘要
                           </p>
                           <p className="mt-2 text-sm text-[var(--foreground-primary)]">
                             {getUpstreamSummary(route)}

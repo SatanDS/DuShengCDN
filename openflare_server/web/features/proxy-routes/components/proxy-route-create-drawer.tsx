@@ -39,7 +39,7 @@ const createWebsiteSchema = z
   .object({
     site_name: z.string().trim().max(255, '站点标识不能超过 255 个字符'),
     domain_rows: z.array(domainRowSchema).min(1),
-    origin_urls_text: z.string().trim().min(1, '请至少填写一个上游地址'),
+    origin_urls_text: z.string().trim().min(1, '请至少填写一个源站地址'),
     enabled: z.boolean(),
     redirect_http: z.boolean(),
     remark: z.string().max(255, '备注不能超过 255 个字符'),
@@ -281,12 +281,12 @@ export function ProxyRouteCreateDrawer({
         />
 
         <ResourceField
-          label="上游地址"
-          hint="每行一个完整 URL。第一行作为主回源，多上游模式请保持相同协议且不要包含 path 或 query。"
+          label="源站地址"
+          hint="每行一个完整 URL，端口写在这里，例如 https://origin.internal:443。第一行作为主源站，多源站模式请保持相同协议且不要包含 path 或 query。"
           error={form.formState.errors.origin_urls_text?.message}
         >
           <ResourceTextarea
-            aria-label="上游地址"
+            aria-label="源站地址"
             placeholder={'https://origin-a.internal:443\nhttps://origin-b.internal:443'}
             {...form.register('origin_urls_text')}
           />

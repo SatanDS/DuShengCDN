@@ -18,7 +18,7 @@ export const websiteConfigSections = [
   {
     key: 'proxy',
     label: '反向代理',
-    description: '配置主回源和上游地址。',
+    description: '配置主源站地址和源站负载均衡。',
   },
   {
     key: 'cache',
@@ -89,7 +89,7 @@ export function validateDomains(domains: string[]) {
 export function parseOriginUrls(value: string) {
   const urls = linesFromTextarea(value);
   if (urls.length === 0) {
-    return { urls: [], error: '请至少填写一个上游地址' };
+    return { urls: [], error: '请至少填写一个源站地址' };
   }
 
   let sharedScheme = '';
@@ -98,25 +98,25 @@ export function parseOriginUrls(value: string) {
     try {
       parsed = new URL(originUrl);
     } catch {
-      return { urls: [], error: `上游地址格式不合法：${originUrl}` };
+      return { urls: [], error: `源站地址格式不合法：${originUrl}` };
     }
 
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return {
         urls: [],
-        error: `上游地址必须以 http:// 或 https:// 开头：${originUrl}`,
+        error: `源站地址必须以 http:// 或 https:// 开头：${originUrl}`,
       };
     }
 
     if (!parsed.hostname) {
-      return { urls: [], error: `上游地址缺少主机名：${originUrl}` };
+      return { urls: [], error: `源站地址缺少主机名：${originUrl}` };
     }
 
     if (urls.length > 1) {
       if ((parsed.pathname && parsed.pathname !== '/') || parsed.search) {
         return {
           urls: [],
-          error: '多上游模式暂不支持带路径或查询参数的地址',
+          error: '多源站模式暂不支持带路径或查询参数的地址',
         };
       }
 
@@ -125,7 +125,7 @@ export function parseOriginUrls(value: string) {
       } else if (sharedScheme !== parsed.protocol) {
         return {
           urls: [],
-          error: '同一站点的多个上游必须使用相同协议',
+          error: '同一站点的多个源站地址必须使用相同协议',
         };
       }
     }
@@ -308,7 +308,7 @@ export function getUpstreamSummary(route: ProxyRouteItem) {
   if (route.upstream_list.length <= 1) {
     return route.origin_url;
   }
-  return `${route.upstream_list.length} 个上游，主上游 ${route.origin_url}`;
+  return `${route.upstream_list.length} 个源站地址，主源站 ${route.origin_url}`;
 }
 
 export function getWebsiteStatusBadges(route: ProxyRouteItem) {

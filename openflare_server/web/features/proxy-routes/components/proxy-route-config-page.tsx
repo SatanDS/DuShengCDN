@@ -149,7 +149,7 @@ const rateLimitSchema = z
 
 const reverseProxySchema = z
   .object({
-    origin_urls_text: z.string().trim().min(1, '请至少填写一个上游地址'),
+    origin_urls_text: z.string().trim().min(1, '请至少填写一个源站地址'),
     origin_host: z.string(),
     custom_headers_text: z.string(),
     remark: z.string().max(255, '备注不能超过 255 个字符'),
@@ -528,7 +528,7 @@ function ReverseProxySection({
   return (
     <ConfigSectionShell
       title="反向代理"
-      description="第一行作为主回源；填写多行时会自动进入多上游负载均衡模式。"
+      description="第一行作为主源站；填写多行时会自动进入多源站负载均衡模式。"
       formId="proxy-route-proxy-form"
       saving={saving}
     >
@@ -558,12 +558,12 @@ function ReverseProxySection({
         })}
       >
         <ResourceField
-          label="上游地址"
-          hint="每行一个完整 URL。多上游模式下不要带 path 或 query。"
+          label="源站地址"
+          hint="每行一个完整 URL，端口写在这里，例如 https://origin.internal:443。多源站模式下不要带 path 或 query。"
           error={form.formState.errors.origin_urls_text?.message}
         >
           <ResourceTextarea
-            aria-label="上游地址"
+            aria-label="源站地址"
             className="min-h-40"
             placeholder={'https://origin-a.internal:443\nhttps://origin-b.internal:443'}
             {...form.register('origin_urls_text')}
