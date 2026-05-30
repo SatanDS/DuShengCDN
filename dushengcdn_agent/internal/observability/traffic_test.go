@@ -104,8 +104,31 @@ func TestBuildTrafficObservabilityReturnsAccessLogs(t *testing.T) {
 	if fallbackMetrics == nil || fallbackMetrics.OpenrestyRxBytes != 192 || fallbackMetrics.OpenrestyTxBytes != 768 {
 		t.Fatalf("expected fallback throughput metrics, got %+v", fallbackMetrics)
 	}
+	if accessLogs[0].RequestBytes != 128 || accessLogs[0].ResponseBytes != 512 {
+		t.Fatalf("expected byte fields in access logs, got %+v", accessLogs)
+	}
 	if accessLogs[0].Path != "/login" || accessLogs[1].Path != "/v1/ping" {
 		t.Fatalf("unexpected access log paths: %+v", accessLogs)
+	}
+}
+
+func TestBuildTrafficObservabilityParsesUpstreamBytes(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "dushengcdn_access.log")
+	content := []byte(
+		"{\"ts\":\"2026-03-14T08:00:00Z\",\"host\":\"app.example.com\",\"path\":\"/asset\",\"remote_addr\":\"10.0.0.1\",\"status\":200,\"request_length\":128,\"bytes_sent\":512,\"upstream_response_length\":\"1024, 256\"}\n",
+	)
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	_, accessLogs, _ := BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
+	if len(accessLogs) != 1 {
+		t.Fatalf("expected one access log, got %+v", accessLogs)
+	}
+	if accessLogs[0].UpstreamBytes != 1280 {
+		t.Fatalf("expected upstream bytes 1280, got %+v", accessLogs[0])
 	}
 }
 

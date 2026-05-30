@@ -1522,6 +1522,34 @@ func validateDatabaseSchemaV16(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV17 adds byte-level access log fields used by observability metering.
+func migrateV17(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDatabaseSchemaV17(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV16(db, backend); err != nil {
+		return err
+	}
+	accessLogColumns := []string{
+		"request_bytes",
+		"response_bytes",
+		"upstream_bytes",
+	}
+	for _, table := range observabilityShardTables("node_access_logs") {
+		for _, column := range accessLogColumns {
+			if !db.Migrator().HasColumn(table, column) {
+				return fmt.Errorf("column %s.%s is missing", table, column)
+			}
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1539,6 +1567,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 13, toVersion: 14, migrate: migrateV14, validate: validateDatabaseSchemaV14},
 		{fromVersion: 14, toVersion: 15, migrate: migrateV15, validate: validateDatabaseSchemaV15},
 		{fromVersion: 15, toVersion: 16, migrate: migrateV16, validate: validateDatabaseSchemaV16},
+		{fromVersion: 16, toVersion: 17, migrate: migrateV17, validate: validateDatabaseSchemaV17},
 	}
 }
 
@@ -1624,7 +1653,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureDefaultGitHubAuthSource(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV16(db, backend); err != nil {
+	if err := validateDatabaseSchemaV17(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

@@ -143,11 +143,14 @@ type CacheOperation struct {
 }
 
 type NodeAccessLog struct {
-	LoggedAtUnix int64  `json:"logged_at_unix"`
-	RemoteAddr   string `json:"remote_addr"`
-	Host         string `json:"host"`
-	Path         string `json:"path"`
-	StatusCode   int    `json:"status_code"`
+	LoggedAtUnix  int64  `json:"logged_at_unix"`
+	RemoteAddr    string `json:"remote_addr"`
+	Host          string `json:"host"`
+	Path          string `json:"path"`
+	StatusCode    int    `json:"status_code"`
+	RequestBytes  int64  `json:"request_bytes"`
+	ResponseBytes int64  `json:"response_bytes"`
+	UpstreamBytes int64  `json:"upstream_bytes"`
 }
 
 type BufferedObservabilityRecord struct {

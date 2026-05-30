@@ -108,7 +108,7 @@ events {
 http {
     include       mime.types;
     default_type  application/octet-stream;
-{{OpenRestyConnectionUpgradeMap}}{{OpenRestyDefaultServerBlock}}    log_format dushengcdn_json escape=json '{"ts":"$time_iso8601","host":"$host","path":"$request_uri","remote_addr":"$remote_addr","status":$status,"request_time":$request_time,"bytes_sent":$body_bytes_sent,"request_length":$request_length,"cache_status":"$upstream_cache_status","upstream_status":"$upstream_status","upstream_response_time":"$upstream_response_time"}';
+{{OpenRestyConnectionUpgradeMap}}{{OpenRestyDefaultServerBlock}}    log_format dushengcdn_json escape=json '{"ts":"$time_iso8601","host":"$host","path":"$request_uri","remote_addr":"$remote_addr","status":$status,"request_time":$request_time,"bytes_sent":$body_bytes_sent,"request_length":$request_length,"upstream_response_length":"$upstream_response_length","cache_status":"$upstream_cache_status","upstream_status":"$upstream_status","upstream_response_time":"$upstream_response_time"}';
     access_log {{OpenRestyAccessLogPath}} dushengcdn_json;
     sendfile on;
     tcp_nopush on;

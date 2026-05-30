@@ -15,6 +15,38 @@ export const dashboardNavigation: NavigationItem[] = [
     href: '/proxy-route',
     label: '网站配置',
     icon: 'proxy',
+    children: [
+      {
+        href: '/proxy-route?section=dns',
+        label: '自动 DNS',
+        icon: 'domain',
+      },
+      {
+        href: '/proxy-route?section=cache',
+        label: '缓存策略',
+        icon: 'performance',
+      },
+      {
+        href: '/proxy-route?section=pow',
+        label: 'PoW 防护',
+        icon: 'setting',
+      },
+      {
+        href: '/proxy-route?section=waf',
+        label: 'WAF 防护',
+        icon: 'certificate',
+      },
+      {
+        href: '/proxy-route?section=region',
+        label: '地区限制',
+        icon: 'website',
+      },
+      {
+        href: '/proxy-route?section=auth',
+        label: '认证配置',
+        icon: 'user',
+      },
+    ],
   },
   {
     href: '/website',
@@ -48,13 +80,13 @@ export const dashboardNavigation: NavigationItem[] = [
   },
   {
     href: '/access-log',
-    label: '访问日志',
+    label: '观测计量',
     icon: 'log',
   },
 
   {
     href: '/performance',
-    label: '性能观测',
+    label: 'OpenResty配置',
     icon: 'performance',
   },
   {

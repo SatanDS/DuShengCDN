@@ -252,6 +252,88 @@ func TestCleanupAccessLogsDeletesExpiredData(t *testing.T) {
 	}
 }
 
+func TestBuildObservabilityMeteringOverviewAggregatesBillingSignals(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Hour)
+	view := buildObservabilityMeteringOverview(meteringOverviewDataSource{
+		now: now,
+		nodes: []*model.Node{
+			{NodeID: "node-a", Status: NodeStatusOnline, LastSeenAt: now},
+			{NodeID: "node-b", Status: NodeStatusOffline, LastSeenAt: now.Add(-3 * time.Hour)},
+		},
+		logs: []*model.NodeAccessLog{
+			{
+				NodeID:        "node-a",
+				LoggedAt:      now.Add(-10 * time.Minute),
+				RemoteAddr:    "203.0.113.1",
+				Region:        "China",
+				Host:          "app.example.com",
+				Path:          "/index",
+				StatusCode:    200,
+				RequestBytes:  100,
+				ResponseBytes: 1000,
+				UpstreamBytes: 300,
+			},
+			{
+				NodeID:        "node-b",
+				LoggedAt:      now.Add(-8 * time.Minute),
+				RemoteAddr:    "203.0.113.2",
+				Region:        "United States",
+				Host:          "app.example.com",
+				Path:          "/api",
+				StatusCode:    502,
+				RequestBytes:  200,
+				ResponseBytes: 2000,
+				UpstreamBytes: 900,
+			},
+			{
+				NodeID:        "node-a",
+				LoggedAt:      now.Add(-6 * time.Minute),
+				RemoteAddr:    "203.0.113.1",
+				Region:        "China",
+				Host:          "static.example.com",
+				Path:          "/asset.js",
+				StatusCode:    200,
+				ResponseBytes: 500,
+			},
+		},
+		reports: []*model.NodeRequestReport{
+			{
+				CacheHitCount:    7,
+				CacheMissCount:   2,
+				CacheBypassCount: 1,
+				StatusCodesJSON:  `{"200":8,"502":2}`,
+			},
+		},
+		snapshots: []*model.NodeMetricSnapshot{
+			{NodeID: "node-a", CapturedAt: now.Add(-2 * time.Hour), OpenrestyRxBytes: 1000, OpenrestyTxBytes: 2000},
+			{NodeID: "node-a", CapturedAt: now.Add(-1 * time.Hour), OpenrestyRxBytes: 1500, OpenrestyTxBytes: 3200},
+			{NodeID: "node-a", CapturedAt: now, OpenrestyRxBytes: 2200, OpenrestyTxBytes: 5200},
+		},
+	})
+
+	if view.RequestCount != 3 {
+		t.Fatalf("expected request count 3, got %d", view.RequestCount)
+	}
+	if view.ResponseBytes != 3500 || view.UpstreamBytes != 1200 || !view.UpstreamBytesSupported {
+		t.Fatalf("unexpected traffic bytes: %+v", view)
+	}
+	if view.CacheHitRatePercent != 70 {
+		t.Fatalf("expected cache hit rate 70, got %f", view.CacheHitRatePercent)
+	}
+	if view.NodeAvailabilityPercent != 50 {
+		t.Fatalf("expected availability 50, got %f", view.NodeAvailabilityPercent)
+	}
+	if len(view.SiteTraffic) == 0 || view.SiteTraffic[0].Key != "app.example.com" || view.SiteTraffic[0].ResponseBytes != 3000 {
+		t.Fatalf("unexpected site traffic: %+v", view.SiteTraffic)
+	}
+	if len(view.TopURLs) == 0 || view.TopURLs[0].Key == "" {
+		t.Fatalf("expected top URLs, got %+v", view.TopURLs)
+	}
+	if view.BandwidthP95Bps <= 0 {
+		t.Fatalf("expected positive p95 bandwidth, got %f", view.BandwidthP95Bps)
+	}
+}
+
 func TestPersistNodeAccessLogsTruncatesLongPath(t *testing.T) {
 	setupServiceTestDB(t)
 

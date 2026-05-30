@@ -16,6 +16,7 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: pushMock,
   }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 function stubMatchMedia() {
@@ -251,7 +252,10 @@ describe('Proxy route website pages', () => {
             primary_domain: payload.domain,
             domain_count: payload.domains.length,
             origin_url: payload.origin_url,
-            upstreams: JSON.stringify([payload.origin_url, ...payload.upstreams]),
+            upstreams: JSON.stringify([
+              payload.origin_url,
+              ...payload.upstreams,
+            ]),
             upstream_list: [payload.origin_url, ...payload.upstreams],
             enabled: payload.enabled,
             enable_https: payload.enable_https,
@@ -281,9 +285,11 @@ describe('Proxy route website pages', () => {
             dns_last_sync_status: '',
             dns_last_sync_message: '',
             dns_last_synced_at: null,
-            region_restriction_enabled: payload.region_restriction_enabled ?? false,
+            region_restriction_enabled:
+              payload.region_restriction_enabled ?? false,
             region_restriction_mode: payload.region_restriction_mode ?? 'block',
-            region_restriction_countries: payload.region_restriction_countries ?? [],
+            region_restriction_countries:
+              payload.region_restriction_countries ?? [],
             remark: payload.remark,
           });
           routes.splice(0, routes.length, created);
@@ -329,7 +335,9 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [{ id: 1, domain: '*.example.com', cert_id: 1, enabled: true }],
+                data: [
+                  { id: 1, domain: '*.example.com', cert_id: 1, enabled: true },
+                ],
               }),
             ),
           );
@@ -500,7 +508,9 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [{ id: 1, domain: '*.example.com', cert_id: 1, enabled: true }],
+                data: [
+                  { id: 1, domain: '*.example.com', cert_id: 1, enabled: true },
+                ],
               }),
             ),
           );

@@ -70,11 +70,14 @@ type AgentNodeTrafficReport struct {
 }
 
 type AgentNodeAccessLog struct {
-	LoggedAtUnix int64  `json:"logged_at_unix"`
-	RemoteAddr   string `json:"remote_addr"`
-	Host         string `json:"host"`
-	Path         string `json:"path"`
-	StatusCode   int    `json:"status_code"`
+	LoggedAtUnix  int64  `json:"logged_at_unix"`
+	RemoteAddr    string `json:"remote_addr"`
+	Host          string `json:"host"`
+	Path          string `json:"path"`
+	StatusCode    int    `json:"status_code"`
+	RequestBytes  int64  `json:"request_bytes"`
+	ResponseBytes int64  `json:"response_bytes"`
+	UpstreamBytes int64  `json:"upstream_bytes"`
 }
 
 type AgentBufferedObservabilityRecord struct {
@@ -241,13 +244,16 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 	}
 	for _, item := range logs {
 		record := &model.NodeAccessLog{
-			NodeID:     nodeID,
-			LoggedAt:   timeFromUnix(item.LoggedAtUnix, reportedAt),
-			RemoteAddr: strings.TrimSpace(item.RemoteAddr),
-			Region:     "",
-			Host:       strings.TrimSpace(item.Host),
-			Path:       truncateForDatabase(strings.TrimSpace(item.Path), nodeAccessLogPathMaxLength),
-			StatusCode: item.StatusCode,
+			NodeID:        nodeID,
+			LoggedAt:      timeFromUnix(item.LoggedAtUnix, reportedAt),
+			RemoteAddr:    strings.TrimSpace(item.RemoteAddr),
+			Region:        "",
+			Host:          strings.TrimSpace(item.Host),
+			Path:          truncateForDatabase(strings.TrimSpace(item.Path), nodeAccessLogPathMaxLength),
+			StatusCode:    item.StatusCode,
+			RequestBytes:  nonNegativeInt64(item.RequestBytes),
+			ResponseBytes: nonNegativeInt64(item.ResponseBytes),
+			UpstreamBytes: nonNegativeInt64(item.UpstreamBytes),
 		}
 		if resolver != nil {
 			record.Region = resolver.Resolve(record.RemoteAddr)
@@ -357,6 +363,13 @@ func normalizeHealthSeverity(severity string) string {
 
 func normalizeHealthEventMessage(message string) string {
 	return truncateForDatabase(message, 4096)
+}
+
+func nonNegativeInt64(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func timeFromUnix(unixSeconds int64, fallback time.Time) time.Time {

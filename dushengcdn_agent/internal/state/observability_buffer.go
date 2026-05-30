@@ -106,7 +106,7 @@ func mergeAccessLogs(existing []protocol.NodeAccessLog, incoming []protocol.Node
 }
 
 func accessLogKey(item protocol.NodeAccessLog) string {
-	return strconv.FormatInt(item.LoggedAtUnix, 10) + "|" + item.RemoteAddr + "|" + item.Host + "|" + item.Path + "|" + strconv.Itoa(item.StatusCode)
+	return strconv.FormatInt(item.LoggedAtUnix, 10) + "|" + item.RemoteAddr + "|" + item.Host + "|" + item.Path + "|" + strconv.Itoa(item.StatusCode) + "|" + strconv.FormatInt(item.ResponseBytes, 10)
 }
 
 func (s *ObservabilityBufferStore) Replayable(currentWindowStartedAtUnix int64, retainAfterUnix int64) ([]ObservabilityBufferRecord, error) {

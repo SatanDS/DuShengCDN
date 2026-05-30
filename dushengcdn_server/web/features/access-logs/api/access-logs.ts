@@ -11,6 +11,7 @@ import type {
   AccessLogList,
   FoldedAccessLogFilters,
   FoldedAccessLogList,
+  ObservabilityMeteringOverview,
 } from '@/features/access-logs/types';
 
 function buildSearchParams(filters: object) {
@@ -46,6 +47,10 @@ export function getAccessLogIPTrend(filters: AccessLogIPTrendFilters) {
   return apiRequest<AccessLogIPTrend>(
     `/access-logs/ip-summary/trend${query ? `?${query}` : ''}`,
   );
+}
+
+export function getObservabilityMeteringOverview() {
+  return apiRequest<ObservabilityMeteringOverview>('/access-logs/metering-overview');
 }
 
 export function cleanupAccessLogs(payload: AccessLogCleanupPayload) {

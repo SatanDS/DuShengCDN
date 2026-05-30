@@ -7,18 +7,41 @@ const navigationPathAliases: Record<string, string> = {
 };
 
 function normalizeNavigationPath(pathname: string) {
-  return navigationPathAliases[pathname] ?? pathname;
+  const [pathOnly] = pathname.split('?');
+  return navigationPathAliases[pathOnly] ?? pathOnly;
+}
+
+function getNavigationSearchParams(pathname: string) {
+  const queryStart = pathname.indexOf('?');
+  if (queryStart < 0) {
+    return new URLSearchParams();
+  }
+  return new URLSearchParams(pathname.slice(queryStart + 1));
 }
 
 export function isPathActive(pathname: string, href: string) {
   const normalizedPathname = normalizeNavigationPath(pathname);
+  const normalizedHref = normalizeNavigationPath(href);
+  const hrefSearchParams = getNavigationSearchParams(href);
 
-  if (href === '/') {
+  if (hrefSearchParams.size > 0) {
+    const pathnameSearchParams = getNavigationSearchParams(pathname);
+    const allParamsMatch = Array.from(hrefSearchParams.entries()).every(
+      ([key, value]) => pathnameSearchParams.get(key) === value,
+    );
+    const pathMatches =
+      normalizedPathname === normalizedHref ||
+      normalizedPathname.startsWith(`${normalizedHref}/`);
+    return pathMatches && allParamsMatch;
+  }
+
+  if (normalizedHref === '/') {
     return normalizedPathname === '/';
   }
 
   return (
-    normalizedPathname === href || normalizedPathname.startsWith(`${href}/`)
+    normalizedPathname === normalizedHref ||
+    normalizedPathname.startsWith(`${normalizedHref}/`)
   );
 }
 

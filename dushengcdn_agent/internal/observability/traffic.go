@@ -24,6 +24,7 @@ type accessLogRecord struct {
 	Status               int    `json:"status"`
 	BytesSent            int64  `json:"bytes_sent"`
 	RequestLength        int64  `json:"request_length"`
+	UpstreamBytes        string `json:"upstream_response_length"`
 	CacheStatus          string `json:"cache_status"`
 	UpstreamStatus       string `json:"upstream_status"`
 	UpstreamResponseTime string `json:"upstream_response_time"`
@@ -185,6 +186,9 @@ func (aggregate *trafficAggregate) consume(line []byte) {
 	if record.BytesSent > 0 {
 		aggregate.openrestyTxBytes += record.BytesSent
 	}
+	if record.UpstreamBytes > 0 && record.RequestLength == 0 {
+		aggregate.openrestyRxBytes += record.UpstreamBytes
+	}
 	if host := strings.TrimSpace(record.Host); host != "" {
 		aggregate.topDomains[host]++
 	}
@@ -192,11 +196,14 @@ func (aggregate *trafficAggregate) consume(line []byte) {
 		aggregate.visitors[remoteAddr] = struct{}{}
 	}
 	aggregate.logs = append(aggregate.logs, protocol.NodeAccessLog{
-		LoggedAtUnix: record.Timestamp.Unix(),
-		RemoteAddr:   strings.TrimSpace(record.RemoteAddr),
-		Host:         strings.TrimSpace(record.Host),
-		Path:         normalizeAccessLogPath(record.Path),
-		StatusCode:   record.Status,
+		LoggedAtUnix:  record.Timestamp.Unix(),
+		RemoteAddr:    strings.TrimSpace(record.RemoteAddr),
+		Host:          strings.TrimSpace(record.Host),
+		Path:          normalizeAccessLogPath(record.Path),
+		StatusCode:    record.Status,
+		RequestBytes:  nonNegativeInt64(record.RequestLength),
+		ResponseBytes: nonNegativeInt64(record.BytesSent),
+		UpstreamBytes: nonNegativeInt64(record.UpstreamBytes),
 	})
 }
 
@@ -208,6 +215,7 @@ type parsedAccessLogRecord struct {
 	Status               int
 	BytesSent            int64
 	RequestLength        int64
+	UpstreamBytes        int64
 	CacheStatus          string
 	UpstreamStatus       string
 	UpstreamResponseTime string
@@ -238,6 +246,7 @@ func parseJSONAccessLogRecord(raw string) (parsedAccessLogRecord, bool) {
 		Status:               record.Status,
 		BytesSent:            record.BytesSent,
 		RequestLength:        record.RequestLength,
+		UpstreamBytes:        parseByteList(record.UpstreamBytes),
 		CacheStatus:          strings.TrimSpace(record.CacheStatus),
 		UpstreamStatus:       strings.TrimSpace(record.UpstreamStatus),
 		UpstreamResponseTime: strings.TrimSpace(record.UpstreamResponseTime),
@@ -328,6 +337,26 @@ func parseUpstreamResponseTimeMS(raw string) int64 {
 		}
 	}
 	return total
+}
+
+func parseByteList(raw string) int64 {
+	var total int64
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ':' || r == ';' || r == ' '
+	}) {
+		value, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err == nil && value > 0 {
+			total += value
+		}
+	}
+	return total
+}
+
+func nonNegativeInt64(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func (aggregate *trafficAggregate) accessLogs() []protocol.NodeAccessLog {

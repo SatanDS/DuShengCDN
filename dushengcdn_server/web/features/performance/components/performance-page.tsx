@@ -564,12 +564,12 @@ export function PerformancePage() {
         return (
             <div className="space-y-6">
                 <PageHeader
-                    title="性能"
+                    title="OpenResty配置"
                     description="集中管理 OpenResty 性能参数和主配置模板。"
                 />
                 <EmptyState
                     title="权限不足"
-                    description="只有超级管理员可以访问性能设置。"
+                    description="只有超级管理员可以访问 OpenResty 配置。"
                 />
             </div>
         );
@@ -582,7 +582,7 @@ export function PerformancePage() {
     if (optionsQuery.isError) {
         return (
             <ErrorState
-                title="性能设置加载失败"
+                title="OpenResty 配置加载失败"
                 description={getErrorMessage(optionsQuery.error)}
             />
         );
@@ -591,7 +591,7 @@ export function PerformancePage() {
     if (previewQuery.isError) {
         return (
             <ErrorState
-                title="性能预览加载失败"
+                title="OpenResty 配置预览加载失败"
                 description={getErrorMessage(previewQuery.error)}
             />
         );
@@ -601,7 +601,7 @@ export function PerformancePage() {
     if (!preview) {
         return (
             <EmptyState
-                title="性能预览不可用"
+                title="OpenResty 配置预览不可用"
                 description="当前未获取到 OpenResty 配置预览。"
             />
         );
@@ -610,8 +610,8 @@ export function PerformancePage() {
     return (
         <div className="space-y-6">
             <PageHeader
-                title="性能"
-                description="统一维护Nginx结构化性能参数和主配置模板。"
+                title="OpenResty配置"
+                description="统一维护 OpenResty 结构化性能参数和主配置模板。"
             />
 
             <div className="flex flex-wrap gap-3">

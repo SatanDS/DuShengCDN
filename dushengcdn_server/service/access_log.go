@@ -1,8 +1,12 @@
 package service
 
 import (
+	"dushengcdn/common"
 	"dushengcdn/model"
 	"errors"
+	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -128,6 +132,53 @@ type AccessLogCleanupResult struct {
 	RetentionDays int       `json:"retention_days"`
 	DeletedCount  int64     `json:"deleted_count"`
 	Cutoff        time.Time `json:"cutoff"`
+}
+
+type ObservabilityMeteringOverview struct {
+	GeneratedAt             time.Time                `json:"generated_at"`
+	WindowStartedAt         time.Time                `json:"window_started_at"`
+	WindowEndedAt           time.Time                `json:"window_ended_at"`
+	RequestCount            int64                    `json:"request_count"`
+	ResponseBytes           int64                    `json:"response_bytes"`
+	RequestBytes            int64                    `json:"request_bytes"`
+	UpstreamBytes           int64                    `json:"upstream_bytes"`
+	UpstreamBytesSupported  bool                     `json:"upstream_bytes_supported"`
+	CacheHitCount           int64                    `json:"cache_hit_count"`
+	CacheClassifiedCount    int64                    `json:"cache_classified_count"`
+	CacheHitRatePercent     float64                  `json:"cache_hit_rate_percent"`
+	BandwidthP95Bps         float64                  `json:"bandwidth_p95_bps"`
+	NodeAvailabilityPercent float64                  `json:"node_availability_percent"`
+	OnlineNodes             int                      `json:"online_nodes"`
+	TotalNodes              int                      `json:"total_nodes"`
+	SiteTraffic             []MeteringTrafficItem    `json:"site_traffic"`
+	NodeTraffic             []MeteringTrafficItem    `json:"node_traffic"`
+	StatusCodes             []DistributionItem       `json:"status_codes"`
+	TopURLs                 []DistributionItem       `json:"top_urls"`
+	TopIPs                  []DistributionItem       `json:"top_ips"`
+	TopRegions              []DistributionItem       `json:"top_regions"`
+	BandwidthTrend          []MeteringBandwidthPoint `json:"bandwidth_trend"`
+}
+
+type MeteringTrafficItem struct {
+	Key           string `json:"key"`
+	RequestCount  int64  `json:"request_count"`
+	RequestBytes  int64  `json:"request_bytes"`
+	ResponseBytes int64  `json:"response_bytes"`
+	UpstreamBytes int64  `json:"upstream_bytes"`
+}
+
+type MeteringBandwidthPoint struct {
+	BucketStartedAt time.Time `json:"bucket_started_at"`
+	Bytes           int64     `json:"bytes"`
+	Bps             float64   `json:"bps"`
+}
+
+type meteringOverviewDataSource struct {
+	now       time.Time
+	logs      []*model.NodeAccessLog
+	reports   []*model.NodeRequestReport
+	snapshots []*model.NodeMetricSnapshot
+	nodes     []*model.Node
 }
 
 func ListAccessLogs(input AccessLogQuery) (*AccessLogList, error) {
@@ -315,6 +366,140 @@ func GetAccessLogIPTrend(input AccessLogIPTrendQuery) (*AccessLogIPTrendView, er
 	}, nil
 }
 
+func GetObservabilityMeteringOverview() (*ObservabilityMeteringOverview, error) {
+	now := time.Now().UTC()
+	since := now.Add(-24 * time.Hour)
+
+	logs, err := model.ListNodeAccessLogs(model.NodeAccessLogQuery{
+		Since:     since,
+		SortBy:    "logged_at",
+		SortOrder: "desc",
+	})
+	if err != nil {
+		return nil, err
+	}
+	reports, err := model.ListRequestReportsSince(since)
+	if err != nil {
+		return nil, err
+	}
+	snapshots, err := model.ListMetricSnapshotsSince(since)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := model.ListNodes()
+	if err != nil {
+		return nil, err
+	}
+
+	return buildObservabilityMeteringOverview(meteringOverviewDataSource{
+		now:       now,
+		logs:      logs,
+		reports:   reports,
+		snapshots: snapshots,
+		nodes:     nodes,
+	}), nil
+}
+
+func buildObservabilityMeteringOverview(source meteringOverviewDataSource) *ObservabilityMeteringOverview {
+	now := source.now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	since := now.Add(-24 * time.Hour)
+	const limit = 8
+
+	overview := &ObservabilityMeteringOverview{
+		GeneratedAt:     now,
+		WindowStartedAt: since,
+		WindowEndedAt:   now,
+		TotalNodes:      len(source.nodes),
+		StatusCodes:     []DistributionItem{},
+		TopURLs:         []DistributionItem{},
+		TopIPs:          []DistributionItem{},
+		TopRegions:      []DistributionItem{},
+		SiteTraffic:     []MeteringTrafficItem{},
+		NodeTraffic:     []MeteringTrafficItem{},
+		BandwidthTrend:  buildMeteringBandwidthTrend(now, source.snapshots),
+	}
+
+	siteAccumulators := make(map[string]*meteringTrafficAccumulator)
+	nodeAccumulators := make(map[string]*meteringTrafficAccumulator)
+	topURLCounts := make(distributionAccumulator)
+	topIPCounts := make(distributionAccumulator)
+	topRegionCounts := make(distributionAccumulator)
+	statusCounts := make(distributionAccumulator)
+
+	for _, item := range source.logs {
+		if item == nil {
+			continue
+		}
+		overview.RequestCount++
+		overview.RequestBytes += nonNegativeInt64(item.RequestBytes)
+		overview.ResponseBytes += nonNegativeInt64(item.ResponseBytes)
+		overview.UpstreamBytes += nonNegativeInt64(item.UpstreamBytes)
+		if item.UpstreamBytes > 0 {
+			overview.UpstreamBytesSupported = true
+		}
+		siteKey := strings.TrimSpace(item.Host)
+		if siteKey == "" {
+			siteKey = "未识别站点"
+		}
+		accumulateMeteringTraffic(siteAccumulators, siteKey, item)
+		nodeKey := strings.TrimSpace(item.NodeID)
+		if nodeKey == "" {
+			nodeKey = "未识别节点"
+		}
+		accumulateMeteringTraffic(nodeAccumulators, nodeKey, item)
+		if key := buildAccessLogURLKey(item); key != "" {
+			topURLCounts[key]++
+		}
+		if remoteAddr := strings.TrimSpace(item.RemoteAddr); remoteAddr != "" {
+			topIPCounts[remoteAddr]++
+		}
+		if region := strings.TrimSpace(item.Region); region != "" {
+			topRegionCounts[region]++
+		}
+		if item.StatusCode > 0 {
+			statusCounts[formatStatusCode(item.StatusCode)]++
+		}
+	}
+
+	for _, report := range source.reports {
+		if report == nil {
+			continue
+		}
+		overview.CacheHitCount += report.CacheHitCount
+		overview.CacheClassifiedCount += report.CacheHitCount + report.CacheMissCount + report.CacheBypassCount + report.CacheExpiredCount + report.CacheStaleCount
+		if len(statusCounts) == 0 {
+			mergeJSONCounts(statusCounts, report.StatusCodesJSON)
+		}
+	}
+	if overview.CacheClassifiedCount > 0 {
+		overview.CacheHitRatePercent = float64(overview.CacheHitCount) / float64(overview.CacheClassifiedCount) * 100
+	}
+	overview.BandwidthP95Bps = calculateP95BandwidthBps(overview.BandwidthTrend)
+
+	for _, node := range source.nodes {
+		if node == nil {
+			continue
+		}
+		if meteringNodeOnline(node, now) {
+			overview.OnlineNodes++
+		}
+	}
+	if overview.TotalNodes > 0 {
+		overview.NodeAvailabilityPercent = float64(overview.OnlineNodes) / float64(overview.TotalNodes) * 100
+	}
+
+	overview.SiteTraffic = meteringTrafficItems(siteAccumulators, limit)
+	overview.NodeTraffic = meteringTrafficItems(nodeAccumulators, limit)
+	overview.StatusCodes = toDistributionItems(statusCounts, limit)
+	overview.TopURLs = toDistributionItems(topURLCounts, limit)
+	overview.TopIPs = toDistributionItems(topIPCounts, limit)
+	overview.TopRegions = toDistributionItems(topRegionCounts, limit)
+	return overview
+}
+
 func CleanupAccessLogs(input AccessLogCleanupInput) (*AccessLogCleanupResult, error) {
 	if input.RetentionDays <= 0 || input.RetentionDays > nodeAccessLogRetentionDays {
 		return nil, errors.New("retention_days 必须在 1 到 90 之间")
@@ -343,6 +528,173 @@ func buildModelAccessLogQuery(input AccessLogQuery) model.NodeAccessLogQuery {
 		SortBy:     input.SortBy,
 		SortOrder:  input.SortOrder,
 	}
+}
+
+type meteringTrafficAccumulator struct {
+	requestCount  int64
+	requestBytes  int64
+	responseBytes int64
+	upstreamBytes int64
+}
+
+func accumulateMeteringTraffic(target map[string]*meteringTrafficAccumulator, key string, item *model.NodeAccessLog) {
+	if item == nil {
+		return
+	}
+	accumulator := target[key]
+	if accumulator == nil {
+		accumulator = &meteringTrafficAccumulator{}
+		target[key] = accumulator
+	}
+	accumulator.requestCount++
+	accumulator.requestBytes += nonNegativeInt64(item.RequestBytes)
+	accumulator.responseBytes += nonNegativeInt64(item.ResponseBytes)
+	accumulator.upstreamBytes += nonNegativeInt64(item.UpstreamBytes)
+}
+
+func meteringTrafficItems(values map[string]*meteringTrafficAccumulator, limit int) []MeteringTrafficItem {
+	items := make([]MeteringTrafficItem, 0, len(values))
+	for key, accumulator := range values {
+		if accumulator == nil || strings.TrimSpace(key) == "" {
+			continue
+		}
+		items = append(items, MeteringTrafficItem{
+			Key:           key,
+			RequestCount:  accumulator.requestCount,
+			RequestBytes:  accumulator.requestBytes,
+			ResponseBytes: accumulator.responseBytes,
+			UpstreamBytes: accumulator.upstreamBytes,
+		})
+	}
+	sort.Slice(items, func(i int, j int) bool {
+		if items[i].ResponseBytes == items[j].ResponseBytes {
+			if items[i].RequestCount == items[j].RequestCount {
+				return items[i].Key < items[j].Key
+			}
+			return items[i].RequestCount > items[j].RequestCount
+		}
+		return items[i].ResponseBytes > items[j].ResponseBytes
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func buildAccessLogURLKey(item *model.NodeAccessLog) string {
+	if item == nil {
+		return ""
+	}
+	host := strings.TrimSpace(item.Host)
+	path := strings.TrimSpace(item.Path)
+	if host == "" {
+		return path
+	}
+	if path == "" {
+		return host
+	}
+	return host + path
+}
+
+func formatStatusCode(statusCode int) string {
+	return strconv.Itoa(statusCode)
+}
+
+func meteringNodeOnline(node *model.Node, now time.Time) bool {
+	if node == nil {
+		return false
+	}
+	if IsAgentWSConnected(node.NodeID) {
+		return true
+	}
+	if node.LastSeenAt.IsZero() {
+		return false
+	}
+	return now.Sub(node.LastSeenAt) <= common.NodeOfflineThreshold
+}
+
+func buildMeteringBandwidthTrend(now time.Time, snapshots []*model.NodeMetricSnapshot) []MeteringBandwidthPoint {
+	start := now.Truncate(time.Hour).Add(-(observabilityTrendBuckets - 1) * time.Hour)
+	points := make([]MeteringBandwidthPoint, observabilityTrendBuckets)
+	for index := range points {
+		points[index].BucketStartedAt = start.Add(time.Duration(index) * time.Hour)
+	}
+	if len(snapshots) == 0 {
+		return points
+	}
+
+	sort.Slice(snapshots, func(i int, j int) bool {
+		if snapshots[i] == nil || snapshots[j] == nil {
+			return snapshots[i] != nil
+		}
+		if snapshots[i].CapturedAt.Equal(snapshots[j].CapturedAt) {
+			return snapshots[i].NodeID < snapshots[j].NodeID
+		}
+		return snapshots[i].CapturedAt.Before(snapshots[j].CapturedAt)
+	})
+
+	type bandwidthCounterState struct {
+		rx   int64
+		tx   int64
+		seen bool
+	}
+	previousByNode := make(map[string]bandwidthCounterState)
+	for _, snapshot := range snapshots {
+		if snapshot == nil {
+			continue
+		}
+		nodeKey := strings.TrimSpace(snapshot.NodeID)
+		if nodeKey == "" {
+			nodeKey = "__unknown__"
+		}
+		previous := previousByNode[nodeKey]
+		previousByNode[nodeKey] = bandwidthCounterState{
+			rx:   snapshot.OpenrestyRxBytes,
+			tx:   snapshot.OpenrestyTxBytes,
+			seen: true,
+		}
+		if !previous.seen {
+			continue
+		}
+		index, ok := trendBucketIndex(snapshot.CapturedAt, start)
+		if !ok {
+			continue
+		}
+		rxDelta := snapshot.OpenrestyRxBytes - previous.rx
+		txDelta := snapshot.OpenrestyTxBytes - previous.tx
+		if rxDelta < 0 {
+			rxDelta = 0
+		}
+		if txDelta < 0 {
+			txDelta = 0
+		}
+		points[index].Bytes += rxDelta + txDelta
+	}
+	for index := range points {
+		points[index].Bps = float64(points[index].Bytes) / 3600
+	}
+	return points
+}
+
+func calculateP95BandwidthBps(points []MeteringBandwidthPoint) float64 {
+	values := make([]float64, 0, len(points))
+	for _, point := range points {
+		if point.Bps > 0 {
+			values = append(values, point.Bps)
+		}
+	}
+	if len(values) == 0 {
+		return 0
+	}
+	sort.Float64s(values)
+	index := int(math.Ceil(float64(len(values))*0.95)) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return values[index]
 }
 
 func listNodeNameMap(logs []*model.NodeAccessLog) (map[string]string, error) {

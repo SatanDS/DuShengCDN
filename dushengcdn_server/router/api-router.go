@@ -188,6 +188,7 @@ func SetApiRouter(router *gin.Engine) {
 			accessLogRoute.GET("/folds", controller.GetFoldedAccessLogs)
 			accessLogRoute.GET("/ip-summary", controller.GetAccessLogIPSummaries)
 			accessLogRoute.GET("/ip-summary/trend", controller.GetAccessLogIPTrend)
+			accessLogRoute.GET("/metering-overview", controller.GetObservabilityMeteringOverview)
 			accessLogRoute.POST("/cleanup", controller.CleanupAccessLogs)
 		}
 		agentRoute := apiRouter.Group("/agent")

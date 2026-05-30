@@ -111,3 +111,47 @@ export interface AccessLogCleanupResult {
   deleted_count: number;
   cutoff: string;
 }
+
+export interface MeteringTrafficItem {
+  key: string;
+  request_count: number;
+  request_bytes: number;
+  response_bytes: number;
+  upstream_bytes: number;
+}
+
+export interface MeteringDistributionItem {
+  key: string;
+  value: number;
+}
+
+export interface MeteringBandwidthPoint {
+  bucket_started_at: string;
+  bytes: number;
+  bps: number;
+}
+
+export interface ObservabilityMeteringOverview {
+  generated_at: string;
+  window_started_at: string;
+  window_ended_at: string;
+  request_count: number;
+  response_bytes: number;
+  request_bytes: number;
+  upstream_bytes: number;
+  upstream_bytes_supported: boolean;
+  cache_hit_count: number;
+  cache_classified_count: number;
+  cache_hit_rate_percent: number;
+  bandwidth_p95_bps: number;
+  node_availability_percent: number;
+  online_nodes: number;
+  total_nodes: number;
+  site_traffic: MeteringTrafficItem[];
+  node_traffic: MeteringTrafficItem[];
+  status_codes: MeteringDistributionItem[];
+  top_urls: MeteringDistributionItem[];
+  top_ips: MeteringDistributionItem[];
+  top_regions: MeteringDistributionItem[];
+  bandwidth_trend: MeteringBandwidthPoint[];
+}

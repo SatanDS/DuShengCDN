@@ -119,6 +119,22 @@ func (legacyProxyRouteV7) TableName() string {
 	return "proxy_routes"
 }
 
+type legacyNodeAccessLogV16 struct {
+	ID         uint      `gorm:"primaryKey"`
+	NodeID     string    `gorm:"index:,composite:node_logged_at,priority:1;size:64;not null"`
+	LoggedAt   time.Time `gorm:"index;index:,composite:node_logged_at,priority:2"`
+	RemoteAddr string    `gorm:"index;size:128"`
+	Region     string    `gorm:"size:128"`
+	Host       string    `gorm:"index;size:255"`
+	Path       string    `gorm:"size:2048"`
+	StatusCode int       `gorm:"index"`
+	CreatedAt  time.Time
+}
+
+func (legacyNodeAccessLogV16) TableName() string {
+	return "node_access_logs"
+}
+
 func openBareTestSQLiteDB(t *testing.T, name string) *gorm.DB {
 	t.Helper()
 
@@ -855,6 +871,59 @@ func TestEnsureDatabaseSchemaUpToDateAddsProxyRouteDomainCertificateFields(t *te
 	}
 	if len(domainCertIDs) != 2 || domainCertIDs[0] != certID || domainCertIDs[1] != certID {
 		t.Fatalf("unexpected migrated domain_cert_ids: %#v", domainCertIDs)
+	}
+}
+
+func TestEnsureDatabaseSchemaUpToDateAddsAccessLogByteFields(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "access-log-bytes.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&DatabaseSchemaVersion{},
+		&File{},
+		&User{},
+		&AuthSource{},
+		&ExternalAccount{},
+		&Option{},
+		&Origin{},
+		&ProxyRoute{},
+		&ConfigVersion{},
+		&Node{},
+		&NodeSystemProfile{},
+		&ApplyLog{},
+		&NodeMetricSnapshot{},
+		&NodeRequestReport{},
+		&legacyNodeAccessLogV16{},
+		&NodeHealthEvent{},
+		&TLSCertificate{},
+		&ManagedDomain{},
+		&AcmeAccount{},
+		&DnsAccount{},
+	); err != nil {
+		t.Fatalf("AutoMigrate legacy schema: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 16); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	for _, table := range observabilityShardTables("node_access_logs") {
+		for _, column := range []string{"request_bytes", "response_bytes", "upstream_bytes"} {
+			if !db.Migrator().HasColumn(table, column) {
+				t.Fatalf("expected column %s.%s to exist", table, column)
+			}
+		}
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
 	}
 }
 

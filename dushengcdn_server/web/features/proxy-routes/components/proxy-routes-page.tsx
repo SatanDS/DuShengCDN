@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 
@@ -20,8 +20,10 @@ import {
 import { ProxyRouteCreateDrawer } from '@/features/proxy-routes/components/proxy-route-create-drawer';
 import {
   getErrorMessage,
+  getWebsiteConfigSection,
   getUpstreamSummary,
   getWebsiteStatusBadges,
+  websiteConfigSections,
 } from '@/features/proxy-routes/helpers';
 import {
   deleteProxyRoute,
@@ -66,6 +68,7 @@ function hasConfigChanges(diff: {
 
 export function ProxyRoutesPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
   const confirmDialog = useConfirmDialog();
@@ -87,7 +90,9 @@ export function ProxyRoutesPage() {
       setFeedback({ tone: 'success', message: '网站已删除。' });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
-        queryClient.invalidateQueries({ queryKey: ['config-versions', 'diff'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['config-versions', 'diff'],
+        }),
       ]);
     },
     onError: (error) => {
@@ -104,7 +109,9 @@ export function ProxyRoutesPage() {
       });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['config-versions'] }),
-        queryClient.invalidateQueries({ queryKey: ['config-versions', 'diff'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['config-versions', 'diff'],
+        }),
       ]);
     },
     onError: (error) => {
@@ -135,8 +142,15 @@ export function ProxyRoutesPage() {
   }, [keyword, routes]);
 
   const diff = diffQuery.data;
-  const totalDomains = routes.reduce((sum, route) => sum + route.domain_count, 0);
+  const totalDomains = routes.reduce(
+    (sum, route) => sum + route.domain_count,
+    0,
+  );
   const enabledCount = routes.filter((route) => route.enabled).length;
+  const preferredSection = getWebsiteConfigSection(searchParams.get('section'));
+  const preferredSectionMeta =
+    websiteConfigSections.find((section) => section.key === preferredSection) ??
+    websiteConfigSections[0];
 
   const handleDelete = async (route: ProxyRouteItem) => {
     const confirmed = await confirmDialog({
@@ -196,7 +210,11 @@ export function ProxyRoutesPage() {
     <>
       <div className="space-y-6">
         <PageHeader
-          title="网站配置"
+          title={
+            preferredSection === 'domains'
+              ? '网站配置'
+              : `网站配置 / ${preferredSectionMeta.label}`
+          }
           action={
             <div className="flex flex-wrap gap-3">
               <SecondaryButton
@@ -246,11 +264,11 @@ export function ProxyRoutesPage() {
             <div className="space-y-3">
               <StatusBadge
                 label={
-                  diff && hasConfigChanges(diff) ? '有待发布变更' : '已与线上一致'
+                  diff && hasConfigChanges(diff)
+                    ? '有待发布变更'
+                    : '已与线上一致'
                 }
-                variant={
-                  diff && hasConfigChanges(diff) ? 'warning' : 'success'
-                }
+                variant={diff && hasConfigChanges(diff) ? 'warning' : 'success'}
               />
               <p className="text-sm text-[var(--foreground-secondary)]">
                 {diff
@@ -269,9 +287,7 @@ export function ProxyRoutesPage() {
           </AppCard>
         </div>
 
-        <AppCard
-          title="网站配置列表"
-        >
+        <AppCard title="网站配置列表">
           <div className="space-y-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="max-w-xl">
@@ -342,10 +358,12 @@ export function ProxyRoutesPage() {
 
                         <div className="flex flex-wrap gap-2">
                           <Link
-                            href={`/proxy-route/detail?id=${route.id}&section=domains`}
+                            href={`/proxy-route/detail?id=${route.id}&section=${preferredSection}`}
                             className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
                           >
-                            配置
+                            {preferredSection === 'domains'
+                              ? '配置'
+                              : `配置${preferredSectionMeta.label}`}
                           </Link>
                           <DangerButton
                             type="button"
@@ -359,7 +377,7 @@ export function ProxyRoutesPage() {
 
                       <div className="grid gap-3 md:grid-cols-2">
                         <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                          <p className="text-xs uppercase tracking-[0.18em] text-[var(--foreground-muted)]">
+                          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
                             域名列表
                           </p>
                           <p className="mt-2 text-sm text-[var(--foreground-primary)]">
@@ -368,7 +386,7 @@ export function ProxyRoutesPage() {
                         </div>
 
                         <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                          <p className="text-xs uppercase tracking-[0.18em] text-[var(--foreground-muted)]">
+                          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
                             节点池
                           </p>
                           <p className="mt-2 text-sm text-[var(--foreground-primary)]">
@@ -377,7 +395,7 @@ export function ProxyRoutesPage() {
                         </div>
 
                         <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                          <p className="text-xs uppercase tracking-[0.18em] text-[var(--foreground-muted)]">
+                          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
                             源站摘要
                           </p>
                           <p className="mt-2 text-sm text-[var(--foreground-primary)]">
@@ -405,9 +423,13 @@ export function ProxyRoutesPage() {
         onCreated={async (route) => {
           await Promise.all([
             queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
-            queryClient.invalidateQueries({ queryKey: ['config-versions', 'diff'] }),
+            queryClient.invalidateQueries({
+              queryKey: ['config-versions', 'diff'],
+            }),
           ]);
-          router.push(`/proxy-route/detail?id=${route.id}&section=domains`);
+          router.push(
+            `/proxy-route/detail?id=${route.id}&section=${preferredSection}`,
+          );
         }}
       />
     </>

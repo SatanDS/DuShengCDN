@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { RankChart } from '@/components/data/rank-chart';
 import { TrendChart } from '@/components/data/trend-chart';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
@@ -18,6 +19,7 @@ import {
   getAccessLogIPTrend,
   getAccessLogs,
   getFoldedAccessLogs,
+  getObservabilityMeteringOverview,
 } from '@/features/access-logs/api/access-logs';
 import type {
   AccessLogCleanupPayload,
@@ -25,6 +27,9 @@ import type {
   AccessLogIPSummaryList,
   AccessLogList,
   FoldedAccessLogList,
+  MeteringDistributionItem,
+  MeteringTrafficItem,
+  ObservabilityMeteringOverview,
 } from '@/features/access-logs/types';
 import {
   PrimaryButton,
@@ -34,9 +39,14 @@ import {
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
-import { formatCompactNumber } from '@/lib/utils/metrics';
+import {
+  formatBytes,
+  formatBytesPerSecond,
+  formatCompactNumber,
+  formatPercent,
+} from '@/lib/utils/metrics';
 
-type ActiveTab = 'detail' | 'ip';
+type ActiveTab = 'metering' | 'detail' | 'ip';
 
 type SearchDraft = {
   nodeId: string;
@@ -91,11 +101,38 @@ function parseSortValue(value: string) {
   } as const;
 }
 
-function buildSummary(totalRecord = 0, totalIP = 0, activeTab: ActiveTab) {
+function buildSummary(
+  totalRecord = 0,
+  totalIP = 0,
+  activeTab: ActiveTab,
+  metering?: ObservabilityMeteringOverview,
+) {
   return [
     { label: '访问记录', value: formatCompactNumber(totalRecord) },
     { label: '来源 IP', value: formatCompactNumber(totalIP) },
-    { label: '当前视图', value: activeTab === 'detail' ? '明细日志' : 'IP 维度' },
+    {
+      label: '缓存命中率',
+      value:
+        metering && metering.cache_classified_count > 0
+          ? formatPercent(metering.cache_hit_rate_percent)
+          : '暂无数据',
+    },
+    {
+      label: '带宽峰值 P95',
+      value:
+        metering && metering.bandwidth_p95_bps > 0
+          ? formatBytesPerSecond(metering.bandwidth_p95_bps)
+          : '暂无数据',
+    },
+    {
+      label: '当前视图',
+      value:
+        activeTab === 'metering'
+          ? '计量概览'
+          : activeTab === 'detail'
+            ? '明细日志'
+            : 'IP 维度',
+    },
   ];
 }
 
@@ -116,7 +153,7 @@ function buildTrendLabels(points: Array<{ bucket_started_at: string }>) {
 export function AccessLogsPage() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const [activeTab, setActiveTab] = useState<ActiveTab>('detail');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('metering');
   const [draft, setDraft] = useState<SearchDraft>({
     nodeId: '',
     remoteAddr: '',
@@ -136,7 +173,9 @@ export function AccessLogsPage() {
   const [detailSort, setDetailSort] = useState('logged_at:desc');
   const [foldedSort, setFoldedSort] = useState('bucket_started_at:desc');
   const [ipSort, setIPSort] = useState('total_requests:desc');
-  const [selectedIP, setSelectedIP] = useState<AccessLogIPSummaryItem | null>(null);
+  const [selectedIP, setSelectedIP] = useState<AccessLogIPSummaryItem | null>(
+    null,
+  );
   const [cleanupDays, setCleanupDays] = useState<string>('7');
   const [customCleanupDays, setCustomCleanupDays] = useState('14');
   const [isCleanupModalOpen, setCleanupModalOpen] = useState(false);
@@ -181,8 +220,9 @@ export function AccessLogsPage() {
         sort_order: detailSortState.sortOrder,
       });
     },
-    placeholderData: (previousData: AccessLogList | FoldedAccessLogList | undefined) =>
-      previousData,
+    placeholderData: (
+      previousData: AccessLogList | FoldedAccessLogList | undefined,
+    ) => previousData,
   });
 
   const ipSummaryQuery = useQuery<AccessLogIPSummaryList>({
@@ -197,11 +237,18 @@ export function AccessLogsPage() {
         sort_by: ipSortState.sortBy,
         sort_order: ipSortState.sortOrder,
       }),
-    placeholderData: (previousData: AccessLogIPSummaryList | undefined) => previousData,
+    placeholderData: (previousData: AccessLogIPSummaryList | undefined) =>
+      previousData,
   });
 
   const ipTrendQuery = useQuery({
-    queryKey: ['access-logs', 'ip-trend', selectedIP?.remote_addr, filters.nodeId, filters.host],
+    queryKey: [
+      'access-logs',
+      'ip-trend',
+      selectedIP?.remote_addr,
+      filters.nodeId,
+      filters.host,
+    ],
     queryFn: () =>
       getAccessLogIPTrend({
         node_id: filters.nodeId || undefined,
@@ -213,15 +260,29 @@ export function AccessLogsPage() {
     enabled: Boolean(selectedIP?.remote_addr),
   });
 
+  const meteringQuery = useQuery<ObservabilityMeteringOverview>({
+    queryKey: ['access-logs', 'metering-overview'],
+    queryFn: getObservabilityMeteringOverview,
+    refetchInterval: 30000,
+  });
+
   const cleanupMutation = useMutation({
-    mutationFn: (payload: AccessLogCleanupPayload) => cleanupAccessLogs(payload),
+    mutationFn: (payload: AccessLogCleanupPayload) =>
+      cleanupAccessLogs(payload),
     onSuccess: async () => {
       setCleanupModalOpen(false);
       showToast({ tone: 'success', message: '访问日志已清理。' });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['access-logs', 'detail'] }),
-        queryClient.invalidateQueries({ queryKey: ['access-logs', 'ip-summary'] }),
-        queryClient.invalidateQueries({ queryKey: ['access-logs', 'ip-trend'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['access-logs', 'ip-summary'],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['access-logs', 'ip-trend'],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['access-logs', 'metering-overview'],
+        }),
       ]);
     },
     onError: (error) => {
@@ -232,15 +293,24 @@ export function AccessLogsPage() {
     },
   });
 
-  const detailSummaryData = detailQuery.data as AccessLogList | FoldedAccessLogList | undefined;
+  const detailSummaryData = detailQuery.data as
+    | AccessLogList
+    | FoldedAccessLogList
+    | undefined;
   const summary = useMemo(
     () =>
       buildSummary(
         detailSummaryData?.total_record ?? 0,
         detailSummaryData?.total_ip ?? 0,
         activeTab,
+        meteringQuery.data,
       ),
-    [activeTab, detailSummaryData?.total_ip, detailSummaryData?.total_record],
+    [
+      activeTab,
+      detailSummaryData?.total_ip,
+      detailSummaryData?.total_record,
+      meteringQuery.data,
+    ],
   );
 
   const trendLabels = useMemo(
@@ -283,17 +353,23 @@ export function AccessLogsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="日志"
-        description="升级后的日志中心支持按节点、IP、域名与路径检索，支持时间折叠、IP 维度聚合与按保留天数清理旧日志。"
+        title="观测计量"
+        description="统一查看访问明细、日志聚合、站点流量、节点流量、缓存命中、回源流量与带宽 P95 等计量口径。"
         action={
-          <PrimaryButton type="button" onClick={() => setCleanupModalOpen(true)}>
+          <PrimaryButton
+            type="button"
+            onClick={() => setCleanupModalOpen(true)}
+          >
             清理日志
           </PrimaryButton>
         }
       />
 
-      <AppCard title="日志摘要" description="所有汇总、排序、折叠与分页都由后端计算，前端仅展示当前页结果。">
-        <div className="grid gap-4 md:grid-cols-3">
+      <AppCard
+        title="计量摘要"
+        description="所有汇总、排序、折叠与分页都由后端计算，前端仅展示当前结果。"
+      >
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           {summary.map((item) => (
             <div
               key={item.label}
@@ -311,8 +387,12 @@ export function AccessLogsPage() {
       </AppCard>
 
       <AppCard
-        title="筛选与视图"
-        description="支持 IP、访问域名、路径、分页大小、排序与时间折叠。"
+        title="视图切换"
+        description={
+          activeTab === 'metering'
+            ? '计量概览使用最近 24 小时全局窗口，明细日志和 IP 维度可继续使用筛选。'
+            : '支持 IP、访问域名、路径、分页大小、排序与时间折叠。'
+        }
         action={
           <SecondaryButton
             type="button"
@@ -329,8 +409,21 @@ export function AccessLogsPage() {
         <div className="space-y-5">
           <div className="flex flex-wrap gap-2">
             {[
-              { key: 'detail', label: '明细日志', description: '按请求明细查看与折叠聚合' },
-              { key: 'ip', label: 'IP 维度', description: '查看来源 IP 汇总与趋势' },
+              {
+                key: 'metering',
+                label: '计量概览',
+                description: '查看计费口径、带宽 P95 与排行',
+              },
+              {
+                key: 'detail',
+                label: '明细日志',
+                description: '按请求明细查看与折叠聚合',
+              },
+              {
+                key: 'ip',
+                label: 'IP 维度',
+                description: '查看来源 IP 汇总与趋势',
+              },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -348,137 +441,165 @@ export function AccessLogsPage() {
             ))}
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-            <ResourceField label="节点 ID">
-              <ResourceInput
-                value={draft.nodeId}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, nodeId: event.target.value }))
-                }
-                placeholder="按 node_id 搜索"
-              />
-            </ResourceField>
-            <ResourceField label="来源 IP">
-              <ResourceInput
-                value={draft.remoteAddr}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, remoteAddr: event.target.value }))
-                }
-                placeholder="按 IP 搜索"
-              />
-            </ResourceField>
-            <ResourceField label="访问域名">
-              <ResourceInput
-                value={draft.host}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, host: event.target.value }))
-                }
-                placeholder="按域名搜索"
-              />
-            </ResourceField>
-            <ResourceField
-              label="请求路径"
-              hint={activeTab === 'ip' ? 'IP 维度页暂不使用路径过滤。' : '支持按路径模糊过滤。'}
-            >
-              <ResourceInput
-                value={draft.path}
-                disabled={activeTab === 'ip'}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, path: event.target.value }))
-                }
-                placeholder="按路径搜索"
-              />
-            </ResourceField>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-            <ResourceField label="每页条数">
-              <ResourceSelect
-                value={String(pageSize)}
-                onChange={(event) => {
-                  setPageSize(Number(event.target.value) || 20);
-                  setDetailPage(0);
-                  setIPPage(0);
-                }}
-              >
-                {pageSizeOptions.map((option) => (
-                  <option key={option} value={option}>
-                    每页 {option} 条
-                  </option>
-                ))}
-              </ResourceSelect>
-            </ResourceField>
-
-            <ResourceField label={activeTab === 'detail' && foldMinutes > 0 ? '折叠排序' : '排序'}>
-              <ResourceSelect
-                value={
-                  activeTab === 'detail' && foldMinutes > 0
-                    ? foldedSort
-                    : activeTab === 'detail'
-                      ? detailSort
-                      : ipSort
-                }
-                onChange={(event) => {
-                  if (activeTab === 'detail' && foldMinutes > 0) {
-                    setFoldedSort(event.target.value);
-                    setDetailPage(0);
-                    return;
+          {activeTab !== 'metering' ? (
+            <>
+              <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+                <ResourceField label="节点 ID">
+                  <ResourceInput
+                    value={draft.nodeId}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        nodeId: event.target.value,
+                      }))
+                    }
+                    placeholder="按 node_id 搜索"
+                  />
+                </ResourceField>
+                <ResourceField label="来源 IP">
+                  <ResourceInput
+                    value={draft.remoteAddr}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        remoteAddr: event.target.value,
+                      }))
+                    }
+                    placeholder="按 IP 搜索"
+                  />
+                </ResourceField>
+                <ResourceField label="访问域名">
+                  <ResourceInput
+                    value={draft.host}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        host: event.target.value,
+                      }))
+                    }
+                    placeholder="按域名搜索"
+                  />
+                </ResourceField>
+                <ResourceField
+                  label="请求路径"
+                  hint={
+                    activeTab === 'ip'
+                      ? 'IP 维度页暂不使用路径过滤。'
+                      : '支持按路径模糊过滤。'
                   }
-                  if (activeTab === 'detail') {
-                    setDetailSort(event.target.value);
-                    setDetailPage(0);
-                    return;
-                  }
-                  setIPSort(event.target.value);
-                  setIPPage(0);
-                }}
-              >
-                {(activeTab === 'detail' && foldMinutes > 0
-                  ? foldedSortOptions
-                  : activeTab === 'detail'
-                    ? detailSortOptions
-                    : ipSortOptions
-                ).map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </ResourceSelect>
-            </ResourceField>
-
-            {activeTab === 'detail' ? (
-              <ResourceField label="时间折叠">
-                <ResourceSelect
-                  value={String(foldMinutes)}
-                  onChange={(event) => {
-                    setFoldMinutes(Number(event.target.value) as 0 | 3 | 5);
-                    setDetailPage(0);
-                  }}
                 >
-                  {foldOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </ResourceSelect>
-              </ResourceField>
-            ) : (
-              <div />
-            )}
+                  <ResourceInput
+                    value={draft.path}
+                    disabled={activeTab === 'ip'}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        path: event.target.value,
+                      }))
+                    }
+                    placeholder="按路径搜索"
+                  />
+                </ResourceField>
+              </div>
 
-            <div className="flex items-end gap-2">
-              <PrimaryButton type="button" onClick={handleSearch}>
-                应用筛选
-              </PrimaryButton>
-              <SecondaryButton type="button" onClick={handleReset}>
-                重置
-              </SecondaryButton>
-            </div>
-          </div>
+              <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+                <ResourceField label="每页条数">
+                  <ResourceSelect
+                    value={String(pageSize)}
+                    onChange={(event) => {
+                      setPageSize(Number(event.target.value) || 20);
+                      setDetailPage(0);
+                      setIPPage(0);
+                    }}
+                  >
+                    {pageSizeOptions.map((option) => (
+                      <option key={option} value={option}>
+                        每页 {option} 条
+                      </option>
+                    ))}
+                  </ResourceSelect>
+                </ResourceField>
+
+                <ResourceField
+                  label={
+                    activeTab === 'detail' && foldMinutes > 0
+                      ? '折叠排序'
+                      : '排序'
+                  }
+                >
+                  <ResourceSelect
+                    value={
+                      activeTab === 'detail' && foldMinutes > 0
+                        ? foldedSort
+                        : activeTab === 'detail'
+                          ? detailSort
+                          : ipSort
+                    }
+                    onChange={(event) => {
+                      if (activeTab === 'detail' && foldMinutes > 0) {
+                        setFoldedSort(event.target.value);
+                        setDetailPage(0);
+                        return;
+                      }
+                      if (activeTab === 'detail') {
+                        setDetailSort(event.target.value);
+                        setDetailPage(0);
+                        return;
+                      }
+                      setIPSort(event.target.value);
+                      setIPPage(0);
+                    }}
+                  >
+                    {(activeTab === 'detail' && foldMinutes > 0
+                      ? foldedSortOptions
+                      : activeTab === 'detail'
+                        ? detailSortOptions
+                        : ipSortOptions
+                    ).map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </ResourceSelect>
+                </ResourceField>
+
+                {activeTab === 'detail' ? (
+                  <ResourceField label="时间折叠">
+                    <ResourceSelect
+                      value={String(foldMinutes)}
+                      onChange={(event) => {
+                        setFoldMinutes(Number(event.target.value) as 0 | 3 | 5);
+                        setDetailPage(0);
+                      }}
+                    >
+                      {foldOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </ResourceSelect>
+                  </ResourceField>
+                ) : (
+                  <div />
+                )}
+
+                <div className="flex items-end gap-2">
+                  <PrimaryButton type="button" onClick={handleSearch}>
+                    应用筛选
+                  </PrimaryButton>
+                  <SecondaryButton type="button" onClick={handleReset}>
+                    重置
+                  </SecondaryButton>
+                </div>
+              </div>
+            </>
+          ) : null}
         </div>
       </AppCard>
 
-      {activeTab === 'detail' ? (
+      {activeTab === 'metering' ? (
+        <MeteringTab query={meteringQuery} />
+      ) : activeTab === 'detail' ? (
         <DetailTab
           detailPage={detailPage}
           pageSize={pageSize}
@@ -508,7 +629,10 @@ export function AccessLogsPage() {
         {ipTrendQuery.isLoading ? (
           <LoadingState />
         ) : ipTrendQuery.isError ? (
-          <ErrorState title="IP 趋势加载失败" description={getErrorMessage(ipTrendQuery.error)} />
+          <ErrorState
+            title="IP 趋势加载失败"
+            description={getErrorMessage(ipTrendQuery.error)}
+          />
         ) : ipTrendQuery.data ? (
           <TrendChart
             labels={trendLabels}
@@ -524,7 +648,10 @@ export function AccessLogsPage() {
             yAxisValueFormatter={(value) => formatCompactNumber(value)}
           />
         ) : (
-          <EmptyState title="暂无趋势数据" description="当前 IP 在最近 24 小时内没有可展示的访问曲线。" />
+          <EmptyState
+            title="暂无趋势数据"
+            description="当前 IP 在最近 24 小时内没有可展示的访问曲线。"
+          />
         )}
       </AppModal>
 
@@ -535,7 +662,10 @@ export function AccessLogsPage() {
         onClose={() => setCleanupModalOpen(false)}
         footer={
           <div className="flex flex-wrap justify-end gap-2">
-            <SecondaryButton type="button" onClick={() => setCleanupModalOpen(false)}>
+            <SecondaryButton
+              type="button"
+              onClick={() => setCleanupModalOpen(false)}
+            >
               取消
             </SecondaryButton>
             <PrimaryButton
@@ -612,6 +742,303 @@ function getStatusMeta(statusCode: number) {
   return { label: String(statusCode), variant: 'success' as const };
 }
 
+function formatTrendHour(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '--';
+  }
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:00`;
+}
+
+function MetricPanel({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+        {label}
+      </p>
+      <p className="mt-2 text-xl font-semibold text-[var(--foreground-primary)]">
+        {value}
+      </p>
+      {hint ? (
+        <p className="mt-2 text-xs leading-5 text-[var(--foreground-secondary)]">
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function MeteringTab({
+  query,
+}: {
+  query: {
+    isLoading: boolean;
+    isError: boolean;
+    isFetching: boolean;
+    error: unknown;
+    data?: ObservabilityMeteringOverview;
+  };
+}) {
+  if (query.isLoading) {
+    return (
+      <AppCard title="计量概览" description="加载中...">
+        <LoadingState />
+      </AppCard>
+    );
+  }
+
+  if (query.isError) {
+    return (
+      <AppCard title="计量概览" description="计量聚合查询失败。">
+        <ErrorState
+          title="计量概览加载失败"
+          description={getErrorMessage(query.error)}
+        />
+      </AppCard>
+    );
+  }
+
+  const data = query.data;
+  if (!data) {
+    return (
+      <AppCard title="计量概览">
+        <EmptyState
+          title="暂无计量数据"
+          description="节点上报观测数据后，这里会展示计量口径。"
+        />
+      </AppCard>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <AppCard
+        title="24 小时计量窗口"
+        description={`统计窗口：${formatDateTime(data.window_started_at)} 至 ${formatDateTime(data.window_ended_at)}。`}
+      >
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricPanel
+            label="带宽峰值 P95"
+            value={
+              data.bandwidth_p95_bps > 0
+                ? formatBytesPerSecond(data.bandwidth_p95_bps)
+                : '暂无数据'
+            }
+            hint="按节点 OpenResty 入站与出站字节差值折算。"
+          />
+          <MetricPanel
+            label="缓存命中率"
+            value={
+              data.cache_classified_count > 0
+                ? formatPercent(data.cache_hit_rate_percent)
+                : '暂无数据'
+            }
+            hint={`${formatCompactNumber(data.cache_hit_count)} 次 HIT / ${formatCompactNumber(data.cache_classified_count)} 次可分类缓存请求。`}
+          />
+          <MetricPanel
+            label="出站流量"
+            value={formatBytes(data.response_bytes)}
+            hint={`${formatCompactNumber(data.request_count)} 次请求。`}
+          />
+          <MetricPanel
+            label="节点可用率"
+            value={
+              data.total_nodes > 0
+                ? formatPercent(data.node_availability_percent)
+                : '暂无节点'
+            }
+            hint={`${data.online_nodes}/${data.total_nodes} 个节点在线。`}
+          />
+        </div>
+      </AppCard>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <AppCard
+          title="带宽趋势"
+          description="按小时聚合 OpenResty 流量，用于观察峰值和 P95 口径。"
+        >
+          <TrendChart
+            labels={data.bandwidth_trend.map((point) =>
+              formatTrendHour(point.bucket_started_at),
+            )}
+            yAxisValueFormatter={(value) => formatBytesPerSecond(value)}
+            series={[
+              {
+                label: '带宽',
+                color: '#2563eb',
+                fillColor: 'rgba(37, 99, 235, 0.16)',
+                variant: 'area',
+                values: data.bandwidth_trend.map((point) => point.bps),
+                valueFormatter: formatBytesPerSecond,
+              },
+            ]}
+          />
+        </AppCard>
+
+        <AppCard
+          title="回源流量"
+          description="由访问日志 upstream_response_length 字段统计。"
+        >
+          <div className="grid gap-4 md:grid-cols-2">
+            <MetricPanel
+              label="回源流量"
+              value={
+                data.upstream_bytes_supported
+                  ? formatBytes(data.upstream_bytes)
+                  : '采集升级后生效'
+              }
+              hint={
+                data.upstream_bytes_supported
+                  ? '新日志已包含回源响应字节。'
+                  : '历史日志缺少 upstream_response_length，升级 Agent 并发布新配置后开始计量。'
+              }
+            />
+            <MetricPanel
+              label="请求入站"
+              value={formatBytes(data.request_bytes)}
+              hint="按访问日志 request_length 聚合。"
+            />
+          </div>
+        </AppCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <TrafficTable title="每站点流量" items={data.site_traffic} />
+        <TrafficTable title="每节点流量" items={data.node_traffic} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <DistributionList
+          title="状态码分布"
+          items={data.status_codes.map((item) => ({
+            ...item,
+            key: `HTTP ${item.key}`,
+          }))}
+        />
+        <DistributionList title="TOP URL" items={data.top_urls} />
+        <DistributionList title="TOP IP" items={data.top_ips} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <DistributionList title="TOP 地区" items={data.top_regions} />
+        <AppCard title="流量排行图">
+          <RankChart
+            items={data.site_traffic.map((item) => ({
+              label: item.key,
+              value: item.response_bytes,
+            }))}
+            color="#2563eb"
+            valueFormatter={formatBytes}
+            emptyMessage="暂无站点流量排行"
+          />
+        </AppCard>
+      </div>
+    </div>
+  );
+}
+
+function TrafficTable({
+  title,
+  items,
+}: {
+  title: string;
+  items: MeteringTrafficItem[];
+}) {
+  return (
+    <AppCard
+      title={title}
+      description="按 24 小时窗口聚合，默认按出站流量排序。"
+    >
+      {items.length === 0 ? (
+        <EmptyState
+          title="暂无流量数据"
+          description="当前窗口内没有可展示的流量聚合。"
+        />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+            <thead>
+              <tr className="text-[var(--foreground-secondary)]">
+                <th className="px-3 py-3 font-medium">对象</th>
+                <th className="px-3 py-3 font-medium">请求</th>
+                <th className="px-3 py-3 font-medium">出站</th>
+                <th className="px-3 py-3 font-medium">入站</th>
+                <th className="px-3 py-3 font-medium">回源</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--border-default)]">
+              {items.map((item) => (
+                <tr key={item.key}>
+                  <td className="max-w-[240px] px-3 py-4 font-medium text-[var(--foreground-primary)]">
+                    <span className="break-all">{item.key}</span>
+                  </td>
+                  <td className="px-3 py-4 text-[var(--foreground-secondary)]">
+                    {formatCompactNumber(item.request_count)}
+                  </td>
+                  <td className="px-3 py-4 text-[var(--foreground-secondary)]">
+                    {formatBytes(item.response_bytes)}
+                  </td>
+                  <td className="px-3 py-4 text-[var(--foreground-secondary)]">
+                    {formatBytes(item.request_bytes)}
+                  </td>
+                  <td className="px-3 py-4 text-[var(--foreground-secondary)]">
+                    {formatBytes(item.upstream_bytes)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </AppCard>
+  );
+}
+
+function DistributionList({
+  title,
+  items,
+}: {
+  title: string;
+  items: MeteringDistributionItem[];
+}) {
+  return (
+    <AppCard title={title}>
+      {items.length === 0 ? (
+        <EmptyState
+          title="暂无分布数据"
+          description="当前窗口内没有可展示的排行。"
+        />
+      ) : (
+        <div className="space-y-3">
+          {items.map((item) => (
+            <div
+              key={item.key}
+              className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
+            >
+              <span className="min-w-0 text-sm font-medium break-all text-[var(--foreground-primary)]">
+                {item.key}
+              </span>
+              <span className="shrink-0 text-sm text-[var(--foreground-secondary)]">
+                {formatCompactNumber(item.value)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </AppCard>
+  );
+}
+
 function DetailTab({
   detailPage,
   pageSize,
@@ -644,7 +1071,10 @@ function DetailTab({
   if (query.isError) {
     return (
       <AppCard title="访问日志" description="日志查询失败。">
-        <ErrorState title="访问日志加载失败" description={getErrorMessage(query.error)} />
+        <ErrorState
+          title="访问日志加载失败"
+          description={getErrorMessage(query.error)}
+        />
       </AppCard>
     );
   }
@@ -658,7 +1088,10 @@ function DetailTab({
       >
         <div className="space-y-4">
           {data.items.length === 0 ? (
-            <EmptyState title="暂无折叠日志" description="当前筛选条件下没有可展示的时间桶。" />
+            <EmptyState
+              title="暂无折叠日志"
+              description="当前筛选条件下没有可展示的时间桶。"
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
@@ -727,7 +1160,10 @@ function DetailTab({
     >
       <div className="space-y-4">
         {data.items.length === 0 ? (
-          <EmptyState title="暂无访问日志" description="当前筛选条件下没有可展示的访问明细。" />
+          <EmptyState
+            title="暂无访问日志"
+            description="当前筛选条件下没有可展示的访问明细。"
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
@@ -778,7 +1214,10 @@ function DetailTab({
                         </div>
                       </td>
                       <td className="px-3 py-4">
-                        <StatusBadge label={statusMeta.label} variant={statusMeta.variant} />
+                        <StatusBadge
+                          label={statusMeta.label}
+                          variant={statusMeta.variant}
+                        />
                       </td>
                     </tr>
                   );
@@ -835,9 +1274,15 @@ function IPTab({
       {query.isLoading ? (
         <LoadingState />
       ) : query.isError ? (
-        <ErrorState title="IP 汇总加载失败" description={getErrorMessage(query.error)} />
+        <ErrorState
+          title="IP 汇总加载失败"
+          description={getErrorMessage(query.error)}
+        />
       ) : items.length === 0 ? (
-        <EmptyState title="暂无 IP 访问记录" description="当前筛选条件下没有可展示的来源 IP。" />
+        <EmptyState
+          title="暂无 IP 访问记录"
+          description="当前筛选条件下没有可展示的来源 IP。"
+        />
       ) : (
         <div className="space-y-4">
           <div className="overflow-x-auto">
@@ -912,10 +1357,18 @@ function Pager({
         第 {page + 1} 页，每页 {pageSize} 条。
       </p>
       <div className="flex gap-2">
-        <SecondaryButton type="button" disabled={page === 0 || isFetching} onClick={onPrev}>
+        <SecondaryButton
+          type="button"
+          disabled={page === 0 || isFetching}
+          onClick={onPrev}
+        >
           上一页
         </SecondaryButton>
-        <SecondaryButton type="button" disabled={!hasMore || isFetching} onClick={onNext}>
+        <SecondaryButton
+          type="button"
+          disabled={!hasMore || isFetching}
+          onClick={onNext}
+        >
           下一页
         </SecondaryButton>
       </div>

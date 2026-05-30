@@ -10,15 +10,18 @@ import (
 )
 
 type NodeAccessLog struct {
-	ID         uint      `json:"id" gorm:"primaryKey"`
-	NodeID     string    `json:"node_id" gorm:"index:,composite:node_logged_at,priority:1;size:64;not null"`
-	LoggedAt   time.Time `json:"logged_at" gorm:"index;index:,composite:node_logged_at,priority:2"`
-	RemoteAddr string    `json:"remote_addr" gorm:"index;size:128"`
-	Region     string    `json:"region" gorm:"size:128"`
-	Host       string    `json:"host" gorm:"index;size:255"`
-	Path       string    `json:"path" gorm:"size:2048"`
-	StatusCode int       `json:"status_code" gorm:"index"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID            uint      `json:"id" gorm:"primaryKey"`
+	NodeID        string    `json:"node_id" gorm:"index:,composite:node_logged_at,priority:1;size:64;not null"`
+	LoggedAt      time.Time `json:"logged_at" gorm:"index;index:,composite:node_logged_at,priority:2"`
+	RemoteAddr    string    `json:"remote_addr" gorm:"index;size:128"`
+	Region        string    `json:"region" gorm:"size:128"`
+	Host          string    `json:"host" gorm:"index;size:255"`
+	Path          string    `json:"path" gorm:"size:2048"`
+	StatusCode    int       `json:"status_code" gorm:"index"`
+	RequestBytes  int64     `json:"request_bytes"`
+	ResponseBytes int64     `json:"response_bytes"`
+	UpstreamBytes int64     `json:"upstream_bytes"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type NodeAccessLogRegionCount struct {
@@ -90,6 +93,18 @@ type NodeAccessLogIPTrendQuery struct {
 type NodeAccessLogTrendPointRow struct {
 	BucketEpoch  int64 `json:"bucket_epoch"`
 	RequestCount int64 `json:"request_count"`
+}
+
+type NodeAccessLogDistributionQuery struct {
+	NodeID string
+	Host   string
+	Since  time.Time
+	Limit  int
+}
+
+type NodeAccessLogDistributionRow struct {
+	Key   string `json:"key"`
+	Value int64  `json:"value"`
 }
 
 func (log *NodeAccessLog) BeforeCreate(tx *gorm.DB) error {
@@ -237,6 +252,44 @@ func ListNodeAccessLogIPTrend(query NodeAccessLogIPTrendQuery) (items []*NodeAcc
 		return items[i].BucketEpoch < items[j].BucketEpoch
 	})
 	return items, nil
+}
+
+func ListNodeAccessLogHostDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	return buildNodeAccessLogDistributionRows(query, func(item *NodeAccessLog) string {
+		return strings.TrimSpace(item.Host)
+	})
+}
+
+func ListNodeAccessLogPathDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	return buildNodeAccessLogDistributionRows(query, func(item *NodeAccessLog) string {
+		return strings.TrimSpace(item.Path)
+	})
+}
+
+func ListNodeAccessLogURLDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	return buildNodeAccessLogDistributionRows(query, func(item *NodeAccessLog) string {
+		host := strings.TrimSpace(item.Host)
+		path := strings.TrimSpace(item.Path)
+		if host == "" {
+			return path
+		}
+		if path == "" {
+			return host
+		}
+		return host + path
+	})
+}
+
+func ListNodeAccessLogIPDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	return buildNodeAccessLogDistributionRows(query, func(item *NodeAccessLog) string {
+		return strings.TrimSpace(item.RemoteAddr)
+	})
+}
+
+func ListNodeAccessLogRegionDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	return buildNodeAccessLogDistributionRows(query, func(item *NodeAccessLog) string {
+		return strings.TrimSpace(item.Region)
+	})
 }
 
 func DeleteNodeAccessLogsBefore(before time.Time) (deleted int64, err error) {
@@ -439,6 +492,48 @@ func buildNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, recentSi
 		})
 	}
 	sortNodeAccessLogIPSummaryRows(rows, query.SortBy, query.SortOrder)
+	return rows, nil
+}
+
+func buildNodeAccessLogDistributionRows(
+	query NodeAccessLogDistributionQuery,
+	keySelector func(item *NodeAccessLog) string,
+) ([]*NodeAccessLogDistributionRow, error) {
+	logs, err := listNodeAccessLogsAcrossShards(NodeAccessLogQuery{
+		NodeID: query.NodeID,
+		Host:   query.Host,
+		Since:  query.Since,
+	})
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64)
+	for _, item := range logs {
+		if item == nil {
+			continue
+		}
+		key := strings.TrimSpace(keySelector(item))
+		if key == "" {
+			continue
+		}
+		counts[key]++
+	}
+	rows := make([]*NodeAccessLogDistributionRow, 0, len(counts))
+	for key, value := range counts {
+		rows = append(rows, &NodeAccessLogDistributionRow{
+			Key:   key,
+			Value: value,
+		})
+	}
+	sort.Slice(rows, func(i int, j int) bool {
+		if rows[i].Value == rows[j].Value {
+			return rows[i].Key < rows[j].Key
+		}
+		return rows[i].Value > rows[j].Value
+	})
+	if query.Limit > 0 && len(rows) > query.Limit {
+		rows = rows[:query.Limit]
+	}
 	return rows, nil
 }
 

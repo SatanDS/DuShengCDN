@@ -117,6 +117,22 @@ func GetAccessLogIPTrend(c *gin.Context) {
 	respondSuccess(c, result)
 }
 
+// GetObservabilityMeteringOverview godoc
+// @Summary Get observability metering overview
+// @Tags AccessLogs
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/access-logs/metering-overview [get]
+func GetObservabilityMeteringOverview(c *gin.Context) {
+	result, err := service.GetObservabilityMeteringOverview()
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, result)
+}
+
 // CleanupAccessLogs godoc
 // @Summary Cleanup access logs by retention days
 // @Tags AccessLogs

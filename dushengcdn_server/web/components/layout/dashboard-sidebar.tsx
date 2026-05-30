@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 
 import { dashboardNavigation } from '@/lib/constants/navigation';
 import { cn } from '@/lib/utils/cn';
@@ -230,7 +230,9 @@ function SidebarContent({
 
 export function DashboardSidebar() {
   const pathname = usePathname();
-  const currentPath = pathname ?? '/';
+  const searchParams = useSearchParams();
+  const search = searchParams.toString();
+  const currentPath = `${pathname ?? '/'}${search ? `?${search}` : ''}`;
   const isSidebarCollapsed = useAppShellStore(
     (state) => state.isSidebarCollapsed,
   );
