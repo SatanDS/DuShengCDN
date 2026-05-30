@@ -206,6 +206,7 @@ describe('Proxy route website pages', () => {
 
   it('creates a website and navigates to config page', async () => {
     const routes: Array<Record<string, unknown>> = [];
+    const createRequests: Array<Record<string, unknown>> = [];
 
     vi.stubGlobal(
       'fetch',
@@ -215,6 +216,7 @@ describe('Proxy route website pages', () => {
 
         if (url.includes('/proxy-routes/') && method === 'POST') {
           const payload = JSON.parse(String(init?.body));
+          createRequests.push(payload);
           const created = buildRoute({
             id: 21,
             site_name: payload.site_name,
@@ -322,7 +324,7 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [],
+                data: [{ id: 7, name: 'cf-main', type: 'cloudflare' }],
               }),
             ),
           );
@@ -360,6 +362,21 @@ describe('Proxy route website pages', () => {
       'https://origin-a.internal:443{enter}https://origin-b.internal:443',
     );
 
+    await user.click(
+      within(dialog).getByRole('checkbox', { name: /创建时自动解析 DNS/ }),
+    );
+    await waitFor(() => {
+      expect(within(dialog).getByText('DNS 账号')).toBeInTheDocument();
+    });
+    await user.selectOptions(within(dialog).getByLabelText(/DNS 账号/), '7');
+    await user.click(
+      within(dialog).getByRole('checkbox', { name: /开启 Cloudflare 代理/ }),
+    );
+    await user.selectOptions(
+      within(dialog).getByLabelText(/DDoS 防护模式/),
+      'auto',
+    );
+
     const submitButton = document.querySelector(
       'button[form="create-website-form"]',
     ) as HTMLButtonElement | null;
@@ -373,6 +390,15 @@ describe('Proxy route website pages', () => {
       expect(pushMock).toHaveBeenCalledWith(
         '/proxy-route/detail?id=21&section=domains',
       );
+    });
+    expect(createRequests[0]).toMatchObject({
+      dns_auto_sync: true,
+      dns_account_id: 7,
+      dns_record_type: 'A',
+      dns_record_content: '',
+      dns_auto_target: true,
+      cloudflare_proxied: true,
+      ddos_protection_mode: 'auto',
     });
   });
 

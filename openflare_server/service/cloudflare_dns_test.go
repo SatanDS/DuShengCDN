@@ -91,6 +91,126 @@ func TestSelectHealthyNodeDNSContent(t *testing.T) {
 	}
 }
 
+func TestSelectHealthyNodeDNSContentSwitchesAwayFromOfflineNode(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	previousTarget := &model.Node{
+		NodeID:          "node-previous-target",
+		Name:            "previous-target",
+		IP:              "8.8.4.4",
+		AgentToken:      "token-previous-target",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      time.Now().Add(-10 * time.Minute),
+	}
+	if err := previousTarget.Insert(); err != nil {
+		t.Fatalf("insert previous target node: %v", err)
+	}
+
+	nextTarget := &model.Node{
+		NodeID:          "node-next-target",
+		Name:            "next-target",
+		IP:              "1.1.1.1",
+		AgentToken:      "token-next-target",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      time.Now(),
+	}
+	if err := nextTarget.Insert(); err != nil {
+		t.Fatalf("insert next target node: %v", err)
+	}
+
+	content, err := selectHealthyNodeDNSContent("A")
+	if err != nil {
+		t.Fatalf("select healthy node: %v", err)
+	}
+	if content != "1.1.1.1" {
+		t.Fatalf("expected DNS target to switch to online node, got %s", content)
+	}
+}
+
+func TestShouldEnableCloudflareProxyForDDOS(t *testing.T) {
+	setupServiceTestDB(t)
+	setCloudflareDDoSThresholdsForTest(t, "100", "50")
+
+	now := time.Now()
+	if err := (&model.NodeRequestReport{
+		NodeID:          "node-ddos",
+		WindowStartedAt: now.Add(-time.Minute),
+		WindowEndedAt:   now,
+		RequestCount:    120,
+		ErrorCount:      1,
+	}).Insert(); err != nil {
+		t.Fatalf("insert request report: %v", err)
+	}
+
+	if !shouldEnableCloudflareProxyForDDOS() {
+		t.Fatal("expected request threshold to enable Cloudflare proxy")
+	}
+}
+
+func TestShouldEnableCloudflareProxyForDDOSErrorRate(t *testing.T) {
+	setupServiceTestDB(t)
+	setCloudflareDDoSThresholdsForTest(t, "1000", "30")
+
+	now := time.Now()
+	if err := (&model.NodeRequestReport{
+		NodeID:          "node-ddos-errors",
+		WindowStartedAt: now.Add(-time.Minute),
+		WindowEndedAt:   now,
+		RequestCount:    100,
+		ErrorCount:      40,
+	}).Insert(); err != nil {
+		t.Fatalf("insert request report: %v", err)
+	}
+
+	if !shouldEnableCloudflareProxyForDDOS() {
+		t.Fatal("expected error rate threshold to enable Cloudflare proxy")
+	}
+}
+
+func setCloudflareDDoSThresholdsForTest(t *testing.T, requestThreshold string, errorRateThreshold string) {
+	t.Helper()
+
+	common.OptionMapRWMutex.Lock()
+	wasNil := common.OptionMap == nil
+	if wasNil {
+		common.OptionMap = make(map[string]string)
+	}
+	oldRequestThreshold, hadRequestThreshold := common.OptionMap["CloudflareDDoSRequestThreshold"]
+	oldErrorRateThreshold, hadErrorRateThreshold := common.OptionMap["CloudflareDDoSErrorRateThreshold"]
+	common.OptionMap["CloudflareDDoSRequestThreshold"] = requestThreshold
+	common.OptionMap["CloudflareDDoSErrorRateThreshold"] = errorRateThreshold
+	common.OptionMapRWMutex.Unlock()
+
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if wasNil {
+			common.OptionMap = nil
+			return
+		}
+		if hadRequestThreshold {
+			common.OptionMap["CloudflareDDoSRequestThreshold"] = oldRequestThreshold
+		} else {
+			delete(common.OptionMap, "CloudflareDDoSRequestThreshold")
+		}
+		if hadErrorRateThreshold {
+			common.OptionMap["CloudflareDDoSErrorRateThreshold"] = oldErrorRateThreshold
+		} else {
+			delete(common.OptionMap, "CloudflareDDoSErrorRateThreshold")
+		}
+	})
+}
+
 func TestValidateDNSRecordContent(t *testing.T) {
 	if err := validateDNSRecordContent("A", "2001:4860:4860::8888"); err == nil {
 		t.Fatal("expected ipv6 content to fail for A record")
