@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -67,6 +68,7 @@ export function ProxyRoutesPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
   const [keyword, setKeyword] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
@@ -136,12 +138,14 @@ export function ProxyRoutesPage() {
   const totalDomains = routes.reduce((sum, route) => sum + route.domain_count, 0);
   const enabledCount = routes.filter((route) => route.enabled).length;
 
-  const handleDelete = (route: ProxyRouteItem) => {
-    if (
-      !window.confirm(
-        `确认删除网站 ${route.site_name} 吗？\n这会删除该站点下的全部域名与配置。`,
-      )
-    ) {
+  const handleDelete = async (route: ProxyRouteItem) => {
+    const confirmed = await confirmDialog({
+      title: '删除规则网站',
+      message: `确认删除网站“${route.site_name}”吗？\n这会删除该站点下的全部域名与配置。`,
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -149,7 +153,7 @@ export function ProxyRoutesPage() {
     deleteMutation.mutate(route.id);
   };
 
-  const handlePublish = () => {
+  const handlePublish = async () => {
     if (!diff || !hasConfigChanges(diff)) {
       setFeedback({ tone: 'info', message: '当前草稿没有可发布的变更。' });
       return;
@@ -162,7 +166,12 @@ export function ProxyRoutesPage() {
       `域名变更 ${diff.added_domains.length + diff.removed_domains.length + diff.modified_domains.length} 项`,
     ].join('，');
 
-    if (!window.confirm(`确认发布当前配置吗？\n${summary}`)) {
+    const confirmed = await confirmDialog({
+      title: '发布当前配置',
+      message: `确认发布当前配置吗？\n${summary}`,
+      confirmLabel: '发布',
+    });
+    if (!confirmed) {
       return;
     }
 

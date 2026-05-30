@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { useAuth } from '@/components/providers/auth-provider';
 import { PageHeader } from '@/components/layout/page-header';
@@ -102,6 +103,7 @@ export function UsersPage() {
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
 
   const form = useForm<UserFormValues>({
     resolver: zodResolver(userSchema),
@@ -231,7 +233,7 @@ export function UsersPage() {
     setIsEditorOpen(true);
   };
 
-  const handleManage = (targetUser: UserItem, action: ManageUserAction) => {
+  const handleManage = async (targetUser: UserItem, action: ManageUserAction) => {
     const actionText = {
       promote: '提升',
       demote: '降级',
@@ -240,12 +242,19 @@ export function UsersPage() {
       enable: '启用',
     }[action];
 
-    if (action === 'delete' && !window.confirm(`确认删除用户“${targetUser.username}”吗？`)) {
-      return;
-    }
-
-    if ((action === 'disable' || action === 'enable') && !window.confirm(`确认${actionText}用户“${targetUser.username}”吗？`)) {
-      return;
+    if (action === 'delete' || action === 'disable' || action === 'enable') {
+      const confirmed = await confirmDialog({
+        title: action === 'delete' ? '删除用户' : `${actionText}用户`,
+        message:
+          action === 'delete'
+            ? `确认删除用户“${targetUser.username}”吗？`
+            : `确认${actionText}用户“${targetUser.username}”吗？`,
+        confirmLabel: actionText,
+        tone: action === 'delete' || action === 'disable' ? 'danger' : 'default',
+      });
+      if (!confirmed) {
+        return;
+      }
     }
 
     setFeedback(null);

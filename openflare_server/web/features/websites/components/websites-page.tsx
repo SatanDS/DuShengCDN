@@ -7,6 +7,7 @@ import { useMemo, useState } from 'react';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -37,6 +38,7 @@ type FeedbackState = {
 export function WebsitesPage() {
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
   const [isWebsiteModalOpen, setIsWebsiteModalOpen] = useState(false);
   const [isCertificateImportOpen, setIsCertificateImportOpen] = useState(false);
   const [preferredCertificateId, setPreferredCertificateId] = useState<
@@ -82,8 +84,14 @@ export function WebsitesPage() {
     setIsWebsiteModalOpen(true);
   };
 
-  const handleDeleteDomain = (domain: ManagedDomainItem) => {
-    if (!window.confirm(`确认删除网站 ${domain.domain} 吗？`)) {
+  const handleDeleteDomain = async (domain: ManagedDomainItem) => {
+    const confirmed = await confirmDialog({
+      title: '删除网站',
+      message: `确认删除网站“${domain.domain}”吗？`,
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 

@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppModal } from '@/components/ui/app-modal';
@@ -243,6 +244,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isAgentUpdateModalOpen, setIsAgentUpdateModalOpen] = useState(false);
   const [isTargetSnapshotOpen, setIsTargetSnapshotOpen] = useState(false);
@@ -418,16 +420,18 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     },
   });
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!node) {
       return;
     }
 
-    if (
-      !window.confirm(
-        `确认删除节点“${node.name}”吗？如果节点在线，系统会同时下发 Agent 卸载指令；离线节点只会删除面板记录。`,
-      )
-    ) {
+    const confirmed = await confirmDialog({
+      title: '删除节点',
+      message: `确认删除节点“${node.name}”吗？如果节点在线，系统会同时下发 Agent 卸载指令；离线节点只会删除面板记录。`,
+      confirmLabel: '删除节点',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -435,16 +439,17 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     deleteMutation.mutate();
   };
 
-  const handleRestartOpenresty = () => {
+  const handleRestartOpenresty = async () => {
     if (!node) {
       return;
     }
 
-    if (
-      !window.confirm(
-        `确认向节点“${node.name}”下发 OpenResty 重启指令吗？该指令会在下一次心跳后执行。`,
-      )
-    ) {
+    const confirmed = await confirmDialog({
+      title: '重启 OpenResty',
+      message: `确认向节点“${node.name}”下发 OpenResty 重启指令吗？该指令会在下一次心跳后执行。`,
+      confirmLabel: '下发重启',
+    });
+    if (!confirmed) {
       return;
     }
 

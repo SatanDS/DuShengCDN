@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -50,6 +51,7 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isCertificateImportOpen, setIsCertificateImportOpen] = useState(false);
   const [isCertificateDetailOpen, setIsCertificateDetailOpen] = useState(false);
@@ -131,12 +133,18 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
     (route) => route.enabled,
   ).length;
 
-  const handleDeleteWebsite = () => {
+  const handleDeleteWebsite = async () => {
     if (!website) {
       return;
     }
 
-    if (!window.confirm(`确认删除网站 ${website.domain} 吗？`)) {
+    const confirmed = await confirmDialog({
+      title: '删除网站',
+      message: `确认删除网站“${website.domain}”吗？`,
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -144,12 +152,18 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
     deleteDomainMutation.mutate(website.id);
   };
 
-  const handleDeleteCertificate = () => {
+  const handleDeleteCertificate = async () => {
     if (!certificate) {
       return;
     }
 
-    if (!window.confirm(`确认删除证书 ${certificate.name} 吗？`)) {
+    const confirmed = await confirmDialog({
+      title: '删除证书',
+      message: `确认删除证书“${certificate.name}”吗？`,
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -501,7 +515,7 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
           }}
           onDelete={() => {
             setIsCertificateDetailOpen(false);
-            handleDeleteCertificate();
+            void handleDeleteCertificate();
           }}
           deleting={deleteCertificateMutation.isPending}
         />

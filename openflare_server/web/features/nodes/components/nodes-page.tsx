@@ -9,6 +9,7 @@ import { ArrowLeft } from 'lucide-react';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -61,6 +62,7 @@ export function NodesPage() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
   const [editingNode, setEditingNode] = useState<NodeItem | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
 
@@ -175,12 +177,14 @@ export function NodesPage() {
     setIsEditorOpen(true);
   };
 
-  const handleDelete = (nodeId: number, nodeName: string) => {
-    if (
-      !window.confirm(
-        `确认删除节点“${nodeName}”吗？如果节点在线，系统会同时下发 Agent 卸载指令；离线节点只会删除面板记录。`,
-      )
-    ) {
+  const handleDelete = async (nodeId: number, nodeName: string) => {
+    const confirmed = await confirmDialog({
+      title: '删除节点',
+      message: `确认删除节点“${nodeName}”吗？如果节点在线，系统会同时下发 Agent 卸载指令；离线节点只会删除面板记录。`,
+      confirmLabel: '删除节点',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 

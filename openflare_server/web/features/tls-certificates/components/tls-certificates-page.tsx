@@ -7,6 +7,7 @@ import { useMemo, useState } from 'react';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -43,6 +44,7 @@ type CertificateApplyMode = 'edit-acme' | 'convert-upload';
 export function TlsCertificatesPage() {
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isApplyOpen, setIsApplyOpen] = useState(false);
   const [selectedCertificateId, setSelectedCertificateId] = useState<
@@ -89,8 +91,14 @@ export function TlsCertificatesPage() {
     [certificatesQuery.data],
   );
 
-  const handleDeleteCertificate = (certificate: TlsCertificateItem) => {
-    if (!window.confirm(`确认删除证书 ${certificate.name} 吗？`)) {
+  const handleDeleteCertificate = async (certificate: TlsCertificateItem) => {
+    const confirmed = await confirmDialog({
+      title: '删除证书',
+      message: `确认删除证书“${certificate.name}”吗？`,
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -98,8 +106,13 @@ export function TlsCertificatesPage() {
     deleteCertificateMutation.mutate(certificate.id);
   };
 
-  const handleRenewCertificate = (certificate: TlsCertificateItem) => {
-    if (!window.confirm(`确认提交证书 ${certificate.name} 的续期申请吗？`)) {
+  const handleRenewCertificate = async (certificate: TlsCertificateItem) => {
+    const confirmed = await confirmDialog({
+      title: '续期证书',
+      message: `确认提交证书“${certificate.name}”的续期申请吗？`,
+      confirmLabel: '提交续期',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -342,7 +355,7 @@ export function TlsCertificatesPage() {
             );
             if (certificate) {
               setIsDetailOpen(false);
-              handleDeleteCertificate(certificate);
+              void handleDeleteCertificate(certificate);
             }
           }}
           deleting={deleteCertificateMutation.isPending}

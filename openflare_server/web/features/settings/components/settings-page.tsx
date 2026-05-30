@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToast } from '@/components/feedback/toast-provider';
 import { AppModal } from '@/components/ui/app-modal';
 import { TurnstileWidget } from '@/components/forms/turnstile-widget';
@@ -256,6 +257,7 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const { refreshUser, user } = useAuth();
   const { showToast, dismissToast } = useToast();
+  const confirmDialog = useConfirmDialog();
   const [activeTab, setActiveTab] = useState<SettingsTab>('personal');
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [profileFields, setProfileFields] = useState(defaultProfileFields);
@@ -701,8 +703,14 @@ export function SettingsPage() {
     );
   };
 
-  const handleUnbindAuthSource = (id: number, label: string) => {
-    if (!window.confirm(`确定解绑「${label}」吗？`)) {
+  const handleUnbindAuthSource = async (id: number, label: string) => {
+    const confirmed = await confirmDialog({
+      title: '解绑第三方账号',
+      message: `确定解绑“${label}”吗？`,
+      confirmLabel: '解绑',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
     void runBusyAction(

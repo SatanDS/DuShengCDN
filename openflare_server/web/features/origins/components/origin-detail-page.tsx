@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -27,6 +28,7 @@ export function OriginDetailPage({ originId }: { originId: string }) {
     tone: 'success' | 'danger';
     message: string;
   }>();
+  const confirmDialog = useConfirmDialog();
   const [isEditorOpen, setIsEditorOpen] = useState(false);
 
   const originQuery = useQuery({
@@ -77,8 +79,14 @@ export function OriginDetailPage({ originId }: { originId: string }) {
     );
   }
 
-  const handleDelete = () => {
-    if (!window.confirm(`确认删除源站 ${origin.name} 吗？`)) {
+  const handleDelete = async () => {
+    const confirmed = await confirmDialog({
+      title: '删除源站',
+      message: `确认删除源站“${origin.name}”吗？`,
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
     deleteMutation.mutate(origin.id);

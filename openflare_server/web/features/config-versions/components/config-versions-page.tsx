@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -399,6 +400,7 @@ function PublishPreviewCard({
 export function ConfigVersionsPage() {
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
   const [selectedVersionId, setSelectedVersionId] = useState<number | null>(
     null,
   );
@@ -498,17 +500,34 @@ export function ConfigVersionsPage() {
     }
   };
 
-  const handleActivate = (version: ConfigVersionSummary) => {
+  const handleActivate = async (version: ConfigVersionSummary) => {
     if (version.is_active) {
       return;
     }
 
-    if (!window.confirm(`确认激活版本 ${version.version} 吗？`)) {
+    const confirmed = await confirmDialog({
+      title: '激活历史版本',
+      message: `确认激活版本 ${version.version} 吗？`,
+      confirmLabel: '激活',
+    });
+    if (!confirmed) {
       return;
     }
 
     setFeedback(null);
     activateMutation.mutate(version.id);
+  };
+
+  const handleForcePublish = async () => {
+    const confirmed = await confirmDialog({
+      title: '强制重新发布',
+      message: '确认强制重新发布吗？这会忽略配置变化检查并立即生成一个新版本。',
+      confirmLabel: '重新发布',
+    });
+    if (!confirmed) {
+      return;
+    }
+    publishMutation.mutate(true);
   };
 
   return (
@@ -521,11 +540,7 @@ export function ConfigVersionsPage() {
             <div className="flex gap-2">
               <SecondaryButton
                 type="button"
-                onClick={() => {
-                  if (window.confirm('确认强制重新发布吗？这会忽略配置变化检查并立即生成一个新版本。')) {
-                    publishMutation.mutate(true);
-                  }
-                }}
+                onClick={() => void handleForcePublish()}
                 disabled={publishMutation.isPending}
               >
                 重新发布

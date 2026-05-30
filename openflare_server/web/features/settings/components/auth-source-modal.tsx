@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { AppModal } from '@/components/ui/app-modal';
 import {
   createAuthSource,
@@ -88,6 +89,7 @@ export function AuthSourceModal({
     text: string;
   } | null>(null);
   const [browserOrigin, setBrowserOrigin] = useState('');
+  const confirmDialog = useConfirmDialog();
 
   useEffect(() => {
     if (!isOpen) {
@@ -171,12 +173,14 @@ export function AuthSourceModal({
     });
   };
 
-  const removeSource = (source: AuthSource) => {
-    if (
-      !window.confirm(
-        `确定删除认证源「${source.display_name || source.name}」吗？`,
-      )
-    ) {
+  const removeSource = async (source: AuthSource) => {
+    const confirmed = await confirmDialog({
+      title: '删除认证源',
+      message: `确定删除认证源“${source.display_name || source.name}”吗？`,
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
     void runAction(`delete-${source.id}`, async () => {

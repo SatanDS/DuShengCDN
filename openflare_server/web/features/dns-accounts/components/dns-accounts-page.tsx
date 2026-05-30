@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -32,6 +33,7 @@ import { formatDateTime } from '@/lib/utils/date';
 export function DnsAccountsPage() {
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<{ tone: 'info' | 'success' | 'danger'; message: string }>();
+  const confirmDialog = useConfirmDialog();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   const dnsAccountsQuery = useQuery({
@@ -50,8 +52,14 @@ export function DnsAccountsPage() {
     },
   });
 
-  const handleDelete = (account: DnsAccountItem) => {
-    if (!window.confirm(`确认删除 DNS 账号 ${account.name} 吗？`)) {
+  const handleDelete = async (account: DnsAccountItem) => {
+    const confirmed = await confirmDialog({
+      title: '删除 DNS 账号',
+      message: `确认删除 DNS 账号“${account.name}”吗？`,
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
     setFeedback(null);
