@@ -6,7 +6,7 @@
 
 </div>
 
-<p align="center
+<p align="center">
   <a href="https://raw.githubusercontent.com/SatanDS/OpenCDN/main/LICENSE">
     <img src="https://img.shields.io/github/license/SatanDS/OpenCDN?color=brightgreen" alt="license">
   </a>
@@ -23,14 +23,7 @@
 
 ## 文档
 
-**https://open-flare.pages.dev**
-
-常用入口：
-
-* [快速开始](https://open-flare.pages.dev/guide/quick-start)
-* [部署说明](https://open-flare.pages.dev/guide/deployment)
-* [配置项参考](https://open-flare.pages.dev/reference/configuration)
-* [系统设计](https://open-flare.pages.dev/design/)
+文档内容已随仓库维护，位于 `docs/` 目录。
 
 ## 核心能力
 
@@ -90,6 +83,38 @@ docker compose up -d
 
 * 用户名：`root`
 * 密码：`123456`
+
+#### HTTPS 反代到管理端
+
+生产环境建议在面板服务器上用 Nginx、OpenResty 或宝塔反向代理对外提供 HTTPS，再转发到 OpenFlare 管理端端口。反代配置必须保留真实客户端 IP 头，否则节点注册和心跳经过反代时可能只能识别到内网 IP。
+
+如果 Docker Compose 使用默认端口映射 `3000:3000`，反代目标是 `http://127.0.0.1:3000`；如果你改成 `3010:3000`，反代目标则改为 `http://127.0.0.1:3010`。
+
+Nginx / OpenResty 示例：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name cdn.example.com;
+
+    ssl_certificate /path/to/fullchain.pem;
+    ssl_certificate_key /path/to/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+宝塔面板可在网站的“反向代理 -> 配置文件”里把 `proxy_set_header` 相关配置加入对应的 `location /` 块，保存后重载 Nginx。
 
 ### 2. 安装 Agent
 
