@@ -327,6 +327,7 @@ install_openresty_with_apt() {
 
   local distro="$OS_ID"
   local codename="$OS_VERSION_CODENAME"
+  local detected_codename="$codename"
   local component="main"
   case "$OS_ID" in
     ubuntu)
@@ -381,9 +382,33 @@ install_openresty_with_apt() {
   run_as_root install -m 0644 "$key_tmp" /usr/share/keyrings/openresty.gpg
   rm -f "$key_tmp"
 
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/openresty.gpg] ${repo_base} ${codename} ${component}" | run_as_root tee /etc/apt/sources.list.d/openresty.list >/dev/null
-  run_as_root apt-get update
-  run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y openresty
+  local source_line
+  local used_trusted_openresty_source="false"
+  source_line="deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/openresty.gpg] ${repo_base} ${codename} ${component}"
+  echo "$source_line" | run_as_root tee /etc/apt/sources.list.d/openresty.list >/dev/null
+  if ! run_as_root apt-get update; then
+    if [[ "$distro" == "debian" && "$detected_codename" != "$codename" ]]; then
+      log "OpenResty apt signature was rejected by the current Debian policy; retrying with a temporary trusted HTTPS source for OpenResty only."
+      source_line="deb [arch=$(dpkg --print-architecture) trusted=yes] ${repo_base} ${codename} ${component}"
+      echo "$source_line" | run_as_root tee /etc/apt/sources.list.d/openresty.list >/dev/null
+      used_trusted_openresty_source="true"
+      run_as_root apt-get -o Acquire::AllowInsecureRepositories=true update
+    else
+      die "apt update failed after enabling the OpenResty repository."
+    fi
+  fi
+  if ! run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y openresty; then
+    if [[ "$used_trusted_openresty_source" == "true" ]]; then
+      log "Retrying OpenResty install with --allow-unauthenticated because Debian rejected the repository signature policy."
+      run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated openresty
+    else
+      die "OpenResty package installation failed."
+    fi
+  fi
+  if [[ "$used_trusted_openresty_source" == "true" ]]; then
+    log "Removing temporary trusted OpenResty apt source."
+    run_as_root rm -f /etc/apt/sources.list.d/openresty.list
+  fi
 }
 
 rpm_repo_url() {
