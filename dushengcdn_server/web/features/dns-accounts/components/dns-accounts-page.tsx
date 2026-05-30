@@ -2,7 +2,6 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 
 import { EmptyState } from '@/components/feedback/empty-state';
@@ -73,15 +72,9 @@ export function DnsAccountsPage() {
       <div className="space-y-6">
         <PageHeader
           title="DNS 账号"
-          description="统一管理 DNS 服务商账号，用于 ACME 证书的 DNS 验证申请。"
+          description="统一管理 DNS 服务商账号，用于 ACME 证书 DNS 验证和 Cloudflare 自动 DNS 调度。"
           action={
             <div className="flex flex-wrap gap-3">
-              <Link
-                href="/website/certificate"
-                className="inline-flex min-h-[46px] items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
-              >
-                返回
-              </Link>
               <PrimaryButton type="button" onClick={() => setIsCreateOpen(true)}>
                 添加账号
               </PrimaryButton>

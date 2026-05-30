@@ -195,8 +195,8 @@ export function NodesPage() {
     <>
       <div className="space-y-6">
         <PageHeader
-          title="节点管理"
-          description="显示节点相关信息。"
+          title="边缘节点 / IP 池"
+          description="统一维护边缘节点、节点池、公网 IP 池、调度权重和排空状态。"
           action={
             <>
               <SecondaryButton type="button" onClick={handleCreate}>
@@ -225,7 +225,7 @@ export function NodesPage() {
         ) : null}
 
         <AppCard
-          title="节点列表"
+          title="边缘节点列表"
           description={filterDescription}
           action={
             <SecondaryButton

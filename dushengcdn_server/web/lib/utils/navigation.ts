@@ -2,7 +2,8 @@ import { dashboardNavigation } from '@/lib/constants/navigation';
 import type { NavigationItem } from '@/types/navigation';
 
 const navigationPathAliases: Record<string, string> = {
-  '/apply-log': '/node',
+  '/website/certificate': '/certificate',
+  '/website/dns-account': '/dns-account',
 };
 
 function normalizeNavigationPath(pathname: string) {

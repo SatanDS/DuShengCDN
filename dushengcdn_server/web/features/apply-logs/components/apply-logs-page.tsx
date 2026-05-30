@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -183,12 +182,6 @@ export function ApplyLogsPage() {
             >
               删除日志
             </PrimaryButton>
-            <Link
-              href="/node"
-              className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
-            >
-              返回节点
-            </Link>
           </div>
         }
       />

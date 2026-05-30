@@ -186,7 +186,7 @@ export function ProxyRoutesPage() {
   if (routesQuery.isError) {
     return (
       <ErrorState
-        title="规则列表加载失败"
+        title="网站配置加载失败"
         description={getErrorMessage(routesQuery.error)}
       />
     );
@@ -196,7 +196,7 @@ export function ProxyRoutesPage() {
     <>
       <div className="space-y-6">
         <PageHeader
-          title="规则配置"
+          title="网站配置"
           action={
             <div className="flex flex-wrap gap-3">
               <SecondaryButton
@@ -213,7 +213,7 @@ export function ProxyRoutesPage() {
                   setIsCreateOpen(true);
                 }}
               >
-                新建规则
+                新建网站配置
               </PrimaryButton>
             </div>
           }
@@ -270,7 +270,7 @@ export function ProxyRoutesPage() {
         </div>
 
         <AppCard
-          title="规则列表"
+          title="网站配置列表"
         >
           <div className="space-y-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -307,10 +307,10 @@ export function ProxyRoutesPage() {
 
             {filteredRoutes.length === 0 ? (
               <EmptyState
-                title={routes.length === 0 ? '暂无网站' : '没有匹配结果'}
+                title={routes.length === 0 ? '暂无网站配置' : '没有匹配结果'}
                 description={
                   routes.length === 0
-                    ? '先创建一个网站，再进入配置子页面继续补齐 HTTPS、缓存和限流。'
+                    ? '先创建一个网站配置，再进入配置子页面继续补齐 HTTPS、缓存和限流。'
                     : '试试调整搜索词，或者清空筛选条件。'
                 }
               />

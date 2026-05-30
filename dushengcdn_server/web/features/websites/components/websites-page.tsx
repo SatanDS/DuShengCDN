@@ -103,38 +103,38 @@ export function WebsitesPage() {
     <>
       <div className="space-y-6">
         <PageHeader
-          title="网站"
-          description="新增网站和添加证书。"
+          title="域名资产"
+          description="维护可复用域名资产和默认证书绑定。"
           action={
             <div className="flex flex-wrap gap-3">
               <Link
-                href="/website/certificate"
+                href="/certificate"
                 className="inline-flex min-h-[46px] items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
               >
-                证书列表
+                TLS 证书
               </Link>
               <PrimaryButton type="button" onClick={handleOpenWebsiteModal}>
-                新增网站
+                新增域名
               </PrimaryButton>
             </div>
           }
         />
 
         <AppCard
-          title="网站列表"
-          description="查看网站绑定的证书、启用状态和更新时间。"
+          title="域名资产列表"
+          description="查看域名绑定的证书、启用状态和更新时间。"
         >
           {managedDomainsQuery.isLoading ? (
             <LoadingState />
           ) : managedDomainsQuery.isError ? (
             <ErrorState
-              title="网站列表加载失败"
+              title="域名资产加载失败"
               description={getErrorMessage(managedDomainsQuery.error)}
             />
           ) : domains.length === 0 ? (
             <EmptyState
-              title="暂无网站"
-              description="点击右上角“新增网站”开始录入。录入时如还没有证书，也可以直接在弹窗里添加。"
+              title="暂无域名资产"
+              description="点击右上角“新增域名”开始录入。录入时如还没有证书，也可以直接在弹窗里添加。"
             />
           ) : (
             <div className="grid gap-4 lg:grid-cols-2">

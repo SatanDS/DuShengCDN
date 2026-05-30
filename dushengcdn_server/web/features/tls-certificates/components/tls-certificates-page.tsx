@@ -147,7 +147,7 @@ export function TlsCertificatesPage() {
                 href="/website"
                 className="inline-flex min-h-[46px] items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
               >
-                返回网站
+                域名资产
               </Link>
               <SecondaryButton
                 type="button"
@@ -160,7 +160,7 @@ export function TlsCertificatesPage() {
                 刷新证书
               </SecondaryButton>
               <Link
-                href="/website/dns-account"
+                href="/dns-account"
                 className="inline-flex min-h-[46px] items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
               >
                 DNS 账号

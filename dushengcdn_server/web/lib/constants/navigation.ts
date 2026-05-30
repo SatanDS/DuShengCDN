@@ -8,18 +8,28 @@ export const dashboardNavigation: NavigationItem[] = [
   },
   {
     href: '/node',
-    label: '节点',
+    label: '节点/IP池',
     icon: 'node',
   },
   {
     href: '/proxy-route',
-    label: '规则',
+    label: '网站配置',
     icon: 'proxy',
   },
   {
     href: '/website',
-    label: '网站',
+    label: '域名资产',
     icon: 'website',
+  },
+  {
+    href: '/dns-account',
+    label: 'DNS账号',
+    icon: 'domain',
+  },
+  {
+    href: '/certificate',
+    label: 'TLS证书',
+    icon: 'certificate',
   },
   {
     href: '/origin',
@@ -28,18 +38,23 @@ export const dashboardNavigation: NavigationItem[] = [
   },
   {
     href: '/config-version',
-    label: '发布',
+    label: '发布版本',
     icon: 'release',
   },
   {
+    href: '/apply-log',
+    label: '应用记录',
+    icon: 'log',
+  },
+  {
     href: '/access-log',
-    label: '日志',
+    label: '访问日志',
     icon: 'log',
   },
 
   {
     href: '/performance',
-    label: '性能',
+    label: '性能观测',
     icon: 'performance',
   },
   {
