@@ -217,6 +217,19 @@ remove_temporary_trusted_openresty_source() {
   fi
 }
 
+disable_default_openresty_service() {
+  if [[ "$OS" != "linux" ]] || ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+  if ! systemctl list-unit-files openresty.service >/dev/null 2>&1; then
+    return
+  fi
+
+  log "Disabling the package default openresty.service; OpenFlare Agent will manage OpenResty directly."
+  run_as_root systemctl disable --now openresty.service >/dev/null 2>&1 || true
+  run_as_root systemctl reset-failed openresty.service >/dev/null 2>&1 || true
+}
+
 load_os_release() {
   OS_ID=""
   OS_ID_LIKE=""
@@ -479,6 +492,7 @@ install_openresty_with_apt() {
     log "Removing temporary trusted OpenResty apt source."
     run_as_root rm -f /etc/apt/sources.list.d/openresty.list
   fi
+  disable_default_openresty_service
 }
 
 rpm_repo_url() {
@@ -611,6 +625,7 @@ ensure_openresty() {
   if OPENRESTY_PATH="$(find_openresty_path)"; then
     finish_pending_openresty_package_configuration
     remove_temporary_trusted_openresty_source
+    disable_default_openresty_service
     return
   fi
 
