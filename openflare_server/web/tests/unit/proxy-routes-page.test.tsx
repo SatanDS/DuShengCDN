@@ -87,6 +87,9 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
     basic_auth_enabled: false,
     basic_auth_username: '',
     basic_auth_password: '',
+    region_restriction_enabled: false,
+    region_restriction_mode: 'block',
+    region_restriction_countries: [],
     dns_auto_sync: false,
     dns_account_id: null,
     dns_zone_id: '',
@@ -255,6 +258,9 @@ describe('Proxy route website pages', () => {
             dns_last_sync_status: '',
             dns_last_sync_message: '',
             dns_last_synced_at: null,
+            region_restriction_enabled: payload.region_restriction_enabled ?? false,
+            region_restriction_mode: payload.region_restriction_mode ?? 'block',
+            region_restriction_countries: payload.region_restriction_countries ?? [],
             remark: payload.remark,
           });
           routes.splice(0, routes.length, created);
@@ -538,6 +544,104 @@ describe('Proxy route website pages', () => {
       cert_ids: [1],
       domain_cert_ids: [1, 0],
       redirect_http: true,
+    });
+  });
+
+  it('saves region restriction settings from config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  region_restriction_enabled:
+                    payload.region_restriction_enabled,
+                  region_restriction_mode: payload.region_restriction_mode,
+                  region_restriction_countries:
+                    payload.region_restriction_countries,
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute(),
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="region" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: '地区限制' }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: /启用地区限制/ }));
+    await user.selectOptions(screen.getByRole('combobox'), 'allow');
+    await user.type(screen.getByRole('textbox'), 'CN, US');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-region-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing region save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      region_restriction_enabled: true,
+      region_restriction_mode: 'allow',
+      region_restriction_countries: ['CN', 'US'],
     });
   });
 });

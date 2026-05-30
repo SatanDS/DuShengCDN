@@ -209,10 +209,44 @@ const cacheSchema = z
     }
   });
 
+const regionRestrictionSchema = z
+  .object({
+    region_restriction_enabled: z.boolean(),
+    region_restriction_mode: z.enum(['allow', 'block']),
+    region_restriction_countries_text: z.string(),
+  })
+  .superRefine((value, context) => {
+    if (!value.region_restriction_enabled) {
+      return;
+    }
+    const countries = parseRegionCountriesText(
+      value.region_restriction_countries_text,
+    );
+    if (countries.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['region_restriction_countries_text'],
+        message: '请至少填写一个国家或地区代码',
+      });
+      return;
+    }
+    for (const country of countries) {
+      if (!/^[A-Z0-9]{2}$/.test(country)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['region_restriction_countries_text'],
+          message: `国家或地区代码格式不合法：${country}`,
+        });
+        return;
+      }
+    }
+  });
+
 type DomainSettingsValues = z.infer<typeof domainSettingsSchema>;
 type RateLimitValues = z.infer<typeof rateLimitSchema>;
 type ReverseProxyValues = z.infer<typeof reverseProxySchema>;
 type CacheValues = z.infer<typeof cacheSchema>;
+type RegionRestrictionValues = z.infer<typeof regionRestrictionSchema>;
 
 type DNSAutomationValues = {
   dns_auto_sync: boolean;
@@ -261,6 +295,13 @@ function buildDomainRows(route: ProxyRouteItem) {
     route.domain_cert_ids,
     selectedCertIDs,
   );
+}
+
+function parseRegionCountriesText(value: string) {
+  return value
+    .split(/[\s,，;；]+/)
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
 }
 
 function ConfigSectionShell({
@@ -1245,6 +1286,112 @@ function PowSection({
   );
 }
 
+function RegionRestrictionSection({
+  route,
+  saving,
+  onSave,
+}: {
+  route: ProxyRouteItem;
+  saving: boolean;
+  onSave: SaveHandler;
+}) {
+  const form = useForm<RegionRestrictionValues>({
+    resolver: zodResolver(regionRestrictionSchema),
+    defaultValues: {
+      region_restriction_enabled: route.region_restriction_enabled,
+      region_restriction_mode: route.region_restriction_mode || 'block',
+      region_restriction_countries_text:
+        route.region_restriction_countries.join('\n'),
+    },
+  });
+
+  useEffect(() => {
+    form.reset({
+      region_restriction_enabled: route.region_restriction_enabled,
+      region_restriction_mode: route.region_restriction_mode || 'block',
+      region_restriction_countries_text:
+        route.region_restriction_countries.join('\n'),
+    });
+  }, [form, route]);
+
+  const watchedEnabled = form.watch('region_restriction_enabled');
+  const watchedMode = form.watch('region_restriction_mode');
+
+  return (
+    <ConfigSectionShell
+      title="地区限制"
+      description="基于 Cloudflare CF-IPCountry 请求头按国家或地区代码放行或拦截访问。"
+      formId="proxy-route-region-form"
+      saving={saving}
+    >
+      <form
+        id="proxy-route-region-form"
+        className="space-y-5"
+        onSubmit={form.handleSubmit((values) => {
+          const countries = parseRegionCountriesText(
+            values.region_restriction_countries_text,
+          );
+          onSave(
+            buildPayloadFromRoute(route, {
+              region_restriction_enabled: values.region_restriction_enabled,
+              region_restriction_mode: values.region_restriction_mode,
+              region_restriction_countries: values.region_restriction_enabled
+                ? countries
+                : [],
+            }),
+            { message: '地区限制已保存。' },
+          );
+        })}
+      >
+        <ToggleField
+          label="启用地区限制"
+          description="开启后，发布配置并由 Agent 应用后才会在节点侧生效。"
+          checked={watchedEnabled}
+          onChange={(checked) =>
+            form.setValue('region_restriction_enabled', checked, {
+              shouldDirty: true,
+            })
+          }
+        />
+
+        <ResourceField
+          label="限制模式"
+          hint={
+            watchedMode === 'allow'
+              ? '只允许列表内地区访问；无法识别地区的请求也会被拒绝。'
+              : '拒绝列表内地区访问；无法识别地区的请求会继续放行。'
+          }
+        >
+          <ResourceSelect
+            disabled={!watchedEnabled}
+            {...form.register('region_restriction_mode')}
+          >
+            <option value="block">拦截列表内地区</option>
+            <option value="allow">只允许列表内地区</option>
+          </ResourceSelect>
+        </ResourceField>
+
+        <ResourceField
+          label="国家/地区代码"
+          hint="每行或用逗号分隔一个 ISO 3166-1 两位代码，例如 CN、US、HK。"
+          error={form.formState.errors.region_restriction_countries_text?.message}
+        >
+          <ResourceTextarea
+            disabled={!watchedEnabled}
+            className="min-h-36"
+            placeholder={'CN\nUS\nHK'}
+            {...form.register('region_restriction_countries_text')}
+          />
+        </ResourceField>
+
+        <div className="rounded-2xl border border-[var(--status-info-border)] bg-[var(--status-info-soft)] px-4 py-3 text-sm leading-6 text-[var(--status-info-foreground)]">
+          该功能依赖 Cloudflare 代理向节点转发的 CF-IPCountry 头。建议配合橙云或可信反代使用，并避免源站端口直接暴露到公网。
+        </div>
+      </form>
+    </ConfigSectionShell>
+  );
+}
+
 const basicAuthSchema = z
   .object({
     basic_auth_enabled: z.boolean(),
@@ -1594,6 +1741,16 @@ export function ProxyRouteConfigPage({
 
           {currentSection === 'pow' ? (
             <PowSection
+              route={route}
+              saving={saveMutation.isPending}
+              onSave={(payload, context) =>
+                saveMutation.mutate({ payload, context })
+              }
+            />
+          ) : null}
+
+          {currentSection === 'region' ? (
+            <RegionRestrictionSection
               route={route}
               saving={saveMutation.isPending}
               onSave={(payload, context) =>

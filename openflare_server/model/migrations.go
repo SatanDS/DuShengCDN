@@ -1418,6 +1418,30 @@ func validateDatabaseSchemaV13(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV14 adds country/region restriction fields to proxy_routes.
+func migrateV14(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDatabaseSchemaV14(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV13(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "region_restriction_enabled") {
+		return fmt.Errorf("column proxy_routes.region_restriction_enabled is missing")
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "region_restriction_mode") {
+		return fmt.Errorf("column proxy_routes.region_restriction_mode is missing")
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "region_restriction_countries") {
+		return fmt.Errorf("column proxy_routes.region_restriction_countries is missing")
+	}
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1432,6 +1456,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 10, toVersion: 11, migrate: migrateV11, validate: validateDatabaseSchemaV11},
 		{fromVersion: 11, toVersion: 12, migrate: migrateV12, validate: validateDatabaseSchemaV12},
 		{fromVersion: 12, toVersion: 13, migrate: migrateV13, validate: validateDatabaseSchemaV13},
+		{fromVersion: 13, toVersion: 14, migrate: migrateV14, validate: validateDatabaseSchemaV14},
 	}
 }
 

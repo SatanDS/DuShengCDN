@@ -1158,6 +1158,39 @@ func TestDiffConfigVersionDetectsBasicAuthChanges(t *testing.T) {
 	}
 }
 
+func TestPublishConfigVersionRendersRegionRestriction(t *testing.T) {
+	setupServiceTestDB(t)
+
+	_, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:                     "region.example.com",
+		OriginURL:                  "https://origin.internal",
+		Enabled:                    true,
+		RegionRestrictionEnabled:   true,
+		RegionRestrictionMode:      "allow",
+		RegionRestrictionCountries: []string{"cn", "US", "cn"},
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	result, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if !strings.Contains(result.Version.RenderedConfig, `if ($http_cf_ipcountry !~* "^(?:CN|US)$")`) {
+		t.Fatalf("expected rendered config to include allow-list region restriction, got %s", result.Version.RenderedConfig)
+	}
+	if !strings.Contains(result.Version.RenderedConfig, "return 403;") {
+		t.Fatal("expected region restriction to return 403")
+	}
+	if !strings.Contains(result.Version.SnapshotJSON, `"region_restriction_enabled":true`) {
+		t.Fatal("expected snapshot to include region restriction enabled state")
+	}
+	if !strings.Contains(result.Version.SnapshotJSON, `"region_restriction_countries":["CN","US"]`) {
+		t.Fatalf("expected snapshot to normalize region countries, got %s", result.Version.SnapshotJSON)
+	}
+}
+
 func TestRenderConfigUsesDefaultServerFallback(t *testing.T) {
 	setupServiceTestDB(t)
 

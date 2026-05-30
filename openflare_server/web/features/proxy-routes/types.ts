@@ -52,6 +52,9 @@ export interface ProxyRouteItem {
   basic_auth_enabled: boolean;
   basic_auth_username: string;
   basic_auth_password: string;
+  region_restriction_enabled: boolean;
+  region_restriction_mode: 'allow' | 'block';
+  region_restriction_countries: string[];
   dns_auto_sync: boolean;
   dns_account_id: number | null;
   dns_zone_id: string;
@@ -100,6 +103,9 @@ export interface ProxyRouteMutationPayload {
   basic_auth_enabled: boolean;
   basic_auth_username?: string;
   basic_auth_password?: string;
+  region_restriction_enabled?: boolean;
+  region_restriction_mode?: 'allow' | 'block';
+  region_restriction_countries?: string[];
   dns_auto_sync?: boolean;
   dns_account_id?: number | null;
   dns_zone_id?: string;

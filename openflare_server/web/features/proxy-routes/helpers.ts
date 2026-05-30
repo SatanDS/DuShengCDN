@@ -36,6 +36,11 @@ export const websiteConfigSections = [
     description: '配置 Proof-of-Work 反爬虫策略。',
   },
   {
+    key: 'region',
+    label: '地区限制',
+    description: '按国家或地区代码放行或拦截访问。',
+  },
+  {
     key: 'auth',
     label: '认证配置',
     description: '配置基础鉴权访问，需要输入账号密码才能访问网站。',
@@ -305,6 +310,9 @@ export function buildPayloadFromRoute(
     basic_auth_enabled: route.basic_auth_enabled,
     basic_auth_username: route.basic_auth_username,
     basic_auth_password: route.basic_auth_password,
+    region_restriction_enabled: route.region_restriction_enabled,
+    region_restriction_mode: route.region_restriction_mode,
+    region_restriction_countries: route.region_restriction_countries,
     dns_auto_sync: route.dns_auto_sync,
     dns_account_id: route.dns_account_id,
     dns_zone_id: route.dns_zone_id,

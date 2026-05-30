@@ -17,12 +17,15 @@ import (
 var proxyHeaderKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var proxyRouteLimitRatePattern = regexp.MustCompile(`^\d+(?:[kKmM])?$`)
 var proxyRouteDomainLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var proxyRouteRegionCountryPattern = regexp.MustCompile(`^[A-Z0-9]{2}$`)
 
 const (
 	proxyRouteCachePolicyURL        = "url"
 	proxyRouteCachePolicySuffix     = "suffix"
 	proxyRouteCachePolicyPathPrefix = "path_prefix"
 	proxyRouteCachePolicyPathExact  = "path_exact"
+	proxyRouteRegionModeAllow       = "allow"
+	proxyRouteRegionModeBlock       = "block"
 )
 
 type ProxyRouteCustomHeaderInput struct {
@@ -31,95 +34,101 @@ type ProxyRouteCustomHeaderInput struct {
 }
 
 type ProxyRouteInput struct {
-	SiteName           string                        `json:"site_name"`
-	Domain             string                        `json:"domain"`
-	Domains            []string                      `json:"domains"`
-	OriginID           *uint                         `json:"origin_id"`
-	OriginURL          string                        `json:"origin_url"`
-	OriginScheme       string                        `json:"origin_scheme"`
-	OriginAddress      string                        `json:"origin_address"`
-	OriginPort         string                        `json:"origin_port"`
-	OriginURI          string                        `json:"origin_uri"`
-	OriginHost         string                        `json:"origin_host"`
-	Upstreams          []string                      `json:"upstreams"`
-	Enabled            bool                          `json:"enabled"`
-	EnableHTTPS        bool                          `json:"enable_https"`
-	CertID             *uint                         `json:"cert_id"`
-	CertIDs            []uint                        `json:"cert_ids"`
-	DomainCertIDs      []uint                        `json:"domain_cert_ids"`
-	RedirectHTTP       bool                          `json:"redirect_http"`
-	LimitConnPerServer int                           `json:"limit_conn_per_server"`
-	LimitConnPerIP     int                           `json:"limit_conn_per_ip"`
-	LimitRate          string                        `json:"limit_rate"`
-	CacheEnabled       bool                          `json:"cache_enabled"`
-	CachePolicy        string                        `json:"cache_policy"`
-	CacheRules         []string                      `json:"cache_rules"`
-	CustomHeaders      []ProxyRouteCustomHeaderInput `json:"custom_headers"`
-	PoWEnabled         bool                          `json:"pow_enabled"`
-	PoWConfig          string                        `json:"pow_config"`
-	BasicAuthEnabled   bool                          `json:"basic_auth_enabled"`
-	BasicAuthUsername  string                        `json:"basic_auth_username"`
-	BasicAuthPassword  string                        `json:"basic_auth_password"`
-	DNSAutoSync        bool                          `json:"dns_auto_sync"`
-	DNSAccountID       *uint                         `json:"dns_account_id"`
-	DNSZoneID          string                        `json:"dns_zone_id"`
-	DNSRecordType      string                        `json:"dns_record_type"`
-	DNSRecordName      string                        `json:"dns_record_name"`
-	DNSRecordContent   string                        `json:"dns_record_content"`
-	DNSAutoTarget      bool                          `json:"dns_auto_target"`
-	CloudflareProxied  bool                          `json:"cloudflare_proxied"`
-	DDOSProtectionMode string                        `json:"ddos_protection_mode"`
-	Remark             string                        `json:"remark"`
+	SiteName                   string                        `json:"site_name"`
+	Domain                     string                        `json:"domain"`
+	Domains                    []string                      `json:"domains"`
+	OriginID                   *uint                         `json:"origin_id"`
+	OriginURL                  string                        `json:"origin_url"`
+	OriginScheme               string                        `json:"origin_scheme"`
+	OriginAddress              string                        `json:"origin_address"`
+	OriginPort                 string                        `json:"origin_port"`
+	OriginURI                  string                        `json:"origin_uri"`
+	OriginHost                 string                        `json:"origin_host"`
+	Upstreams                  []string                      `json:"upstreams"`
+	Enabled                    bool                          `json:"enabled"`
+	EnableHTTPS                bool                          `json:"enable_https"`
+	CertID                     *uint                         `json:"cert_id"`
+	CertIDs                    []uint                        `json:"cert_ids"`
+	DomainCertIDs              []uint                        `json:"domain_cert_ids"`
+	RedirectHTTP               bool                          `json:"redirect_http"`
+	LimitConnPerServer         int                           `json:"limit_conn_per_server"`
+	LimitConnPerIP             int                           `json:"limit_conn_per_ip"`
+	LimitRate                  string                        `json:"limit_rate"`
+	CacheEnabled               bool                          `json:"cache_enabled"`
+	CachePolicy                string                        `json:"cache_policy"`
+	CacheRules                 []string                      `json:"cache_rules"`
+	CustomHeaders              []ProxyRouteCustomHeaderInput `json:"custom_headers"`
+	PoWEnabled                 bool                          `json:"pow_enabled"`
+	PoWConfig                  string                        `json:"pow_config"`
+	BasicAuthEnabled           bool                          `json:"basic_auth_enabled"`
+	BasicAuthUsername          string                        `json:"basic_auth_username"`
+	BasicAuthPassword          string                        `json:"basic_auth_password"`
+	RegionRestrictionEnabled   bool                          `json:"region_restriction_enabled"`
+	RegionRestrictionMode      string                        `json:"region_restriction_mode"`
+	RegionRestrictionCountries []string                      `json:"region_restriction_countries"`
+	DNSAutoSync                bool                          `json:"dns_auto_sync"`
+	DNSAccountID               *uint                         `json:"dns_account_id"`
+	DNSZoneID                  string                        `json:"dns_zone_id"`
+	DNSRecordType              string                        `json:"dns_record_type"`
+	DNSRecordName              string                        `json:"dns_record_name"`
+	DNSRecordContent           string                        `json:"dns_record_content"`
+	DNSAutoTarget              bool                          `json:"dns_auto_target"`
+	CloudflareProxied          bool                          `json:"cloudflare_proxied"`
+	DDOSProtectionMode         string                        `json:"ddos_protection_mode"`
+	Remark                     string                        `json:"remark"`
 }
 
 type ProxyRouteView struct {
-	ID                 uint                          `json:"id"`
-	SiteName           string                        `json:"site_name"`
-	Domain             string                        `json:"domain"`
-	Domains            []string                      `json:"domains"`
-	PrimaryDomain      string                        `json:"primary_domain"`
-	DomainCount        int                           `json:"domain_count"`
-	OriginID           *uint                         `json:"origin_id"`
-	OriginURL          string                        `json:"origin_url"`
-	OriginHost         string                        `json:"origin_host"`
-	Upstreams          string                        `json:"upstreams"`
-	UpstreamList       []string                      `json:"upstream_list"`
-	Enabled            bool                          `json:"enabled"`
-	EnableHTTPS        bool                          `json:"enable_https"`
-	CertID             *uint                         `json:"cert_id"`
-	CertIDs            []uint                        `json:"cert_ids"`
-	DomainCertIDs      []uint                        `json:"domain_cert_ids"`
-	RedirectHTTP       bool                          `json:"redirect_http"`
-	LimitConnPerServer int                           `json:"limit_conn_per_server"`
-	LimitConnPerIP     int                           `json:"limit_conn_per_ip"`
-	LimitRate          string                        `json:"limit_rate"`
-	CacheEnabled       bool                          `json:"cache_enabled"`
-	CachePolicy        string                        `json:"cache_policy"`
-	CacheRules         string                        `json:"cache_rules"`
-	CacheRuleList      []string                      `json:"cache_rule_list"`
-	CustomHeaders      string                        `json:"custom_headers"`
-	CustomHeaderList   []ProxyRouteCustomHeaderInput `json:"custom_header_list"`
-	PoWEnabled         bool                          `json:"pow_enabled"`
-	PoWConfig          *ProxyRoutePoWConfig          `json:"pow_config"`
-	BasicAuthEnabled   bool                          `json:"basic_auth_enabled"`
-	BasicAuthUsername  string                        `json:"basic_auth_username"`
-	BasicAuthPassword  string                        `json:"basic_auth_password"`
-	DNSAutoSync        bool                          `json:"dns_auto_sync"`
-	DNSAccountID       *uint                         `json:"dns_account_id"`
-	DNSZoneID          string                        `json:"dns_zone_id"`
-	DNSRecordType      string                        `json:"dns_record_type"`
-	DNSRecordName      string                        `json:"dns_record_name"`
-	DNSRecordContent   string                        `json:"dns_record_content"`
-	DNSAutoTarget      bool                          `json:"dns_auto_target"`
-	DNSRecordIDs       map[string]string             `json:"dns_record_ids"`
-	CloudflareProxied  bool                          `json:"cloudflare_proxied"`
-	DDOSProtectionMode string                        `json:"ddos_protection_mode"`
-	DNSLastSyncStatus  string                        `json:"dns_last_sync_status"`
-	DNSLastSyncMessage string                        `json:"dns_last_sync_message"`
-	DNSLastSyncedAt    *time.Time                    `json:"dns_last_synced_at"`
-	Remark             string                        `json:"remark"`
-	CreatedAt          time.Time                     `json:"created_at"`
-	UpdatedAt          time.Time                     `json:"updated_at"`
+	ID                         uint                          `json:"id"`
+	SiteName                   string                        `json:"site_name"`
+	Domain                     string                        `json:"domain"`
+	Domains                    []string                      `json:"domains"`
+	PrimaryDomain              string                        `json:"primary_domain"`
+	DomainCount                int                           `json:"domain_count"`
+	OriginID                   *uint                         `json:"origin_id"`
+	OriginURL                  string                        `json:"origin_url"`
+	OriginHost                 string                        `json:"origin_host"`
+	Upstreams                  string                        `json:"upstreams"`
+	UpstreamList               []string                      `json:"upstream_list"`
+	Enabled                    bool                          `json:"enabled"`
+	EnableHTTPS                bool                          `json:"enable_https"`
+	CertID                     *uint                         `json:"cert_id"`
+	CertIDs                    []uint                        `json:"cert_ids"`
+	DomainCertIDs              []uint                        `json:"domain_cert_ids"`
+	RedirectHTTP               bool                          `json:"redirect_http"`
+	LimitConnPerServer         int                           `json:"limit_conn_per_server"`
+	LimitConnPerIP             int                           `json:"limit_conn_per_ip"`
+	LimitRate                  string                        `json:"limit_rate"`
+	CacheEnabled               bool                          `json:"cache_enabled"`
+	CachePolicy                string                        `json:"cache_policy"`
+	CacheRules                 string                        `json:"cache_rules"`
+	CacheRuleList              []string                      `json:"cache_rule_list"`
+	CustomHeaders              string                        `json:"custom_headers"`
+	CustomHeaderList           []ProxyRouteCustomHeaderInput `json:"custom_header_list"`
+	PoWEnabled                 bool                          `json:"pow_enabled"`
+	PoWConfig                  *ProxyRoutePoWConfig          `json:"pow_config"`
+	BasicAuthEnabled           bool                          `json:"basic_auth_enabled"`
+	BasicAuthUsername          string                        `json:"basic_auth_username"`
+	BasicAuthPassword          string                        `json:"basic_auth_password"`
+	RegionRestrictionEnabled   bool                          `json:"region_restriction_enabled"`
+	RegionRestrictionMode      string                        `json:"region_restriction_mode"`
+	RegionRestrictionCountries []string                      `json:"region_restriction_countries"`
+	DNSAutoSync                bool                          `json:"dns_auto_sync"`
+	DNSAccountID               *uint                         `json:"dns_account_id"`
+	DNSZoneID                  string                        `json:"dns_zone_id"`
+	DNSRecordType              string                        `json:"dns_record_type"`
+	DNSRecordName              string                        `json:"dns_record_name"`
+	DNSRecordContent           string                        `json:"dns_record_content"`
+	DNSAutoTarget              bool                          `json:"dns_auto_target"`
+	DNSRecordIDs               map[string]string             `json:"dns_record_ids"`
+	CloudflareProxied          bool                          `json:"cloudflare_proxied"`
+	DDOSProtectionMode         string                        `json:"ddos_protection_mode"`
+	DNSLastSyncStatus          string                        `json:"dns_last_sync_status"`
+	DNSLastSyncMessage         string                        `json:"dns_last_sync_message"`
+	DNSLastSyncedAt            *time.Time                    `json:"dns_last_synced_at"`
+	Remark                     string                        `json:"remark"`
+	CreatedAt                  time.Time                     `json:"created_at"`
+	UpdatedAt                  time.Time                     `json:"updated_at"`
 }
 
 func ListProxyRoutes() ([]*ProxyRouteView, error) {
@@ -246,6 +255,18 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
+	regionMode, regionCountries, err := normalizeProxyRouteRegionRestriction(
+		input.RegionRestrictionEnabled,
+		input.RegionRestrictionMode,
+		input.RegionRestrictionCountries,
+	)
+	if err != nil {
+		return nil, err
+	}
+	regionCountriesJSON, err := json.Marshal(regionCountries)
+	if err != nil {
+		return nil, err
+	}
 
 	powConfig, err := normalizePoWConfig(input.PoWEnabled, input.PoWConfig)
 	if err != nil {
@@ -348,6 +369,9 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.BasicAuthEnabled = input.BasicAuthEnabled
 	route.BasicAuthUsername = input.BasicAuthUsername
 	route.BasicAuthPassword = input.BasicAuthPassword
+	route.RegionRestrictionEnabled = input.RegionRestrictionEnabled
+	route.RegionRestrictionMode = regionMode
+	route.RegionRestrictionCountries = string(regionCountriesJSON)
 	route.DNSAutoSync = input.DNSAutoSync
 	route.DNSAccountID = dnsAccountID
 	route.DNSZoneID = dnsZoneID
@@ -397,6 +421,10 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 	if err != nil {
 		return nil, err
 	}
+	regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
+	if err != nil {
+		return nil, err
+	}
 	certIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
 	if err != nil {
 		return nil, err
@@ -411,53 +439,56 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 	}
 	primaryDomain := domains[0]
 	return &ProxyRouteView{
-		ID:                 route.ID,
-		SiteName:           normalizeProxyRouteSiteNameInput(route, route.SiteName, primaryDomain),
-		Domain:             primaryDomain,
-		Domains:            domains,
-		PrimaryDomain:      primaryDomain,
-		DomainCount:        len(domains),
-		OriginID:           route.OriginID,
-		OriginURL:          route.OriginURL,
-		OriginHost:         route.OriginHost,
-		Upstreams:          route.Upstreams,
-		UpstreamList:       upstreams,
-		Enabled:            route.Enabled,
-		EnableHTTPS:        route.EnableHTTPS,
-		CertID:             certID,
-		CertIDs:            certIDs,
-		DomainCertIDs:      domainCertIDs,
-		RedirectHTTP:       route.RedirectHTTP,
-		LimitConnPerServer: route.LimitConnPerServer,
-		LimitConnPerIP:     route.LimitConnPerIP,
-		LimitRate:          route.LimitRate,
-		CacheEnabled:       route.CacheEnabled,
-		CachePolicy:        route.CachePolicy,
-		CacheRules:         route.CacheRules,
-		CacheRuleList:      cacheRules,
-		CustomHeaders:      route.CustomHeaders,
-		CustomHeaderList:   customHeaders,
-		PoWEnabled:         route.PoWEnabled,
-		PoWConfig:          powConfig,
-		BasicAuthEnabled:   route.BasicAuthEnabled,
-		BasicAuthUsername:  route.BasicAuthUsername,
-		BasicAuthPassword:  route.BasicAuthPassword,
-		DNSAutoSync:        route.DNSAutoSync,
-		DNSAccountID:       route.DNSAccountID,
-		DNSZoneID:          route.DNSZoneID,
-		DNSRecordType:      normalizeDNSRecordType(route.DNSRecordType),
-		DNSRecordName:      route.DNSRecordName,
-		DNSRecordContent:   route.DNSRecordContent,
-		DNSAutoTarget:      route.DNSAutoTarget,
-		DNSRecordIDs:       decodeDNSRecordIDs(route.DNSRecordIDs),
-		CloudflareProxied:  route.CloudflareProxied,
-		DDOSProtectionMode: normalizeDDOSProtectionMode(route.DDOSProtectionMode),
-		DNSLastSyncStatus:  route.DNSLastSyncStatus,
-		DNSLastSyncMessage: route.DNSLastSyncMessage,
-		DNSLastSyncedAt:    route.DNSLastSyncedAt,
-		Remark:             route.Remark,
-		CreatedAt:          route.CreatedAt,
-		UpdatedAt:          route.UpdatedAt,
+		ID:                         route.ID,
+		SiteName:                   normalizeProxyRouteSiteNameInput(route, route.SiteName, primaryDomain),
+		Domain:                     primaryDomain,
+		Domains:                    domains,
+		PrimaryDomain:              primaryDomain,
+		DomainCount:                len(domains),
+		OriginID:                   route.OriginID,
+		OriginURL:                  route.OriginURL,
+		OriginHost:                 route.OriginHost,
+		Upstreams:                  route.Upstreams,
+		UpstreamList:               upstreams,
+		Enabled:                    route.Enabled,
+		EnableHTTPS:                route.EnableHTTPS,
+		CertID:                     certID,
+		CertIDs:                    certIDs,
+		DomainCertIDs:              domainCertIDs,
+		RedirectHTTP:               route.RedirectHTTP,
+		LimitConnPerServer:         route.LimitConnPerServer,
+		LimitConnPerIP:             route.LimitConnPerIP,
+		LimitRate:                  route.LimitRate,
+		CacheEnabled:               route.CacheEnabled,
+		CachePolicy:                route.CachePolicy,
+		CacheRules:                 route.CacheRules,
+		CacheRuleList:              cacheRules,
+		CustomHeaders:              route.CustomHeaders,
+		CustomHeaderList:           customHeaders,
+		PoWEnabled:                 route.PoWEnabled,
+		PoWConfig:                  powConfig,
+		BasicAuthEnabled:           route.BasicAuthEnabled,
+		BasicAuthUsername:          route.BasicAuthUsername,
+		BasicAuthPassword:          route.BasicAuthPassword,
+		RegionRestrictionEnabled:   route.RegionRestrictionEnabled,
+		RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
+		RegionRestrictionCountries: regionCountries,
+		DNSAutoSync:                route.DNSAutoSync,
+		DNSAccountID:               route.DNSAccountID,
+		DNSZoneID:                  route.DNSZoneID,
+		DNSRecordType:              normalizeDNSRecordType(route.DNSRecordType),
+		DNSRecordName:              route.DNSRecordName,
+		DNSRecordContent:           route.DNSRecordContent,
+		DNSAutoTarget:              route.DNSAutoTarget,
+		DNSRecordIDs:               decodeDNSRecordIDs(route.DNSRecordIDs),
+		CloudflareProxied:          route.CloudflareProxied,
+		DDOSProtectionMode:         normalizeDDOSProtectionMode(route.DDOSProtectionMode),
+		DNSLastSyncStatus:          route.DNSLastSyncStatus,
+		DNSLastSyncMessage:         route.DNSLastSyncMessage,
+		DNSLastSyncedAt:            route.DNSLastSyncedAt,
+		Remark:                     route.Remark,
+		CreatedAt:                  route.CreatedAt,
+		UpdatedAt:                  route.UpdatedAt,
 	}, nil
 }
 
@@ -1043,6 +1074,59 @@ func decodeStoredCustomHeaders(raw string) ([]ProxyRouteCustomHeaderInput, error
 		return nil, errors.New("custom_headers payload is invalid")
 	}
 	return normalizeCustomHeaders(headers)
+}
+
+func normalizeProxyRouteRegionRestrictionMode(raw string) string {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case proxyRouteRegionModeAllow, proxyRouteRegionModeBlock:
+		return mode
+	default:
+		return proxyRouteRegionModeBlock
+	}
+}
+
+func normalizeProxyRouteRegionRestriction(enabled bool, rawMode string, rawCountries []string) (string, []string, error) {
+	mode := normalizeProxyRouteRegionRestrictionMode(rawMode)
+	if !enabled {
+		return mode, []string{}, nil
+	}
+	countries := make([]string, 0, len(rawCountries))
+	seen := make(map[string]struct{}, len(rawCountries))
+	for _, rawCountry := range rawCountries {
+		country := strings.ToUpper(strings.TrimSpace(rawCountry))
+		if country == "" {
+			continue
+		}
+		if !proxyRouteRegionCountryPattern.MatchString(country) {
+			return "", nil, fmt.Errorf("region country code %q is invalid", rawCountry)
+		}
+		if _, ok := seen[country]; ok {
+			continue
+		}
+		seen[country] = struct{}{}
+		countries = append(countries, country)
+	}
+	if len(countries) == 0 {
+		return "", nil, errors.New("region restriction requires at least one country code")
+	}
+	return mode, countries, nil
+}
+
+func decodeStoredRegionRestrictionCountries(raw string) ([]string, error) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return []string{}, nil
+	}
+	var countries []string
+	if err := json.Unmarshal([]byte(text), &countries); err != nil {
+		return nil, errors.New("region_restriction_countries payload is invalid")
+	}
+	_, normalized, err := normalizeProxyRouteRegionRestriction(len(countries) > 0, proxyRouteRegionModeBlock, countries)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 func normalizeCachePolicy(enabled bool, raw string) string {

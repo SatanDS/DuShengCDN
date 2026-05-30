@@ -234,6 +234,9 @@ export function ProxyRouteCreateDrawer({
         basic_auth_enabled: false,
         basic_auth_username: '',
         basic_auth_password: '',
+        region_restriction_enabled: false,
+        region_restriction_mode: 'block',
+        region_restriction_countries: [],
         dns_auto_sync: values.dns_auto_sync,
         dns_account_id:
           values.dns_auto_sync && Number.isFinite(dnsAccountID) && dnsAccountID > 0
