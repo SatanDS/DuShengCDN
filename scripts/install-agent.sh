@@ -361,7 +361,17 @@ install_openresty_with_apt() {
     die "cannot detect apt distribution codename. Install OpenResty manually or pass --openresty-path."
   fi
 
+  local repo_base
+  repo_base="$(apt_repository_base_url "$distro")"
+  if [[ "$distro" == "debian" ]] && [[ "$codename" == "trixie" || "$codename" == "testing" || "$codename" == "sid" ]]; then
+    if ! curl -fsSL -o /dev/null "${repo_base}/dists/${codename}/Release"; then
+      log "OpenResty apt repository does not provide ${codename}; falling back to Debian bookworm packages."
+      codename="bookworm"
+    fi
+  fi
+
   log "Installing OpenResty via apt (${distro} ${codename})..."
+  run_as_root rm -f /etc/apt/sources.list.d/openresty.list
   run_as_root apt-get update
   run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg
 
@@ -371,7 +381,7 @@ install_openresty_with_apt() {
   run_as_root install -m 0644 "$key_tmp" /usr/share/keyrings/openresty.gpg
   rm -f "$key_tmp"
 
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/openresty.gpg] $(apt_repository_base_url "$distro") ${codename} ${component}" | run_as_root tee /etc/apt/sources.list.d/openresty.list >/dev/null
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/openresty.gpg] ${repo_base} ${codename} ${component}" | run_as_root tee /etc/apt/sources.list.d/openresty.list >/dev/null
   run_as_root apt-get update
   run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y openresty
 }
