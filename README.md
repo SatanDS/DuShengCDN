@@ -32,6 +32,7 @@
 * Agent 自动注册、心跳、同步、校验、reload 与失败回滚
 * OpenResty 主配置、性能参数、缓存参数与 Lua 资源托管
 * 本地 GeoIP 地区限制、真实客户端 IP 国家码识别、IP 国家码缓存与在线精确查询 API 回退
+* 可选本地轻量 WAF，支持观察/拦截模式、内置攻击规则、白名单与自定义规则
 * TLS 证书、域名资产、节点凭证与版本状态管理
 * Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换与 DDoS 自动切换橙云
 * Agent 安装环境检测、Release 二进制下载、自动更新与删除节点联动卸载
@@ -271,6 +272,18 @@ GeoIP 地区限制说明：
 * Agent 会自动下载并更新 Country 数据库，默认来源为 `https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb`，默认路径为 Agent 数据目录下的 `var/lib/openflare/geoip/GeoLite2-Country.mmdb`，默认每 24 小时检查更新一次。
 * 如你后续搭建自己的在线 IP 精确查询服务，可在 Agent 配置里设置 `geoip_lookup_api_url` 和 `geoip_lookup_api_token`，或安装时追加 `--geoip-api-url`、`--geoip-api-token`；查询顺序是先本地 GeoIP，未识别到国家码时再请求 API。API 返回 JSON 中的 `country_code`、`countryCode`、`iso_code`、`isoCode` 或 `country` 字段均可识别。
 * 修改地区限制后需要发布并激活新配置，Agent 应用 OpenResty 配置后才会在节点侧生效。
+
+本地 WAF 说明：
+
+* WAF 是独立于 GeoIP 的可选本地模块，默认关闭；GeoIP 负责“哪个地区能访问”，WAF 负责“请求是否像攻击或扫描”。
+* 进入 `反代规则` -> 选择站点 `配置` -> 左侧 `WAF 防护` 分区，可以为单个站点启用 WAF。
+* 节点访问处理顺序为：真实 IP 识别 -> GeoIP 地区限制 -> WAF -> PoW -> 反向代理源站。
+* `观察模式` 只记录命中的规则并继续放行，适合上线前观察误杀；`拦截模式` 会对命中的请求直接返回 `403`。
+* 内置规则支持 SQL 注入、XSS、路径穿越、敏感路径扫描和常见恶意工具 User-Agent。
+* 白名单支持 IP、IP CIDR、路径；路径支持精确匹配，也支持以 `*` 结尾的前缀匹配，例如 `/api/public/*`。
+* 自定义拦截规则支持路径包含、路径正则、查询参数包含、请求头包含和 User-Agent 包含。
+* 当前 WAF 是轻量本地规则引擎，不是完整 ModSecurity / OWASP CRS；优点是部署简单、资源占用低，复杂规则集可后续再扩展。
+* 修改 WAF 后需要发布并激活新配置，Agent 应用 OpenResty 配置后才会在节点侧生效。
 
 界面交互说明：
 

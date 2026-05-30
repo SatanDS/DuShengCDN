@@ -12,6 +12,7 @@ func renderOpenRestyObservabilityTemplateBlock() string {
 	return stringsJoinLines(
 		"    lua_shared_dict openflare_observability 10m;",
 		"    lua_shared_dict openflare_pow_config 1m;",
+		"    lua_shared_dict openflare_waf_config 1m;",
 		"    lua_shared_dict openflare_pow_challenges 10m;",
 		"    lua_shared_dict openflare_pow_sessions 20m;",
 		"    lua_shared_dict openflare_geoip_cache 20m;",

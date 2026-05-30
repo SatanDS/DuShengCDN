@@ -20,6 +20,28 @@ export interface ProxyRoutePoWConfig {
   blacklist: ProxyRoutePoWListConfig;
 }
 
+export interface ProxyRouteWAFWhitelistConfig {
+  ips: string[];
+  ip_cidrs: string[];
+  paths: string[];
+}
+
+export interface ProxyRouteWAFCustomRules {
+  path_contains: string[];
+  path_regexes: string[];
+  query_contains: string[];
+  header_contains: string[];
+  user_agents: string[];
+}
+
+export interface ProxyRouteWAFConfig {
+  builtin_rules: Array<
+    'sqli' | 'xss' | 'path_traversal' | 'sensitive_paths' | 'bad_bots'
+  >;
+  whitelist: ProxyRouteWAFWhitelistConfig;
+  block_rules: ProxyRouteWAFCustomRules;
+}
+
 export interface ProxyRouteItem {
   id: number;
   site_name: string;
@@ -49,6 +71,9 @@ export interface ProxyRouteItem {
   custom_header_list: ProxyRouteCustomHeader[];
   pow_enabled: boolean;
   pow_config: ProxyRoutePoWConfig;
+  waf_enabled: boolean;
+  waf_mode: 'log' | 'block';
+  waf_config: ProxyRouteWAFConfig;
   basic_auth_enabled: boolean;
   basic_auth_username: string;
   basic_auth_password: string;
@@ -100,6 +125,9 @@ export interface ProxyRouteMutationPayload {
   custom_headers: ProxyRouteCustomHeader[];
   pow_enabled: boolean;
   pow_config: string;
+  waf_enabled?: boolean;
+  waf_mode?: 'log' | 'block';
+  waf_config?: string;
   basic_auth_enabled: boolean;
   basic_auth_username?: string;
   basic_auth_password?: string;

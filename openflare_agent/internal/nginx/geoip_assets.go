@@ -337,6 +337,10 @@ end
 
 function M.run_access()
     M.check_region()
+    local ok_waf, waf = pcall(require, "waf.check")
+    if ok_waf and waf and waf.run then
+        waf.run()
+    end
     local ok_pow, pow = pcall(require, "pow.check")
     if ok_pow and pow and pow.run then
         return pow.run()

@@ -232,6 +232,9 @@ func (m *Manager) writeTargetFiles(mainConfig string, routeConfig string, suppor
 	if err := m.writeRegionConfig(supportFiles); err != nil {
 		return err
 	}
+	if err := m.writeWAFConfig(supportFiles); err != nil {
+		return err
+	}
 	if err := m.ensureMimeTypes(); err != nil {
 		return err
 	}
@@ -302,6 +305,7 @@ func (m *Manager) EnsureLuaAssets() error {
 	}
 	allSupportFiles := append(ManagedObservabilityLuaFiles(), m.managedPowLuaFiles()...)
 	allSupportFiles = append(allSupportFiles, m.managedGeoIPLuaFiles()...)
+	allSupportFiles = append(allSupportFiles, m.managedWAFLuaFiles()...)
 	powStaticFiles, err := ManagedPowStaticFiles()
 	if err != nil {
 		return fmt.Errorf("load pow static files: %w", err)
@@ -528,6 +532,7 @@ type backupState struct {
 	Files        []protocol.SupportFile
 	PowConfig    *protocol.SupportFile
 	RegionConfig *protocol.SupportFile
+	WAFConfig    *protocol.SupportFile
 }
 
 type managedFile struct {
@@ -594,6 +599,11 @@ func (m *Manager) backup() (*backupState, error) {
 		return nil, err
 	}
 	state.RegionConfig = regionConfig
+	wafConfig, err := m.readWAFConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	state.WAFConfig = wafConfig
 	slog.Debug("backup captured", "main_exists", state.MainExisted, "route_exists", state.RouteExisted, "cert_files", len(state.Files))
 	return state, nil
 }
@@ -625,7 +635,10 @@ func (m *Manager) restore(state *backupState) error {
 	if err := m.restorePowConfig(state); err != nil {
 		return err
 	}
-	return m.restoreRegionConfig(state)
+	if err := m.restoreRegionConfig(state); err != nil {
+		return err
+	}
+	return m.restoreWAFConfig(state)
 }
 
 func (m *Manager) writeCertFiles(certFiles []protocol.SupportFile) error {
@@ -681,10 +694,30 @@ func (m *Manager) writeRegionConfig(supportFiles []protocol.SupportFile) error {
 	return nil
 }
 
+func (m *Manager) writeWAFConfig(supportFiles []protocol.SupportFile) error {
+	if m.RuntimeConfigDir == "" {
+		return nil
+	}
+	configPath := filepath.Join(m.RuntimeConfigDir, "waf_config.json")
+	for _, file := range supportFiles {
+		if file.Path == "waf_config.json" {
+			if err := os.WriteFile(configPath, []byte(file.Content), 0o644); err != nil {
+				return fmt.Errorf("write waf_config.json: %w", err)
+			}
+			slog.Info("wrote waf config", "path", configPath, "size", len(file.Content))
+			return nil
+		}
+	}
+	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove waf_config.json: %w", err)
+	}
+	return nil
+}
+
 func (m *Manager) writeManagedCertFiles(certFiles []protocol.SupportFile) error {
 	files := make([]managedFile, 0, len(certFiles))
 	for _, file := range certFiles {
-		if file.Path == "pow_config.json" || file.Path == "region_config.json" {
+		if file.Path == "pow_config.json" || file.Path == "region_config.json" || file.Path == "waf_config.json" {
 			continue
 		}
 		targetPath, err := m.certFileTargetPath(file.Path)
@@ -730,6 +763,9 @@ func (m *Manager) readCertFiles() ([]protocol.SupportFile, error) {
 			return nil
 		}
 		if filepath.ToSlash(relativePath) == "region_config.json" {
+			return nil
+		}
+		if filepath.ToSlash(relativePath) == "waf_config.json" {
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -787,6 +823,24 @@ func (m *Manager) readRegionConfigFile() (*protocol.SupportFile, error) {
 	}, nil
 }
 
+func (m *Manager) readWAFConfigFile() (*protocol.SupportFile, error) {
+	if m.RuntimeConfigDir == "" {
+		return nil, nil
+	}
+	configPath := filepath.Join(m.RuntimeConfigDir, "waf_config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &protocol.SupportFile{
+		Path:    "waf_config.json",
+		Content: string(data),
+	}, nil
+}
+
 func (m *Manager) readManagedSupportFiles() ([]protocol.SupportFile, error) {
 	files, err := m.readCertFiles()
 	if err != nil {
@@ -805,6 +859,13 @@ func (m *Manager) readManagedSupportFiles() ([]protocol.SupportFile, error) {
 	}
 	if regionConfig != nil {
 		files = append(files, *regionConfig)
+	}
+	wafConfig, err := m.readWAFConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	if wafConfig != nil {
+		files = append(files, *wafConfig)
 	}
 	return files, nil
 }
@@ -835,6 +896,20 @@ func (m *Manager) restoreRegionConfig(state *backupState) error {
 		return nil
 	}
 	return os.WriteFile(configPath, []byte(state.RegionConfig.Content), 0o644)
+}
+
+func (m *Manager) restoreWAFConfig(state *backupState) error {
+	if state == nil || m.RuntimeConfigDir == "" {
+		return nil
+	}
+	configPath := filepath.Join(m.RuntimeConfigDir, "waf_config.json")
+	if state.WAFConfig == nil {
+		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return os.WriteFile(configPath, []byte(state.WAFConfig.Content), 0o644)
 }
 
 func (m *Manager) writeSafeDefaultFallbackFiles() error {
@@ -1125,6 +1200,15 @@ func (m *Manager) managedGeoIPLuaFiles() []protocol.SupportFile {
 		files[index].Content = strings.ReplaceAll(files[index].Content, GeoIPLookupAPIURLPlaceholder, m.luaStringLiteral(m.GeoIPLookupAPIURL))
 		files[index].Content = strings.ReplaceAll(files[index].Content, GeoIPLookupAPITokenPlaceholder, m.luaStringLiteral(m.GeoIPLookupAPIToken))
 		files[index].Content = strings.ReplaceAll(files[index].Content, GeoIPLookupAPITimeoutPlaceholder, fmt.Sprintf("%d", m.geoIPLookupAPITimeoutMilliseconds()))
+	}
+	return files
+}
+
+func (m *Manager) managedWAFLuaFiles() []protocol.SupportFile {
+	files := ManagedWAFLuaFiles()
+	runtimeConfigDir := filepath.ToSlash(strings.TrimSpace(m.RuntimeConfigDir))
+	for index := range files {
+		files[index].Content = strings.ReplaceAll(files[index].Content, RuntimeConfigDirPlaceholder, runtimeConfigDir)
 	}
 	return files
 }

@@ -49,6 +49,51 @@ func TestGetActiveConfigForAgentIncludesPoWConfig(t *testing.T) {
 	}
 }
 
+func TestGetActiveConfigForAgentIncludesWAFConfig(t *testing.T) {
+	setupServiceTestDB(t)
+
+	_, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:     "waf-agent.example.com",
+		OriginURL:  "https://origin.internal",
+		Enabled:    true,
+		WAFEnabled: true,
+		WAFMode:    "log",
+		WAFConfig:  `{"builtin_rules":["sqli","sensitive_paths"],"whitelist":{"ips":["1.2.3.4"],"ip_cidrs":["10.0.0.0/8"],"paths":["/api/public/*"]},"block_rules":{"path_contains":["/debug"],"path_regexes":["^/private/"],"query_contains":["debug=true"],"header_contains":["X-Scanner"],"user_agents":["sqlmap"]}}`,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	release, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if !strings.Contains(release.Version.RenderedConfig, "access_by_lua_file __OPENFLARE_LUA_DIR__/access.lua;") {
+		t.Fatalf("expected rendered config to include unified access lua for WAF, got %s", release.Version.RenderedConfig)
+	}
+	if !strings.Contains(release.Version.MainConfig, "lua_shared_dict openflare_waf_config 1m;") {
+		t.Fatalf("expected main config to include WAF shared dict, got %s", release.Version.MainConfig)
+	}
+
+	activeConfig, err := GetActiveConfigForAgent()
+	if err != nil {
+		t.Fatalf("GetActiveConfigForAgent failed: %v", err)
+	}
+
+	for _, file := range activeConfig.SupportFiles {
+		if file.Path == "waf_config.json" {
+			if !strings.Contains(file.Content, `"mode":"log"`) {
+				t.Fatalf("expected waf_config.json to preserve mode, got %s", file.Content)
+			}
+			if !strings.Contains(file.Content, `"sensitive_paths"`) {
+				t.Fatalf("expected waf_config.json to include builtin rules, got %s", file.Content)
+			}
+			return
+		}
+	}
+	t.Fatal("expected agent config to include waf_config.json support file")
+}
+
 func TestGetActiveConfigForAgentUsesTenMinutePoWSessionDefault(t *testing.T) {
 	setupServiceTestDB(t)
 

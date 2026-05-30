@@ -1034,6 +1034,98 @@ const powSchema = z
 
 type PowValues = z.infer<typeof powSchema>;
 
+type WAFRuleKey =
+  | 'sqli'
+  | 'xss'
+  | 'path_traversal'
+  | 'sensitive_paths'
+  | 'bad_bots';
+
+const wafBuiltinRules: Array<{ key: WAFRuleKey; label: string; description: string }> = [
+  { key: 'sqli', label: 'SQL 注入', description: '匹配常见 SQL 注入探测片段。' },
+  { key: 'xss', label: 'XSS', description: '匹配脚本注入和危险事件属性。' },
+  { key: 'path_traversal', label: '路径穿越', description: '匹配 ../ 和编码后的目录穿越。' },
+  { key: 'sensitive_paths', label: '敏感路径', description: '拦截 .env、.git、wp-config 等扫描。' },
+  { key: 'bad_bots', label: '恶意工具 UA', description: '匹配 sqlmap、nikto、nmap 等扫描器。' },
+];
+
+const wafSchema = z
+  .object({
+    waf_enabled: z.boolean(),
+    waf_mode: z.enum(['log', 'block']),
+    builtin_rules: z.array(
+      z.enum(['sqli', 'xss', 'path_traversal', 'sensitive_paths', 'bad_bots']),
+    ),
+    whitelist: z.object({
+      ips: z.string(),
+      ip_cidrs: z.string(),
+      paths: z.string(),
+    }),
+    block_rules: z.object({
+      path_contains: z.string(),
+      path_regexes: z.string(),
+      query_contains: z.string(),
+      header_contains: z.string(),
+      user_agents: z.string(),
+    }),
+  })
+  .superRefine((value, context) => {
+    if (!value.waf_enabled) return;
+
+    for (const path of linesFromTextarea(value.whitelist.paths)) {
+      if (!path.startsWith('/')) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['whitelist', 'paths'],
+          message: `白名单路径必须以 / 开头：${path}`,
+        });
+        return;
+      }
+    }
+
+    for (const pattern of linesFromTextarea(value.block_rules.path_regexes)) {
+      try {
+        new RegExp(pattern);
+      } catch {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['block_rules', 'path_regexes'],
+          message: `路径正则格式不合法：${pattern}`,
+        });
+        return;
+      }
+    }
+  });
+
+type WAFValues = z.infer<typeof wafSchema>;
+
+function buildWAFValuesFromRoute(route: ProxyRouteItem): WAFValues {
+  const config = route.waf_config;
+  return {
+    waf_enabled: route.waf_enabled,
+    waf_mode: route.waf_mode || 'block',
+    builtin_rules: config?.builtin_rules ?? [
+      'sqli',
+      'xss',
+      'path_traversal',
+      'sensitive_paths',
+      'bad_bots',
+    ],
+    whitelist: {
+      ips: (config?.whitelist?.ips ?? []).join('\n'),
+      ip_cidrs: (config?.whitelist?.ip_cidrs ?? []).join('\n'),
+      paths: (config?.whitelist?.paths ?? []).join('\n'),
+    },
+    block_rules: {
+      path_contains: (config?.block_rules?.path_contains ?? []).join('\n'),
+      path_regexes: (config?.block_rules?.path_regexes ?? []).join('\n'),
+      query_contains: (config?.block_rules?.query_contains ?? []).join('\n'),
+      header_contains: (config?.block_rules?.header_contains ?? []).join('\n'),
+      user_agents: (config?.block_rules?.user_agents ?? []).join('\n'),
+    },
+  };
+}
+
 function buildPowListFromConfig(
   list:
     | { ips?: string[]; ip_cidrs?: string[]; paths?: string[]; path_regexes?: string[]; user_agents?: string[] }
@@ -1281,6 +1373,213 @@ function PowSection({
               .join('; ')}
           </p>
         )}
+      </form>
+    </ConfigSectionShell>
+  );
+}
+
+function WAFSection({
+  route,
+  saving,
+  onSave,
+}: {
+  route: ProxyRouteItem;
+  saving: boolean;
+  onSave: SaveHandler;
+}) {
+  const form = useForm<WAFValues>({
+    resolver: zodResolver(wafSchema),
+    defaultValues: buildWAFValuesFromRoute(route),
+  });
+
+  useEffect(() => {
+    form.reset(buildWAFValuesFromRoute(route));
+  }, [form, route]);
+
+  const watchedEnabled = form.watch('waf_enabled');
+  const watchedMode = form.watch('waf_mode');
+  const watchedBuiltinRules = form.watch('builtin_rules');
+  const toggleBuiltinRule = (rule: WAFRuleKey, checked: boolean) => {
+    const current = new Set(form.getValues('builtin_rules'));
+    if (checked) {
+      current.add(rule);
+    } else {
+      current.delete(rule);
+    }
+    form.setValue('builtin_rules', Array.from(current) as WAFRuleKey[], {
+      shouldDirty: true,
+    });
+  };
+
+  return (
+    <ConfigSectionShell
+      title="WAF 防护"
+      description="启用节点本地轻量 WAF，在地区限制之后、PoW 之前检查恶意请求。"
+      formId="proxy-route-waf-form"
+      saving={saving}
+    >
+      <form
+        id="proxy-route-waf-form"
+        className="space-y-5"
+        onSubmit={form.handleSubmit((values) => {
+          const wafConfigPayload = JSON.stringify({
+            builtin_rules: values.builtin_rules,
+            whitelist: {
+              ips: linesFromTextarea(values.whitelist.ips),
+              ip_cidrs: linesFromTextarea(values.whitelist.ip_cidrs),
+              paths: linesFromTextarea(values.whitelist.paths),
+            },
+            block_rules: {
+              path_contains: linesFromTextarea(values.block_rules.path_contains),
+              path_regexes: linesFromTextarea(values.block_rules.path_regexes),
+              query_contains: linesFromTextarea(values.block_rules.query_contains),
+              header_contains: linesFromTextarea(values.block_rules.header_contains),
+              user_agents: linesFromTextarea(values.block_rules.user_agents),
+            },
+          });
+          onSave(
+            buildPayloadFromRoute(route, {
+              waf_enabled: values.waf_enabled,
+              waf_mode: values.waf_mode,
+              waf_config: wafConfigPayload,
+            }),
+            { message: 'WAF 防护设置已保存。' },
+          );
+        })}
+      >
+        <ToggleField
+          label="启用 WAF 防护"
+          description="默认关闭。开启并发布配置后，节点会在本地检查常见攻击和自定义规则。"
+          checked={watchedEnabled}
+          onChange={(checked) =>
+            form.setValue('waf_enabled', checked, { shouldDirty: true })
+          }
+        />
+
+        <ResourceField
+          label="运行模式"
+          hint={
+            watchedMode === 'log'
+              ? '只记录命中规则并继续放行，适合先观察误杀。'
+              : '命中规则后直接返回 403。'
+          }
+        >
+          <ResourceSelect disabled={!watchedEnabled} {...form.register('waf_mode')}>
+            <option value="block">拦截模式</option>
+            <option value="log">观察模式</option>
+          </ResourceSelect>
+        </ResourceField>
+
+        <ResourceField
+          label="内置规则"
+          hint="建议先使用观察模式确认误杀情况，再切换为拦截模式。"
+          container="div"
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {wafBuiltinRules.map((rule) => (
+              <label
+                key={rule.key}
+                className="flex min-h-20 items-start gap-3 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
+              >
+                <input
+                  type="checkbox"
+                  disabled={!watchedEnabled}
+                  checked={watchedBuiltinRules.includes(rule.key)}
+                  onChange={(event) =>
+                    toggleBuiltinRule(rule.key, event.target.checked)
+                  }
+                  className="mt-1 h-4 w-4 rounded border-[var(--border-default)] accent-[var(--brand-primary)]"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-[var(--foreground-primary)]">
+                    {rule.label}
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-[var(--foreground-secondary)]">
+                    {rule.description}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </ResourceField>
+
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+          <fieldset disabled={!watchedEnabled} className="space-y-4">
+            <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
+              白名单（匹配后跳过 WAF）
+            </legend>
+            <ResourceField label="IP" hint="每行一个 IP 地址">
+              <ResourceTextarea
+                className="min-h-20"
+                placeholder="1.2.3.4"
+                {...form.register('whitelist.ips')}
+              />
+            </ResourceField>
+            <ResourceField label="IP CIDR" hint="每行一个 CIDR 范围">
+              <ResourceTextarea
+                className="min-h-20"
+                placeholder="10.0.0.0/8"
+                {...form.register('whitelist.ip_cidrs')}
+              />
+            </ResourceField>
+            <ResourceField
+              label="路径"
+              hint="每行一个路径，支持以 * 结尾的前缀匹配。"
+              error={form.formState.errors.whitelist?.paths?.message}
+            >
+              <ResourceTextarea
+                className="min-h-20"
+                placeholder="/api/public/*"
+                {...form.register('whitelist.paths')}
+              />
+            </ResourceField>
+          </fieldset>
+
+          <fieldset disabled={!watchedEnabled} className="space-y-4">
+            <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
+              自定义拦截规则
+            </legend>
+            <ResourceField label="路径包含" hint="每行一个关键字">
+              <ResourceTextarea
+                className="min-h-20"
+                placeholder="/debug"
+                {...form.register('block_rules.path_contains')}
+              />
+            </ResourceField>
+            <ResourceField
+              label="路径正则"
+              hint="每行一个正则表达式。"
+              error={form.formState.errors.block_rules?.path_regexes?.message}
+            >
+              <ResourceTextarea
+                className="min-h-20"
+                placeholder="^/private/"
+                {...form.register('block_rules.path_regexes')}
+              />
+            </ResourceField>
+            <ResourceField label="查询参数包含" hint="每行一个关键字">
+              <ResourceTextarea
+                className="min-h-20"
+                placeholder="debug=true"
+                {...form.register('block_rules.query_contains')}
+              />
+            </ResourceField>
+            <ResourceField label="请求头包含" hint="每行一个关键字">
+              <ResourceTextarea
+                className="min-h-20"
+                placeholder="X-Scanner"
+                {...form.register('block_rules.header_contains')}
+              />
+            </ResourceField>
+            <ResourceField label="User-Agent 包含" hint="每行一个关键字">
+              <ResourceTextarea
+                className="min-h-20"
+                placeholder="sqlmap"
+                {...form.register('block_rules.user_agents')}
+              />
+            </ResourceField>
+          </fieldset>
+        </div>
       </form>
     </ConfigSectionShell>
   );
@@ -1741,6 +2040,16 @@ export function ProxyRouteConfigPage({
 
           {currentSection === 'pow' ? (
             <PowSection
+              route={route}
+              saving={saveMutation.isPending}
+              onSave={(payload, context) =>
+                saveMutation.mutate({ payload, context })
+              }
+            />
+          ) : null}
+
+          {currentSection === 'waf' ? (
+            <WAFSection
               route={route}
               saving={saveMutation.isPending}
               onSave={(payload, context) =>

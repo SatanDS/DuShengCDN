@@ -26,6 +26,8 @@ const (
 	proxyRouteCachePolicyPathExact  = "path_exact"
 	proxyRouteRegionModeAllow       = "allow"
 	proxyRouteRegionModeBlock       = "block"
+	proxyRouteWAFModeLog            = "log"
+	proxyRouteWAFModeBlock          = "block"
 )
 
 type ProxyRouteCustomHeaderInput struct {
@@ -60,6 +62,9 @@ type ProxyRouteInput struct {
 	CustomHeaders              []ProxyRouteCustomHeaderInput `json:"custom_headers"`
 	PoWEnabled                 bool                          `json:"pow_enabled"`
 	PoWConfig                  string                        `json:"pow_config"`
+	WAFEnabled                 bool                          `json:"waf_enabled"`
+	WAFMode                    string                        `json:"waf_mode"`
+	WAFConfig                  string                        `json:"waf_config"`
 	BasicAuthEnabled           bool                          `json:"basic_auth_enabled"`
 	BasicAuthUsername          string                        `json:"basic_auth_username"`
 	BasicAuthPassword          string                        `json:"basic_auth_password"`
@@ -107,6 +112,9 @@ type ProxyRouteView struct {
 	CustomHeaderList           []ProxyRouteCustomHeaderInput `json:"custom_header_list"`
 	PoWEnabled                 bool                          `json:"pow_enabled"`
 	PoWConfig                  *ProxyRoutePoWConfig          `json:"pow_config"`
+	WAFEnabled                 bool                          `json:"waf_enabled"`
+	WAFMode                    string                        `json:"waf_mode"`
+	WAFConfig                  *ProxyRouteWAFConfig          `json:"waf_config"`
 	BasicAuthEnabled           bool                          `json:"basic_auth_enabled"`
 	BasicAuthUsername          string                        `json:"basic_auth_username"`
 	BasicAuthPassword          string                        `json:"basic_auth_password"`
@@ -276,6 +284,15 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
+	wafMode := normalizeWAFMode(input.WAFMode)
+	wafConfig, err := normalizeWAFConfig(input.WAFEnabled, input.WAFConfig)
+	if err != nil {
+		return nil, err
+	}
+	wafConfigJSON, err := json.Marshal(wafConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	if !input.EnableHTTPS {
 		input.RedirectHTTP = false
@@ -366,6 +383,9 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.CustomHeaders = string(customHeadersJSON)
 	route.PoWEnabled = input.PoWEnabled
 	route.PoWConfig = string(powConfigJSON)
+	route.WAFEnabled = input.WAFEnabled
+	route.WAFMode = wafMode
+	route.WAFConfig = string(wafConfigJSON)
 	route.BasicAuthEnabled = input.BasicAuthEnabled
 	route.BasicAuthUsername = input.BasicAuthUsername
 	route.BasicAuthPassword = input.BasicAuthPassword
@@ -421,6 +441,10 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 	if err != nil {
 		return nil, err
 	}
+	wafConfig, err := decodeStoredWAFConfig(route.WAFEnabled, route.WAFConfig)
+	if err != nil {
+		return nil, err
+	}
 	regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
 	if err != nil {
 		return nil, err
@@ -467,6 +491,9 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		CustomHeaderList:           customHeaders,
 		PoWEnabled:                 route.PoWEnabled,
 		PoWConfig:                  powConfig,
+		WAFEnabled:                 route.WAFEnabled,
+		WAFMode:                    normalizeWAFMode(route.WAFMode),
+		WAFConfig:                  wafConfig,
 		BasicAuthEnabled:           route.BasicAuthEnabled,
 		BasicAuthUsername:          route.BasicAuthUsername,
 		BasicAuthPassword:          route.BasicAuthPassword,
@@ -1448,6 +1475,144 @@ func decodeStoredPoWConfig(enabled bool, raw string) (*ProxyRoutePoWConfig, erro
 	var cfg ProxyRoutePoWConfig
 	if err := json.Unmarshal([]byte(text), &cfg); err != nil {
 		return nil, errors.New("pow_config 格式无效")
+	}
+	return &cfg, nil
+}
+
+// WAF configuration types and validation
+
+type ProxyRouteWAFCustomRules struct {
+	PathContains   []string `json:"path_contains"`
+	PathRegexes    []string `json:"path_regexes"`
+	QueryContains  []string `json:"query_contains"`
+	HeaderContains []string `json:"header_contains"`
+	UserAgents     []string `json:"user_agents"`
+}
+
+type ProxyRouteWAFWhitelistConfig struct {
+	IPs     []string `json:"ips"`
+	IPCidrs []string `json:"ip_cidrs"`
+	Paths   []string `json:"paths"`
+}
+
+type ProxyRouteWAFConfig struct {
+	BuiltinRules []string                     `json:"builtin_rules"`
+	Whitelist    ProxyRouteWAFWhitelistConfig `json:"whitelist"`
+	BlockRules   ProxyRouteWAFCustomRules     `json:"block_rules"`
+}
+
+var wafBuiltinRuleValues = map[string]bool{
+	"sqli":            true,
+	"xss":             true,
+	"path_traversal":  true,
+	"sensitive_paths": true,
+	"bad_bots":        true,
+}
+
+func defaultWAFConfig() ProxyRouteWAFConfig {
+	return ProxyRouteWAFConfig{
+		BuiltinRules: []string{"sqli", "xss", "path_traversal", "sensitive_paths", "bad_bots"},
+		Whitelist: ProxyRouteWAFWhitelistConfig{
+			IPs:     []string{},
+			IPCidrs: []string{},
+			Paths:   []string{},
+		},
+		BlockRules: ProxyRouteWAFCustomRules{
+			PathContains:   []string{},
+			PathRegexes:    []string{},
+			QueryContains:  []string{},
+			HeaderContains: []string{},
+			UserAgents:     []string{},
+		},
+	}
+}
+
+func normalizeWAFMode(raw string) string {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case proxyRouteWAFModeLog, proxyRouteWAFModeBlock:
+		return mode
+	default:
+		return proxyRouteWAFModeBlock
+	}
+}
+
+func normalizeStringList(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		item := strings.TrimSpace(value)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		normalized = append(normalized, item)
+	}
+	return normalized
+}
+
+func normalizeWAFConfig(enabled bool, raw string) (ProxyRouteWAFConfig, error) {
+	cfg := defaultWAFConfig()
+	if !enabled {
+		return cfg, nil
+	}
+	text := strings.TrimSpace(raw)
+	if text != "" && text != "{}" {
+		if err := json.Unmarshal([]byte(text), &cfg); err != nil {
+			return cfg, errors.New("waf_config 格式无效")
+		}
+	}
+
+	cfg.BuiltinRules = normalizeStringList(cfg.BuiltinRules)
+	for _, rule := range cfg.BuiltinRules {
+		if !wafBuiltinRuleValues[rule] {
+			return cfg, fmt.Errorf("waf_config.builtin_rules 不支持规则: %s", rule)
+		}
+	}
+
+	cfg.Whitelist.IPs = normalizeStringList(cfg.Whitelist.IPs)
+	cfg.Whitelist.IPCidrs = normalizeStringList(cfg.Whitelist.IPCidrs)
+	cfg.Whitelist.Paths = normalizeStringList(cfg.Whitelist.Paths)
+	cfg.BlockRules.PathContains = normalizeStringList(cfg.BlockRules.PathContains)
+	cfg.BlockRules.PathRegexes = normalizeStringList(cfg.BlockRules.PathRegexes)
+	cfg.BlockRules.QueryContains = normalizeStringList(cfg.BlockRules.QueryContains)
+	cfg.BlockRules.HeaderContains = normalizeStringList(cfg.BlockRules.HeaderContains)
+	cfg.BlockRules.UserAgents = normalizeStringList(cfg.BlockRules.UserAgents)
+
+	for _, ip := range cfg.Whitelist.IPs {
+		if net.ParseIP(ip) == nil {
+			return cfg, fmt.Errorf("waf_config 白名单 IP 格式无效: %s", ip)
+		}
+	}
+	for _, cidr := range cfg.Whitelist.IPCidrs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return cfg, fmt.Errorf("waf_config 白名单 IP CIDR 格式无效: %s", cidr)
+		}
+	}
+	for _, path := range cfg.Whitelist.Paths {
+		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "\r\n") {
+			return cfg, fmt.Errorf("waf_config 白名单路径格式无效: %s", path)
+		}
+	}
+	for _, re := range cfg.BlockRules.PathRegexes {
+		if _, err := regexp.Compile(re); err != nil {
+			return cfg, fmt.Errorf("waf_config 路径正则格式无效: %s", re)
+		}
+	}
+
+	return cfg, nil
+}
+
+func decodeStoredWAFConfig(enabled bool, raw string) (*ProxyRouteWAFConfig, error) {
+	cfg, err := normalizeWAFConfig(enabled, raw)
+	if err != nil {
+		return nil, err
 	}
 	return &cfg, nil
 }

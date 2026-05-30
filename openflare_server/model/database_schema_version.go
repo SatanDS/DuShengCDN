@@ -4,7 +4,7 @@ import "time"
 
 const (
 	legacyDatabaseSchemaVersion  = 1
-	currentDatabaseSchemaVersion = 14
+	currentDatabaseSchemaVersion = 15
 	databaseSchemaVersionRowID   = 1
 )
 

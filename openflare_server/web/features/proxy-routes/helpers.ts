@@ -36,6 +36,11 @@ export const websiteConfigSections = [
     description: '配置 Proof-of-Work 反爬虫策略。',
   },
   {
+    key: 'waf',
+    label: 'WAF 防护',
+    description: '配置本地轻量 WAF 规则。',
+  },
+  {
     key: 'region',
     label: '地区限制',
     description: '按国家或地区代码放行或拦截访问。',
@@ -307,6 +312,9 @@ export function buildPayloadFromRoute(
     remark: route.remark || '',
     pow_enabled: route.pow_enabled,
     pow_config: JSON.stringify(route.pow_config),
+    waf_enabled: route.waf_enabled,
+    waf_mode: route.waf_mode,
+    waf_config: JSON.stringify(route.waf_config),
     basic_auth_enabled: route.basic_auth_enabled,
     basic_auth_username: route.basic_auth_username,
     basic_auth_password: route.basic_auth_password,
