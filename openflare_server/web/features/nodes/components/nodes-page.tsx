@@ -98,8 +98,11 @@ export function NodesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: deleteNode,
-    onSuccess: async () => {
-      setFeedback({ tone: 'success', message: '节点已删除。' });
+    onSuccess: async (result) => {
+      setFeedback({
+        tone: result.uninstall_agent_requested ? 'success' : 'info',
+        message: result.uninstall_agent_message || '节点已删除。',
+      });
       setEditingNode(null);
       await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
     },
@@ -175,7 +178,7 @@ export function NodesPage() {
   const handleDelete = (nodeId: number, nodeName: string) => {
     if (
       !window.confirm(
-        `确认删除节点“${nodeName}”吗？删除后该节点需要重新创建并重新接入。`,
+        `确认删除节点“${nodeName}”吗？如果节点在线，系统会同时下发 Agent 卸载指令；离线节点只会删除面板记录。`,
       )
     ) {
       return;

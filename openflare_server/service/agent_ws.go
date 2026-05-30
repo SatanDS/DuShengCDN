@@ -11,6 +11,7 @@ const (
 	AgentWSMessageTypeSettings        = "settings"
 	AgentWSMessageTypeActiveConfig    = "active_config"
 	AgentWSMessageTypeForceSyncConfig = "force_sync_config"
+	AgentWSMessageTypeUninstallAgent  = "uninstall_agent"
 	AgentWSMessageTypePing            = "ping"
 	AgentWSMessageTypePong            = "pong"
 
@@ -175,6 +176,12 @@ func SendAgentWSForceSyncConfig(nodeID string, activeConfig *ActiveConfigMeta) b
 	return sendAgentWSMessage(nodeID, AgentWSOutboundMessage{
 		Type:    AgentWSMessageTypeForceSyncConfig,
 		Payload: activeConfig,
+	})
+}
+
+func SendAgentWSUninstallAgent(nodeID string) bool {
+	return sendAgentWSMessage(nodeID, AgentWSOutboundMessage{
+		Type: AgentWSMessageTypeUninstallAgent,
 	})
 }
 

@@ -122,11 +122,12 @@ func DeleteNode(c *gin.Context) {
 		return
 	}
 
-	if err = service.DeleteNode(uint(id)); err != nil {
+	result, err := service.DeleteNode(uint(id))
+	if err != nil {
 		respondFailure(c, err.Error())
 		return
 	}
-	respondSuccessMessage(c, "")
+	respondSuccess(c, result)
 }
 
 // RequestNodeAgentUpdate godoc

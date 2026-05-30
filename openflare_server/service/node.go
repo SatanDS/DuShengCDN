@@ -48,6 +48,13 @@ type NodeBootstrapView struct {
 	DiscoveryToken string `json:"discovery_token"`
 }
 
+type NodeDeleteResult struct {
+	NodeID                  string `json:"node_id"`
+	Name                    string `json:"name"`
+	UninstallAgentRequested bool   `json:"uninstall_agent_requested"`
+	UninstallAgentMessage   string `json:"uninstall_agent_message"`
+}
+
 type AgentRegistrationResponse struct {
 	NodeID     string `json:"node_id"`
 	AgentToken string `json:"agent_token"`
@@ -120,17 +127,27 @@ func UpdateNode(id uint, input NodeInput) (*NodeView, error) {
 	return buildNodeView(node), nil
 }
 
-func DeleteNode(id uint) error {
+func DeleteNode(id uint) (*NodeDeleteResult, error) {
 	node, err := model.GetNodeByID(id)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	result := &NodeDeleteResult{
+		NodeID: node.NodeID,
+		Name:   node.Name,
+	}
+	if SendAgentWSUninstallAgent(node.NodeID) {
+		result.UninstallAgentRequested = true
+		result.UninstallAgentMessage = "已向在线节点下发 Agent 卸载指令"
+	} else {
+		result.UninstallAgentMessage = "节点未通过 WebSocket 在线，已删除面板记录但未能远程卸载 Agent"
 	}
 	slog.Info("node deleted", "name", node.Name, "node_id", node.NodeID)
 	if err := node.Delete(); err != nil {
-		return err
+		return nil, err
 	}
 	invalidateAgentTokenCache(node.AgentToken)
-	return nil
+	return result, nil
 }
 
 func GetNodeAgentRelease(ctx context.Context, id uint, channel string) (*NodeAgentReleaseInfo, error) {

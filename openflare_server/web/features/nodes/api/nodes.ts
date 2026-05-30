@@ -4,6 +4,7 @@ import type {
   NodeAgentReleaseInfo,
   NodeAgentUpdatePayload,
   NodeBootstrapToken,
+  NodeDeleteResult,
   NodeItem,
   NodeMutationPayload,
   NodeObservability,
@@ -29,7 +30,7 @@ export function updateNode(id: number, payload: NodeMutationPayload) {
 }
 
 export function deleteNode(id: number) {
-  return apiRequest<void>(`/nodes/${id}/delete`, {
+  return apiRequest<NodeDeleteResult>(`/nodes/${id}/delete`, {
     method: 'POST',
   });
 }

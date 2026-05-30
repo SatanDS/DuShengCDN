@@ -705,6 +705,40 @@ func TestRunnerHonorsManualUpdateRequest(t *testing.T) {
 	}
 }
 
+func TestRunnerHandlesUninstallRequest(t *testing.T) {
+	calls := 0
+	original := runSelfUninstallFunc
+	originalDelay := selfUninstallDelay
+	runSelfUninstallFunc = func(cfg *config.Config) error {
+		calls++
+		return nil
+	}
+	selfUninstallDelay = 10 * time.Millisecond
+	defer func() {
+		runSelfUninstallFunc = original
+		selfUninstallDelay = originalDelay
+	}()
+
+	runner := &Runner{Config: &config.Config{}}
+	_, err := runner.handleWebSocketMessage(context.Background(), protocol.WSMessage{
+		Type: protocol.WSMessageTypeUninstallAgent,
+	}, &fakeWebSocketConnection{})
+	if err == nil {
+		t.Fatal("expected uninstall request to close websocket")
+	}
+	if !runner.uninstallRequested {
+		t.Fatal("expected uninstall flag to be set")
+	}
+
+	_, _ = runner.handleWebSocketMessage(context.Background(), protocol.WSMessage{
+		Type: protocol.WSMessageTypeUninstallAgent,
+	}, &fakeWebSocketConnection{})
+	time.Sleep(50 * time.Millisecond)
+	if calls != 1 {
+		t.Fatalf("expected one uninstall execution, got %d", calls)
+	}
+}
+
 func TestWebSocketBackoffSequence(t *testing.T) {
 	backoff := newWebSocketBackoff()
 	expected := []time.Duration{

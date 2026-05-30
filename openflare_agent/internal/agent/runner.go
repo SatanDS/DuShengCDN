@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -49,6 +53,9 @@ type UpdateOptions struct {
 
 const autoUpdateCheckInterval = 6 * time.Hour
 
+var runSelfUninstallFunc = runSelfUninstall
+var selfUninstallDelay = 2 * time.Second
+
 type Runner struct {
 	Config              *config.Config
 	StateStore          *state.Store
@@ -65,6 +72,7 @@ type Runner struct {
 	updateChan              string
 	updateTag               string
 	lastAutoUpdateCheck     time.Time
+	uninstallRequested      bool
 	restartOpenrestyNow     bool
 	websocketUpgradeEnabled bool
 }
@@ -310,6 +318,9 @@ func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WS
 			slog.Error("agent ws triggered force sync failed", "version", target.Version, "error", err)
 		}
 		return false, nil
+	case protocol.WSMessageTypeUninstallAgent:
+		r.requestSelfUninstall()
+		return false, errors.New("agent uninstall requested by server")
 	case protocol.WSMessageTypePing:
 		slog.Debug("agent ws ping received")
 		return false, conn.SendPong()
@@ -359,6 +370,99 @@ func (backoff *webSocketBackoff) Reset() {
 
 func (r *Runner) hasAgentToken() bool {
 	return strings.TrimSpace(r.Config.AgentToken) != ""
+}
+
+func (r *Runner) requestSelfUninstall() {
+	if r.uninstallRequested {
+		return
+	}
+	r.uninstallRequested = true
+	slog.Warn("agent uninstall requested by server")
+	go func() {
+		time.Sleep(selfUninstallDelay)
+		if err := runSelfUninstallFunc(r.Config); err != nil {
+			slog.Error("agent uninstall failed", "error", err)
+			return
+		}
+	}()
+}
+
+func runSelfUninstall(cfg *config.Config) error {
+	if runningInContainer() {
+		slog.Warn("agent appears to run in a container; exiting process, remove the container from the Docker host if needed")
+		os.Exit(0)
+	}
+	installDir := detectInstallDir(cfg)
+	if installDir == "" || installDir == "/" || installDir == "." {
+		return errors.New("unsafe install directory, refusing to uninstall")
+	}
+	if runtime.GOOS == "linux" && commandExists("systemd-run") {
+		return startSystemdUninstall(installDir)
+	}
+	return removeInstallDirAndExit(installDir)
+}
+
+func startSystemdUninstall(installDir string) error {
+	script := strings.Join([]string{
+		"sleep 1",
+		"systemctl stop openflare-agent || true",
+		"systemctl disable openflare-agent || true",
+		"rm -f /etc/systemd/system/openflare-agent.service",
+		"systemctl daemon-reload || true",
+		"systemctl reset-failed openflare-agent || true",
+		"rm -rf -- " + shellQuote(installDir),
+	}, "; ")
+	return exec.Command(
+		"systemd-run",
+		"--unit=openflare-agent-uninstall",
+		"--collect",
+		"/bin/sh",
+		"-c",
+		script,
+	).Start()
+}
+
+func detectInstallDir(cfg *config.Config) string {
+	if cfg != nil {
+		if dataDir := strings.TrimSpace(cfg.DataDir); dataDir != "" {
+			if filepath.Base(dataDir) == "data" {
+				return filepath.Clean(filepath.Dir(dataDir))
+			}
+			return filepath.Clean(dataDir)
+		}
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(execPath)
+}
+
+func removeInstallDirAndExit(installDir string) error {
+	if runtime.GOOS == "windows" {
+		return exec.Command("cmd", "/C", "ping", "127.0.0.1", "-n", "3", ">nul", "&", "rmdir", "/S", "/Q", installDir).Start()
+	}
+	if err := os.RemoveAll(installDir); err != nil {
+		return err
+	}
+	os.Exit(0)
+	return nil
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func runningInContainer() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv("container")) != ""
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (r *Runner) applySettings(settings *protocol.AgentSettings) bool {

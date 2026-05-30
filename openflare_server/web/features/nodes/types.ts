@@ -38,6 +38,13 @@ export interface NodeBootstrapToken {
   discovery_token: string;
 }
 
+export interface NodeDeleteResult {
+  node_id: string;
+  name: string;
+  uninstall_agent_requested: boolean;
+  uninstall_agent_message: string;
+}
+
 export interface NodeMutationPayload {
   name: string;
   ip: string;

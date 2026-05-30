@@ -37,6 +37,7 @@ const (
 	WSMessageTypeSettings        = "settings"
 	WSMessageTypeActiveConfig    = "active_config"
 	WSMessageTypeForceSyncConfig = "force_sync_config"
+	WSMessageTypeUninstallAgent  = "uninstall_agent"
 	WSMessageTypePing            = "ping"
 	WSMessageTypePong            = "pong"
 )

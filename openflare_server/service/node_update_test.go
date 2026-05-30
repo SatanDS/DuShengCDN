@@ -330,6 +330,70 @@ func TestUpdateNodeValidatesAndPersistsGeoMetadata(t *testing.T) {
 	}
 }
 
+func TestDeleteNodeSendsUninstallToOnlineAgent(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:       "node-delete-online",
+		Name:         "delete-online",
+		IP:           "10.0.0.8",
+		AgentToken:   "agent-token",
+		AgentVersion: "v0.4.0",
+		Status:       NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+	client := RegisterAgentWSClient(node.NodeID)
+	defer UnregisterAgentWSClient(client)
+
+	result, err := DeleteNode(node.ID)
+	if err != nil {
+		t.Fatalf("expected delete node to succeed: %v", err)
+	}
+	if !result.UninstallAgentRequested {
+		t.Fatalf("expected uninstall instruction to be requested, got %+v", result)
+	}
+	select {
+	case message := <-client.Messages():
+		if message.Type != AgentWSMessageTypeUninstallAgent {
+			t.Fatalf("unexpected websocket message type: %s", message.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected uninstall websocket message")
+	}
+	if _, err = model.GetNodeByID(node.ID); err == nil {
+		t.Fatal("expected node record to be deleted")
+	}
+}
+
+func TestDeleteNodeReportsOfflineUninstallSkipped(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:       "node-delete-offline",
+		Name:         "delete-offline",
+		IP:           "10.0.0.8",
+		AgentToken:   "agent-token",
+		AgentVersion: "v0.4.0",
+		Status:       NodeStatusOffline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+
+	result, err := DeleteNode(node.ID)
+	if err != nil {
+		t.Fatalf("expected delete node to succeed: %v", err)
+	}
+	if result.UninstallAgentRequested {
+		t.Fatalf("expected uninstall instruction to be skipped, got %+v", result)
+	}
+	if !strings.Contains(result.UninstallAgentMessage, "未能远程卸载") {
+		t.Fatalf("unexpected offline uninstall message: %s", result.UninstallAgentMessage)
+	}
+}
+
 func TestUpdateNodeRejectsPartialGeoMetadata(t *testing.T) {
 	setupServiceTestDB(t)
 
