@@ -17,6 +17,8 @@ SERVICE_NAME="openflare-agent"
 OPENRESTY_PATH=""
 AUTO_INSTALL_DEPS="true"
 SOURCE_REF="${SOURCE_REF:-main}"
+GEOIP_LOOKUP_API_URL=""
+GEOIP_LOOKUP_API_TOKEN=""
 
 usage() {
   cat <<EOF
@@ -33,6 +35,8 @@ Options:
   --openresty-path PATH     OpenResty binary path (default: auto-detect from PATH)
   --repo REPO               GitHub repository (default: SatanDS/OpenCDN)
   --source-ref REF          Git branch, tag, or commit used when building from source (default: main)
+  --geoip-api-url URL       Optional precise IP lookup API URL used when local GeoIP has no country
+  --geoip-api-token TOKEN   Optional bearer token for --geoip-api-url
   --install-deps            Install missing runtime dependencies automatically (default)
   --no-install-deps         Do not install missing dependencies automatically
   --no-service              Do not create systemd service
@@ -61,6 +65,8 @@ while [[ $# -gt 0 ]]; do
     --openresty-path) OPENRESTY_PATH="$2"; shift 2 ;;
     --repo)         REPO="$2"; shift 2 ;;
     --source-ref)   SOURCE_REF="$2"; shift 2 ;;
+    --geoip-api-url) GEOIP_LOOKUP_API_URL="$2"; shift 2 ;;
+    --geoip-api-token) GEOIP_LOOKUP_API_TOKEN="$2"; shift 2 ;;
     --install-deps) AUTO_INSTALL_DEPS="true"; shift ;;
     --no-install-deps) AUTO_INSTALL_DEPS="false"; shift ;;
     --no-service)   CREATE_SERVICE="false"; shift ;;
@@ -78,6 +84,23 @@ if [[ -z "$DISCOVERY_TOKEN" && -z "$AGENT_TOKEN" ]]; then
   echo "Error: either --discovery-token or --agent-token is required"
   exit 1
 fi
+
+geoip_api_config_json() {
+  if [[ -z "$GEOIP_LOOKUP_API_URL" ]]; then
+    return
+  fi
+  printf ',\n  "geoip_lookup_api_url": "%s"' "$(json_escape "$GEOIP_LOOKUP_API_URL")"
+  if [[ -n "$GEOIP_LOOKUP_API_TOKEN" ]]; then
+    printf ',\n  "geoip_lookup_api_token": "%s"' "$(json_escape "$GEOIP_LOOKUP_API_TOKEN")"
+  fi
+}
+
+json_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s' "$value"
+}
 
 log() {
   echo "==> $*"
@@ -187,6 +210,45 @@ find_openresty_path() {
   return 1
 }
 
+find_opm_path() {
+  if command -v opm >/dev/null 2>&1; then
+    command -v opm
+    return 0
+  fi
+
+  local candidates=(
+    "/usr/bin/opm"
+    "/usr/local/bin/opm"
+    "/usr/local/openresty/bin/opm"
+    "/opt/openresty/bin/opm"
+    "/opt/homebrew/bin/opm"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+ensure_libmaxminddb_link() {
+  if [[ "$OS" != "linux" ]]; then
+    return
+  fi
+  if [[ -e /usr/lib/libmaxminddb.so || -e /usr/lib64/libmaxminddb.so || -e /usr/local/lib/libmaxminddb.so ]]; then
+    return
+  fi
+
+  local lib
+  lib="$(find /usr/lib /usr/lib64 /usr/local/lib -name 'libmaxminddb.so.*' -type f -o -name 'libmaxminddb.so.*' -type l 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$lib" ]]; then
+    run_as_root ln -sf "$lib" /usr/lib/libmaxminddb.so
+  fi
+}
+
 openresty_package_needs_configure() {
   if ! command -v dpkg-query >/dev/null 2>&1; then
     return 1
@@ -230,6 +292,46 @@ disable_default_openresty_service() {
   run_as_root systemctl reset-failed openresty.service >/dev/null 2>&1 || true
 }
 
+ensure_geoip_lua_dependencies() {
+  local opm_path
+  if [[ "$AUTO_INSTALL_DEPS" != "true" ]]; then
+    if ! opm_path="$(find_opm_path)"; then
+      die "opm was not found. Install lua-resty-maxminddb and lua-resty-http manually or rerun without --no-install-deps."
+    fi
+    ensure_libmaxminddb_link
+    return
+  fi
+
+  log "Ensuring local GeoIP runtime dependencies..."
+  case "$OS" in
+    linux)
+      install_common_linux_dependencies
+      ;;
+    darwin)
+      if ! command -v brew >/dev/null 2>&1; then
+        die "Homebrew is required to install libmaxminddb automatically on macOS."
+      fi
+      brew install libmaxminddb || true
+      ;;
+    *)
+      die "unsupported OS for automatic GeoIP dependency installation: $OS"
+      ;;
+  esac
+
+  ensure_libmaxminddb_link
+
+  if ! opm_path="$(find_opm_path)"; then
+    die "opm was not found after OpenResty installation. Install OpenResty with opm support, install lua-resty-maxminddb/lua-resty-http manually, or use Docker Agent."
+  fi
+
+  if ! "$opm_path" get anjia0532/lua-resty-maxminddb; then
+    die "failed to install lua-resty-maxminddb via opm."
+  fi
+  if ! "$opm_path" get ledgetech/lua-resty-http; then
+    die "failed to install lua-resty-http via opm."
+  fi
+}
+
 load_os_release() {
   OS_ID=""
   OS_ID_LIKE=""
@@ -259,17 +361,17 @@ version_major() {
 install_common_linux_dependencies() {
   if command -v apt-get >/dev/null 2>&1; then
     run_as_root apt-get update
-    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg libmaxminddb0 libmaxminddb-dev build-essential
   elif command -v dnf >/dev/null 2>&1; then
-    run_as_root dnf install -y ca-certificates curl
+    run_as_root dnf install -y ca-certificates curl libmaxminddb libmaxminddb-devel gcc make
   elif command -v yum >/dev/null 2>&1; then
-    run_as_root yum install -y ca-certificates curl
+    run_as_root yum install -y ca-certificates curl libmaxminddb libmaxminddb-devel gcc make
   elif command -v apk >/dev/null 2>&1; then
-    run_as_root apk add --no-cache ca-certificates curl
+    run_as_root apk add --no-cache ca-certificates curl libmaxminddb libmaxminddb-dev gcc musl-dev make
   elif command -v zypper >/dev/null 2>&1; then
-    run_as_root zypper --non-interactive install ca-certificates curl
+    run_as_root zypper --non-interactive install ca-certificates curl libmaxminddb0 libmaxminddb-devel gcc make
   elif command -v pacman >/dev/null 2>&1; then
-    run_as_root pacman -Sy --needed --noconfirm ca-certificates curl
+    run_as_root pacman -Sy --needed --noconfirm ca-certificates curl libmaxminddb gcc make
   else
     die "no supported package manager found. Install curl and OpenResty manually or pass --openresty-path."
   fi
@@ -278,17 +380,17 @@ install_common_linux_dependencies() {
 install_source_build_dependencies_linux() {
   if command -v apt-get >/dev/null 2>&1; then
     run_as_root apt-get update
-    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git tar
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git tar libmaxminddb0 libmaxminddb-dev build-essential
   elif command -v dnf >/dev/null 2>&1; then
-    run_as_root dnf install -y ca-certificates curl git tar
+    run_as_root dnf install -y ca-certificates curl git tar libmaxminddb libmaxminddb-devel gcc make
   elif command -v yum >/dev/null 2>&1; then
-    run_as_root yum install -y ca-certificates curl git tar
+    run_as_root yum install -y ca-certificates curl git tar libmaxminddb libmaxminddb-devel gcc make
   elif command -v apk >/dev/null 2>&1; then
-    run_as_root apk add --no-cache ca-certificates curl git tar
+    run_as_root apk add --no-cache ca-certificates curl git tar libmaxminddb libmaxminddb-dev gcc musl-dev make
   elif command -v zypper >/dev/null 2>&1; then
-    run_as_root zypper --non-interactive install ca-certificates curl git tar
+    run_as_root zypper --non-interactive install ca-certificates curl git tar libmaxminddb0 libmaxminddb-devel gcc make
   elif command -v pacman >/dev/null 2>&1; then
-    run_as_root pacman -Sy --needed --noconfirm ca-certificates curl git tar
+    run_as_root pacman -Sy --needed --noconfirm ca-certificates curl git tar libmaxminddb gcc make
   else
     die "no supported package manager found. Install git, tar, and Go manually, or publish release assets."
   fi
@@ -731,6 +833,7 @@ fi
 
 ensure_curl
 ensure_openresty
+ensure_geoip_lua_dependencies
 
 if [[ ! -x "$OPENRESTY_PATH" ]]; then
   echo "Error: OpenResty binary is not executable: ${OPENRESTY_PATH}"
@@ -792,23 +895,27 @@ if [[ -n "$AGENT_TOKEN" ]]; then
   if [[ "$NEEDS_ROOT" == "true" ]]; then
     write_file_as_root "$CONFIG_FILE" <<CFGEOF
 {
-  "server_url": "${SERVER_URL}",
-  "agent_token": "${AGENT_TOKEN}",
-  "openresty_path": "${OPENRESTY_PATH}",
+  "server_url": "$(json_escape "$SERVER_URL")",
+  "agent_token": "$(json_escape "$AGENT_TOKEN")",
+  "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
+  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
+  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
   "heartbeat_interval": 30000,
-  "request_timeout": 10000
+  "request_timeout": 10000$(geoip_api_config_json)
 }
 CFGEOF
   else
     cat > "$CONFIG_FILE" <<CFGEOF
 {
-  "server_url": "${SERVER_URL}",
-  "agent_token": "${AGENT_TOKEN}",
-  "openresty_path": "${OPENRESTY_PATH}",
+  "server_url": "$(json_escape "$SERVER_URL")",
+  "agent_token": "$(json_escape "$AGENT_TOKEN")",
+  "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
+  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
+  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
   "heartbeat_interval": 30000,
-  "request_timeout": 10000
+  "request_timeout": 10000$(geoip_api_config_json)
 }
 CFGEOF
   fi
@@ -816,23 +923,27 @@ else
   if [[ "$NEEDS_ROOT" == "true" ]]; then
     write_file_as_root "$CONFIG_FILE" <<CFGEOF
 {
-  "server_url": "${SERVER_URL}",
-  "discovery_token": "${DISCOVERY_TOKEN}",
-  "openresty_path": "${OPENRESTY_PATH}",
+  "server_url": "$(json_escape "$SERVER_URL")",
+  "discovery_token": "$(json_escape "$DISCOVERY_TOKEN")",
+  "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
+  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
+  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
   "heartbeat_interval": 30000,
-  "request_timeout": 10000
+  "request_timeout": 10000$(geoip_api_config_json)
 }
 CFGEOF
   else
     cat > "$CONFIG_FILE" <<CFGEOF
 {
-  "server_url": "${SERVER_URL}",
-  "discovery_token": "${DISCOVERY_TOKEN}",
-  "openresty_path": "${OPENRESTY_PATH}",
+  "server_url": "$(json_escape "$SERVER_URL")",
+  "discovery_token": "$(json_escape "$DISCOVERY_TOKEN")",
+  "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
+  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
+  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
   "heartbeat_interval": 30000,
-  "request_timeout": 10000
+  "request_timeout": 10000$(geoip_api_config_json)
 }
 CFGEOF
   fi

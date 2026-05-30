@@ -29,17 +29,23 @@ func TestGetActiveConfigForAgentIncludesPoWConfig(t *testing.T) {
 	}
 
 	foundPowConfig := false
+	foundRegionConfig := false
 	for _, file := range activeConfig.SupportFiles {
-		if file.Path != "pow_config.json" {
-			continue
+		if file.Path == "pow_config.json" {
+			foundPowConfig = true
+			if file.Content == "" {
+				t.Fatal("expected pow_config.json content to be populated")
+			}
 		}
-		foundPowConfig = true
-		if file.Content == "" {
-			t.Fatal("expected pow_config.json content to be populated")
+		if file.Path == "region_config.json" {
+			foundRegionConfig = true
 		}
 	}
 	if !foundPowConfig {
 		t.Fatal("expected agent config to include pow_config.json support file")
+	}
+	if !foundRegionConfig {
+		t.Fatal("expected agent config to include region_config.json support file")
 	}
 }
 

@@ -14,6 +14,8 @@ func renderOpenRestyObservabilityTemplateBlock() string {
 		"    lua_shared_dict openflare_pow_config 1m;",
 		"    lua_shared_dict openflare_pow_challenges 10m;",
 		"    lua_shared_dict openflare_pow_sessions 20m;",
+		"    lua_shared_dict openflare_geoip_cache 20m;",
+		"    lua_shared_dict openflare_region_config 1m;",
 		fmt.Sprintf("    init_worker_by_lua_file %s/%s;", nginxLuaDirPlaceholder, openRestyObservabilityInitLuaPath),
 		fmt.Sprintf("    log_by_lua_file %s/%s;", nginxLuaDirPlaceholder, openRestyObservabilityLogLuaPath),
 		"",

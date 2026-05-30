@@ -17,6 +17,9 @@ services:
     environment:
       OPENFLARE_SERVER_URL: "http://host.docker.internal:3000"
       OPENFLARE_AGENT_TOKEN: "373956188ddead1df6dd7c86cd330b73"
+      # Optional precise IP lookup API. Local GeoIP is used first; this API is queried only when local GeoIP has no country.
+      # OPENFLARE_GEOIP_LOOKUP_API_URL: "https://ipdb.example.com/lookup"
+      # OPENFLARE_GEOIP_LOOKUP_API_TOKEN: "replace-with-api-token"
       LOG_LEVEL: "debug"
 
     extra_hosts:

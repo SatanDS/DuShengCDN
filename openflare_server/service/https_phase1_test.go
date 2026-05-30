@@ -65,7 +65,10 @@ func TestCreateTLSCertificateAndRenderHTTPSConfig(t *testing.T) {
 		t.Fatal("expected main config to include managed openresty observability listen placeholder")
 	}
 	if strings.Contains(result.Version.MainConfig, "resolver ") {
-		t.Fatal("expected main config to omit resolver directive when no resolvers are configured")
+		t.Fatal("expected main config to omit static resolver directive when no resolvers are configured")
+	}
+	if !strings.Contains(result.Version.MainConfig, "__OPENFLARE_RESOLVER_DIRECTIVE__") {
+		t.Fatal("expected main config to include agent-managed resolver placeholder")
 	}
 	if !strings.Contains(result.Version.MainConfig, "use epoll;") {
 		t.Fatal("expected main config to default to epoll event model")
@@ -1016,6 +1019,9 @@ func TestPublishConfigVersionDetectsPoWChanges(t *testing.T) {
 	if !strings.Contains(secondRelease.Version.MainConfig, "lua_shared_dict openflare_pow_config 1m;") {
 		t.Fatal("expected main config to declare shared dict for pow config")
 	}
+	if !strings.Contains(secondRelease.Version.MainConfig, "lua_shared_dict openflare_geoip_cache 20m;") {
+		t.Fatal("expected main config to declare shared dict for geoip cache")
+	}
 	if !strings.Contains(secondRelease.Version.RenderedConfig, "location /.within.website/x/cmd/anubis/static/ {") {
 		t.Fatal("expected rendered config to expose anubis static location")
 	}
@@ -1025,7 +1031,7 @@ func TestPublishConfigVersionDetectsPoWChanges(t *testing.T) {
 	if !strings.Contains(secondRelease.Version.RenderedConfig, "application/javascript js mjs;") {
 		t.Fatal("expected rendered config to serve Anubis module scripts with a JavaScript MIME type")
 	}
-	if !strings.Contains(secondRelease.Version.RenderedConfig, "    access_by_lua_file __OPENFLARE_LUA_DIR__/pow/check.lua;\n\n    location = /.within.website/x/cmd/anubis/api/pass-challenge") {
+	if !strings.Contains(secondRelease.Version.RenderedConfig, "    access_by_lua_file __OPENFLARE_LUA_DIR__/access.lua;\n\n    location = /.within.website/x/cmd/anubis/api/pass-challenge") {
 		t.Fatal("expected PoW access handler to render at server scope before PoW locations")
 	}
 	locationStart := strings.Index(secondRelease.Version.RenderedConfig, "    location / {\n")
@@ -1048,17 +1054,23 @@ func TestPublishConfigVersionDetectsPoWChanges(t *testing.T) {
 		t.Fatalf("failed to decode support files: %v", err)
 	}
 	foundPowSupportFile := false
+	foundRegionSupportFile := false
 	for _, file := range supportFiles {
-		if file.Path != "pow_config.json" {
-			continue
+		if file.Path == "pow_config.json" {
+			foundPowSupportFile = true
+			if !strings.Contains(file.Content, `"difficulty":5`) {
+				t.Fatalf("expected pow support file to persist config, got %s", file.Content)
+			}
 		}
-		foundPowSupportFile = true
-		if !strings.Contains(file.Content, `"difficulty":5`) {
-			t.Fatalf("expected pow support file to persist config, got %s", file.Content)
+		if file.Path == "region_config.json" {
+			foundRegionSupportFile = true
 		}
 	}
 	if !foundPowSupportFile {
 		t.Fatal("expected publish to include pow_config.json support file")
+	}
+	if !foundRegionSupportFile {
+		t.Fatal("expected publish to include region_config.json support file")
 	}
 }
 
@@ -1102,7 +1114,7 @@ func TestPublishConfigVersionRendersBasicAuthWithPoW(t *testing.T) {
 	if !strings.Contains(result.Version.RenderedConfig, "                return ngx.exit(401)\n            end\n        }\n") {
 		t.Fatal("expected rendered basic auth Lua block to close the if statement before the nginx block")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "    access_by_lua_file __OPENFLARE_LUA_DIR__/pow/check.lua;") {
+	if !strings.Contains(result.Version.RenderedConfig, "    access_by_lua_file __OPENFLARE_LUA_DIR__/access.lua;") {
 		t.Fatal("expected PoW access handler to remain at server scope")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "proxy_pass http://backend_xbot_example_com_1;") {
@@ -1177,17 +1189,37 @@ func TestPublishConfigVersionRendersRegionRestriction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishConfigVersion failed: %v", err)
 	}
-	if !strings.Contains(result.Version.RenderedConfig, `if ($http_cf_ipcountry !~* "^(?:CN|US)$")`) {
-		t.Fatalf("expected rendered config to include allow-list region restriction, got %s", result.Version.RenderedConfig)
+	if strings.Contains(result.Version.RenderedConfig, "$http_cf_ipcountry") {
+		t.Fatalf("expected rendered config to avoid Cloudflare country header dependency, got %s", result.Version.RenderedConfig)
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "return 403;") {
-		t.Fatal("expected region restriction to return 403")
+	if !strings.Contains(result.Version.RenderedConfig, "    access_by_lua_file __OPENFLARE_LUA_DIR__/access.lua;") {
+		t.Fatalf("expected rendered config to include local geoip access handler, got %s", result.Version.RenderedConfig)
+	}
+	if !strings.Contains(result.Version.MainConfig, "lua_shared_dict openflare_region_config 1m;") {
+		t.Fatal("expected main config to declare shared dict for region config")
 	}
 	if !strings.Contains(result.Version.SnapshotJSON, `"region_restriction_enabled":true`) {
 		t.Fatal("expected snapshot to include region restriction enabled state")
 	}
 	if !strings.Contains(result.Version.SnapshotJSON, `"region_restriction_countries":["CN","US"]`) {
 		t.Fatalf("expected snapshot to normalize region countries, got %s", result.Version.SnapshotJSON)
+	}
+	var supportFiles []SupportFile
+	if err := json.Unmarshal([]byte(result.Version.SupportFilesJSON), &supportFiles); err != nil {
+		t.Fatalf("failed to decode support files: %v", err)
+	}
+	foundRegionSupportFile := false
+	for _, file := range supportFiles {
+		if file.Path != "region_config.json" {
+			continue
+		}
+		foundRegionSupportFile = true
+		if !strings.Contains(file.Content, `"mode":"allow"`) || !strings.Contains(file.Content, `"countries":["CN","US"]`) {
+			t.Fatalf("expected region support file to persist config, got %s", file.Content)
+		}
+	}
+	if !foundRegionSupportFile {
+		t.Fatal("expected publish to include region_config.json support file")
 	}
 }
 

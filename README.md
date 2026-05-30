@@ -188,6 +188,12 @@ docker run -d --name openflare-agent --restart unless-stopped \
   ghcr.io/satands/opencdn-agent:latest
 ```
 
+Docker Agent 镜像已内置 OpenResty、`libmaxminddb`、`lua-resty-maxminddb` 和 `lua-resty-http`。如需接入自建 IP 精确查询 API，可追加：
+```bash
+-e OPENFLARE_GEOIP_LOOKUP_API_URL=https://ipdb.example.com/lookup \
+-e OPENFLARE_GEOIP_LOOKUP_API_TOKEN=YOUR_API_TOKEN
+```
+
 #### 本地部署
 
 使用 `discovery_token` 接入：
@@ -206,11 +212,20 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/instal
   --agent-token YOUR_AGENT_TOKEN
 ```
 
+可选接入自建 IP 精确查询 API：
+```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh | bash -s -- \
+  --server-url http://your-server:3000 \
+  --agent-token YOUR_AGENT_TOKEN \
+  --geoip-api-url https://ipdb.example.com/lookup \
+  --geoip-api-token YOUR_API_TOKEN
+```
+
 安装脚本默认写入 `/opt/openflare-agent`，创建 `openflare-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
 
 依赖安装兼容性：
 
-* Linux / macOS 会自动检查 `curl`、`tar`、`OpenResty`、构建工具等运行依赖，缺少时尝试通过系统包管理器安装。
+* Linux / macOS 会自动检查 `curl`、`tar`、`OpenResty`、`libmaxminddb`、`lua-resty-maxminddb`、`lua-resty-http`、构建工具等运行依赖，缺少时尝试通过系统包管理器和 `opm` 安装。
 * Debian 13 `trixie` 暂无 OpenResty 官方源时，脚本会回退到 Debian `bookworm` 源；遇到新版 apt 拒绝旧签名策略时，会临时使用 OpenResty 官方 HTTPS 源完成安装，并在安装后移除临时源。
 * 新装 OpenResty 后，脚本会阻止系统自带 `openresty` 服务自动启动，避免它提前占用 `80` / `443` 端口；端口由 `openflare-agent` 托管。
 
@@ -248,7 +263,11 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/uninst
 * `拦截列表内地区`：列表内地区返回 `403`，无法识别地区的请求继续放行。
 * `只允许列表内地区`：只有列表内地区可以访问，无法识别地区的请求也会返回 `403`。
 * 国家或地区代码使用 ISO 3166-1 两位代码，例如 `CN`、`US`、`HK`，可一行一个，也可以用逗号分隔。
-* 当前地区识别基于 Cloudflare 代理传入的 `CF-IPCountry` 请求头，建议配合 Cloudflare 橙云或可信反代使用，并避免源站端口直接暴露到公网。
+* 地区识别默认依赖 Agent 节点本地 `GeoLite2-Country.mmdb` 数据库，不再要求 Cloudflare 橙云或 `CF-IPCountry` 请求头；OpenResty 会按真实客户端 IP 查询国家码。
+* 真实 IP 优先读取 `CF-Connecting-IP`、`X-Real-IP`、`X-Forwarded-For`，最后使用连接 IP；前置 HTTPS 反代需要正确透传这些请求头。
+* OpenResty 会缓存 `IP -> 国家码`，默认缓存有效识别结果 24 小时；本地库和在线 API 都查不到时会短暂缓存未知结果，避免每个请求重复查库。
+* Agent 会自动下载并更新 Country 数据库，默认来源为 `https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb`，默认路径为 Agent 数据目录下的 `var/lib/openflare/geoip/GeoLite2-Country.mmdb`，默认每 24 小时检查更新一次。
+* 如你后续搭建自己的在线 IP 精确查询服务，可在 Agent 配置里设置 `geoip_lookup_api_url` 和 `geoip_lookup_api_token`，或安装时追加 `--geoip-api-url`、`--geoip-api-token`；查询顺序是先本地 GeoIP，未识别到国家码时再请求 API。API 返回 JSON 中的 `country_code`、`countryCode`、`iso_code`、`isoCode` 或 `country` 字段均可识别。
 * 修改地区限制后需要发布并激活新配置，Agent 应用 OpenResty 配置后才会在节点侧生效。
 
 界面交互说明：

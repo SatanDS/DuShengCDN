@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"openflare-agent/internal/protocol"
 )
@@ -297,8 +298,8 @@ func TestManagerApplyWritesSupportFilesAndReplacesPlaceholder(t *testing.T) {
 	if !strings.Contains(string(routeData), "/etc/nginx/openflare-certs/1.crt") {
 		t.Fatalf("expected placeholder replacement in route config, got %s", string(routeData))
 	}
-	renderedRoute := manager.renderRouteConfig("access_by_lua_file __OPENFLARE_LUA_DIR__/pow/check.lua;\nlocation /.within.website/x/cmd/anubis/static/ { alias __OPENFLARE_POW_STATIC_DIR__/; }\n")
-	if !strings.Contains(renderedRoute, "access_by_lua_file /etc/nginx/openflare-lua/pow/check.lua;") {
+	renderedRoute := manager.renderRouteConfig("access_by_lua_file __OPENFLARE_LUA_DIR__/access.lua;\nlocation /.within.website/x/cmd/anubis/static/ { alias __OPENFLARE_POW_STATIC_DIR__/; }\n")
+	if !strings.Contains(renderedRoute, "access_by_lua_file /etc/nginx/openflare-lua/access.lua;") {
 		t.Fatalf("expected lua dir placeholder replacement in route config, got %s", renderedRoute)
 	}
 	if !strings.Contains(renderedRoute, "alias /etc/nginx/openflare-lua/pow/static/;") {
@@ -499,6 +500,9 @@ func TestEnsureLuaAssetsKeepsBaseDirAndRemovesStaleFiles(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(luaDir, "pow", "check.lua")); err != nil {
 		t.Fatalf("expected managed pow lua file to exist, stat err = %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(luaDir, "geoip", "access.lua")); err != nil {
+		t.Fatalf("expected managed geoip lua file to exist, stat err = %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(luaDir, "pow", "static", "js", "main.mjs")); err != nil {
 		t.Fatalf("expected managed pow static asset to exist, stat err = %v", err)
 	}
@@ -552,6 +556,46 @@ func TestManagerEnsureLuaAssetsWritesReadableFiles(t *testing.T) {
 	if !strings.Contains(string(data), filepath.ToSlash(manager.RuntimeConfigDir)+"/pow_config.json") {
 		t.Fatalf("expected pow lua to read runtime config dir, got %s", string(data))
 	}
+	geoipData, err := os.ReadFile(filepath.Join(manager.LuaDir, "geoip", "access.lua"))
+	if err != nil {
+		t.Fatalf("failed to read geoip lua file: %v", err)
+	}
+	if !strings.Contains(string(geoipData), `local db_path = ""`) {
+		t.Fatalf("expected empty geoip database path placeholder to be rendered, got %s", string(geoipData))
+	}
+}
+
+func TestManagerEnsureLuaAssetsRendersGeoIPRuntimeSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	manager := &Manager{
+		LuaDir:                 filepath.Join(tempDir, "lua"),
+		NginxLuaDir:            "/etc/nginx/openflare-lua",
+		RuntimeConfigDir:       filepath.Join(tempDir, "runtime"),
+		NginxGeoIPDatabasePath: "/data/GeoLite2-Country.mmdb",
+		GeoIPLookupAPIURL:      "https://ipdb.example.com/lookup",
+		GeoIPLookupAPIToken:    "secret",
+		GeoIPLookupAPITimeout:  350 * time.Millisecond,
+	}
+
+	if err := manager.EnsureLuaAssets(); err != nil {
+		t.Fatalf("EnsureLuaAssets failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(manager.LuaDir, "geoip", "access.lua"))
+	if err != nil {
+		t.Fatalf("failed to read geoip lua file: %v", err)
+	}
+	text := string(data)
+	for _, expected := range []string{
+		`local db_path = "/data/GeoLite2-Country.mmdb"`,
+		`local api_url = "https://ipdb.example.com/lookup"`,
+		`local api_token = "secret"`,
+		`local api_timeout = 350`,
+		`Authorization"] = "Bearer " .. api_token`,
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected geoip lua to contain %q, got %s", expected, text)
+		}
+	}
 }
 
 func TestEnsureLuaAssetsLeavesRuntimePowConfigOutsideLuaDir(t *testing.T) {
@@ -582,9 +626,12 @@ func TestEnsureLuaAssetsLeavesRuntimePowConfigOutsideLuaDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(luaDir, "pow_config.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected lua pow_config.json to stay absent, stat err = %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(luaDir, "region_config.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected lua region_config.json to stay absent, stat err = %v", err)
+	}
 }
 
-func TestManagerApplyWritesPowConfigToRuntimeDirAndCleansLegacyCopies(t *testing.T) {
+func TestManagerApplyWritesRuntimeConfigFilesAndCleansLegacyCopies(t *testing.T) {
 	tempDir := t.TempDir()
 	certDir := filepath.Join(tempDir, "certs")
 	luaDir := filepath.Join(tempDir, "lua")
@@ -608,7 +655,8 @@ func TestManagerApplyWritesPowConfigToRuntimeDirAndCleansLegacyCopies(t *testing
 		Executor:         &fakeExecutor{},
 	}
 	outcome := manager.Apply(context.Background(), "main", "route", []protocol.SupportFile{
-		{Path: "pow_config.json", Content: "runtime"},
+		{Path: "pow_config.json", Content: "pow-runtime"},
+		{Path: "region_config.json", Content: "region-runtime"},
 	})
 	if outcome.Status != ApplyStatusSuccess {
 		t.Fatalf("Apply failed: %#v", outcome)
@@ -617,8 +665,15 @@ func TestManagerApplyWritesPowConfigToRuntimeDirAndCleansLegacyCopies(t *testing
 	if err != nil {
 		t.Fatalf("failed to read runtime pow config: %v", err)
 	}
-	if string(data) != "runtime" {
+	if string(data) != "pow-runtime" {
 		t.Fatalf("unexpected runtime pow config: %s", string(data))
+	}
+	data, err = os.ReadFile(filepath.Join(runtimeConfigDir, "region_config.json"))
+	if err != nil {
+		t.Fatalf("failed to read runtime region config: %v", err)
+	}
+	if string(data) != "region-runtime" {
+		t.Fatalf("unexpected runtime region config: %s", string(data))
 	}
 	for _, path := range []string{filepath.Join(certDir, "pow_config.json"), filepath.Join(luaDir, "pow_config.json")} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -627,7 +682,7 @@ func TestManagerApplyWritesPowConfigToRuntimeDirAndCleansLegacyCopies(t *testing
 	}
 }
 
-func TestManagerCurrentChecksumIncludesPowConfig(t *testing.T) {
+func TestManagerCurrentChecksumIncludesRuntimeConfigFiles(t *testing.T) {
 	tempDir := t.TempDir()
 	mainPath := filepath.Join(tempDir, "nginx.conf")
 	routePath := filepath.Join(tempDir, "routes.conf")
@@ -646,7 +701,10 @@ func TestManagerCurrentChecksumIncludesPowConfig(t *testing.T) {
 		context.Background(),
 		"access_log __OPENFLARE_ACCESS_LOG__ openflare_json;\n",
 		"location /.within.website/x/cmd/anubis/static/ { alias __OPENFLARE_POW_STATIC_DIR__/; }\n",
-		[]protocol.SupportFile{{Path: "pow_config.json", Content: `[{"domains":["pow.example.com"],"enabled":true}]`}},
+		[]protocol.SupportFile{
+			{Path: "pow_config.json", Content: `[{"domains":["pow.example.com"],"enabled":true}]`},
+			{Path: "region_config.json", Content: `[{"domains":["region.example.com"],"enabled":true}]`},
+		},
 	)
 	if outcome.Status != ApplyStatusSuccess {
 		t.Fatalf("Apply failed: %#v", outcome)
@@ -659,7 +717,10 @@ func TestManagerCurrentChecksumIncludesPowConfig(t *testing.T) {
 	expected := bundleChecksum(
 		"access_log __OPENFLARE_ACCESS_LOG__ openflare_json;\n",
 		"location /.within.website/x/cmd/anubis/static/ { alias __OPENFLARE_POW_STATIC_DIR__/; }\n",
-		[]protocol.SupportFile{{Path: "pow_config.json", Content: `[{"domains":["pow.example.com"],"enabled":true}]`}},
+		[]protocol.SupportFile{
+			{Path: "pow_config.json", Content: `[{"domains":["pow.example.com"],"enabled":true}]`},
+			{Path: "region_config.json", Content: `[{"domains":["region.example.com"],"enabled":true}]`},
+		},
 	)
 	if value != expected {
 		t.Fatalf("unexpected checksum with pow config: got %s want %s", value, expected)
@@ -667,6 +728,9 @@ func TestManagerCurrentChecksumIncludesPowConfig(t *testing.T) {
 }
 
 func TestManagedPowLuaFilesUseInternalChallengeFlow(t *testing.T) {
+	if !strings.Contains(openRestyPowCheckLua, `function M.run()`) {
+		t.Fatal("expected check.lua to expose a callable run function for the unified access handler")
+	}
 	if !strings.Contains(openRestyPowCheckLua, `return ngx.exec("/.within.website/x/cmd/anubis/api/make-challenge")`) {
 		t.Fatal("expected check.lua to internally execute make-challenge instead of issuing a 302 redirect")
 	}
@@ -696,6 +760,29 @@ func TestManagedPowLuaFilesUseInternalChallengeFlow(t *testing.T) {
 	}
 	if !strings.Contains(openRestyPowVerifyLua, `if ngx.var.scheme == "https" then`) {
 		t.Fatal("expected verify.lua to only mark the session cookie as Secure for HTTPS requests")
+	}
+}
+
+func TestGeoIPAccessLuaUsesLocalDatabaseThenFallbackAPIAndCache(t *testing.T) {
+	checks := []string{
+		`local ok_http, http = pcall(require, "resty.http")`,
+		"local cached = ip_cache:get(ip)",
+		"if ensure_mmdb() then",
+		`local request_url = build_api_lookup_url(ip)`,
+		`headers["Authorization"] = "Bearer " .. api_token`,
+		`local function country_from_table(value)`,
+		`country_from_api_payload(res.body)`,
+		"local api_code = lookup_country_with_api(ip)",
+		"ip_cache:set(ip, code, ttl)",
+		"return ngx.exit(ngx.HTTP_FORBIDDEN)",
+	}
+	for _, expected := range checks {
+		if !strings.Contains(openRestyGeoIPAccessLua, expected) {
+			t.Fatalf("expected geoip access lua to contain %q", expected)
+		}
+	}
+	if strings.Index(openRestyGeoIPAccessLua, "if ensure_mmdb() then") > strings.Index(openRestyGeoIPAccessLua, "local api_code = lookup_country_with_api(ip)") {
+		t.Fatal("expected geoip access lua to query local mmdb before fallback API")
 	}
 }
 

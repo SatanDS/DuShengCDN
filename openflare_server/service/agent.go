@@ -249,7 +249,7 @@ func filterAgentSupportFiles(files []SupportFile) []SupportFile {
 		switch {
 		case strings.HasSuffix(path, ".crt"), strings.HasSuffix(path, ".key"), strings.HasSuffix(path, ".pem"):
 			filtered = append(filtered, file)
-		case path == "pow_config.json":
+		case path == "pow_config.json", path == "region_config.json":
 			filtered = append(filtered, file)
 		}
 	}

@@ -27,6 +27,10 @@ const RouteConfigPlaceholder = "__OPENFLARE_ROUTE_CONFIG__"
 const AccessLogPlaceholder = "__OPENFLARE_ACCESS_LOG__"
 const LuaDirPlaceholder = "__OPENFLARE_LUA_DIR__"
 const RuntimeConfigDirPlaceholder = "__OPENFLARE_RUNTIME_CONFIG_DIR__"
+const GeoIPDatabasePathPlaceholder = "__OPENFLARE_GEOIP_DATABASE_PATH__"
+const GeoIPLookupAPIURLPlaceholder = "__OPENFLARE_GEOIP_LOOKUP_API_URL__"
+const GeoIPLookupAPITokenPlaceholder = "__OPENFLARE_GEOIP_LOOKUP_API_TOKEN__"
+const GeoIPLookupAPITimeoutPlaceholder = "__OPENFLARE_GEOIP_LOOKUP_API_TIMEOUT__"
 const ObservabilityListenPlaceholder = "__OPENFLARE_OBSERVABILITY_LISTEN__"
 const ObservabilityPortPlaceholder = "__OPENFLARE_OBSERVABILITY_PORT__"
 const ResolverDirectivePlaceholder = "__OPENFLARE_RESOLVER_DIRECTIVE__"
@@ -143,6 +147,11 @@ type Manager struct {
 	LuaDir                       string
 	NginxLuaDir                  string
 	RuntimeConfigDir             string
+	GeoIPDatabasePath            string
+	NginxGeoIPDatabasePath       string
+	GeoIPLookupAPIURL            string
+	GeoIPLookupAPIToken          string
+	GeoIPLookupAPITimeout        time.Duration
 	OpenrestyObservabilityListen string
 	OpenrestyObservabilityPort   int
 	OpenrestyResolverDirective   string
@@ -220,6 +229,9 @@ func (m *Manager) writeTargetFiles(mainConfig string, routeConfig string, suppor
 	if err := m.writePowConfig(supportFiles); err != nil {
 		return err
 	}
+	if err := m.writeRegionConfig(supportFiles); err != nil {
+		return err
+	}
 	if err := m.ensureMimeTypes(); err != nil {
 		return err
 	}
@@ -289,6 +301,7 @@ func (m *Manager) EnsureLuaAssets() error {
 		return nil
 	}
 	allSupportFiles := append(ManagedObservabilityLuaFiles(), m.managedPowLuaFiles()...)
+	allSupportFiles = append(allSupportFiles, m.managedGeoIPLuaFiles()...)
 	powStaticFiles, err := ManagedPowStaticFiles()
 	if err != nil {
 		return fmt.Errorf("load pow static files: %w", err)
@@ -394,6 +407,9 @@ func (m *Manager) CurrentChecksum() (string, error) {
 	if luaDir := m.luaRuntimePath(); luaDir != "" {
 		normalizedMain = strings.ReplaceAll(normalizedMain, luaDir, LuaDirPlaceholder)
 	}
+	if geoIPDatabasePath := m.geoIPDatabaseRuntimePath(); geoIPDatabasePath != "" {
+		normalizedMain = strings.ReplaceAll(normalizedMain, geoIPDatabasePath, GeoIPDatabasePathPlaceholder)
+	}
 	if listen := strings.TrimSpace(m.OpenrestyObservabilityListen); listen != "" {
 		normalizedMain = strings.ReplaceAll(normalizedMain, listen, ObservabilityListenPlaceholder)
 	}
@@ -410,6 +426,9 @@ func (m *Manager) CurrentChecksum() (string, error) {
 	if luaDir := m.luaRuntimePath(); luaDir != "" {
 		normalizedRoute = strings.ReplaceAll(normalizedRoute, luaDir+"/pow/static", PowStaticDirPlaceholder)
 		normalizedRoute = strings.ReplaceAll(normalizedRoute, luaDir, LuaDirPlaceholder)
+	}
+	if geoIPDatabasePath := m.geoIPDatabaseRuntimePath(); geoIPDatabasePath != "" {
+		normalizedRoute = strings.ReplaceAll(normalizedRoute, geoIPDatabasePath, GeoIPDatabasePathPlaceholder)
 	}
 	files, err := m.readManagedSupportFiles()
 	if err != nil {
@@ -428,6 +447,11 @@ type ExecutorOptions struct {
 	NginxCertDir               string
 	LuaDir                     string
 	NginxLuaDir                string
+	GeoIPDatabasePath          string
+	NginxGeoIPDatabasePath     string
+	GeoIPLookupAPIURL          string
+	GeoIPLookupAPIToken        string
+	GeoIPLookupAPITimeout      time.Duration
 	OpenrestyObservabilityPort int
 }
 
@@ -503,6 +527,7 @@ type backupState struct {
 	RouteData    []byte
 	Files        []protocol.SupportFile
 	PowConfig    *protocol.SupportFile
+	RegionConfig *protocol.SupportFile
 }
 
 type managedFile struct {
@@ -564,6 +589,11 @@ func (m *Manager) backup() (*backupState, error) {
 		return nil, err
 	}
 	state.PowConfig = powConfig
+	regionConfig, err := m.readRegionConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	state.RegionConfig = regionConfig
 	slog.Debug("backup captured", "main_exists", state.MainExisted, "route_exists", state.RouteExisted, "cert_files", len(state.Files))
 	return state, nil
 }
@@ -592,7 +622,10 @@ func (m *Manager) restore(state *backupState) error {
 			return err
 		}
 	}
-	return m.restorePowConfig(state)
+	if err := m.restorePowConfig(state); err != nil {
+		return err
+	}
+	return m.restoreRegionConfig(state)
 }
 
 func (m *Manager) writeCertFiles(certFiles []protocol.SupportFile) error {
@@ -628,10 +661,30 @@ func (m *Manager) writePowConfig(supportFiles []protocol.SupportFile) error {
 	return nil
 }
 
+func (m *Manager) writeRegionConfig(supportFiles []protocol.SupportFile) error {
+	if m.RuntimeConfigDir == "" {
+		return nil
+	}
+	configPath := filepath.Join(m.RuntimeConfigDir, "region_config.json")
+	for _, file := range supportFiles {
+		if file.Path == "region_config.json" {
+			if err := os.WriteFile(configPath, []byte(file.Content), 0o644); err != nil {
+				return fmt.Errorf("write region_config.json: %w", err)
+			}
+			slog.Info("wrote region config", "path", configPath, "size", len(file.Content))
+			return nil
+		}
+	}
+	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove region_config.json: %w", err)
+	}
+	return nil
+}
+
 func (m *Manager) writeManagedCertFiles(certFiles []protocol.SupportFile) error {
 	files := make([]managedFile, 0, len(certFiles))
 	for _, file := range certFiles {
-		if file.Path == "pow_config.json" {
+		if file.Path == "pow_config.json" || file.Path == "region_config.json" {
 			continue
 		}
 		targetPath, err := m.certFileTargetPath(file.Path)
@@ -676,6 +729,9 @@ func (m *Manager) readCertFiles() ([]protocol.SupportFile, error) {
 		if filepath.ToSlash(relativePath) == "pow_config.json" {
 			return nil
 		}
+		if filepath.ToSlash(relativePath) == "region_config.json" {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -713,6 +769,24 @@ func (m *Manager) readPowConfigFile() (*protocol.SupportFile, error) {
 	}, nil
 }
 
+func (m *Manager) readRegionConfigFile() (*protocol.SupportFile, error) {
+	if m.RuntimeConfigDir == "" {
+		return nil, nil
+	}
+	configPath := filepath.Join(m.RuntimeConfigDir, "region_config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &protocol.SupportFile{
+		Path:    "region_config.json",
+		Content: string(data),
+	}, nil
+}
+
 func (m *Manager) readManagedSupportFiles() ([]protocol.SupportFile, error) {
 	files, err := m.readCertFiles()
 	if err != nil {
@@ -724,6 +798,13 @@ func (m *Manager) readManagedSupportFiles() ([]protocol.SupportFile, error) {
 	}
 	if powConfig != nil {
 		files = append(files, *powConfig)
+	}
+	regionConfig, err := m.readRegionConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	if regionConfig != nil {
+		files = append(files, *regionConfig)
 	}
 	return files, nil
 }
@@ -740,6 +821,20 @@ func (m *Manager) restorePowConfig(state *backupState) error {
 		return nil
 	}
 	return os.WriteFile(configPath, []byte(state.PowConfig.Content), 0o644)
+}
+
+func (m *Manager) restoreRegionConfig(state *backupState) error {
+	if state == nil || m.RuntimeConfigDir == "" {
+		return nil
+	}
+	configPath := filepath.Join(m.RuntimeConfigDir, "region_config.json")
+	if state.RegionConfig == nil {
+		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return os.WriteFile(configPath, []byte(state.RegionConfig.Content), 0o644)
 }
 
 func (m *Manager) writeSafeDefaultFallbackFiles() error {
@@ -979,6 +1074,9 @@ func (m *Manager) renderRouteConfig(content string) string {
 		rendered = strings.ReplaceAll(rendered, LuaDirPlaceholder, luaDir)
 		rendered = strings.ReplaceAll(rendered, PowStaticDirPlaceholder, luaDir+"/pow/static")
 	}
+	if geoIPDatabasePath := m.geoIPDatabaseRuntimePath(); geoIPDatabasePath != "" {
+		rendered = strings.ReplaceAll(rendered, GeoIPDatabasePathPlaceholder, geoIPDatabasePath)
+	}
 	return rendered
 }
 
@@ -992,6 +1090,9 @@ func (m *Manager) renderMainConfig(content string) string {
 	}
 	if luaDir := m.luaRuntimePath(); luaDir != "" {
 		rendered = strings.ReplaceAll(rendered, LuaDirPlaceholder, luaDir)
+	}
+	if geoIPDatabasePath := m.geoIPDatabaseRuntimePath(); geoIPDatabasePath != "" {
+		rendered = strings.ReplaceAll(rendered, GeoIPDatabasePathPlaceholder, geoIPDatabasePath)
 	}
 	if listen := strings.TrimSpace(m.OpenrestyObservabilityListen); listen != "" {
 		rendered = strings.ReplaceAll(rendered, ObservabilityListenPlaceholder, listen)
@@ -1010,6 +1111,20 @@ func (m *Manager) managedPowLuaFiles() []protocol.SupportFile {
 	runtimeConfigDir := filepath.ToSlash(strings.TrimSpace(m.RuntimeConfigDir))
 	for index := range files {
 		files[index].Content = strings.ReplaceAll(files[index].Content, RuntimeConfigDirPlaceholder, runtimeConfigDir)
+		files[index].Content = strings.ReplaceAll(files[index].Content, GeoIPDatabasePathPlaceholder, m.geoIPDatabaseRuntimePath())
+	}
+	return files
+}
+
+func (m *Manager) managedGeoIPLuaFiles() []protocol.SupportFile {
+	files := ManagedGeoIPLuaFiles()
+	runtimeConfigDir := filepath.ToSlash(strings.TrimSpace(m.RuntimeConfigDir))
+	for index := range files {
+		files[index].Content = strings.ReplaceAll(files[index].Content, RuntimeConfigDirPlaceholder, runtimeConfigDir)
+		files[index].Content = strings.ReplaceAll(files[index].Content, GeoIPDatabasePathPlaceholder, m.geoIPDatabaseRuntimePath())
+		files[index].Content = strings.ReplaceAll(files[index].Content, GeoIPLookupAPIURLPlaceholder, m.luaStringLiteral(m.GeoIPLookupAPIURL))
+		files[index].Content = strings.ReplaceAll(files[index].Content, GeoIPLookupAPITokenPlaceholder, m.luaStringLiteral(m.GeoIPLookupAPIToken))
+		files[index].Content = strings.ReplaceAll(files[index].Content, GeoIPLookupAPITimeoutPlaceholder, fmt.Sprintf("%d", m.geoIPLookupAPITimeoutMilliseconds()))
 	}
 	return files
 }
@@ -1117,6 +1232,26 @@ func (m *Manager) luaRuntimePath() string {
 		return ""
 	}
 	return filepath.ToSlash(m.NginxLuaDir)
+}
+
+func (m *Manager) geoIPDatabaseRuntimePath() string {
+	if path := strings.TrimSpace(m.NginxGeoIPDatabasePath); path != "" {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(strings.TrimSpace(m.GeoIPDatabasePath))
+}
+
+func (m *Manager) geoIPLookupAPITimeoutMilliseconds() int {
+	if m.GeoIPLookupAPITimeout <= 0 {
+		return 250
+	}
+	return int(m.GeoIPLookupAPITimeout / time.Millisecond)
+}
+
+func (m *Manager) luaStringLiteral(value string) string {
+	escaped := strings.ReplaceAll(strings.TrimSpace(value), `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
 }
 
 func checksum(content string) string {

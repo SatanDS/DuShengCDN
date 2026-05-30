@@ -10,6 +10,7 @@ import (
 
 	"openflare-agent/internal/agent"
 	"openflare-agent/internal/config"
+	agentgeoip "openflare-agent/internal/geoip"
 	"openflare-agent/internal/heartbeat"
 	"openflare-agent/internal/httpclient"
 	"openflare-agent/internal/logging"
@@ -41,6 +42,11 @@ func main() {
 			NginxCertDir:               cfg.OpenrestyCertDir,
 			LuaDir:                     cfg.LuaDir,
 			NginxLuaDir:                cfg.OpenrestyLuaDir,
+			GeoIPDatabasePath:          cfg.GeoIPDatabasePath,
+			NginxGeoIPDatabasePath:     cfg.OpenrestyGeoIPDatabasePath,
+			GeoIPLookupAPIURL:          cfg.GeoIPLookupAPIURL,
+			GeoIPLookupAPIToken:        cfg.GeoIPLookupAPIToken,
+			GeoIPLookupAPITimeout:      cfg.GeoIPLookupAPITimeout.Duration(),
 			OpenrestyObservabilityPort: cfg.OpenrestyObservabilityPort,
 		},
 	)
@@ -54,12 +60,14 @@ func main() {
 		"cert_dir", cfg.CertDir,
 		"lua_dir", cfg.LuaDir,
 		"runtime_config_dir", cfg.RuntimeConfigDir,
+		"geoip_database", cfg.GeoIPDatabasePath,
 	)
 
 	client := httpclient.New(cfg.ServerURL, cfg.InitialAuthToken(), cfg.RequestTimeout.Duration())
 	wsClient := wsclient.New(cfg.ServerURL, cfg.InitialAuthToken(), cfg.RequestTimeout.Duration())
 	stateStore := state.NewStore(cfg.StatePath)
 	observabilityBuffer := state.NewObservabilityBufferStore(cfg.ObservabilityBufferPath)
+	resolverDirective := nginx.ResolverDirective(cfg.OpenrestyPath, cfg.OpenrestyResolvers)
 	runtimeManager := &nginx.Manager{
 		MainConfigPath:               cfg.MainConfigPath,
 		RouteConfigPath:              cfg.RouteConfigPath,
@@ -69,9 +77,14 @@ func main() {
 		LuaDir:                       cfg.LuaDir,
 		NginxLuaDir:                  cfg.OpenrestyLuaDir,
 		RuntimeConfigDir:             cfg.RuntimeConfigDir,
+		GeoIPDatabasePath:            cfg.GeoIPDatabasePath,
+		NginxGeoIPDatabasePath:       cfg.OpenrestyGeoIPDatabasePath,
+		GeoIPLookupAPIURL:            cfg.GeoIPLookupAPIURL,
+		GeoIPLookupAPIToken:          cfg.GeoIPLookupAPIToken,
+		GeoIPLookupAPITimeout:        cfg.GeoIPLookupAPITimeout.Duration(),
 		OpenrestyObservabilityListen: nginx.ObservabilityListenAddress(cfg.OpenrestyPath, cfg.OpenrestyObservabilityPort),
 		OpenrestyObservabilityPort:   cfg.OpenrestyObservabilityPort,
-		OpenrestyResolverDirective:   "",
+		OpenrestyResolverDirective:   resolverDirective,
 		Executor: nginx.NewExecutor(nginx.ExecutorOptions{
 			NginxPath:                  cfg.OpenrestyPath,
 			MainConfigPath:             cfg.MainConfigPath,
@@ -80,6 +93,11 @@ func main() {
 			NginxCertDir:               cfg.OpenrestyCertDir,
 			LuaDir:                     cfg.LuaDir,
 			NginxLuaDir:                cfg.OpenrestyLuaDir,
+			GeoIPDatabasePath:          cfg.GeoIPDatabasePath,
+			NginxGeoIPDatabasePath:     cfg.OpenrestyGeoIPDatabasePath,
+			GeoIPLookupAPIURL:          cfg.GeoIPLookupAPIURL,
+			GeoIPLookupAPIToken:        cfg.GeoIPLookupAPIToken,
+			GeoIPLookupAPITimeout:      cfg.GeoIPLookupAPITimeout.Duration(),
 			OpenrestyObservabilityPort: cfg.OpenrestyObservabilityPort,
 		}),
 	}
@@ -100,6 +118,11 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go (&agentgeoip.Updater{
+		URL:      cfg.GeoIPDatabaseURL,
+		Path:     cfg.GeoIPDatabasePath,
+		Interval: cfg.GeoIPUpdateInterval.Duration(),
+	}).Run(ctx)
 	slog.Info("agent process started")
 
 	if err = runner.Run(ctx); err != nil && err != context.Canceled {

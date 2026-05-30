@@ -67,6 +67,21 @@ func TestLoadDefaultsToManagedBinaryPaths(t *testing.T) {
 	if cfg.ObservabilityBufferPath != filepath.Join(dir, "data", defaultObservabilityBufferRelativePath) {
 		t.Fatalf("unexpected observability buffer path: %s", cfg.ObservabilityBufferPath)
 	}
+	if cfg.GeoIPDatabaseURL != defaultGeoIPDatabaseURL {
+		t.Fatalf("unexpected geoip database url: %s", cfg.GeoIPDatabaseURL)
+	}
+	if cfg.GeoIPDatabasePath != filepath.Join(dir, "data", defaultGeoIPDatabaseRelativePath) {
+		t.Fatalf("unexpected geoip database path: %s", cfg.GeoIPDatabasePath)
+	}
+	if cfg.OpenrestyGeoIPDatabasePath != cfg.GeoIPDatabasePath {
+		t.Fatalf("unexpected openresty geoip database path: %s", cfg.OpenrestyGeoIPDatabasePath)
+	}
+	if cfg.GeoIPUpdateInterval.Duration() != defaultGeoIPUpdateInterval {
+		t.Fatalf("unexpected geoip update interval: %s", cfg.GeoIPUpdateInterval)
+	}
+	if cfg.GeoIPLookupAPITimeout.Duration() != 250*time.Millisecond {
+		t.Fatalf("unexpected geoip lookup api timeout: %s", cfg.GeoIPLookupAPITimeout)
+	}
 	if cfg.OpenrestyObservabilityPort != defaultOpenRestyObservabilityPort {
 		t.Fatalf("unexpected openresty observability port: %d", cfg.OpenrestyObservabilityPort)
 	}
@@ -231,6 +246,9 @@ func TestLoadUsesCustomDataDirForGeneratedFiles(t *testing.T) {
 	if cfg.ObservabilityBufferPath != "/srv/openflare/"+defaultObservabilityBufferRelativePath {
 		t.Fatalf("unexpected observability buffer path: %s", cfg.ObservabilityBufferPath)
 	}
+	if cfg.GeoIPDatabasePath != "/srv/openflare/"+defaultGeoIPDatabaseRelativePath {
+		t.Fatalf("unexpected geoip database path: %s", cfg.GeoIPDatabasePath)
+	}
 	if cfg.CertDir != "/srv/openflare/"+defaultCertDirRelativePath {
 		t.Fatalf("unexpected cert dir: %s", cfg.CertDir)
 	}
@@ -250,6 +268,10 @@ func TestLoadUsesEnvConfigWhenFileIsMissing(t *testing.T) {
 	t.Setenv("OPENFLARE_NODE_IP", "10.0.0.9")
 	t.Setenv("OPENFLARE_DATA_DIR", "/srv/openflare-env")
 	t.Setenv("OPENFLARE_OPENRESTY_PATH", "/usr/bin/openresty")
+	t.Setenv("OPENFLARE_GEOIP_DATABASE_URL", "https://ipdb.example.com/GeoLite2-Country.mmdb")
+	t.Setenv("OPENFLARE_GEOIP_LOOKUP_API_URL", "https://ipdb.example.com/lookup")
+	t.Setenv("OPENFLARE_GEOIP_LOOKUP_API_TOKEN", "token")
+	t.Setenv("OPENFLARE_GEOIP_LOOKUP_API_TIMEOUT", "350ms")
 	t.Setenv("OPENFLARE_HEARTBEAT_INTERVAL", "45s")
 	t.Setenv("OPENFLARE_REQUEST_TIMEOUT", "2500")
 	t.Setenv("OPENFLARE_OPENRESTY_OBSERVABILITY_PORT", "19091")
@@ -266,6 +288,15 @@ func TestLoadUsesEnvConfigWhenFileIsMissing(t *testing.T) {
 	}
 	if cfg.DataDir != "/srv/openflare-env" {
 		t.Fatalf("unexpected data dir: %s", cfg.DataDir)
+	}
+	if cfg.GeoIPDatabaseURL != "https://ipdb.example.com/GeoLite2-Country.mmdb" {
+		t.Fatalf("unexpected geoip database url: %s", cfg.GeoIPDatabaseURL)
+	}
+	if cfg.GeoIPLookupAPIURL != "https://ipdb.example.com/lookup" || cfg.GeoIPLookupAPIToken != "token" {
+		t.Fatalf("unexpected geoip api config: %#v", cfg)
+	}
+	if cfg.GeoIPLookupAPITimeout.Duration() != 350*time.Millisecond {
+		t.Fatalf("unexpected geoip api timeout: %s", cfg.GeoIPLookupAPITimeout)
 	}
 	if cfg.HeartbeatInterval.Duration() != 45*time.Second {
 		t.Fatalf("unexpected heartbeat interval: %s", cfg.HeartbeatInterval)

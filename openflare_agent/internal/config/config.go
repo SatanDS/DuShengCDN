@@ -23,8 +23,11 @@ const (
 	defaultAccessLogRelativePath           = "var/log/openflare/access.log"
 	defaultStateRelativePath               = "var/lib/openflare/agent-state.json"
 	defaultObservabilityBufferRelativePath = "var/lib/openflare/observability-buffer.json"
+	defaultGeoIPDatabaseRelativePath       = "var/lib/openflare/geoip/GeoLite2-Country.mmdb"
+	defaultGeoIPDatabaseURL                = "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb"
 	defaultOpenRestyObservabilityPort      = 18081
 	defaultObservabilityReplayMinutes      = 15
+	defaultGeoIPUpdateInterval             = 24 * time.Hour
 )
 
 type Config struct {
@@ -52,6 +55,13 @@ type Config struct {
 	OpenrestyObservabilityPort int                 `json:"openresty_observability_port"`
 	ObservabilityBufferPath    string              `json:"observability_buffer_path"`
 	ObservabilityReplayMinutes int                 `json:"observability_replay_minutes"`
+	GeoIPDatabaseURL           string              `json:"geoip_database_url"`
+	GeoIPDatabasePath          string              `json:"geoip_database_path"`
+	OpenrestyGeoIPDatabasePath string              `json:"openresty_geoip_database_path"`
+	GeoIPUpdateInterval        MillisecondDuration `json:"geoip_update_interval"`
+	GeoIPLookupAPIURL          string              `json:"geoip_lookup_api_url,omitempty"`
+	GeoIPLookupAPIToken        string              `json:"geoip_lookup_api_token,omitempty"`
+	GeoIPLookupAPITimeout      MillisecondDuration `json:"geoip_lookup_api_timeout,omitempty"`
 	StatePath                  string              `json:"state_path"`
 	HeartbeatInterval          MillisecondDuration `json:"heartbeat_interval"`
 	RequestTimeout             MillisecondDuration `json:"request_timeout"`
@@ -81,6 +91,13 @@ type configFile struct {
 	OpenrestyObservabilityPort int                 `json:"openresty_observability_port"`
 	ObservabilityBufferPath    string              `json:"observability_buffer_path"`
 	ObservabilityReplayMinutes int                 `json:"observability_replay_minutes"`
+	GeoIPDatabaseURL           string              `json:"geoip_database_url"`
+	GeoIPDatabasePath          string              `json:"geoip_database_path"`
+	OpenrestyGeoIPDatabasePath string              `json:"openresty_geoip_database_path"`
+	GeoIPUpdateInterval        MillisecondDuration `json:"geoip_update_interval"`
+	GeoIPLookupAPIURL          string              `json:"geoip_lookup_api_url"`
+	GeoIPLookupAPIToken        string              `json:"geoip_lookup_api_token"`
+	GeoIPLookupAPITimeout      MillisecondDuration `json:"geoip_lookup_api_timeout"`
 	StatePath                  string              `json:"state_path"`
 	HeartbeatInterval          MillisecondDuration `json:"heartbeat_interval"`
 	RequestTimeout             MillisecondDuration `json:"request_timeout"`
@@ -123,6 +140,13 @@ func Load(path string) (*Config, error) {
 		OpenrestyObservabilityPort: file.OpenrestyObservabilityPort,
 		ObservabilityBufferPath:    file.ObservabilityBufferPath,
 		ObservabilityReplayMinutes: file.ObservabilityReplayMinutes,
+		GeoIPDatabaseURL:           file.GeoIPDatabaseURL,
+		GeoIPDatabasePath:          file.GeoIPDatabasePath,
+		OpenrestyGeoIPDatabasePath: file.OpenrestyGeoIPDatabasePath,
+		GeoIPUpdateInterval:        file.GeoIPUpdateInterval,
+		GeoIPLookupAPIURL:          file.GeoIPLookupAPIURL,
+		GeoIPLookupAPIToken:        file.GeoIPLookupAPIToken,
+		GeoIPLookupAPITimeout:      file.GeoIPLookupAPITimeout,
 		StatePath:                  file.StatePath,
 		HeartbeatInterval:          file.HeartbeatInterval,
 		RequestTimeout:             file.RequestTimeout,
@@ -188,6 +212,21 @@ func applyDefaults(cfg *Config, baseDir string) {
 	if cfg.ObservabilityReplayMinutes <= 0 {
 		cfg.ObservabilityReplayMinutes = defaultObservabilityReplayMinutes
 	}
+	if cfg.GeoIPDatabaseURL == "" {
+		cfg.GeoIPDatabaseURL = defaultGeoIPDatabaseURL
+	}
+	if cfg.GeoIPDatabasePath == "" {
+		cfg.GeoIPDatabasePath = joinManagedPath(cfg.DataDir, defaultGeoIPDatabaseRelativePath)
+	}
+	if cfg.OpenrestyGeoIPDatabasePath == "" {
+		cfg.OpenrestyGeoIPDatabasePath = cfg.GeoIPDatabasePath
+	}
+	if cfg.GeoIPUpdateInterval <= 0 {
+		cfg.GeoIPUpdateInterval = MillisecondDuration(defaultGeoIPUpdateInterval)
+	}
+	if cfg.GeoIPLookupAPITimeout <= 0 {
+		cfg.GeoIPLookupAPITimeout = MillisecondDuration(250 * time.Millisecond)
+	}
 	if cfg.HeartbeatInterval <= 0 {
 		cfg.HeartbeatInterval = MillisecondDuration(10 * time.Second)
 	}
@@ -234,6 +273,14 @@ func normalizeManagedPaths(cfg *Config) {
 	if usesSlashPath(cfg.ObservabilityBufferPath) {
 		cfg.ObservabilityBufferPath = filepath.ToSlash(cfg.ObservabilityBufferPath)
 	}
+	if usesSlashPath(cfg.GeoIPDatabasePath) {
+		cfg.GeoIPDatabasePath = filepath.ToSlash(cfg.GeoIPDatabasePath)
+	}
+	if usesSlashPath(cfg.OpenrestyGeoIPDatabasePath) {
+		cfg.OpenrestyGeoIPDatabasePath = filepath.ToSlash(cfg.OpenrestyGeoIPDatabasePath)
+	}
+	cfg.GeoIPLookupAPIURL = strings.TrimSpace(cfg.GeoIPLookupAPIURL)
+	cfg.GeoIPLookupAPIToken = strings.TrimSpace(cfg.GeoIPLookupAPIToken)
 }
 
 func hasEnvConfig() bool {
@@ -245,7 +292,14 @@ func hasEnvConfig() bool {
 		"OPENFLARE_NODE_IP",
 		"OPENFLARE_DATA_DIR",
 		"OPENFLARE_OPENRESTY_PATH",
+		"OPENFLARE_GEOIP_DATABASE_URL",
+		"OPENFLARE_GEOIP_DATABASE_PATH",
+		"OPENFLARE_OPENRESTY_GEOIP_DATABASE_PATH",
+		"OPENFLARE_GEOIP_LOOKUP_API_URL",
+		"OPENFLARE_GEOIP_LOOKUP_API_TOKEN",
 		"OPENFLARE_HEARTBEAT_INTERVAL",
+		"OPENFLARE_GEOIP_UPDATE_INTERVAL",
+		"OPENFLARE_GEOIP_LOOKUP_API_TIMEOUT",
 		"OPENFLARE_REQUEST_TIMEOUT",
 		"OPENFLARE_OPENRESTY_OBSERVABILITY_PORT",
 	} {
@@ -272,9 +326,24 @@ func applyEnvOverrides(cfg *Config) {
 	overrideString("OPENFLARE_NODE_IP", &cfg.NodeIP)
 	overrideString("OPENFLARE_DATA_DIR", &cfg.DataDir)
 	overrideString("OPENFLARE_OPENRESTY_PATH", &cfg.OpenrestyPath)
+	overrideString("OPENFLARE_GEOIP_DATABASE_URL", &cfg.GeoIPDatabaseURL)
+	overrideString("OPENFLARE_GEOIP_DATABASE_PATH", &cfg.GeoIPDatabasePath)
+	overrideString("OPENFLARE_OPENRESTY_GEOIP_DATABASE_PATH", &cfg.OpenrestyGeoIPDatabasePath)
+	overrideString("OPENFLARE_GEOIP_LOOKUP_API_URL", &cfg.GeoIPLookupAPIURL)
+	overrideString("OPENFLARE_GEOIP_LOOKUP_API_TOKEN", &cfg.GeoIPLookupAPIToken)
 	if value := strings.TrimSpace(os.Getenv("OPENFLARE_HEARTBEAT_INTERVAL")); value != "" {
 		if duration, err := parseDurationValue(value); err == nil {
 			cfg.HeartbeatInterval = duration
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("OPENFLARE_GEOIP_LOOKUP_API_TIMEOUT")); value != "" {
+		if duration, err := parseDurationValue(value); err == nil {
+			cfg.GeoIPLookupAPITimeout = duration
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("OPENFLARE_GEOIP_UPDATE_INTERVAL")); value != "" {
+		if duration, err := parseDurationValue(value); err == nil {
+			cfg.GeoIPUpdateInterval = duration
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("OPENFLARE_REQUEST_TIMEOUT")); value != "" {
@@ -335,6 +404,21 @@ func validate(cfg *Config) error {
 	if cfg.ObservabilityReplayMinutes <= 0 {
 		return errors.New("observability_replay_minutes 必须大于 0")
 	}
+	if strings.TrimSpace(cfg.GeoIPDatabaseURL) == "" {
+		return errors.New("geoip_database_url cannot be empty")
+	}
+	if strings.TrimSpace(cfg.GeoIPDatabasePath) == "" {
+		return errors.New("geoip_database_path cannot be empty")
+	}
+	if strings.TrimSpace(cfg.OpenrestyGeoIPDatabasePath) == "" {
+		return errors.New("openresty_geoip_database_path cannot be empty")
+	}
+	if cfg.GeoIPUpdateInterval <= 0 {
+		return errors.New("geoip_update_interval must be greater than 0")
+	}
+	if cfg.GeoIPLookupAPITimeout <= 0 {
+		return errors.New("geoip_lookup_api_timeout must be greater than 0")
+	}
 	return nil
 }
 
@@ -354,6 +438,9 @@ func (cfg *Config) Save() error {
 	}
 	if cfg.configPath == "" {
 		return errors.New("config path 未初始化")
+	}
+	if cfg.GeoIPLookupAPIToken == "" {
+		cfg.GeoIPLookupAPIToken = os.Getenv("OPENFLARE_GEOIP_LOOKUP_API_TOKEN")
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

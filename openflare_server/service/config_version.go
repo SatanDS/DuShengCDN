@@ -487,8 +487,14 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 		return nil, err
 	}
 	supportFiles = append(supportFiles, powSupportFiles...)
+	regionConfigJSON, regionSupportFiles, err := renderRegionConfigBundle(routes)
+	if err != nil {
+		return nil, err
+	}
+	supportFiles = append(supportFiles, regionSupportFiles...)
 	mainConfig := renderMainConfig(openRestyConfig)
 	supportFiles = append(supportFiles, SupportFile{Path: "pow_config.json", Content: powConfigJSON})
+	supportFiles = append(supportFiles, SupportFile{Path: "region_config.json", Content: regionConfigJSON})
 	return &configBundle{
 		Routes:            routes,
 		SnapshotRoutes:    snapshotRoutes,
@@ -1139,7 +1145,7 @@ func renderMainConfigTemplate(templateText string, cfg openRestyConfigSnapshot) 
 		"{{OpenRestyGzip}}", onOff(cfg.GzipEnabled),
 		"{{OpenRestyGzipMinLength}}", fmt.Sprintf("%d", cfg.GzipMinLength),
 		"{{OpenRestyGzipCompLevel}}", fmt.Sprintf("%d", cfg.GzipCompLevel),
-		"{{OpenRestyResolverDirective}}", renderTemplateDirective(cfg.Resolvers != "", fmt.Sprintf("resolver %s;", cfg.Resolvers)),
+		"{{OpenRestyResolverDirective}}", renderOpenRestyResolverDirective(cfg.Resolvers),
 		"{{OpenRestyCacheBlock}}", renderOpenRestyCacheTemplateBlock(cfg),
 		"{{OpenRestyRouteConfigInclude}}", nginxRouteConfigPlaceholder,
 	)
@@ -1151,6 +1157,14 @@ func renderTemplateDirective(enabled bool, statement string) string {
 		return ""
 	}
 	return fmt.Sprintf("    %s\n", statement)
+}
+
+func renderOpenRestyResolverDirective(resolvers string) string {
+	trimmed := strings.TrimSpace(resolvers)
+	if trimmed != "" {
+		return renderTemplateDirective(true, fmt.Sprintf("resolver %s;", trimmed))
+	}
+	return fmt.Sprintf("    %s\n", "__OPENFLARE_RESOLVER_DIRECTIVE__")
 }
 
 func renderOpenRestyCacheTemplateBlock(cfg openRestyConfigSnapshot) string {
@@ -1190,10 +1204,18 @@ func onOff(value bool) string {
 const nginxPowStaticDirPlaceholder = "__OPENFLARE_POW_STATIC_DIR__"
 
 func renderPowAccessBlock(powEnabled bool) string {
-	if !powEnabled {
+	return renderUnifiedAccessBlock(powEnabled)
+}
+
+func renderRouteAccessBlock(powEnabled bool, regionConfig routeRegionRestrictionConfig) string {
+	return renderUnifiedAccessBlock(powEnabled || (regionConfig.Enabled && len(regionConfig.Countries) > 0))
+}
+
+func renderUnifiedAccessBlock(enabled bool) string {
+	if !enabled {
 		return ""
 	}
-	return fmt.Sprintf("    access_by_lua_file %s/pow/check.lua;\n", nginxLuaDirPlaceholder)
+	return fmt.Sprintf("    access_by_lua_file %s/access.lua;\n", nginxLuaDirPlaceholder)
 }
 
 func renderBasicAuthBlock(enabled bool, username, password string) string {
@@ -1213,16 +1235,7 @@ func renderBasicAuthBlock(enabled bool, username, password string) string {
 }
 
 func renderRegionRestrictionBlock(config routeRegionRestrictionConfig) string {
-	if !config.Enabled || len(config.Countries) == 0 {
-		return ""
-	}
-	pattern := fmt.Sprintf("^(?:%s)$", strings.Join(config.Countries, "|"))
-	switch normalizeProxyRouteRegionRestrictionMode(config.Mode) {
-	case proxyRouteRegionModeAllow:
-		return fmt.Sprintf("    if ($http_cf_ipcountry !~* %s) {\n        return 403;\n    }\n", quoteNginxStringLiteral(pattern))
-	default:
-		return fmt.Sprintf("    if ($http_cf_ipcountry ~* %s) {\n        return 403;\n    }\n", quoteNginxStringLiteral(pattern))
-	}
+	return renderUnifiedAccessBlock(config.Enabled && len(config.Countries) > 0)
 }
 
 func renderPowLocationBlocks(powEnabled bool) string {
@@ -1366,7 +1379,7 @@ func nextVersionNumber(now time.Time) (string, error) {
 }
 
 func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, regionConfig routeRegionRestrictionConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n%s%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, renderPowAccessBlock(powEnabled), renderPowLocationBlocks(powEnabled), renderRegionRestrictionBlock(regionConfig), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestrictionConfig) string {
@@ -1376,7 +1389,7 @@ func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestri
 func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, regionConfig routeRegionRestrictionConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
 	certPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateCertFileName(certificateID))
 	keyPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateKeyFileName(certificateID))
-	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n%s%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderPowAccessBlock(powEnabled), renderPowLocationBlocks(powEnabled), renderRegionRestrictionBlock(regionConfig), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderServerNames(domains []string) string {
@@ -1758,6 +1771,48 @@ func renderPowConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, e
 		})
 	}
 	if !hasPow {
+		return "{}", nil, nil
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return "", nil, err
+	}
+	return string(data), nil, nil
+}
+
+func renderRegionConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, error) {
+	type domainEntry struct {
+		Domains   []string `json:"domains"`
+		Enabled   bool     `json:"enabled"`
+		Mode      string   `json:"mode"`
+		Countries []string `json:"countries"`
+	}
+	entries := make([]domainEntry, 0)
+	hasRegionRestriction := false
+	for _, route := range routes {
+		if !route.RegionRestrictionEnabled {
+			continue
+		}
+		countries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(countries) == 0 {
+			continue
+		}
+		domains, err := decodeStoredDomains(route.Domains, route.Domain)
+		if err != nil {
+			return "", nil, err
+		}
+		hasRegionRestriction = true
+		entries = append(entries, domainEntry{
+			Domains:   domains,
+			Enabled:   true,
+			Mode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
+			Countries: countries,
+		})
+	}
+	if !hasRegionRestriction {
 		return "{}", nil, nil
 	}
 	data, err := json.Marshal(entries)

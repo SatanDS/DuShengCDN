@@ -20,10 +20,22 @@ RUN go build -trimpath -ldflags "-s -w -X 'openflare-agent/internal/config.Agent
 FROM openresty/openresty:alpine
 
 RUN apk add --no-cache ca-certificates tzdata \
+        libmaxminddb \
+        libmaxminddb-dev \
+        gcc \
+        musl-dev \
+        make \
+        perl \
+    && opm get anjia0532/lua-resty-maxminddb \
+    && opm get ledgetech/lua-resty-http \
+    && apk del gcc musl-dev make libmaxminddb-dev perl \
+    && ln -sf /usr/lib/libmaxminddb.so.0 /usr/lib/libmaxminddb.so \
     && mkdir -p /etc/openflare /data
 
 ENV OPENFLARE_OPENRESTY_PATH=openresty \
-    OPENFLARE_DATA_DIR=/data
+    OPENFLARE_DATA_DIR=/data \
+    OPENFLARE_GEOIP_DATABASE_PATH=/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb \
+    OPENFLARE_OPENRESTY_GEOIP_DATABASE_PATH=/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb
 
 COPY --from=builder /build/openflare-agent /usr/local/bin/openflare-agent
 

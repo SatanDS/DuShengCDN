@@ -1320,7 +1320,7 @@ function RegionRestrictionSection({
   return (
     <ConfigSectionShell
       title="地区限制"
-      description="基于 Cloudflare CF-IPCountry 请求头按国家或地区代码放行或拦截访问。"
+      description="基于节点本地 GeoIP 数据库按国家或地区代码放行或拦截访问。"
       formId="proxy-route-region-form"
       saving={saving}
     >
@@ -1385,7 +1385,7 @@ function RegionRestrictionSection({
         </ResourceField>
 
         <div className="rounded-2xl border border-[var(--status-info-border)] bg-[var(--status-info-soft)] px-4 py-3 text-sm leading-6 text-[var(--status-info-foreground)]">
-          该功能依赖 Cloudflare 代理向节点转发的 CF-IPCountry 头。建议配合橙云或可信反代使用，并避免源站端口直接暴露到公网。
+          该功能由 Agent 节点本地 GeoIP 数据库识别真实客户端 IP，前置反代需要正确透传 CF-Connecting-IP、X-Real-IP 或 X-Forwarded-For。
         </div>
       </form>
     </ConfigSectionShell>

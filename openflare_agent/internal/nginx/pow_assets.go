@@ -9,7 +9,9 @@ import (
 //go:embed pow_static
 var powStaticFS embed.FS
 
-const openRestyPowCheckLua = `local source = debug.getinfo(1, "S").source or ""
+const openRestyPowCheckLua = `local M = {}
+
+local source = debug.getinfo(1, "S").source or ""
 if string.sub(source, 1, 1) == "@" then
     local script_path = string.sub(source, 2)
     local base_dir = string.match(script_path, "^(.*)/pow/[^/]+%.lua$")
@@ -80,6 +82,7 @@ local function load_pow_config()
     end
 end
 
+function M.run()
 load_pow_config()
 
 local host = ngx.var.host
@@ -157,6 +160,9 @@ ngx.req.set_uri_args({
     host = host
 })
 return ngx.exec("/.within.website/x/cmd/anubis/api/make-challenge")
+end
+
+return M
 `
 
 const openRestyPowChallengeLua = `local cjson = require "cjson.safe"
