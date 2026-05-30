@@ -365,7 +365,7 @@ install_openresty_with_apt() {
   local repo_base
   repo_base="$(apt_repository_base_url "$distro")"
   if [[ "$distro" == "debian" ]] && [[ "$codename" == "trixie" || "$codename" == "testing" || "$codename" == "sid" ]]; then
-    if ! curl -fsSL -o /dev/null "${repo_base}/dists/${codename}/Release"; then
+    if ! curl -fsSL -o /dev/null "${repo_base}/dists/${codename}/Release" 2>/dev/null; then
       log "OpenResty apt repository does not provide ${codename}; falling back to Debian bookworm packages."
       codename="bookworm"
     fi
