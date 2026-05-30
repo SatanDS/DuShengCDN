@@ -1043,6 +1043,36 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                             : '暂无错误率摘要'}
                         </p>
                       </div>
+                      <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                        <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                          缓存命中
+                        </p>
+                        <p className="mt-3 text-2xl font-semibold text-[var(--foreground-primary)]">
+                          {trafficSummary
+                            ? `${trafficSummary.cache_hit_rate_percent.toFixed(1)}%`
+                            : '—'}
+                        </p>
+                        <p className="mt-2 text-sm text-[var(--foreground-secondary)]">
+                          {trafficSummary
+                            ? `HIT ${trafficSummary.cache_hit_count} · MISS ${trafficSummary.cache_miss_count} · STALE ${trafficSummary.cache_stale_count}`
+                            : '暂无缓存摘要'}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                        <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                          回源健康
+                        </p>
+                        <p className="mt-3 text-2xl font-semibold text-[var(--foreground-primary)]">
+                          {trafficSummary
+                            ? trafficSummary.upstream_error_count.toLocaleString('zh-CN')
+                            : '—'}
+                        </p>
+                        <p className="mt-2 text-sm text-[var(--foreground-secondary)]">
+                          {trafficSummary
+                            ? `平均回源 ${trafficSummary.average_upstream_response_ms.toFixed(0)} ms`
+                            : '暂无回源摘要'}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 ) : (

@@ -53,6 +53,7 @@ func migrateTextColumns(db *gorm.DB, backend string) error {
 		{model: &Node{}, table: "nodes", column: "last_error"},
 		{model: &ApplyLog{}, table: "apply_logs", column: "message"},
 		{model: &NodeHealthEvent{}, table: "node_health_events", column: "message"},
+		{model: &ProxyRoute{}, table: "proxy_routes", column: "dns_record_content"},
 	}
 	for _, item := range columns {
 		if !db.Migrator().HasTable(item.model) || !db.Migrator().HasColumn(item.model, item.column) {
@@ -1466,6 +1467,61 @@ func validateDatabaseSchemaV15(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV16 adds basic CDN scheduling metadata and cache/upstream observability counters.
+func migrateV16(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDatabaseSchemaV16(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV15(db, backend); err != nil {
+		return err
+	}
+	nodeColumns := []string{
+		"pool_name",
+		"tags",
+		"weight",
+		"public_ips",
+		"scheduling_enabled",
+		"drain_mode",
+	}
+	for _, column := range nodeColumns {
+		if !db.Migrator().HasColumn(&Node{}, column) {
+			return fmt.Errorf("column nodes.%s is missing", column)
+		}
+	}
+	routeColumns := []string{
+		"node_pool",
+		"dns_target_count",
+		"dns_schedule_mode",
+	}
+	for _, column := range routeColumns {
+		if !db.Migrator().HasColumn(&ProxyRoute{}, column) {
+			return fmt.Errorf("column proxy_routes.%s is missing", column)
+		}
+	}
+	reportColumns := []string{
+		"cache_hit_count",
+		"cache_miss_count",
+		"cache_bypass_count",
+		"cache_expired_count",
+		"cache_stale_count",
+		"upstream_error_count",
+		"upstream_response_ms",
+	}
+	for _, table := range observabilityShardTables("node_request_reports") {
+		for _, column := range reportColumns {
+			if !db.Migrator().HasColumn(table, column) {
+				return fmt.Errorf("column %s.%s is missing", table, column)
+			}
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1482,6 +1538,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 12, toVersion: 13, migrate: migrateV13, validate: validateDatabaseSchemaV13},
 		{fromVersion: 13, toVersion: 14, migrate: migrateV14, validate: validateDatabaseSchemaV14},
 		{fromVersion: 14, toVersion: 15, migrate: migrateV15, validate: validateDatabaseSchemaV15},
+		{fromVersion: 15, toVersion: 16, migrate: migrateV16, validate: validateDatabaseSchemaV16},
 	}
 }
 
@@ -1567,7 +1624,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureDefaultGitHubAuthSource(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV15(db, backend); err != nil {
+	if err := validateDatabaseSchemaV16(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

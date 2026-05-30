@@ -33,6 +33,12 @@ type CloudflareCredentials struct {
 	APIToken string `json:"api_token"`
 }
 
+type cloudflareCredentialsAlias struct {
+	APIToken      string `json:"api_token"`
+	APITokenCamel string `json:"apiToken"`
+	Token         string `json:"token"`
+}
+
 type CloudflareZone struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -54,6 +60,16 @@ type CloudflareDNSUpsertInput struct {
 	Content string
 	Proxied bool
 	TTL     int
+}
+
+type CloudflareDNSSyncInput struct {
+	ZoneID           string
+	Type             string
+	Name             string
+	Contents         []string
+	Proxied          bool
+	TTL              int
+	ManagedRecordIDs map[string]string
 }
 
 type cloudflareClient struct {
@@ -111,8 +127,62 @@ func parseCloudflareCredentials(account *model.DnsAccount) (*CloudflareCredentia
 	return &credentials, nil
 }
 
+func parseCloudflareCredentialsV2(account *model.DnsAccount) (*CloudflareCredentials, error) {
+	if account == nil {
+		return nil, errors.New("DNS account does not exist")
+	}
+	if strings.ToLower(strings.TrimSpace(account.Type)) != cloudflareDNSProviderType {
+		return nil, fmt.Errorf("DNS account type %s does not support automatic DNS; only Cloudflare is supported", account.Type)
+	}
+	token := parseCloudflareAPIToken(account.Authorization)
+	if token == "" {
+		return nil, errors.New("Cloudflare DNS account is missing api_token")
+	}
+	return &CloudflareCredentials{APIToken: token}, nil
+}
+
+func parseCloudflareAPIToken(raw string) string {
+	text := normalizeCloudflareAPIToken(raw)
+	if text == "" {
+		return ""
+	}
+	if strings.HasPrefix(text, "{") {
+		var credentials cloudflareCredentialsAlias
+		if err := json.Unmarshal([]byte(text), &credentials); err != nil {
+			return ""
+		}
+		return normalizeCloudflareAPIToken(firstNonEmptyCloudflareCredential(credentials.APIToken, credentials.APITokenCamel, credentials.Token))
+	}
+	var quoted string
+	if err := json.Unmarshal([]byte(text), &quoted); err == nil {
+		return normalizeCloudflareAPIToken(quoted)
+	}
+	return text
+}
+
+func normalizeCloudflareAPIToken(raw string) string {
+	token := strings.TrimSpace(raw)
+	token = strings.Trim(token, "\"'")
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+	token = strings.ReplaceAll(token, "\r", "")
+	token = strings.ReplaceAll(token, "\n", "")
+	return strings.TrimSpace(token)
+}
+
+func firstNonEmptyCloudflareCredential(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func newCloudflareClientFromAccount(account *model.DnsAccount) (*cloudflareClient, error) {
-	credentials, err := parseCloudflareCredentials(account)
+	credentials, err := parseCloudflareCredentialsV2(account)
 	if err != nil {
 		return nil, err
 	}
@@ -308,6 +378,98 @@ func (client *cloudflareClient) UpsertDNSRecord(ctx context.Context, input Cloud
 	return &response.Result, nil
 }
 
+func (client *cloudflareClient) SyncDNSRecords(ctx context.Context, input CloudflareDNSSyncInput) ([]CloudflareDNSRecord, error) {
+	input.ZoneID = strings.TrimSpace(input.ZoneID)
+	input.Type = normalizeDNSRecordType(input.Type)
+	input.Name = normalizeDNSRecordName(input.Name)
+	if input.TTL <= 0 {
+		input.TTL = cloudflareDefaultRecordTTL
+	}
+	contents, err := normalizeDNSRecordContents(input.Type, input.Contents)
+	if err != nil {
+		return nil, err
+	}
+	if input.ZoneID == "" || input.Name == "" || len(contents) == 0 {
+		return nil, errors.New("Cloudflare DNS record sync parameters are incomplete")
+	}
+	if input.Type == "CNAME" && len(contents) > 1 {
+		return nil, errors.New("CNAME record sync only supports one target")
+	}
+
+	records, err := client.ListDNSRecords(ctx, input.ZoneID, input.Type, input.Name)
+	if err != nil {
+		return nil, err
+	}
+	existingByContent := make(map[string]CloudflareDNSRecord, len(records))
+	for _, record := range records {
+		existingByContent[strings.TrimSpace(record.Content)] = record
+	}
+
+	desiredKeys := make(map[string]struct{}, len(contents))
+	result := make([]CloudflareDNSRecord, 0, len(contents))
+	for _, content := range contents {
+		desiredKeys[dnsRecordStorageKey(input.Name, content)] = struct{}{}
+		payload := map[string]any{
+			"type":    input.Type,
+			"name":    input.Name,
+			"content": content,
+			"ttl":     input.TTL,
+			"proxied": input.Proxied,
+		}
+		if record, ok := existingByContent[content]; ok {
+			updated, err := client.putDNSRecord(ctx, input.ZoneID, record.ID, payload)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, *updated)
+			continue
+		}
+		created, err := client.postDNSRecord(ctx, input.ZoneID, payload)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *created)
+	}
+
+	for key, recordID := range input.ManagedRecordIDs {
+		if isLegacyDNSRecordStorageKey(key) {
+			continue
+		}
+		if _, ok := desiredKeys[key]; ok {
+			continue
+		}
+		if strings.TrimSpace(recordID) == "" {
+			continue
+		}
+		if err := client.DeleteDNSRecord(ctx, input.ZoneID, recordID); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (client *cloudflareClient) postDNSRecord(ctx context.Context, zoneID string, payload map[string]any) (*CloudflareDNSRecord, error) {
+	var response cloudflareAPIResponse[CloudflareDNSRecord]
+	if err := client.do(ctx, http.MethodPost, "/zones/"+url.PathEscape(zoneID)+"/dns_records", nil, payload, &response); err != nil {
+		return nil, err
+	}
+	if !response.Success {
+		return nil, errors.New(cloudflareErrorMessage(response.Errors))
+	}
+	return &response.Result, nil
+}
+
+func (client *cloudflareClient) putDNSRecord(ctx context.Context, zoneID string, recordID string, payload map[string]any) (*CloudflareDNSRecord, error) {
+	var response cloudflareAPIResponse[CloudflareDNSRecord]
+	if err := client.do(ctx, http.MethodPut, "/zones/"+url.PathEscape(zoneID)+"/dns_records/"+url.PathEscape(recordID), nil, payload, &response); err != nil {
+		return nil, err
+	}
+	if !response.Success {
+		return nil, errors.New(cloudflareErrorMessage(response.Errors))
+	}
+	return &response.Result, nil
+}
+
 func (client *cloudflareClient) DeleteDNSRecord(ctx context.Context, zoneID string, recordID string) error {
 	zoneID = strings.TrimSpace(zoneID)
 	recordID = strings.TrimSpace(recordID)
@@ -368,6 +530,60 @@ func validateDNSRecordContent(recordType string, content string) error {
 		return fmt.Errorf("不支持的 DNS 记录类型：%s", recordType)
 	}
 	return nil
+}
+
+func normalizeDNSRecordContents(recordType string, contents []string) ([]string, error) {
+	result := make([]string, 0, len(contents))
+	seen := make(map[string]struct{}, len(contents))
+	for _, content := range contents {
+		normalized := strings.TrimSpace(content)
+		if normalized == "" {
+			continue
+		}
+		if err := validateDNSRecordContent(recordType, normalized); err != nil {
+			return nil, err
+		}
+		if recordType == "CNAME" {
+			normalized = normalizeDNSRecordName(normalized)
+		} else if ip := net.ParseIP(normalized); ip != nil {
+			normalized = ip.String()
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	if len(result) == 0 {
+		return nil, errors.New("DNS record content cannot be empty")
+	}
+	return result, nil
+}
+
+func splitDNSRecordContent(content string) []string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(content, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if item := strings.TrimSpace(part); item != "" {
+			values = append(values, item)
+		}
+	}
+	return values
+}
+
+func dnsRecordStorageKey(recordName string, content string) string {
+	return normalizeDNSRecordName(recordName) + "|" + strings.TrimSpace(content)
+}
+
+func isLegacyDNSRecordStorageKey(key string) bool {
+	name, content, ok := strings.Cut(key, "|")
+	return !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(content) == ""
 }
 
 func encodeDNSRecordIDs(records map[string]string) string {

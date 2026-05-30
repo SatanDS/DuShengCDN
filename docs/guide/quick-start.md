@@ -145,10 +145,11 @@ journalctl -u dushengcdn-agent -f
 在管理端完成以下操作：
 
 1. 新增网站配置，填写网站名称、域名和源站地址。
-2. 确认网站配置处于启用状态。
-3. 发布前查看预览或变更摘要。
-4. 发布并激活新版本。
-5. 等待 Agent 在后续 heartbeat 中发现版本并应用。
+2. 如需自动 DNS，先在节点中维护节点池与公网 IP，再在网站配置中选择节点池和 Cloudflare DNS 账号。
+3. 确认网站配置处于启用状态。
+4. 发布前查看预览或变更摘要。
+5. 发布并激活新版本。
+6. 等待 Agent 在后续 heartbeat 或 WebSocket 通知中发现版本并应用。
 
 版本号格式为 `YYYYMMDD-NNN`。历史版本不可变，回滚通过重新激活旧版本完成。
 
@@ -178,5 +179,6 @@ journalctl -u dushengcdn-agent -n 100 --no-pager
 | Agent 无法注册 | 确认 Agent 节点能访问 `--server-url`，并检查 Token 是否填错或已失效 |
 | Agent 在线但没有应用配置 | 确认网站配置已启用，并且已经发布并激活版本 |
 | OpenResty 应用失败 | 查看节点应用记录和 `journalctl -u dushengcdn-agent`，重点检查域名、证书、源站地址和端口占用 |
+| 自动 DNS 没有解析到节点 | 确认网站绑定的节点池内有在线节点，节点公网 IP 池包含对应 A/AAAA 地址，且未开启排空或关闭调度 |
 
 更多排查路径见 [故障排查](./troubleshooting.md)。

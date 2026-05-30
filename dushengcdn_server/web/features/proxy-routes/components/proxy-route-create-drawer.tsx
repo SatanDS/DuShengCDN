@@ -40,12 +40,18 @@ const domainRowSchema = z.object({
 const createWebsiteSchema = z
   .object({
     site_name: z.string().trim().max(255, '站点标识不能超过 255 个字符'),
+    node_pool: z
+      .string()
+      .trim()
+      .max(64, '节点池名称不能超过 64 个字符'),
     domain_rows: z.array(domainRowSchema).min(1),
     origin_urls_text: z.string().trim().min(1, '请至少填写一个源站地址'),
     dns_auto_sync: z.boolean(),
     dns_account_id: z.string(),
     dns_record_type: z.enum(['A', 'AAAA', 'CNAME']),
     dns_record_content: z.string(),
+    dns_target_count: z.coerce.number().int().min(1).max(20),
+    dns_schedule_mode: z.enum(['healthy', 'weighted']),
     cloudflare_proxied: z.boolean(),
     ddos_protection_mode: z.enum(['off', 'manual', 'auto']),
     enabled: z.boolean(),
@@ -111,12 +117,15 @@ type CreateWebsiteFormValues = z.infer<typeof createWebsiteSchema>;
 
 const defaultValues: CreateWebsiteFormValues = {
   site_name: '',
+  node_pool: 'default',
   domain_rows: [{ domain: '', certificateId: '' }],
   origin_urls_text: '',
   dns_auto_sync: false,
   dns_account_id: '',
   dns_record_type: 'A',
   dns_record_content: '',
+  dns_target_count: 1,
+  dns_schedule_mode: 'healthy',
   cloudflare_proxied: false,
   ddos_protection_mode: 'off',
   enabled: true,
@@ -216,6 +225,7 @@ export function ProxyRouteCreateDrawer({
         origin_uri: primaryOrigin.uri,
         origin_host: '',
         upstreams: urls.slice(1),
+        node_pool: values.node_pool.trim() || 'default',
         enabled: values.enabled,
         enable_https: selectedCertIDs.length > 0,
         cert_id: selectedCertIDs[0] ?? null,
@@ -250,6 +260,8 @@ export function ProxyRouteCreateDrawer({
         dns_record_name: '',
         dns_record_content: values.dns_record_content.trim(),
         dns_auto_target: values.dns_auto_sync && values.dns_record_content.trim() === '',
+        dns_target_count: values.dns_target_count,
+        dns_schedule_mode: values.dns_schedule_mode,
         cloudflare_proxied: values.cloudflare_proxied,
         ddos_protection_mode: values.ddos_protection_mode,
         remark: values.remark.trim(),
@@ -301,6 +313,17 @@ export function ProxyRouteCreateDrawer({
           <ResourceInput
             {...form.register('site_name')}
             placeholder="marketing-site"
+          />
+        </ResourceField>
+
+        <ResourceField
+          label="节点池"
+          hint="自动 DNS 会从该节点池选择公网 IP，缓存清理/预热也会下发到该池在线节点。"
+          error={form.formState.errors.node_pool?.message}
+        >
+          <ResourceInput
+            placeholder="default"
+            {...form.register('node_pool')}
           />
         </ResourceField>
 
@@ -380,7 +403,7 @@ export function ProxyRouteCreateDrawer({
               hint={
                 dnsRecordType === 'CNAME'
                   ? '填写 CNAME 目标域名。'
-                  : '留空会自动选择在线节点 IP，节点离线后自动切换。'
+                  : '可填写多个 A/AAAA 内容；留空会按节点池自动选择在线节点 IP。'
               }
               error={form.formState.errors.dns_record_content?.message}
               className="md:col-span-2"
@@ -389,11 +412,36 @@ export function ProxyRouteCreateDrawer({
                 placeholder={
                   dnsRecordType === 'CNAME'
                     ? 'target.example.com'
-                    : '留空自动选择节点 IP'
+                    : '留空自动选择，或填写多个 IP'
                 }
                 {...form.register('dns_record_content')}
               />
             </ResourceField>
+
+            {dnsRecordType !== 'CNAME' ? (
+              <>
+                <ResourceField
+                  label="目标数量"
+                  hint="自动选择时最多同步多少个节点 IP。"
+                >
+                  <ResourceInput
+                    type="number"
+                    min={1}
+                    max={20}
+                    {...form.register('dns_target_count', {
+                      valueAsNumber: true,
+                    })}
+                  />
+                </ResourceField>
+
+                <ResourceField label="调度模式">
+                  <ResourceSelect {...form.register('dns_schedule_mode')}>
+                    <option value="healthy">按健康时间</option>
+                    <option value="weighted">按权重优先</option>
+                  </ResourceSelect>
+                </ResourceField>
+              </>
+            ) : null}
 
             <ToggleField
               label="开启 Cloudflare 代理"

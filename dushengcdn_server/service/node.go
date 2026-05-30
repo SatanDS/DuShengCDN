@@ -8,6 +8,7 @@ import (
 	"dushengcdn/utils/geoip"
 	"dushengcdn/utils/geoip/iputil"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -18,6 +19,12 @@ import (
 type NodeInput struct {
 	Name              string   `json:"name"`
 	IP                string   `json:"ip"`
+	PoolName          string   `json:"pool_name"`
+	Tags              []string `json:"tags"`
+	Weight            int      `json:"weight"`
+	PublicIPs         []string `json:"public_ips"`
+	SchedulingEnabled *bool    `json:"scheduling_enabled"`
+	DrainMode         bool     `json:"drain_mode"`
 	AutoUpdateEnabled bool     `json:"auto_update_enabled"`
 	GeoName           string   `json:"geo_name"`
 	GeoLatitude       *float64 `json:"geo_latitude"`
@@ -62,17 +69,23 @@ type AgentRegistrationResponse struct {
 }
 
 func CreateNode(input NodeInput) (*NodeView, error) {
-	name, ip, geoName, geoLatitude, geoLongitude, geoManualOverride, err := normalizeNodeInput(input)
-	if name == "" {
+	normalized, err := normalizeNodeInputV2(input, true)
+	if normalized.Name == "" {
 		return nil, errors.New("节点名不能为空")
 	}
 	node := &model.Node{
-		Name:              name,
-		IP:                ip,
-		GeoName:           geoName,
-		GeoLatitude:       geoLatitude,
-		GeoLongitude:      geoLongitude,
-		GeoManualOverride: geoManualOverride,
+		Name:              normalized.Name,
+		IP:                normalized.IP,
+		PoolName:          normalized.PoolName,
+		Tags:              normalized.TagsJSON,
+		Weight:            normalized.Weight,
+		PublicIPs:         normalized.PublicIPsJSON,
+		SchedulingEnabled: normalized.SchedulingEnabled,
+		DrainMode:         normalized.DrainMode,
+		GeoName:           normalized.GeoName,
+		GeoLatitude:       normalized.GeoLatitude,
+		GeoLongitude:      normalized.GeoLongitude,
+		GeoManualOverride: normalized.GeoManualOverride,
 		AgentVersion:      "",
 		NginxVersion:      "",
 		Status:            NodeStatusPending,
@@ -101,20 +114,29 @@ func CreateNode(input NodeInput) (*NodeView, error) {
 }
 
 func UpdateNode(id uint, input NodeInput) (*NodeView, error) {
-	name, ip, geoName, geoLatitude, geoLongitude, geoManualOverride, err := normalizeNodeInput(input)
-	if name == "" {
+	normalized, err := normalizeNodeInputV2(input, true)
+	if normalized.Name == "" {
 		return nil, errors.New("节点名不能为空")
 	}
 	node, err := model.GetNodeByID(id)
 	if err != nil {
 		return nil, err
 	}
-	node.Name = name
-	node.IP = ip
-	node.GeoName = geoName
-	node.GeoLatitude = geoLatitude
-	node.GeoLongitude = geoLongitude
-	node.GeoManualOverride = geoManualOverride
+	if input.SchedulingEnabled == nil {
+		normalized.SchedulingEnabled = node.SchedulingEnabled
+	}
+	node.Name = normalized.Name
+	node.IP = normalized.IP
+	node.PoolName = normalized.PoolName
+	node.Tags = normalized.TagsJSON
+	node.Weight = normalized.Weight
+	node.PublicIPs = normalized.PublicIPsJSON
+	node.SchedulingEnabled = normalized.SchedulingEnabled
+	node.DrainMode = normalized.DrainMode
+	node.GeoName = normalized.GeoName
+	node.GeoLatitude = normalized.GeoLatitude
+	node.GeoLongitude = normalized.GeoLongitude
+	node.GeoManualOverride = normalized.GeoManualOverride
 	node.AutoUpdateEnabled = input.AutoUpdateEnabled
 	if !node.GeoManualOverride {
 		applyGeoInfoFromIP(node, strings.TrimSpace(node.IP))
@@ -299,6 +321,12 @@ func buildNodeView(node *model.Node) *NodeView {
 		NodeID:                    node.NodeID,
 		Name:                      node.Name,
 		IP:                        node.IP,
+		PoolName:                  normalizeNodePoolName(node.PoolName),
+		Tags:                      decodeStoredStringList(node.Tags),
+		Weight:                    normalizeNodeWeight(node.Weight),
+		PublicIPs:                 resolveNodePublicIPs(node),
+		SchedulingEnabled:         node.SchedulingEnabled,
+		DrainMode:                 node.DrainMode,
 		GeoName:                   strings.TrimSpace(node.GeoName),
 		GeoLatitude:               node.GeoLatitude,
 		GeoLongitude:              node.GeoLongitude,
@@ -334,6 +362,132 @@ func nodeViewLastSeenAt(node *model.Node) any {
 		return time.Time{}
 	}
 	return node.LastSeenAt
+}
+
+type normalizedNodeInput struct {
+	Name              string
+	IP                string
+	PoolName          string
+	TagsJSON          string
+	Weight            int
+	PublicIPsJSON     string
+	SchedulingEnabled bool
+	DrainMode         bool
+	GeoName           string
+	GeoLatitude       *float64
+	GeoLongitude      *float64
+	GeoManualOverride bool
+}
+
+func normalizeNodeInputV2(input NodeInput, defaultSchedulingEnabled bool) (normalizedNodeInput, error) {
+	name, ip, geoName, geoLatitude, geoLongitude, geoManualOverride, err := normalizeNodeInput(input)
+	if err != nil {
+		return normalizedNodeInput{}, err
+	}
+	tags := normalizeStringList(input.Tags)
+	publicIPs, err := normalizeNodePublicIPs(ip, input.PublicIPs)
+	if err != nil {
+		return normalizedNodeInput{}, err
+	}
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return normalizedNodeInput{}, err
+	}
+	publicIPsJSON, err := json.Marshal(publicIPs)
+	if err != nil {
+		return normalizedNodeInput{}, err
+	}
+	schedulingEnabled := defaultSchedulingEnabled
+	if input.SchedulingEnabled != nil {
+		schedulingEnabled = *input.SchedulingEnabled
+	}
+	return normalizedNodeInput{
+		Name:              name,
+		IP:                ip,
+		PoolName:          normalizeNodePoolName(input.PoolName),
+		TagsJSON:          string(tagsJSON),
+		Weight:            normalizeNodeWeight(input.Weight),
+		PublicIPsJSON:     string(publicIPsJSON),
+		SchedulingEnabled: schedulingEnabled,
+		DrainMode:         input.DrainMode,
+		GeoName:           geoName,
+		GeoLatitude:       geoLatitude,
+		GeoLongitude:      geoLongitude,
+		GeoManualOverride: geoManualOverride,
+	}, nil
+}
+
+func normalizeNodePoolName(raw string) string {
+	poolName := strings.ToLower(strings.TrimSpace(raw))
+	if poolName == "" {
+		return "default"
+	}
+	if len(poolName) > 64 {
+		return poolName[:64]
+	}
+	return poolName
+}
+
+func normalizeNodeWeight(weight int) int {
+	if weight <= 0 {
+		return 100
+	}
+	if weight > 1000 {
+		return 1000
+	}
+	return weight
+}
+
+func normalizeNodePublicIPs(primaryIP string, values []string) ([]string, error) {
+	candidates := make([]string, 0, len(values)+1)
+	candidates = append(candidates, values...)
+	if strings.TrimSpace(primaryIP) != "" {
+		candidates = append(candidates, primaryIP)
+	}
+	result := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, value := range candidates {
+		ip := iputil.NormalizeIP(value)
+		if ip == "" {
+			continue
+		}
+		if net.ParseIP(ip) == nil {
+			return nil, errors.New("public_ips contains invalid IP")
+		}
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		result = append(result, ip)
+	}
+	return result, nil
+}
+
+func decodeStoredStringList(raw string) []string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return []string{}
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(text), &values); err != nil {
+		return []string{}
+	}
+	return normalizeStringList(values)
+}
+
+func resolveNodePublicIPs(node *model.Node) []string {
+	if node == nil {
+		return []string{}
+	}
+	values := decodeStoredStringList(node.PublicIPs)
+	if len(values) > 0 {
+		return values
+	}
+	ips, err := normalizeNodePublicIPs(node.IP, nil)
+	if err != nil {
+		return []string{}
+	}
+	return ips
 }
 
 func normalizeNodeInput(input NodeInput) (string, string, string, *float64, *float64, bool, error) {

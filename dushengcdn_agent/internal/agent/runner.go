@@ -37,6 +37,8 @@ type Updater interface {
 type RuntimeManager interface {
 	CheckHealth(ctx context.Context) error
 	Restart(ctx context.Context) error
+	PurgeCache(ctx context.Context, operation protocol.CacheOperation) error
+	WarmCache(ctx context.Context, operation protocol.CacheOperation) error
 }
 
 type WebSocketService interface {
@@ -321,6 +323,14 @@ func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WS
 	case protocol.WSMessageTypeUninstallAgent:
 		r.requestSelfUninstall()
 		return false, errors.New("agent uninstall requested by server")
+	case protocol.WSMessageTypeCacheOperation:
+		var operation protocol.CacheOperation
+		if err := json.Unmarshal(message.Payload, &operation); err != nil {
+			slog.Debug("agent ws cache operation decode failed", "error", err)
+			return false, nil
+		}
+		r.handleCacheOperation(ctx, operation)
+		return false, nil
 	case protocol.WSMessageTypePing:
 		slog.Debug("agent ws ping received")
 		return false, conn.SendPong()
@@ -330,6 +340,28 @@ func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WS
 	default:
 		slog.Debug("agent ws unsupported message type", "type", message.Type)
 		return false, nil
+	}
+}
+
+func (r *Runner) handleCacheOperation(ctx context.Context, operation protocol.CacheOperation) {
+	if r.RuntimeManager == nil {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(operation.Action)) {
+	case "purge":
+		if err := r.RuntimeManager.PurgeCache(ctx, operation); err != nil {
+			slog.Error("agent cache purge failed", "operation_id", operation.OperationID, "error", err)
+			return
+		}
+		slog.Info("agent cache purge completed", "operation_id", operation.OperationID, "scope", operation.Scope)
+	case "warm":
+		if err := r.RuntimeManager.WarmCache(ctx, operation); err != nil {
+			slog.Error("agent cache warm failed", "operation_id", operation.OperationID, "error", err)
+			return
+		}
+		slog.Info("agent cache warm completed", "operation_id", operation.OperationID, "urls", len(operation.URLs))
+	default:
+		slog.Warn("agent cache operation action is unsupported", "operation_id", operation.OperationID, "action", operation.Action)
 	}
 }
 

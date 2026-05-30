@@ -56,6 +56,13 @@ type AgentNodeTrafficReport struct {
 	WindowEndedAtUnix   int64            `json:"window_ended_at_unix"`
 	RequestCount        int64            `json:"request_count"`
 	ErrorCount          int64            `json:"error_count"`
+	CacheHitCount       int64            `json:"cache_hit_count"`
+	CacheMissCount      int64            `json:"cache_miss_count"`
+	CacheBypassCount    int64            `json:"cache_bypass_count"`
+	CacheExpiredCount   int64            `json:"cache_expired_count"`
+	CacheStaleCount     int64            `json:"cache_stale_count"`
+	UpstreamErrorCount  int64            `json:"upstream_error_count"`
+	UpstreamResponseMS  int64            `json:"upstream_response_ms"`
 	UniqueVisitorCount  int64            `json:"unique_visitor_count"`
 	StatusCodes         map[string]int64 `json:"status_codes"`
 	TopDomains          map[string]int64 `json:"top_domains"`
@@ -199,6 +206,13 @@ func persistNodeTrafficReport(tx *gorm.DB, nodeID string, report *AgentNodeTraff
 		WindowEndedAt:       timeFromUnix(report.WindowEndedAtUnix, reportedAt),
 		RequestCount:        report.RequestCount,
 		ErrorCount:          report.ErrorCount,
+		CacheHitCount:       report.CacheHitCount,
+		CacheMissCount:      report.CacheMissCount,
+		CacheBypassCount:    report.CacheBypassCount,
+		CacheExpiredCount:   report.CacheExpiredCount,
+		CacheStaleCount:     report.CacheStaleCount,
+		UpstreamErrorCount:  report.UpstreamErrorCount,
+		UpstreamResponseMS:  report.UpstreamResponseMS,
 		UniqueVisitorCount:  report.UniqueVisitorCount,
 		StatusCodesJSON:     marshalJSON(report.StatusCodes),
 		TopDomainsJSON:      marshalJSON(report.TopDomains),

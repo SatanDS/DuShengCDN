@@ -115,6 +115,12 @@ type NodeView struct {
 	NodeID                    string     `json:"node_id"`
 	Name                      string     `json:"name"`
 	IP                        string     `json:"ip"`
+	PoolName                  string     `json:"pool_name"`
+	Tags                      []string   `json:"tags"`
+	Weight                    int        `json:"weight"`
+	PublicIPs                 []string   `json:"public_ips"`
+	SchedulingEnabled         bool       `json:"scheduling_enabled"`
+	DrainMode                 bool       `json:"drain_mode"`
 	GeoName                   string     `json:"geo_name"`
 	GeoLatitude               *float64   `json:"geo_latitude"`
 	GeoLongitude              *float64   `json:"geo_longitude"`

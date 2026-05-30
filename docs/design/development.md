@@ -156,6 +156,7 @@ tests/
 * `proxy_routes` 以“网站配置”作为聚合边界，必须包含唯一 `site_name` 与非空 `domains` 列表。
 * `proxy_routes.domains` 中的每个域名都必须全局唯一，列表第一项视为主域名。
 * `proxy_routes` 继续允许保存一个或多个源站地址用于负载均衡，但不引入独立 `origin_pool`。
+* `proxy_routes.node_pool` 只保存网站绑定的节点池名称，用于自动 DNS 选点和缓存运行时操作，不得演变成按节点分组的配置版本。
 * 遗留 `domain` 字段只能作为 `domains[0]` 的兼容镜像；新代码不得继续以该字段作为唯一业务输入。
 * `proxy_routes` 如关联 `origins`，必须同时保存可直接渲染的 `origin_url`。
 * 源站统一使用 named `upstream` + keepalive；单源站如带 base path 或 query，应在 `proxy_pass` 上补回 URI，多源站仅允许纯 `scheme://host[:port]`。
@@ -164,8 +165,8 @@ tests/
 * `config_versions` 必须保存完整快照与渲染结果。
 * 全局同时只能有一个激活版本。
 * 回滚通过重新激活旧版本实现。
-* `nodes` 只保留控制面状态与低频摘要。
-* 观测数据必须按节点与时间窗口关联，快照与聚合结果采用追加式模型。
+* `nodes` 只保留控制面状态、调度元数据与低频摘要；节点池、公网 IP 池、标签、权重、调度开关和排空状态可以保存在 `nodes`。
+* 观测数据必须按节点与时间窗口关联，快照与聚合结果采用追加式模型；缓存命中、缓存未命中、回源错误与回源耗时属于窗口统计，不写入 `nodes`。
 * 原始访问明细必须有受控保留策略。
 * `auth_sources` 仅保存管理端第三方登录源配置，当前支持 `github` 与 `oidc`。
 * `external_accounts` 是第三方账号与本地用户的唯一绑定来源；旧 `users.github_id` 仅用于兼容迁移，不得作为新登录流程的业务输入。
@@ -228,6 +229,7 @@ tests/
 * 不在线修改历史版本。
 * 不做按节点分组的差异化版本。
 * 预览与 diff 是只读能力，不产生发布记录。
+* 缓存清理和缓存预热是运行时指令，不产生配置版本，不允许扩展成远程命令执行入口。
 
 Agent 必须满足：
 
@@ -235,6 +237,7 @@ Agent 必须满足：
 * 周期性心跳与同步。
 * 常规同步优先依据 heartbeat 返回的版本摘要判断。
 * WS 连接升级开启且连接成功时，Agent 可通过 WS 接收激活版本摘要并立即同步；WS 失败或断开必须退回 HTTP heartbeat。
+* Agent 可通过 WS 接收受限的缓存运行时指令；实现必须绑定明确 action、scope 和参数校验，不得接受任意 shell 命令。
 * 发现新版本时先备份旧文件。
 * 写入主配置、路由配置与必要证书文件。
 * 写入新配置后执行 `openresty -t -c <main_config_path>`，再 reload；reload 发现运行时未启动时允许直接启动 OpenResty。

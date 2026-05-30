@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -378,6 +379,108 @@ func (m *Manager) Restart(ctx context.Context) error {
 	}
 	slog.Info("openresty restart requested")
 	return m.Executor.Restart(ctx)
+}
+
+func (m *Manager) PurgeCache(ctx context.Context, operation protocol.CacheOperation) error {
+	scope := strings.ToLower(strings.TrimSpace(operation.Scope))
+	if scope == "" {
+		scope = "all"
+	}
+	if scope != "all" {
+		return fmt.Errorf("cache purge scope %q is not supported yet", operation.Scope)
+	}
+	cachePath := strings.TrimSpace(operation.CachePath)
+	if cachePath == "" {
+		return errors.New("cache_path is empty")
+	}
+	cleanPath, err := safeCacheDirectory(cachePath)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(cleanPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		target := filepath.Join(cleanPath, entry.Name())
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("remove cache entry %s: %w", target, err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) WarmCache(ctx context.Context, operation protocol.CacheOperation) error {
+	urls := normalizeWarmURLs(operation.URLs)
+	if len(urls) == 0 {
+		return errors.New("cache warm requires at least one URL")
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	for _, targetURL := range urls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("warm cache %s failed: %w", targetURL, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("warm cache %s returned %s", targetURL, resp.Status)
+		}
+	}
+	return nil
+}
+
+func safeCacheDirectory(path string) (string, error) {
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" || cleanPath == "." {
+		return "", errors.New("cache path is unsafe")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		return "", errors.New("cache path must be absolute")
+	}
+	volume := filepath.VolumeName(cleanPath)
+	root := volume + string(os.PathSeparator)
+	if cleanPath == root || cleanPath == volume || len(cleanPath) < len(root)+4 {
+		return "", errors.New("cache path is too broad")
+	}
+	return cleanPath, nil
+}
+
+func normalizeWarmURLs(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		raw := strings.TrimSpace(value)
+		if raw == "" {
+			continue
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			continue
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			continue
+		}
+		normalized := parsed.String()
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result
 }
 
 func (m *Manager) CurrentChecksum() (string, error) {

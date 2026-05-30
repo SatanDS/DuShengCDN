@@ -22,7 +22,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "3010:3000"
     environment:
       SESSION_SECRET: replace-with-random-string
       SQLITE_PATH: /data/dushengcdn.db
@@ -32,4 +32,3 @@ services:
 
     volumes:
       - ./dushengcdn-data:/data
-

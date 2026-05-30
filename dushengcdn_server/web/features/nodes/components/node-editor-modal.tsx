@@ -13,6 +13,7 @@ import {
   ResourceField,
   ResourceInput,
   ResourceSelect,
+  ResourceTextarea,
   SecondaryButton,
   ToggleField,
 } from '@/features/shared/components/resource-primitives';
@@ -43,6 +44,15 @@ const nodeEditorSchema = z
       .min(1, '请输入节点名')
       .max(128, '节点名不能超过 128 个字符'),
     ip: z.string().trim().max(64, '节点 IP 不能超过 64 个字符'),
+    pool_name: z
+      .string()
+      .trim()
+      .max(64, '节点池名称不能超过 64 个字符'),
+    tags_text: z.string(),
+    weight: z.coerce.number().int().min(1, '权重必须大于 0').max(1000, '权重不能超过 1000'),
+    public_ips_text: z.string(),
+    scheduling_enabled: z.boolean(),
+    drain_mode: z.boolean(),
     auto_update_enabled: z.boolean(),
     geo_manual_override: z.boolean(),
     geo_region: z.string(),
@@ -100,6 +110,12 @@ type NodeEditorValues = z.infer<typeof nodeEditorSchema>;
 const defaultValues: NodeEditorValues = {
   name: '',
   ip: '',
+  pool_name: 'default',
+  tags_text: '',
+  weight: 100,
+  public_ips_text: '',
+  scheduling_enabled: true,
+  drain_mode: false,
   auto_update_enabled: false,
   geo_manual_override: false,
   geo_region: '',
@@ -184,6 +200,12 @@ function buildFormValues(node?: Partial<NodeItem> | null): NodeEditorValues {
   return {
     name: node.name ?? '',
     ip: node.ip ?? '',
+    pool_name: node.pool_name ?? 'default',
+    tags_text: (node.tags ?? []).join('\n'),
+    weight: node.weight ?? 100,
+    public_ips_text: (node.public_ips ?? []).join('\n'),
+    scheduling_enabled: node.scheduling_enabled ?? true,
+    drain_mode: node.drain_mode ?? false,
     auto_update_enabled: node.auto_update_enabled ?? false,
     geo_manual_override: node.geo_manual_override ?? false,
     geo_region: node.geo_manual_override ? node.geo_name ?? '' : '',
@@ -200,11 +222,21 @@ function buildFormValues(node?: Partial<NodeItem> | null): NodeEditorValues {
 }
 
 function toPayload(values: NodeEditorValues): NodeMutationPayload {
+  const basePayload = {
+    name: values.name.trim(),
+    ip: values.ip.trim(),
+    pool_name: values.pool_name.trim() || 'default',
+    tags: linesFromTextarea(values.tags_text),
+    weight: values.weight,
+    public_ips: linesFromTextarea(values.public_ips_text),
+    scheduling_enabled: values.scheduling_enabled,
+    drain_mode: values.drain_mode,
+    auto_update_enabled: values.auto_update_enabled,
+  };
+
   if (!values.geo_manual_override) {
     return {
-      name: values.name.trim(),
-      ip: values.ip.trim(),
-      auto_update_enabled: values.auto_update_enabled,
+      ...basePayload,
       geo_manual_override: false,
       geo_name: '',
       geo_latitude: null,
@@ -213,9 +245,7 @@ function toPayload(values: NodeEditorValues): NodeMutationPayload {
   }
 
   return {
-    name: values.name.trim(),
-    ip: values.ip.trim(),
-    auto_update_enabled: values.auto_update_enabled,
+    ...basePayload,
     geo_manual_override: true,
     geo_name: values.geo_name.trim(),
     geo_latitude:
@@ -223,6 +253,13 @@ function toPayload(values: NodeEditorValues): NodeMutationPayload {
     geo_longitude:
       values.geo_longitude.trim() === '' ? null : Number(values.geo_longitude),
   };
+}
+
+function linesFromTextarea(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 export function NodeEditorModal({
@@ -310,6 +347,80 @@ export function NodeEditorModal({
         >
           <ResourceInput placeholder="203.0.113.10" {...form.register('ip')} />
         </ResourceField>
+
+        <div className="grid gap-5 md:grid-cols-2">
+          <ResourceField
+            label="节点池"
+            hint="同一节点池会作为 DNS 调度和缓存操作的默认目标范围。"
+            error={form.formState.errors.pool_name?.message}
+          >
+            <ResourceInput
+              placeholder="default"
+              {...form.register('pool_name')}
+            />
+          </ResourceField>
+
+          <ResourceField
+            label="调度权重"
+            hint="加权模式下优先选择权重更高的节点。"
+            error={form.formState.errors.weight?.message}
+          >
+            <ResourceInput
+              type="number"
+              min={1}
+              max={1000}
+              {...form.register('weight', { valueAsNumber: true })}
+            />
+          </ResourceField>
+        </div>
+
+        <ResourceField
+          label="公网 IP 池"
+          hint="每行一个 A/AAAA 地址；留空时使用节点 IP。自动 DNS 会从这里选取目标。"
+        >
+          <ResourceTextarea
+            className="min-h-24"
+            placeholder={'203.0.113.10\n2001:db8::10'}
+            {...form.register('public_ips_text')}
+          />
+        </ResourceField>
+
+        <ResourceField
+          label="节点标签"
+          hint="每行一个标签，用于后续筛选和运维标记。"
+        >
+          <ResourceTextarea
+            className="min-h-20"
+            placeholder={'edge\nasia'}
+            {...form.register('tags_text')}
+          />
+        </ResourceField>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <ToggleField
+            label="参与自动调度"
+            description="关闭后自动 DNS 不再选择该节点。"
+            checked={form.watch('scheduling_enabled')}
+            onChange={(checked) => {
+              form.setValue('scheduling_enabled', checked, {
+                shouldDirty: true,
+                shouldValidate: true,
+              });
+            }}
+          />
+
+          <ToggleField
+            label="排空模式"
+            description="开启后自动 DNS 和缓存运行时操作都会跳过该节点。"
+            checked={form.watch('drain_mode')}
+            onChange={(checked) => {
+              form.setValue('drain_mode', checked, {
+                shouldDirty: true,
+                shouldValidate: true,
+              });
+            }}
+          />
+        </div>
 
         <ToggleField
           label="Agent 自动更新"

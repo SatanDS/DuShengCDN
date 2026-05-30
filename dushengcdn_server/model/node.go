@@ -7,6 +7,12 @@ type Node struct {
 	NodeID                    string    `json:"node_id" gorm:"uniqueIndex;size:64;not null"`
 	Name                      string    `json:"name" gorm:"size:128;not null"`
 	IP                        string    `json:"ip" gorm:"size:64;not null"`
+	PoolName                  string    `json:"pool_name" gorm:"size:64;not null;default:'default'"`
+	Tags                      string    `json:"tags" gorm:"type:text;not null;default:'[]'"`
+	Weight                    int       `json:"weight" gorm:"not null;default:100"`
+	PublicIPs                 string    `json:"public_ips" gorm:"type:text;not null;default:'[]'"`
+	SchedulingEnabled         bool      `json:"scheduling_enabled" gorm:"not null;default:true"`
+	DrainMode                 bool      `json:"drain_mode" gorm:"not null;default:false"`
 	GeoName                   string    `json:"geo_name" gorm:"size:128"`
 	GeoLatitude               *float64  `json:"geo_latitude"`
 	GeoLongitude              *float64  `json:"geo_longitude"`

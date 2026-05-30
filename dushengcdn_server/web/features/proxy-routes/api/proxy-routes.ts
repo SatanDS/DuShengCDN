@@ -2,6 +2,8 @@ import { apiRequest } from '@/lib/api/client';
 
 import type {
   ManagedDomainMatchResult,
+  ProxyRouteCacheOperationPayload,
+  ProxyRouteCacheOperationResult,
   ProxyRouteItem,
   ProxyRouteMutationPayload,
   TlsCertificateItem,
@@ -33,6 +35,32 @@ export function deleteProxyRoute(id: number) {
   return apiRequest<void>(`/proxy-routes/${id}/delete`, {
     method: 'POST',
   });
+}
+
+export function purgeProxyRouteCache(
+  id: number,
+  payload?: ProxyRouteCacheOperationPayload,
+) {
+  return apiRequest<ProxyRouteCacheOperationResult>(
+    `/proxy-routes/${id}/cache/purge`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload ?? { scope: 'all' }),
+    },
+  );
+}
+
+export function warmProxyRouteCache(
+  id: number,
+  payload: ProxyRouteCacheOperationPayload,
+) {
+  return apiRequest<ProxyRouteCacheOperationResult>(
+    `/proxy-routes/${id}/cache/warm`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function getTlsCertificates() {

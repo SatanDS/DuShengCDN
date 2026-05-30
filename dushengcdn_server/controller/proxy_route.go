@@ -172,3 +172,40 @@ func DeleteProxyRoute(c *gin.Context) {
 		"message": "",
 	})
 }
+
+func PurgeProxyRouteCache(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid id"})
+		return
+	}
+	var input service.CacheOperationInput
+	if err = json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
+		input = service.CacheOperationInput{Scope: "all"}
+	}
+	result, err := service.RequestProxyRouteCachePurge(uint(id), input)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error(), "data": result})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": result})
+}
+
+func WarmProxyRouteCache(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid id"})
+		return
+	}
+	var input service.CacheOperationInput
+	if err = json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid payload"})
+		return
+	}
+	result, err := service.RequestProxyRouteCacheWarm(uint(id), input)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error(), "data": result})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": result})
+}

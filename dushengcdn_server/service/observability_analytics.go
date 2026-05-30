@@ -20,13 +20,22 @@ type TrafficDistributions struct {
 }
 
 type TrafficWindowSummary struct {
-	WindowStartedAt    time.Time `json:"window_started_at"`
-	WindowEndedAt      time.Time `json:"window_ended_at"`
-	RequestCount       int64     `json:"request_count"`
-	UniqueVisitorCount int64     `json:"unique_visitor_count"`
-	ErrorCount         int64     `json:"error_count"`
-	EstimatedQPS       float64   `json:"estimated_qps"`
-	ErrorRatePercent   float64   `json:"error_rate_percent"`
+	WindowStartedAt           time.Time `json:"window_started_at"`
+	WindowEndedAt             time.Time `json:"window_ended_at"`
+	RequestCount              int64     `json:"request_count"`
+	UniqueVisitorCount        int64     `json:"unique_visitor_count"`
+	ErrorCount                int64     `json:"error_count"`
+	CacheHitCount             int64     `json:"cache_hit_count"`
+	CacheMissCount            int64     `json:"cache_miss_count"`
+	CacheBypassCount          int64     `json:"cache_bypass_count"`
+	CacheExpiredCount         int64     `json:"cache_expired_count"`
+	CacheStaleCount           int64     `json:"cache_stale_count"`
+	UpstreamErrorCount        int64     `json:"upstream_error_count"`
+	UpstreamResponseMS        int64     `json:"upstream_response_ms"`
+	CacheHitRatePercent       float64   `json:"cache_hit_rate_percent"`
+	AverageUpstreamResponseMS float64   `json:"average_upstream_response_ms"`
+	EstimatedQPS              float64   `json:"estimated_qps"`
+	ErrorRatePercent          float64   `json:"error_rate_percent"`
 }
 
 type ObservabilityHealthSummary struct {
@@ -52,12 +61,24 @@ func buildTrafficWindowSummary(report *model.NodeRequestReport) TrafficWindowSum
 		RequestCount:       report.RequestCount,
 		UniqueVisitorCount: report.UniqueVisitorCount,
 		ErrorCount:         report.ErrorCount,
+		CacheHitCount:      report.CacheHitCount,
+		CacheMissCount:     report.CacheMissCount,
+		CacheBypassCount:   report.CacheBypassCount,
+		CacheExpiredCount:  report.CacheExpiredCount,
+		CacheStaleCount:    report.CacheStaleCount,
+		UpstreamErrorCount: report.UpstreamErrorCount,
+		UpstreamResponseMS: report.UpstreamResponseMS,
 	}
 	if duration := report.WindowEndedAt.Sub(report.WindowStartedAt).Seconds(); duration > 0 {
 		summary.EstimatedQPS = float64(report.RequestCount) / duration
 	}
 	if report.RequestCount > 0 {
 		summary.ErrorRatePercent = (float64(report.ErrorCount) / float64(report.RequestCount)) * 100
+		summary.AverageUpstreamResponseMS = float64(report.UpstreamResponseMS) / float64(report.RequestCount)
+	}
+	cacheClassifiedCount := report.CacheHitCount + report.CacheMissCount + report.CacheBypassCount + report.CacheExpiredCount + report.CacheStaleCount
+	if cacheClassifiedCount > 0 {
+		summary.CacheHitRatePercent = float64(report.CacheHitCount) / float64(cacheClassifiedCount) * 100
 	}
 	return summary
 }

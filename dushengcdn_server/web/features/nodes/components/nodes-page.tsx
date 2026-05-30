@@ -305,6 +305,7 @@ export function NodesPage() {
                     <tr className="text-[var(--foreground-secondary)]">
                       <th className="px-3 py-3 font-medium">节点</th>
                       <th className="px-3 py-3 font-medium">状态</th>
+                      <th className="px-3 py-3 font-medium">调度</th>
                       <th className="px-3 py-3 font-medium">
                         Agent / OpenResty
                       </th>
@@ -327,6 +328,9 @@ export function NodesPage() {
                               IP：{node.ip || 'null'}
                             </p>
                             <p className="text-xs text-[var(--foreground-secondary)]">
+                              公网 IP：{node.public_ips.join(' / ') || '未配置'}
+                            </p>
+                            <p className="text-xs text-[var(--foreground-secondary)]">
                               位置：{node.geo_name || '未配置地图点位'}
                             </p>
                           </div>
@@ -336,6 +340,22 @@ export function NodesPage() {
                             label={getNodeStatusLabel(node.status)}
                             variant={getNodeStatusVariant(node.status)}
                           />
+                        </td>
+                        <td className="px-3 py-4">
+                          <div className="space-y-2">
+                            <p className="text-xs text-[var(--foreground-secondary)]">
+                              池：{node.pool_name || 'default'} · 权重 {node.weight}
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              <StatusBadge
+                                label={node.scheduling_enabled ? '参与调度' : '暂停调度'}
+                                variant={node.scheduling_enabled ? 'success' : 'warning'}
+                              />
+                              {node.drain_mode ? (
+                                <StatusBadge label="排空" variant="warning" />
+                              ) : null}
+                            </div>
+                          </div>
                         </td>
                         <td className="px-3 py-4 text-[var(--foreground-secondary)]">
                           {node.agent_version || 'unknown'} /{' '}

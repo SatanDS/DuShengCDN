@@ -91,6 +91,22 @@ Agent 上报应用结果
 
 默认启用 WS 连接升级时，Agent 会先通过 HTTP heartbeat 获取设置，随后尝试连接 Agent WebSocket。WS 成功后，周期性状态上报改由 WS 承载；Server 发布或激活版本后会向已连接 Agent 广播激活版本摘要，使 Agent 立即进入既有同步流程。WS 断开或建立失败时，Agent 自动退回 HTTP heartbeat。
 
+### 运行时指令流
+
+```text
+Browser -> Server 管理 API -> Agent WebSocket -> Agent -> OpenResty 本地缓存目录 / HTTP 预热请求
+```
+
+缓存清理与预热是运行时操作，不生成配置版本，也不修改历史快照。Server 只向网站绑定节点池内、在线且 OpenResty 健康的 Agent 下发结构化指令；Agent 仅执行受限的缓存目录清理和 HTTP/HTTPS 预热请求，不暴露远程 shell。
+
+### 自动 DNS 调度流
+
+```text
+ProxyRoute DNS 设置 -> Server 选择节点池在线公网 IP -> Cloudflare DNS A/AAAA 多记录同步
+```
+
+节点池、公网 IP 池、权重、调度开关和排空状态保存在 `nodes`。网站配置通过 `proxy_routes.node_pool` 绑定目标节点池；当启用 Cloudflare 自动 DNS 且记录内容交给系统自动选择时，Server 会按记录类型、节点健康状态、OpenResty 状态、节点池和调度模式选择一个或多个公网 IP，并同步到 Cloudflare。
+
 ### 反向代理流
 
 ```text
@@ -127,6 +143,7 @@ Client -> OpenResty server block -> named upstream -> Origin
 | Agent 主动拉取 | Server 不需要 SSH 权限，也不暴露远程命令入口 |
 | 全局单激活版本 | 降低 MVP 复杂度，保证所有节点默认一致 |
 | 网站配置聚合多域名 | 支持一个业务站点共享站点级策略，同时允许按域名绑定证书 |
+| 节点池只影响调度与运行时操作 | 保持配置发布仍是全局完整版本，避免引入按节点分组版本模型 |
 | 观测数据服务端聚合 | 避免前端临时统计造成口径不一致 |
 
 ## 贡献者阅读建议

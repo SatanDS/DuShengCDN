@@ -369,6 +369,15 @@ export function ProxyRoutesPage() {
 
                         <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
                           <p className="text-xs uppercase tracking-[0.18em] text-[var(--foreground-muted)]">
+                            节点池
+                          </p>
+                          <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                            {route.node_pool || 'default'}
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+                          <p className="text-xs uppercase tracking-[0.18em] text-[var(--foreground-muted)]">
                             源站摘要
                           </p>
                           <p className="mt-2 text-sm text-[var(--foreground-primary)]">

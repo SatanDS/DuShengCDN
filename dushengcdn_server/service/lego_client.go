@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -162,13 +161,13 @@ func SetupDNSProvider(client *lego.Client, dnsAccount *model.DnsAccount, dns1, d
 
 	switch dnsAccount.Type {
 	case "cloudflare":
-		var creds map[string]string
-		if err := json.Unmarshal([]byte(dnsAccount.Authorization), &creds); err != nil {
-			return fmt.Errorf("failed to parse cloudflare credentials: %v", err)
+		token := parseCloudflareAPIToken(dnsAccount.Authorization)
+		if token == "" {
+			return errors.New("Cloudflare DNS account is missing api_token")
 		}
 
 		config := cloudflare.NewDefaultConfig()
-		config.AuthToken = creds["api_token"]
+		config.AuthToken = token
 
 		p, err := cloudflare.NewDNSProviderConfig(config)
 		if err != nil {

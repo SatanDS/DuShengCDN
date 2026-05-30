@@ -93,6 +93,8 @@ func SetApiRouter(router *gin.Engine) {
 			proxyRoute.POST("/", controller.CreateProxyRoute)
 			proxyRoute.POST("/:id/update", controller.UpdateProxyRoute)
 			proxyRoute.POST("/:id/delete", controller.DeleteProxyRoute)
+			proxyRoute.POST("/:id/cache/purge", controller.PurgeProxyRouteCache)
+			proxyRoute.POST("/:id/cache/warm", controller.WarmProxyRouteCache)
 		}
 		originRoute := apiRouter.Group("/origins")
 		originRoute.Use(middleware.AdminAuth())

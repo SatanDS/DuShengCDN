@@ -109,6 +109,14 @@ func (f *fakeRuntimeManager) Restart(ctx context.Context) error {
 	return f.restartErr
 }
 
+func (f *fakeRuntimeManager) PurgeCache(ctx context.Context, operation protocol.CacheOperation) error {
+	return nil
+}
+
+func (f *fakeRuntimeManager) WarmCache(ctx context.Context, operation protocol.CacheOperation) error {
+	return nil
+}
+
 func (f *fakeSyncService) SyncOnStartup(ctx context.Context, target *protocol.ActiveConfigMeta) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

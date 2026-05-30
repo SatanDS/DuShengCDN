@@ -19,7 +19,9 @@ import type { DnsAccountItem } from '@/features/dns-accounts/types';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
 import {
   getProxyRoute,
+  purgeProxyRouteCache,
   updateProxyRoute,
+  warmProxyRouteCache,
 } from '@/features/proxy-routes/api/proxy-routes';
 import {
   buildDomainRowsFromRoute,
@@ -152,6 +154,10 @@ const rateLimitSchema = z
 const reverseProxySchema = z
   .object({
     origin_urls_text: z.string().trim().min(1, '请至少填写一个源站地址'),
+    node_pool: z
+      .string()
+      .trim()
+      .max(64, '节点池名称不能超过 64 个字符'),
     origin_host: z.string(),
     custom_headers_text: z.string(),
     remark: z.string().max(255, '备注不能超过 255 个字符'),
@@ -256,6 +262,8 @@ type DNSAutomationValues = {
   dns_record_name: string;
   dns_record_content: string;
   dns_auto_target: boolean;
+  dns_target_count: number;
+  dns_schedule_mode: 'healthy' | 'weighted';
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'manual' | 'auto';
 };
@@ -565,6 +573,7 @@ function ReverseProxySection({
     resolver: zodResolver(reverseProxySchema),
     defaultValues: {
       origin_urls_text: route.upstream_list.join('\n'),
+      node_pool: route.node_pool || 'default',
       origin_host: route.origin_host || '',
       custom_headers_text: customHeadersToText(route.custom_header_list),
       remark: route.remark || '',
@@ -574,6 +583,7 @@ function ReverseProxySection({
   useEffect(() => {
     form.reset({
       origin_urls_text: route.upstream_list.join('\n'),
+      node_pool: route.node_pool || 'default',
       origin_host: route.origin_host || '',
       custom_headers_text: customHeadersToText(route.custom_header_list),
       remark: route.remark || '',
@@ -603,6 +613,7 @@ function ReverseProxySection({
               origin_address: primaryOrigin.address,
               origin_port: primaryOrigin.port,
               origin_uri: primaryOrigin.uri,
+              node_pool: values.node_pool.trim() || 'default',
               origin_host: values.origin_host.trim(),
               upstreams: urls.slice(1),
               custom_headers: headers,
@@ -622,6 +633,17 @@ function ReverseProxySection({
             className="min-h-40"
             placeholder={'https://origin-a.internal:443\nhttps://origin-b.internal:443'}
             {...form.register('origin_urls_text')}
+          />
+        </ResourceField>
+
+        <ResourceField
+          label="节点池"
+          hint="自动 DNS 会从该节点池选择公网 IP，缓存运行时操作也会下发到该池在线节点。"
+          error={form.formState.errors.node_pool?.message}
+        >
+          <ResourceInput
+            placeholder="default"
+            {...form.register('node_pool')}
           />
         </ResourceField>
 
@@ -679,6 +701,8 @@ function DNSAutomationSection({
       dns_record_name: route.dns_record_name || '',
       dns_record_content: route.dns_record_content || '',
       dns_auto_target: route.dns_auto_target,
+      dns_target_count: route.dns_target_count || 1,
+      dns_schedule_mode: route.dns_schedule_mode || 'healthy',
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
     },
@@ -693,6 +717,8 @@ function DNSAutomationSection({
       dns_record_name: route.dns_record_name || '',
       dns_record_content: route.dns_record_content || '',
       dns_auto_target: route.dns_auto_target,
+      dns_target_count: route.dns_target_count || 1,
+      dns_schedule_mode: route.dns_schedule_mode || 'healthy',
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
     });
@@ -726,6 +752,8 @@ function DNSAutomationSection({
               dns_record_name: values.dns_record_name.trim(),
               dns_record_content: values.dns_record_content.trim(),
               dns_auto_target: values.dns_auto_target,
+              dns_target_count: values.dns_target_count,
+              dns_schedule_mode: values.dns_schedule_mode,
               cloudflare_proxied: values.cloudflare_proxied,
               ddos_protection_mode: values.ddos_protection_mode,
             }),
@@ -811,12 +839,12 @@ function DNSAutomationSection({
           hint={
             recordType === 'CNAME'
               ? 'CNAME 必须手动填写目标域名。'
-              : '启用自动选择时，系统会使用在线节点公网 IP；关闭后会固定使用你填写的内容。'
+              : '启用自动选择时，系统会使用节点池中的在线公网 IP；关闭后可固定多个 A/AAAA 内容。'
           }
         >
           <ResourceInput
             disabled={!autoSyncEnabled || autoTarget}
-            placeholder={recordType === 'CNAME' ? 'target.example.com' : '留空自动选择节点 IP'}
+            placeholder={recordType === 'CNAME' ? 'target.example.com' : '留空自动选择，或填写多个 IP'}
             {...form.register('dns_record_content')}
           />
         </ResourceField>
@@ -830,6 +858,38 @@ function DNSAutomationSection({
             form.setValue('dns_auto_target', checked, { shouldDirty: true })
           }
         />
+
+        {recordType !== 'CNAME' ? (
+          <div className="grid gap-5 md:grid-cols-2">
+            <ResourceField
+              label="目标数量"
+              hint="自动选择时最多同步多少个节点 IP。"
+            >
+              <ResourceInput
+                type="number"
+                min={1}
+                max={20}
+                disabled={!autoSyncEnabled || !autoTarget}
+                {...form.register('dns_target_count', {
+                  valueAsNumber: true,
+                })}
+              />
+            </ResourceField>
+
+            <ResourceField
+              label="调度模式"
+              hint="加权模式会优先选择节点权重更高的 IP。"
+            >
+              <ResourceSelect
+                disabled={!autoSyncEnabled || !autoTarget}
+                {...form.register('dns_schedule_mode')}
+              >
+                <option value="healthy">按健康时间</option>
+                <option value="weighted">按权重优先</option>
+              </ResourceSelect>
+            </ResourceField>
+          </div>
+        ) : null}
 
         <div className="grid gap-5 md:grid-cols-2">
           <ToggleField
@@ -879,6 +939,8 @@ function CacheSection({
   saving: boolean;
   onSave: SaveHandler;
 }) {
+  const queryClient = useQueryClient();
+  const { setFeedback } = useToastFeedback<FeedbackState>();
   const form = useForm<CacheValues>({
     resolver: zodResolver(cacheSchema),
     defaultValues: {
@@ -898,6 +960,39 @@ function CacheSection({
 
   const watchedEnabled = form.watch('cache_enabled');
   const watchedPolicy = form.watch('cache_policy');
+  const purgeMutation = useMutation({
+    mutationFn: () => purgeProxyRouteCache(route.id, { scope: 'all' }),
+    onSuccess: async (result) => {
+      setFeedback({
+        tone: 'success',
+        message: `已下发缓存清理到 ${result.target_nodes.length} 个节点。`,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['proxy-routes', 'detail', route.id],
+      });
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const warmMutation = useMutation({
+    mutationFn: () =>
+      warmProxyRouteCache(route.id, {
+        scope: 'url',
+        urls: route.domains.map(
+          (domain) => `${route.enable_https ? 'https' : 'http'}://${domain}/`,
+        ),
+      }),
+    onSuccess: (result) => {
+      setFeedback({
+        tone: 'success',
+        message: `已下发首页预热到 ${result.target_nodes.length} 个节点。`,
+      });
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
 
   return (
     <ConfigSectionShell
@@ -971,6 +1066,23 @@ function CacheSection({
             {...form.register('cache_rules_text')}
           />
         </ResourceField>
+
+        <div className="flex flex-wrap gap-3">
+          <SecondaryButton
+            type="button"
+            disabled={purgeMutation.isPending}
+            onClick={() => purgeMutation.mutate()}
+          >
+            {purgeMutation.isPending ? '清理中...' : '清理全部缓存'}
+          </SecondaryButton>
+          <SecondaryButton
+            type="button"
+            disabled={warmMutation.isPending || route.domains.length === 0}
+            onClick={() => warmMutation.mutate()}
+          >
+            {warmMutation.isPending ? '预热中...' : '预热站点首页'}
+          </SecondaryButton>
+        </div>
       </form>
     </ConfigSectionShell>
   );

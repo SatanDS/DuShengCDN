@@ -11,6 +11,7 @@ type ProxyRoute struct {
 	OriginURL                  string     `json:"origin_url" gorm:"size:2048;not null"`
 	OriginHost                 string     `json:"origin_host" gorm:"size:255"`
 	Upstreams                  string     `json:"upstreams" gorm:"type:text;not null;default:'[]'"`
+	NodePool                   string     `json:"node_pool" gorm:"size:64;not null;default:'default'"`
 	Enabled                    bool       `json:"enabled" gorm:"not null;default:true"`
 	EnableHTTPS                bool       `json:"enable_https" gorm:"column:enable_https;not null;default:false"`
 	CertID                     *uint      `json:"cert_id"`
@@ -40,8 +41,10 @@ type ProxyRoute struct {
 	DNSZoneID                  string     `json:"dns_zone_id" gorm:"size:128;not null;default:''"`
 	DNSRecordType              string     `json:"dns_record_type" gorm:"size:16;not null;default:'A'"`
 	DNSRecordName              string     `json:"dns_record_name" gorm:"size:255;not null;default:''"`
-	DNSRecordContent           string     `json:"dns_record_content" gorm:"size:255;not null;default:''"`
+	DNSRecordContent           string     `json:"dns_record_content" gorm:"type:text;not null;default:''"`
 	DNSAutoTarget              bool       `json:"dns_auto_target" gorm:"not null;default:false"`
+	DNSTargetCount             int        `json:"dns_target_count" gorm:"not null;default:1"`
+	DNSScheduleMode            string     `json:"dns_schedule_mode" gorm:"size:32;not null;default:'healthy'"`
 	DNSRecordIDs               string     `json:"dns_record_ids" gorm:"type:text;not null;default:'{}'"`
 	CloudflareProxied          bool       `json:"cloudflare_proxied" gorm:"not null;default:false"`
 	DDOSProtectionMode         string     `json:"ddos_protection_mode" gorm:"size:16;not null;default:'off'"`
@@ -87,6 +90,7 @@ func (route *ProxyRoute) Update() error {
 		"origin_url":                   route.OriginURL,
 		"origin_host":                  route.OriginHost,
 		"upstreams":                    route.Upstreams,
+		"node_pool":                    route.NodePool,
 		"enabled":                      route.Enabled,
 		"enable_https":                 route.EnableHTTPS,
 		"cert_id":                      route.CertID,
@@ -118,6 +122,8 @@ func (route *ProxyRoute) Update() error {
 		"dns_record_name":              route.DNSRecordName,
 		"dns_record_content":           route.DNSRecordContent,
 		"dns_auto_target":              route.DNSAutoTarget,
+		"dns_target_count":             route.DNSTargetCount,
+		"dns_schedule_mode":            route.DNSScheduleMode,
 		"dns_record_ids":               route.DNSRecordIDs,
 		"cloudflare_proxied":           route.CloudflareProxied,
 		"ddos_protection_mode":         route.DDOSProtectionMode,

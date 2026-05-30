@@ -14,6 +14,13 @@ type NodeRequestReport struct {
 	WindowEndedAt       time.Time `json:"window_ended_at" gorm:"index"`
 	RequestCount        int64     `json:"request_count"`
 	ErrorCount          int64     `json:"error_count"`
+	CacheHitCount       int64     `json:"cache_hit_count"`
+	CacheMissCount      int64     `json:"cache_miss_count"`
+	CacheBypassCount    int64     `json:"cache_bypass_count"`
+	CacheExpiredCount   int64     `json:"cache_expired_count"`
+	CacheStaleCount     int64     `json:"cache_stale_count"`
+	UpstreamErrorCount  int64     `json:"upstream_error_count"`
+	UpstreamResponseMS  int64     `json:"upstream_response_ms"`
 	UniqueVisitorCount  int64     `json:"unique_visitor_count"`
 	StatusCodesJSON     string    `json:"status_codes_json" gorm:"type:text"`
 	TopDomainsJSON      string    `json:"top_domains_json" gorm:"type:text"`

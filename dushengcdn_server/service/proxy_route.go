@@ -47,6 +47,7 @@ type ProxyRouteInput struct {
 	OriginURI                  string                        `json:"origin_uri"`
 	OriginHost                 string                        `json:"origin_host"`
 	Upstreams                  []string                      `json:"upstreams"`
+	NodePool                   string                        `json:"node_pool"`
 	Enabled                    bool                          `json:"enabled"`
 	EnableHTTPS                bool                          `json:"enable_https"`
 	CertID                     *uint                         `json:"cert_id"`
@@ -78,6 +79,8 @@ type ProxyRouteInput struct {
 	DNSRecordName              string                        `json:"dns_record_name"`
 	DNSRecordContent           string                        `json:"dns_record_content"`
 	DNSAutoTarget              bool                          `json:"dns_auto_target"`
+	DNSTargetCount             int                           `json:"dns_target_count"`
+	DNSScheduleMode            string                        `json:"dns_schedule_mode"`
 	CloudflareProxied          bool                          `json:"cloudflare_proxied"`
 	DDOSProtectionMode         string                        `json:"ddos_protection_mode"`
 	Remark                     string                        `json:"remark"`
@@ -95,6 +98,7 @@ type ProxyRouteView struct {
 	OriginHost                 string                        `json:"origin_host"`
 	Upstreams                  string                        `json:"upstreams"`
 	UpstreamList               []string                      `json:"upstream_list"`
+	NodePool                   string                        `json:"node_pool"`
 	Enabled                    bool                          `json:"enabled"`
 	EnableHTTPS                bool                          `json:"enable_https"`
 	CertID                     *uint                         `json:"cert_id"`
@@ -128,6 +132,8 @@ type ProxyRouteView struct {
 	DNSRecordName              string                        `json:"dns_record_name"`
 	DNSRecordContent           string                        `json:"dns_record_content"`
 	DNSAutoTarget              bool                          `json:"dns_auto_target"`
+	DNSTargetCount             int                           `json:"dns_target_count"`
+	DNSScheduleMode            string                        `json:"dns_schedule_mode"`
 	DNSRecordIDs               map[string]string             `json:"dns_record_ids"`
 	CloudflareProxied          bool                          `json:"cloudflare_proxied"`
 	DDOSProtectionMode         string                        `json:"ddos_protection_mode"`
@@ -335,6 +341,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err := validateOriginHost(originHost); err != nil {
 		return nil, err
 	}
+	nodePool := normalizeNodePoolName(input.NodePool)
 	input.DomainCertIDs = domainCertIDs
 	input.CertIDs = certIDs
 	input.CertID = primaryCertID
@@ -353,7 +360,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		input.BasicAuthPassword = ""
 	}
 
-	dnsAccountID, dnsZoneID, dnsRecordType, dnsRecordName, dnsRecordContent, dnsAutoTarget, ddosMode, err := normalizeProxyRouteDNSSettings(input)
+	dnsAccountID, dnsZoneID, dnsRecordType, dnsRecordName, dnsRecordContent, dnsAutoTarget, dnsTargetCount, dnsScheduleMode, ddosMode, err := normalizeProxyRouteDNSSettingsV2(input)
 	if err != nil {
 		return nil, err
 	}
@@ -368,6 +375,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.OriginURL = upstreams[0]
 	route.OriginHost = originHost
 	route.Upstreams = string(upstreamsJSON)
+	route.NodePool = nodePool
 	route.Enabled = input.Enabled
 	route.EnableHTTPS = input.EnableHTTPS
 	route.CertID = input.CertID
@@ -399,6 +407,8 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.DNSRecordName = dnsRecordName
 	route.DNSRecordContent = dnsRecordContent
 	route.DNSAutoTarget = dnsAutoTarget
+	route.DNSTargetCount = dnsTargetCount
+	route.DNSScheduleMode = dnsScheduleMode
 	route.CloudflareProxied = input.CloudflareProxied
 	route.DDOSProtectionMode = ddosMode
 	route.Remark = remark
@@ -474,6 +484,7 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		OriginHost:                 route.OriginHost,
 		Upstreams:                  route.Upstreams,
 		UpstreamList:               upstreams,
+		NodePool:                   normalizeNodePoolName(route.NodePool),
 		Enabled:                    route.Enabled,
 		EnableHTTPS:                route.EnableHTTPS,
 		CertID:                     certID,
@@ -507,6 +518,8 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		DNSRecordName:              route.DNSRecordName,
 		DNSRecordContent:           route.DNSRecordContent,
 		DNSAutoTarget:              route.DNSAutoTarget,
+		DNSTargetCount:             normalizeDNSTargetCount(route.DNSTargetCount),
+		DNSScheduleMode:            normalizeDNSScheduleMode(route.DNSScheduleMode),
 		DNSRecordIDs:               decodeDNSRecordIDs(route.DNSRecordIDs),
 		CloudflareProxied:          route.CloudflareProxied,
 		DDOSProtectionMode:         normalizeDDOSProtectionMode(route.DDOSProtectionMode),
@@ -693,6 +706,76 @@ func normalizeProxyRouteDNSSettings(input ProxyRouteInput) (*uint, string, strin
 
 	dnsAccountID := *input.DNSAccountID
 	return &dnsAccountID, strings.TrimSpace(input.DNSZoneID), recordType, recordName, recordContent, dnsAutoTarget, ddosMode, nil
+}
+
+func normalizeProxyRouteDNSSettingsV2(input ProxyRouteInput) (*uint, string, string, string, string, bool, int, string, string, error) {
+	ddosMode := normalizeDDOSProtectionMode(input.DDOSProtectionMode)
+	dnsTargetCount := normalizeDNSTargetCount(input.DNSTargetCount)
+	dnsScheduleMode := normalizeDNSScheduleMode(input.DNSScheduleMode)
+	if !input.DNSAutoSync {
+		return nil, "", normalizeDNSRecordType(input.DNSRecordType), "", "", false, dnsTargetCount, dnsScheduleMode, ddosMode, nil
+	}
+	if input.DNSAccountID == nil || *input.DNSAccountID == 0 {
+		return nil, "", "", "", "", false, 0, "", "", errors.New("automatic DNS requires a DNS account")
+	}
+	account, err := model.GetDnsAccountByID(*input.DNSAccountID)
+	if err != nil {
+		return nil, "", "", "", "", false, 0, "", "", errors.New("selected DNS account does not exist")
+	}
+	if strings.ToLower(strings.TrimSpace(account.Type)) != cloudflareDNSProviderType {
+		return nil, "", "", "", "", false, 0, "", "", errors.New("automatic DNS currently only supports Cloudflare DNS accounts")
+	}
+	dnsRecordType := normalizeDNSRecordType(input.DNSRecordType)
+	dnsRecordName := normalizeDNSRecordName(input.DNSRecordName)
+	if dnsRecordName != "" && !isValidProxyRouteDomain(dnsRecordName) {
+		return nil, "", "", "", "", false, 0, "", "", errors.New("DNS record name format is invalid")
+	}
+	dnsRecordContent := strings.TrimSpace(input.DNSRecordContent)
+	if dnsRecordContent != "" {
+		contents, err := normalizeDNSRecordContents(dnsRecordType, splitDNSRecordContent(dnsRecordContent))
+		if err != nil {
+			return nil, "", "", "", "", false, 0, "", "", err
+		}
+		if dnsRecordType == "CNAME" && len(contents) > 1 {
+			return nil, "", "", "", "", false, 0, "", "", errors.New("CNAME record only supports one target")
+		}
+		dnsRecordContent = strings.Join(contents, ",")
+	}
+	dnsAutoTarget := input.DNSAutoTarget || dnsRecordContent == ""
+	if dnsRecordType == "CNAME" && dnsAutoTarget {
+		return nil, "", "", "", "", false, 0, "", "", errors.New("CNAME record requires manual content")
+	}
+	dnsAccountID := *input.DNSAccountID
+	return &dnsAccountID,
+		strings.TrimSpace(input.DNSZoneID),
+		dnsRecordType,
+		dnsRecordName,
+		dnsRecordContent,
+		dnsAutoTarget,
+		dnsTargetCount,
+		dnsScheduleMode,
+		ddosMode,
+		nil
+}
+
+func normalizeDNSTargetCount(value int) int {
+	if value <= 0 {
+		return 1
+	}
+	if value > 20 {
+		return 20
+	}
+	return value
+}
+
+func normalizeDNSScheduleMode(raw string) string {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case "weighted":
+		return "weighted"
+	default:
+		return "healthy"
+	}
 }
 
 func normalizeDDOSProtectionMode(raw string) string {

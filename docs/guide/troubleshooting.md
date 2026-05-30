@@ -15,6 +15,8 @@
 | 发布后节点未更新 | 激活版本、节点 heartbeat、应用记录 |
 | OpenResty 应用失败 | 应用记录、Agent 日志、证书、源站地址、端口占用 |
 | 访问分析无数据 | OpenResty 容器状态、观测端口、Agent 补报日志 |
+| 自动 DNS 不切换 | 节点池、公网 IP 池、调度开关、排空状态、Cloudflare Token 权限 |
+| 缓存操作失败 | Agent WebSocket 连接、网站节点池、OpenResty 缓存目录配置 |
 
 ## Server 无法启动
 
@@ -52,6 +54,8 @@ ls -ld "$(dirname /path/to/dushengcdn.db)"
 | 数据库连接失败 | 检查 `DSN` 中用户名、密码、主机、端口、库名和 `sslmode` |
 | SQLite 无法创建文件 | 检查 `SQLITE_PATH` 所在目录是否存在且可写 |
 | 端口被占用 | 修改 `PORT` 或 `--port`，或停止占用端口的进程 |
+
+Docker Compose 部署时如只想改宿主机访问端口，可把 `ports` 改成 `3010:3000`；容器内应用仍监听 `3000`。
 
 ## 管理端打不开或空白
 
@@ -194,6 +198,27 @@ curl -Iv https://your-domain
 3. 查看 Agent 日志是否有观测采集或补报失败信息。
 4. 检查 `openresty_observability_port` 是否被占用，默认是 `18081`。
 5. 确认 Server 侧没有因数据库清理策略删除对应时间窗口数据。
+
+## 自动 DNS 未按节点切换
+
+按顺序检查：
+
+1. Cloudflare DNS 账号 Token 是否具备 `Zone Read` 和 `DNS Edit` 权限。
+2. Token 是否保存为原始 Token、`Bearer ...` 或 JSON 中的 `api_token` / `apiToken` / `token`。
+3. 网站配置是否启用自动 DNS，并绑定了正确节点池。
+4. 目标节点池内是否有在线节点，且 OpenResty 状态不是 unhealthy。
+5. 节点公网 IP 池是否包含对应记录类型的公网地址；A 记录需要 IPv4，AAAA 记录需要 IPv6。
+6. 节点是否被关闭调度或开启排空模式。
+
+## 缓存清理或预热失败
+
+缓存运行时操作通过 Agent WebSocket 下发。排查时确认：
+
+1. 节点列表中目标节点是否显示在线，且 WebSocket 可用。
+2. 网站绑定的节点池是否正确。
+3. 节点没有开启排空模式。
+4. 已在性能设置中配置并发布 `OpenRestyCachePath`。
+5. Agent 日志中是否出现 `agent cache purge failed` 或 `agent cache warm failed`。
 
 ## 前端构建失败
 

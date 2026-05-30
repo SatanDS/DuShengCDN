@@ -1556,6 +1556,9 @@ func renderProxyHeaderBlock(originURL string, originHost string, customHeaders [
 	builder.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 	builder.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
 	builder.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+	builder.WriteString("        proxy_next_upstream error timeout invalid_header http_500 http_502 http_503 http_504;\n")
+	builder.WriteString("        proxy_next_upstream_tries 3;\n")
+	builder.WriteString("        proxy_next_upstream_timeout 10s;\n")
 	if common.OpenRestyWebsocketEnabled {
 		builder.WriteString("        proxy_http_version 1.1;\n")
 		builder.WriteString("        proxy_set_header Connection $connection_upgrade;\n")

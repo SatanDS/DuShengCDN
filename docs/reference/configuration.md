@@ -113,6 +113,8 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 
 这类参数必须以结构化方式校验、保存并参与版本渲染。
 
+缓存运行时操作使用 `OpenRestyCachePath` 作为 Agent 清理目标。该路径必须是节点本地的绝对路径；Agent 会拒绝过宽泛的路径，并且只支持当前的全量清理与 URL 预热。
+
 约束：
 
 * 管理端不再暴露 `resolver` 配置。
@@ -124,6 +126,21 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 * 默认 `keepalive_timeout` 为 `20` 秒，默认 `proxy_connect_timeout` 为 `3` 秒。
 * 默认事件模型为 `epoll`，并默认开启 `multi_accept`。
 * HTTPS 监听默认使用独立 `http2 on;` 指令，避免新版 Nginx/OpenResty 对 `listen ... http2` 的弃用告警。
+
+## 调度相关数据字段
+
+以下字段由管理端保存到数据库，不是 Agent 配置文件字段：
+
+| 字段 | 位置 | 作用 |
+| --- | --- | --- |
+| `nodes.pool_name` | 节点 | 节点池名称，默认 `default` |
+| `nodes.public_ips` | 节点 | 可用于自动 DNS 的公网 IPv4/IPv6 列表 |
+| `nodes.weight` | 节点 | 加权调度时的优先级，默认 `100` |
+| `nodes.scheduling_enabled` | 节点 | 是否参与自动 DNS 调度 |
+| `nodes.drain_mode` | 节点 | 排空节点，自动 DNS 和缓存运行时操作都会跳过 |
+| `proxy_routes.node_pool` | 网站配置 | 网站绑定的目标节点池 |
+| `proxy_routes.dns_target_count` | 网站配置 | 自动 DNS 最多同步的目标 IP 数量 |
+| `proxy_routes.dns_schedule_mode` | 网站配置 | 自动 DNS 选点模式：`healthy` 或 `weighted` |
 
 ## 前端构建环境变量
 

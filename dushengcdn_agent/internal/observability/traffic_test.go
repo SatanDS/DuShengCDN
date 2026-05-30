@@ -109,6 +109,34 @@ func TestBuildTrafficObservabilityReturnsAccessLogs(t *testing.T) {
 	}
 }
 
+func TestBuildTrafficReportAggregatesCacheAndUpstreamFields(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "dushengcdn_access.log")
+	content := []byte(
+		"{\"ts\":\"2026-03-14T08:00:00Z\",\"host\":\"app.example.com\",\"path\":\"/hit\",\"remote_addr\":\"10.0.0.1\",\"status\":200,\"cache_status\":\"HIT\",\"upstream_status\":\"200\",\"upstream_response_time\":\"0.010\"}\n" +
+			"{\"ts\":\"2026-03-14T08:00:01Z\",\"host\":\"app.example.com\",\"path\":\"/miss\",\"remote_addr\":\"10.0.0.2\",\"status\":502,\"cache_status\":\"MISS\",\"upstream_status\":\"502\",\"upstream_response_time\":\"0.250\"}\n" +
+			"{\"ts\":\"2026-03-14T08:00:02Z\",\"host\":\"app.example.com\",\"path\":\"/stale\",\"remote_addr\":\"10.0.0.3\",\"status\":200,\"cache_status\":\"STALE\",\"upstream_status\":\"200, 503\",\"upstream_response_time\":\"0.020, 0.030\"}\n",
+	)
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	report := BuildTrafficReport(&config.Config{AccessLogPath: logPath}, stateStore, nil)
+	if report == nil {
+		t.Fatal("expected traffic report")
+	}
+	if report.CacheHitCount != 1 || report.CacheMissCount != 1 || report.CacheStaleCount != 1 {
+		t.Fatalf("unexpected cache counters: %+v", report)
+	}
+	if report.UpstreamErrorCount != 2 {
+		t.Fatalf("expected two upstream 5xx statuses, got %d", report.UpstreamErrorCount)
+	}
+	if report.UpstreamResponseMS != 310 {
+		t.Fatalf("unexpected upstream response time sum: %d", report.UpstreamResponseMS)
+	}
+}
+
 func TestBuildTrafficObservabilityTruncatesLongAccessLogPath(t *testing.T) {
 	tempDir := t.TempDir()
 	routeConfigPath := filepath.Join(tempDir, "conf.d", "dushengcdn_routes.conf")

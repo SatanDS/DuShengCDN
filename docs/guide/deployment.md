@@ -99,6 +99,15 @@ docker compose logs -f dushengcdn
 
 首次访问 `http://localhost:3000`，默认账号为 `root` / `123456`。登录后请立即修改默认密码。
 
+如果宿主机 `3000` 端口已被占用，可以只改宿主机侧端口，例如：
+
+```yaml
+ports:
+  - "3010:3000"
+```
+
+此时浏览器访问 `http://localhost:3010`，容器内部仍监听 `3000`。
+
 ## 源码启动 Server
 
 先构建管理端前端：
@@ -129,6 +138,8 @@ go run . --port 3000 --log-dir ./logs
 ```
 
 ## Agent 接入
+
+生产环境建议在节点详情中维护节点池、公网 IP 池、调度权重和排空状态。自动 DNS 会按网站绑定的节点池选择在线且 OpenResty 健康的公网 IP；缓存清理和预热也会下发到同一节点池内的在线 Agent。
 
 使用 `discovery_token` 自动注册：
 

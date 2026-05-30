@@ -54,6 +54,7 @@ export interface ProxyRouteItem {
   origin_host: string;
   upstreams: string;
   upstream_list: string[];
+  node_pool: string;
   enabled: boolean;
   enable_https: boolean;
   cert_id: number | null;
@@ -87,6 +88,8 @@ export interface ProxyRouteItem {
   dns_record_name: string;
   dns_record_content: string;
   dns_auto_target: boolean;
+  dns_target_count: number;
+  dns_schedule_mode: 'healthy' | 'weighted';
   dns_record_ids: Record<string, string>;
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'manual' | 'auto';
@@ -110,6 +113,7 @@ export interface ProxyRouteMutationPayload {
   origin_uri: string;
   origin_host: string;
   upstreams: string[];
+  node_pool?: string;
   enabled: boolean;
   enable_https: boolean;
   cert_id: number | null;
@@ -141,6 +145,8 @@ export interface ProxyRouteMutationPayload {
   dns_record_name?: string;
   dns_record_content?: string;
   dns_auto_target?: boolean;
+  dns_target_count?: number;
+  dns_schedule_mode?: 'healthy' | 'weighted';
   cloudflare_proxied?: boolean;
   ddos_protection_mode?: 'off' | 'manual' | 'auto';
   remark: string;
@@ -165,4 +171,17 @@ export interface ManagedDomainMatchResult {
   matched: boolean;
   candidate?: ManagedDomainMatchCandidate;
   candidates: ManagedDomainMatchCandidate[];
+}
+
+export interface ProxyRouteCacheOperationPayload {
+  scope?: 'all' | 'url' | 'prefix';
+  urls?: string[];
+  prefixes?: string[];
+}
+
+export interface ProxyRouteCacheOperationResult {
+  operation_id: string;
+  action: 'purge' | 'warm';
+  target_nodes: string[];
+  failed_nodes: string[];
 }

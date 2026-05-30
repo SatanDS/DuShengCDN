@@ -17,28 +17,38 @@ import (
 )
 
 type accessLogRecord struct {
-	Timestamp     string `json:"ts"`
-	Host          string `json:"host"`
-	RemoteAddr    string `json:"remote_addr"`
-	Path          string `json:"path"`
-	Status        int    `json:"status"`
-	BytesSent     int64  `json:"bytes_sent"`
-	RequestLength int64  `json:"request_length"`
+	Timestamp            string `json:"ts"`
+	Host                 string `json:"host"`
+	RemoteAddr           string `json:"remote_addr"`
+	Path                 string `json:"path"`
+	Status               int    `json:"status"`
+	BytesSent            int64  `json:"bytes_sent"`
+	RequestLength        int64  `json:"request_length"`
+	CacheStatus          string `json:"cache_status"`
+	UpstreamStatus       string `json:"upstream_status"`
+	UpstreamResponseTime string `json:"upstream_response_time"`
 }
 
 var combinedAccessLogPattern = regexp.MustCompile(`^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(?:\S+)\s+(\S+)(?:\s+[^"]*)?"\s+(\d{3})\s+\S+`)
 
 type trafficAggregate struct {
-	windowStartedAt  time.Time
-	windowEndedAt    time.Time
-	requestCount     int64
-	errorCount       int64
-	openrestyRxBytes int64
-	openrestyTxBytes int64
-	statusCodes      map[string]int64
-	topDomains       map[string]int64
-	visitors         map[string]struct{}
-	logs             []protocol.NodeAccessLog
+	windowStartedAt    time.Time
+	windowEndedAt      time.Time
+	requestCount       int64
+	errorCount         int64
+	cacheHitCount      int64
+	cacheMissCount     int64
+	cacheBypassCount   int64
+	cacheExpiredCount  int64
+	cacheStaleCount    int64
+	upstreamErrorCount int64
+	upstreamResponseMS int64
+	openrestyRxBytes   int64
+	openrestyTxBytes   int64
+	statusCodes        map[string]int64
+	topDomains         map[string]int64
+	visitors           map[string]struct{}
+	logs               []protocol.NodeAccessLog
 }
 
 func BuildTrafficReport(cfg *config.Config, stateStore *state.Store, managed *managedOpenRestyMetrics) *protocol.NodeTrafficReport {
@@ -163,6 +173,9 @@ func (aggregate *trafficAggregate) consume(line []byte) {
 	if record.Status >= 500 {
 		aggregate.errorCount++
 	}
+	aggregate.consumeCacheStatus(record.CacheStatus)
+	aggregate.upstreamErrorCount += countUpstreamErrors(record.UpstreamStatus)
+	aggregate.upstreamResponseMS += parseUpstreamResponseTimeMS(record.UpstreamResponseTime)
 	if record.Status > 0 {
 		aggregate.statusCodes[strconv.Itoa(record.Status)]++
 	}
@@ -188,13 +201,16 @@ func (aggregate *trafficAggregate) consume(line []byte) {
 }
 
 type parsedAccessLogRecord struct {
-	Timestamp     time.Time
-	Host          string
-	RemoteAddr    string
-	Path          string
-	Status        int
-	BytesSent     int64
-	RequestLength int64
+	Timestamp            time.Time
+	Host                 string
+	RemoteAddr           string
+	Path                 string
+	Status               int
+	BytesSent            int64
+	RequestLength        int64
+	CacheStatus          string
+	UpstreamStatus       string
+	UpstreamResponseTime string
 }
 
 func parseAccessLogRecord(raw string) (parsedAccessLogRecord, bool) {
@@ -215,13 +231,16 @@ func parseJSONAccessLogRecord(raw string) (parsedAccessLogRecord, bool) {
 		return parsedAccessLogRecord{}, false
 	}
 	return parsedAccessLogRecord{
-		Timestamp:     timestamp,
-		Host:          strings.TrimSpace(record.Host),
-		RemoteAddr:    strings.TrimSpace(record.RemoteAddr),
-		Path:          normalizeAccessLogPath(record.Path),
-		Status:        record.Status,
-		BytesSent:     record.BytesSent,
-		RequestLength: record.RequestLength,
+		Timestamp:            timestamp,
+		Host:                 strings.TrimSpace(record.Host),
+		RemoteAddr:           strings.TrimSpace(record.RemoteAddr),
+		Path:                 normalizeAccessLogPath(record.Path),
+		Status:               record.Status,
+		BytesSent:            record.BytesSent,
+		RequestLength:        record.RequestLength,
+		CacheStatus:          strings.TrimSpace(record.CacheStatus),
+		UpstreamStatus:       strings.TrimSpace(record.UpstreamStatus),
+		UpstreamResponseTime: strings.TrimSpace(record.UpstreamResponseTime),
 	}, true
 }
 
@@ -256,11 +275,59 @@ func (aggregate *trafficAggregate) report() *protocol.NodeTrafficReport {
 		WindowEndedAtUnix:   aggregate.windowEndedAt.Unix(),
 		RequestCount:        aggregate.requestCount,
 		ErrorCount:          aggregate.errorCount,
+		CacheHitCount:       aggregate.cacheHitCount,
+		CacheMissCount:      aggregate.cacheMissCount,
+		CacheBypassCount:    aggregate.cacheBypassCount,
+		CacheExpiredCount:   aggregate.cacheExpiredCount,
+		CacheStaleCount:     aggregate.cacheStaleCount,
+		UpstreamErrorCount:  aggregate.upstreamErrorCount,
+		UpstreamResponseMS:  aggregate.upstreamResponseMS,
 		UniqueVisitorCount:  int64(len(aggregate.visitors)),
 		StatusCodes:         cloneTrafficCounts(aggregate.statusCodes, 0),
 		TopDomains:          topCounts(aggregate.topDomains, 8),
 		SourceCountries:     map[string]int64{},
 	}
+}
+
+func (aggregate *trafficAggregate) consumeCacheStatus(status string) {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "HIT":
+		aggregate.cacheHitCount++
+	case "MISS":
+		aggregate.cacheMissCount++
+	case "BYPASS":
+		aggregate.cacheBypassCount++
+	case "EXPIRED":
+		aggregate.cacheExpiredCount++
+	case "STALE", "UPDATING", "REVALIDATED":
+		aggregate.cacheStaleCount++
+	}
+}
+
+func countUpstreamErrors(raw string) int64 {
+	var count int64
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ':' || r == ';' || r == ' '
+	}) {
+		status, err := strconv.Atoi(strings.TrimSpace(part))
+		if err == nil && status >= 500 {
+			count++
+		}
+	}
+	return count
+}
+
+func parseUpstreamResponseTimeMS(raw string) int64 {
+	var total int64
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ':' || r == ';' || r == ' '
+	}) {
+		value, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err == nil && value > 0 {
+			total += int64(value * 1000)
+		}
+	}
+	return total
 }
 
 func (aggregate *trafficAggregate) accessLogs() []protocol.NodeAccessLog {

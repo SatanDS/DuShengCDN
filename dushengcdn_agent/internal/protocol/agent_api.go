@@ -38,6 +38,7 @@ const (
 	WSMessageTypeActiveConfig    = "active_config"
 	WSMessageTypeForceSyncConfig = "force_sync_config"
 	WSMessageTypeUninstallAgent  = "uninstall_agent"
+	WSMessageTypeCacheOperation  = "cache_operation"
 	WSMessageTypePing            = "ping"
 	WSMessageTypePong            = "pong"
 )
@@ -119,10 +120,26 @@ type NodeTrafficReport struct {
 	WindowEndedAtUnix   int64            `json:"window_ended_at_unix"`
 	RequestCount        int64            `json:"request_count"`
 	ErrorCount          int64            `json:"error_count"`
+	CacheHitCount       int64            `json:"cache_hit_count"`
+	CacheMissCount      int64            `json:"cache_miss_count"`
+	CacheBypassCount    int64            `json:"cache_bypass_count"`
+	CacheExpiredCount   int64            `json:"cache_expired_count"`
+	CacheStaleCount     int64            `json:"cache_stale_count"`
+	UpstreamErrorCount  int64            `json:"upstream_error_count"`
+	UpstreamResponseMS  int64            `json:"upstream_response_ms"`
 	UniqueVisitorCount  int64            `json:"unique_visitor_count"`
 	StatusCodes         map[string]int64 `json:"status_codes"`
 	TopDomains          map[string]int64 `json:"top_domains"`
 	SourceCountries     map[string]int64 `json:"source_countries"`
+}
+
+type CacheOperation struct {
+	OperationID string   `json:"operation_id"`
+	Action      string   `json:"action"`
+	Scope       string   `json:"scope"`
+	URLs        []string `json:"urls,omitempty"`
+	Prefixes    []string `json:"prefixes,omitempty"`
+	CachePath   string   `json:"cache_path,omitempty"`
 }
 
 type NodeAccessLog struct {

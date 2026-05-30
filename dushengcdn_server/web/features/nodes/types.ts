@@ -5,6 +5,12 @@ export interface NodeItem {
   node_id: string;
   name: string;
   ip: string;
+  pool_name: string;
+  tags: string[];
+  weight: number;
+  public_ips: string[];
+  scheduling_enabled: boolean;
+  drain_mode: boolean;
   geo_name: string;
   geo_latitude?: number | null;
   geo_longitude?: number | null;
@@ -48,6 +54,12 @@ export interface NodeDeleteResult {
 export interface NodeMutationPayload {
   name: string;
   ip: string;
+  pool_name?: string;
+  tags?: string[];
+  weight?: number;
+  public_ips?: string[];
+  scheduling_enabled?: boolean;
+  drain_mode?: boolean;
   auto_update_enabled: boolean;
   geo_name: string;
   geo_latitude?: number | null;
@@ -109,6 +121,13 @@ export interface NodeTrafficReport {
   window_ended_at: string;
   request_count: number;
   error_count: number;
+  cache_hit_count: number;
+  cache_miss_count: number;
+  cache_bypass_count: number;
+  cache_expired_count: number;
+  cache_stale_count: number;
+  upstream_error_count: number;
+  upstream_response_ms: number;
   unique_visitor_count: number;
   status_codes_json: string;
   top_domains_json: string;
@@ -162,6 +181,15 @@ export interface NodeTrafficSummary {
   request_count: number;
   unique_visitor_count: number;
   error_count: number;
+  cache_hit_count: number;
+  cache_miss_count: number;
+  cache_bypass_count: number;
+  cache_expired_count: number;
+  cache_stale_count: number;
+  upstream_error_count: number;
+  upstream_response_ms: number;
+  cache_hit_rate_percent: number;
+  average_upstream_response_ms: number;
   estimated_qps: number;
   error_rate_percent: number;
 }

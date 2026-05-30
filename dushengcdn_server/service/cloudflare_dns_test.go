@@ -222,3 +222,84 @@ func TestValidateDNSRecordContent(t *testing.T) {
 		t.Fatalf("expected cname target to pass: %v", err)
 	}
 }
+
+func TestParseCloudflareAPITokenVariants(t *testing.T) {
+	cases := map[string]string{
+		`raw-token`:                  "raw-token",
+		` Bearer bearer-token `:      "bearer-token",
+		`{"api_token":"json-token"}`: "json-token",
+		`{"apiToken":"camel-token"}`: "camel-token",
+		`{"token":"short-token"}`:    "short-token",
+		`"quoted-token"`:             "quoted-token",
+		"line-\nwrapped":             "line-wrapped",
+	}
+	for raw, want := range cases {
+		if got := parseCloudflareAPIToken(raw); got != want {
+			t.Fatalf("parseCloudflareAPIToken(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestSelectHealthyNodeDNSTargetsByPoolAndWeight(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	nodes := []*model.Node{
+		{
+			NodeID:          "node-a",
+			Name:            "a",
+			IP:              "8.8.8.8",
+			PoolName:        "edge",
+			PublicIPs:       `["8.8.8.8","2001:4860:4860::8888"]`,
+			Weight:          100,
+			AgentToken:      "token-a",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      time.Now(),
+		},
+		{
+			NodeID:          "node-b",
+			Name:            "b",
+			IP:              "1.1.1.1",
+			PoolName:        "edge",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          500,
+			AgentToken:      "token-b",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      time.Now().Add(-time.Second),
+		},
+		{
+			NodeID:          "node-c",
+			Name:            "c",
+			IP:              "9.9.9.9",
+			PoolName:        "other",
+			Weight:          1000,
+			AgentToken:      "token-c",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      time.Now(),
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+
+	targets, err := selectHealthyNodeDNSTargets("A", "edge", 2, "weighted")
+	if err != nil {
+		t.Fatalf("select targets: %v", err)
+	}
+	if len(targets) != 2 || targets[0] != "1.1.1.1" || targets[1] != "8.8.8.8" {
+		t.Fatalf("unexpected targets: %#v", targets)
+	}
+}
