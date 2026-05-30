@@ -1,8 +1,8 @@
 # 启动 Server
 
-你会学到：如何从源码构建管理端前端、启动 OpenFlare Server、选择 SQLite 或 PostgreSQL，并访问 Swagger。
+你会学到：如何从源码构建管理端前端、启动 DuShengCDN Server、选择 SQLite 或 PostgreSQL，并访问 Swagger。
 
-OpenFlare Server 是 Gin + GORM 单体控制面，负责管理端 UI、管理 API、Agent API、配置渲染、版本发布、数据存储与聚合查询。
+DuShengCDN Server 是 Gin + GORM 单体控制面，负责管理端 UI、管理 API、Agent API、配置渲染、版本发布、数据存储与聚合查询。
 
 ## 前置条件
 
@@ -17,10 +17,10 @@ OpenFlare Server 是 Gin + GORM 单体控制面，负责管理端 UI、管理 AP
 
 ## 构建管理端前端
 
-Go Server 会托管 `openflare_server/web/build` 中的静态产物。源码启动前先构建前端：
+Go Server 会托管 `dushengcdn_server/web/build` 中的静态产物。源码启动前先构建前端：
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 corepack enable
 pnpm install
 pnpm build
@@ -37,9 +37,9 @@ pnpm test
 ## 使用 SQLite 启动
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='replace-with-a-long-random-string'
-export SQLITE_PATH='./openflare.db'
+export SQLITE_PATH='./dushengcdn.db'
 export LOG_LEVEL='info'
 go run .
 ```
@@ -53,9 +53,9 @@ http://localhost:3000
 ## 使用 PostgreSQL 启动
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='replace-with-a-long-random-string'
-export DSN='postgres://openflare:secret@127.0.0.1:5432/openflare?sslmode=disable'
+export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
 export LOG_LEVEL='info'
 go run .
 ```
@@ -99,8 +99,8 @@ http://localhost:3000/swagger/index.html
 
 ```bash
 go install github.com/swaggo/swag/cmd/swag@v1.16.4
-cd openflare_server
+cd dushengcdn_server
 swag init -g main.go -o docs
 ```
 
-Swagger 生成文件位于 `openflare_server/docs`。
+Swagger 生成文件位于 `dushengcdn_server/docs`。

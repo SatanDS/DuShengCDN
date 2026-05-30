@@ -1,8 +1,8 @@
 # Troubleshooting
 
-You will learn how to debug OpenFlare Server, database, login, Agent, OpenResty, release, and frontend build issues by symptom.
+You will learn how to debug DuShengCDN Server, database, login, Agent, OpenResty, release, and frontend build issues by symptom.
 
-Start by locating the failing layer: browser, Server, database, Agent, OpenResty, origin, or DNS. OpenFlare applies configuration only after a version is activated and the Agent discovers it through heartbeat.
+Start by locating the failing layer: browser, Server, database, Agent, OpenResty, origin, or DNS. DuShengCDN applies configuration only after a version is activated and the Agent discovers it through heartbeat.
 
 ## Quick Triage
 
@@ -21,7 +21,7 @@ Start by locating the failing layer: browser, Server, database, Agent, OpenResty
 1. Check logs:
 
 ```bash
-docker compose logs -n 200 openflare
+docker compose logs -n 200 dushengcdn
 ```
 
 For source runs, check terminal output.
@@ -42,7 +42,7 @@ docker compose logs -n 100 postgres
 4. If SQLite is used, check that the database directory is writable:
 
 ```bash
-ls -ld "$(dirname /path/to/openflare.db)"
+ls -ld "$(dirname /path/to/dushengcdn.db)"
 ```
 
 Common causes:
@@ -64,7 +64,7 @@ curl -I http://127.0.0.1:3000
 2. For source runs, confirm frontend static assets were built:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm build
 ```
 
@@ -73,7 +73,7 @@ pnpm build
 4. If using the frontend dev server, confirm backend proxy configuration:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 NEXT_DEV_BACKEND_URL=http://127.0.0.1:3000 pnpm dev
 ```
 
@@ -101,13 +101,13 @@ curl -I http://your-server:3000
 Check Agent logs:
 
 ```bash
-journalctl -u openflare-agent -n 200 --no-pager
+journalctl -u dushengcdn-agent -n 200 --no-pager
 ```
 
 Check config:
 
 ```bash
-sed -n '1,160p' /opt/openflare-agent/agent.json
+sed -n '1,160p' /opt/dushengcdn-agent/agent.json
 ```
 
 Confirm:
@@ -122,7 +122,7 @@ Confirm:
 If the log says the token is invalid, prepare a new token in the UI, update `agent.json`, and restart:
 
 ```bash
-systemctl restart openflare-agent
+systemctl restart dushengcdn-agent
 ```
 
 ## Node Does Not Apply a New Version
@@ -138,7 +138,7 @@ Check in order:
 Follow Agent logs:
 
 ```bash
-journalctl -u openflare-agent -f
+journalctl -u dushengcdn-agent -f
 ```
 
 After a target `version + checksum` fails and rolls back, the Agent blocks repeated attempts for that same target locally. Fix the configuration and publish a new checksum, or activate an old version to roll back.
@@ -158,7 +158,7 @@ Common causes:
 OpenResty config test:
 
 ```bash
-openresty -t -c /path/to/openflare/data/etc/nginx/nginx.conf
+openresty -t -c /path/to/dushengcdn/data/etc/nginx/nginx.conf
 ```
 
 OpenResty runtime:
@@ -167,7 +167,7 @@ OpenResty runtime:
 ps aux | grep openresty
 ```
 
-Agent periodic health checks use local `http://127.0.0.1:<openresty_observability_port>/openflare/stub_status` instead of repeatedly running `openresty -t`. If a node is unhealthy, first confirm that the local observability port is listening. If `host not found in upstream` only appears during apply, the failure comes from config validation or reload, not the periodic health probe.
+Agent periodic health checks use local `http://127.0.0.1:<openresty_observability_port>/dushengcdn/stub_status` instead of repeatedly running `openresty -t`. If a node is unhealthy, first confirm that the local observability port is listening. If `host not found in upstream` only appears during apply, the failure comes from config validation or reload, not the periodic health probe.
 
 Use the actual `openresty_path` and `main_config_path` from `agent.json`.
 
@@ -196,7 +196,7 @@ Domains without a bound certificate are not automatically added to HTTPS configu
 ## Frontend Build Fails
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 corepack enable
 pnpm install
 pnpm lint

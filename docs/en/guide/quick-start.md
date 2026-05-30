@@ -1,8 +1,8 @@
 # Quick Start
 
-You will learn how to start OpenFlare Server with Docker Compose, sign in for the first time, connect the first Agent, and verify that a configuration was published to a node.
+You will learn how to start DuShengCDN Server with Docker Compose, sign in for the first time, connect the first Agent, and verify that a configuration was published to a node.
 
-The minimal OpenFlare setup contains:
+The minimal DuShengCDN setup contains:
 
 | Component | Responsibility |
 | --- | --- |
@@ -33,19 +33,19 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: openflare
-      POSTGRES_USER: openflare
+      POSTGRES_DB: dushengcdn
+      POSTGRES_USER: dushengcdn
       POSTGRES_PASSWORD: replace-with-strong-password
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openflare -d openflare"]
+      test: ["CMD-SHELL", "pg_isready -U dushengcdn -d dushengcdn"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  openflare:
-    image: ghcr.io/rain-kl/openflare:latest
+  dushengcdn:
+    image: ghcr.io/satands/dushengcdn:latest
     restart: unless-stopped
     depends_on:
       postgres:
@@ -54,7 +54,7 @@ services:
       - "3000:3000"
     environment:
       SESSION_SECRET: replace-with-a-long-random-string
-      DSN: postgres://openflare:replace-with-strong-password@postgres:5432/openflare?sslmode=disable
+      DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
       GIN_MODE: release
       LOG_LEVEL: info
 
@@ -72,10 +72,10 @@ Verify:
 
 ```bash
 docker compose ps
-docker compose logs -f openflare
+docker compose logs -f dushengcdn
 ```
 
-When the `openflare` container is running and logs show `server listening`, open:
+When the `dushengcdn` container is running and logs show `server listening`, open:
 
 ```text
 http://localhost:3000
@@ -109,7 +109,7 @@ Run the install script on the proxy node.
 With `discovery_token`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --discovery-token YOUR_DISCOVERY_TOKEN
 ```
@@ -117,7 +117,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 With node-specific `agent_token`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
@@ -126,16 +126,16 @@ The script defaults to:
 
 | Item | Default |
 | --- | --- |
-| Install directory | `/opt/openflare-agent` |
-| Config file | `/opt/openflare-agent/agent.json` |
-| systemd service | `openflare-agent.service` |
+| Install directory | `/opt/dushengcdn-agent` |
+| Config file | `/opt/dushengcdn-agent/agent.json` |
+| systemd service | `dushengcdn-agent.service` |
 | OpenResty path | Auto-detects `openresty` unless `--openresty-path` is provided |
 
 Check status:
 
 ```bash
-systemctl status openflare-agent
-journalctl -u openflare-agent -f
+systemctl status dushengcdn-agent
+journalctl -u dushengcdn-agent -f
 ```
 
 If systemd is unavailable, the script prints a manual start command.
@@ -166,7 +166,7 @@ In the UI:
 On the Agent node:
 
 ```bash
-journalctl -u openflare-agent -n 100 --no-pager
+journalctl -u dushengcdn-agent -n 100 --no-pager
 ```
 
 ## Common Failures
@@ -177,6 +177,6 @@ journalctl -u openflare-agent -n 100 --no-pager
 | Login works but data cannot be saved | Check PostgreSQL health and the username/password/database in `DSN` |
 | Agent cannot register | Confirm the Agent node can reach `--server-url`, and check whether the token is wrong or expired |
 | Agent is online but does not apply | Confirm the site is enabled and a version was published and activated |
-| OpenResty apply fails | Check apply logs and `journalctl -u openflare-agent`, especially domains, certificates, upstream URLs, and port conflicts |
+| OpenResty apply fails | Check apply logs and `journalctl -u dushengcdn-agent`, especially domains, certificates, upstream URLs, and port conflicts |
 
 See [Troubleshooting](./troubleshooting.md) for deeper diagnostics.

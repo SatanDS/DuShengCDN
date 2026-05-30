@@ -1,19 +1,19 @@
 # Product Boundary
 
-You will learn: What OpenFlare is, what problems it solves, who the target users are, what the current stable capabilities are, and which design boundaries cannot be bypassed during implementation.
+You will learn: What DuShengCDN is, what problems it solves, who the target users are, what the current stable capabilities are, and which design boundaries cannot be bypassed during implementation.
 
-OpenFlare is a self-hosted OpenResty control plane oriented toward single-team or single-organization internal operation and maintenance (O&M) scenarios. It resolves the issues of scattered management in reverse proxy configuration, node synchronization, certificate hosting, configuration release/rollback, and basic observability.
+DuShengCDN is a self-hosted OpenResty control plane oriented toward single-team or single-organization internal operation and maintenance (O&M) scenarios. It resolves the issues of scattered management in reverse proxy configuration, node synchronization, certificate hosting, configuration release/rollback, and basic observability.
 
 ## Project Positioning
 
-OpenFlare is suitable for teams that need to centrally manage multiple OpenResty proxy nodes:
+DuShengCDN is suitable for teams that need to centrally manage multiple OpenResty proxy nodes:
 
 * Want to maintain reverse proxy site configurations using a management console.
 * Want every configuration change to have a complete version, preview, activation, and rollback.
 * Want nodes to actively sync configuration, rather than having the control plane SSH into nodes to execute commands.
 * Want to manage TLS certificates, domain assets, node statuses, and basic access analytics within the same system.
 
-OpenFlare is currently not positioned as a general-purpose log platform, service mesh, Kubernetes Ingress Controller, or multi-tenant cloud platform.
+DuShengCDN is currently not positioned as a general-purpose log platform, service mesh, Kubernetes Ingress Controller, or multi-tenant cloud platform.
 
 ## Target Users
 

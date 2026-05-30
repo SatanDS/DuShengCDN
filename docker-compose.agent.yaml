@@ -1,0 +1,26 @@
+services:
+  dushengcdn-agent:
+    build:
+      context: .
+      dockerfile: dushengcdn_agent/Dockerfile
+    container_name: dushengcdn-agent
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:18081:18081"
+
+    volumes:
+      - ./dushengcdn_agent/data/:/data
+
+    environment:
+      DUSHENGCDN_SERVER_URL: "http://host.docker.internal:3000"
+      DUSHENGCDN_AGENT_TOKEN: "replace-with-agent-token"
+      # Optional precise IP lookup API. Local GeoIP is used first; this API is queried only when local GeoIP has no country.
+      # DUSHENGCDN_GEOIP_LOOKUP_API_URL: "https://ipdb.example.com/lookup"
+      # DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN: "replace-with-api-token"
+      LOG_LEVEL: "debug"
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

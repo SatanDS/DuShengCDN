@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="/opt/openflare-agent"
-SERVICE_NAME="openflare-agent"
+INSTALL_DIR="/opt/dushengcdn-agent"
+SERVICE_NAME="dushengcdn-agent"
 
 usage() {
   cat <<EOF
-OpenFlare Agent Uninstaller
+DuShengCDN Agent Uninstaller
 
 Usage:
   uninstall-agent.sh [OPTIONS]
 
 Options:
-  --install-dir DIR         Installation directory (default: /opt/openflare-agent)
-  --service-name NAME       systemd service name (default: openflare-agent)
+  --install-dir DIR         Installation directory (default: /opt/dushengcdn-agent)
+  --service-name NAME       systemd service name (default: dushengcdn-agent)
   -h, --help                Show this help message
 
 Behavior:
@@ -25,7 +25,7 @@ Behavior:
 
 Examples:
   uninstall-agent.sh
-  uninstall-agent.sh --install-dir /srv/openflare-agent
+  uninstall-agent.sh --install-dir /srv/dushengcdn-agent
 EOF
   exit 0
 }
@@ -57,12 +57,12 @@ json_get_string() {
   printf '%s\n' "$match" | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/'
 }
 
-AGENT_BINARY="${INSTALL_DIR}/openflare-agent"
+AGENT_BINARY="${INSTALL_DIR}/dushengcdn-agent"
 CONFIG_FILE="${INSTALL_DIR}/agent.json"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 OPENRESTY_PATH=""
-OPENRESTY_CONTAINER_NAME="openflare-openresty"
+OPENRESTY_CONTAINER_NAME="dushengcdn-openresty"
 OPENRESTY_DOCKER_IMAGE="openresty/openresty:alpine"
 DOCKER_BINARY="docker"
 OPENRESTY_MODE="unknown"
@@ -74,7 +74,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
   DOCKER_BINARY="$(json_get_string "$CONFIG_FILE" "docker_binary")"
 
   if [[ -z "$OPENRESTY_CONTAINER_NAME" ]]; then
-    OPENRESTY_CONTAINER_NAME="openflare-openresty"
+    OPENRESTY_CONTAINER_NAME="dushengcdn-openresty"
   fi
   if [[ -z "$OPENRESTY_DOCKER_IMAGE" ]]; then
     OPENRESTY_DOCKER_IMAGE="openresty/openresty:alpine"
@@ -95,7 +95,7 @@ if command -v systemctl >/dev/null 2>&1; then
   SYSTEMCTL_AVAILABLE="true"
 fi
 
-echo "Uninstalling OpenFlare Agent from ${INSTALL_DIR}..."
+echo "Uninstalling DuShengCDN Agent from ${INSTALL_DIR}..."
 
 if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   if systemctl is-active --quiet "$SERVICE_NAME"; then
@@ -189,4 +189,4 @@ else
 fi
 
 echo ""
-echo "OpenFlare Agent uninstall finished."
+echo "DuShengCDN Agent uninstall finished."

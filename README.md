@@ -1,20 +1,20 @@
 <div align="center">
 
-# OpenFlare
+# DuShengCDN
 
 轻量、自托管的 OpenResty 控制面，用于管理反向代理规则、配置发布、节点同步、TLS 证书与基础可观测能力。
 
 </div>
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/SatanDS/OpenCDN/main/LICENSE">
-    <img src="https://img.shields.io/github/license/SatanDS/OpenCDN?color=brightgreen" alt="license">
+  <a href="https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/LICENSE">
+    <img src="https://img.shields.io/github/license/SatanDS/DuShengCDN?color=brightgreen" alt="license">
   </a>
-  <a href="https://github.com/SatanDS/OpenCDN/releases/latest">
-    <img src="https://img.shields.io/github/v/release/SatanDS/OpenCDN?color=brightgreen&include_prereleases" alt="release">
+  <a href="https://github.com/SatanDS/DuShengCDN/releases/latest">
+    <img src="https://img.shields.io/github/v/release/SatanDS/DuShengCDN?color=brightgreen&include_prereleases" alt="release">
   </a>
-  <a href="https://github.com/SatanDS/OpenCDN/pkgs/container/opencdn">
-    <img src="https://img.shields.io/badge/GHCR-ghcr.io%2Fsatands%2Fopencdn-brightgreen" alt="ghcr">
+  <a href="https://github.com/SatanDS/DuShengCDN/pkgs/container/dushengcdn">
+    <img src="https://img.shields.io/badge/GHCR-ghcr.io%2Fsatands%2Fdushengcdn-brightgreen" alt="ghcr">
   </a>
 </p>
 
@@ -49,19 +49,19 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: openflare
-      POSTGRES_USER: openflare
+      POSTGRES_DB: dushengcdn
+      POSTGRES_USER: dushengcdn
       POSTGRES_PASSWORD: replace-with-strong-password
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openflare -d openflare"]
+      test: ["CMD-SHELL", "pg_isready -U dushengcdn -d dushengcdn"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  openflare:
-    image: ghcr.io/satands/opencdn:latest
+  dushengcdn:
+    image: ghcr.io/satands/dushengcdn:latest
     restart: unless-stopped
     depends_on:
       postgres:
@@ -70,7 +70,7 @@ services:
       - "3000:3000"
     environment:
       SESSION_SECRET: replace-with-random-string
-      DSN: postgres://openflare:replace-with-strong-password@postgres:5432/openflare?sslmode=disable
+      DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
       GIN_MODE: release
       LOG_LEVEL: info
 
@@ -91,7 +91,7 @@ docker compose up -d
 
 #### HTTPS 反代到管理端
 
-生产环境建议在面板服务器上用 Nginx、OpenResty 或宝塔反向代理对外提供 HTTPS，再转发到 OpenFlare 管理端端口。反代配置必须保留真实客户端 IP 头，否则节点注册和心跳经过反代时可能只能识别到内网 IP。
+生产环境建议在面板服务器上用 Nginx、OpenResty 或宝塔反向代理对外提供 HTTPS，再转发到 DuShengCDN 管理端端口。反代配置必须保留真实客户端 IP 头，否则节点注册和心跳经过反代时可能只能识别到内网 IP。
 
 如果 Docker Compose 使用默认端口映射 `3000:3000`，反代目标是 `http://127.0.0.1:3000`；如果你改成 `3010:3000`，反代目标则改为 `http://127.0.0.1:3010`。
 
@@ -139,7 +139,7 @@ proxy_set_header Connection "upgrade";
 
 ### 2. 配置 Cloudflare 自动 DNS 与防护
 
-如果域名已经接入 Cloudflare，可以让 OpenFlare 自动创建或更新 DNS 记录，并在节点离线或遇到攻击流量时自动调整解析策略。
+如果域名已经接入 Cloudflare，可以让 DuShengCDN 自动创建或更新 DNS 记录，并在节点离线或遇到攻击流量时自动调整解析策略。
 
 准备 Cloudflare API Token：
 
@@ -162,7 +162,7 @@ proxy_set_header Connection "upgrade";
 * 开启 `自动选择在线节点 IP` 后，节点离线、OpenResty 不健康或节点 IP 不是公网 IP 时会跳过该节点，并切换到其它在线节点公网 IP。
 * 手动填写的 DNS 记录内容不会被后台覆盖；只有开启自动选择节点 IP，才会由系统接管记录内容。
 * 多域名规则默认会同步规则里的所有域名；单域名规则可在详情页手动指定记录名称。
-* 删除规则时，如果该规则曾由 OpenFlare 创建 DNS 记录，会尝试同步删除对应 Cloudflare DNS 记录。
+* 删除规则时，如果该规则曾由 DuShengCDN 创建 DNS 记录，会尝试同步删除对应 Cloudflare DNS 记录。
 
 DDoS 自动切换橙云：
 
@@ -183,17 +183,17 @@ DDoS 自动切换橙云：
 Docker 部署可直接运行 Agent 镜像：
 
 ```bash
-docker run -d --name openflare-agent --restart unless-stopped \
+docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
-  -e OPENFLARE_SERVER_URL=http://your-server:3000 \
-  -e OPENFLARE_AGENT_TOKEN=YOUR_AGENT_TOKEN \
-  ghcr.io/satands/opencdn-agent:latest
+  -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
+  -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
+  ghcr.io/satands/dushengcdn-agent:latest
 ```
 
 Docker Agent 镜像已内置 OpenResty、`libmaxminddb`、`lua-resty-maxminddb` 和 `lua-resty-http`。如需接入自建 IP 精确查询 API，可追加：
 ```bash
--e OPENFLARE_GEOIP_LOOKUP_API_URL=https://ipdb.example.com/lookup \
--e OPENFLARE_GEOIP_LOOKUP_API_TOKEN=YOUR_API_TOKEN
+-e DUSHENGCDN_GEOIP_LOOKUP_API_URL=https://ipdb.example.com/lookup \
+-e DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN=YOUR_API_TOKEN
 ```
 
 #### 本地部署
@@ -201,7 +201,7 @@ Docker Agent 镜像已内置 OpenResty、`libmaxminddb`、`lua-resty-maxminddb` 
 使用 `discovery_token` 接入：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --discovery-token YOUR_DISCOVERY_TOKEN
 ```
@@ -209,37 +209,37 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/instal
 使用节点专属 `agent_token`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
 
 可选接入自建 IP 精确查询 API：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN \
   --geoip-api-url https://ipdb.example.com/lookup \
   --geoip-api-token YOUR_API_TOKEN
 ```
 
-安装脚本默认写入 `/opt/openflare-agent`，创建 `openflare-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
+安装脚本默认写入 `/opt/dushengcdn-agent`，创建 `dushengcdn-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
 
 依赖安装兼容性：
 
 * Linux / macOS 会自动检查 `curl`、`tar`、`OpenResty`、`libmaxminddb`、`lua-resty-maxminddb`、`lua-resty-http`、构建工具等运行依赖，缺少时尝试通过系统包管理器和 `opm` 安装。
 * Debian 13 `trixie` 暂无 OpenResty 官方源时，脚本会回退到 Debian `bookworm` 源；遇到新版 apt 拒绝旧签名策略时，会临时使用 OpenResty 官方 HTTPS 源完成安装，并在安装后移除临时源。
-* 新装 OpenResty 后，脚本会阻止系统自带 `openresty` 服务自动启动，避免它提前占用 `80` / `443` 端口；端口由 `openflare-agent` 托管。
+* 新装 OpenResty 后，脚本会阻止系统自带 `openresty` 服务自动启动，避免它提前占用 `80` / `443` 端口；端口由 `dushengcdn-agent` 托管。
 
 ### 4. 卸载 Agent
 
 如需彻底卸载 Agent 并清空本地数据，可执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/uninstall-agent.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uninstall-agent.sh | bash
 ```
 
-卸载脚本会先停止并移除 `openflare-agent.service`、删除整个 `/opt/openflare-agent` 目录，不会删除本机 OpenResty。
+卸载脚本会先停止并移除 `dushengcdn-agent.service`、删除整个 `/opt/dushengcdn-agent` 目录，不会删除本机 OpenResty。
 
 在管理端删除在线节点时，Server 会通过 Agent 连接下发卸载指令；Agent 收到后会执行本机卸载流程并退出。节点离线时，面板只会删除节点记录，需要你后续在节点服务器上手动执行卸载脚本。
 
@@ -269,7 +269,7 @@ GeoIP 地区限制说明：
 * 地区识别默认依赖 Agent 节点本地 `GeoLite2-Country.mmdb` 数据库，不再要求 Cloudflare 橙云或 `CF-IPCountry` 请求头；OpenResty 会按真实客户端 IP 查询国家码。
 * 真实 IP 优先读取 `CF-Connecting-IP`、`X-Real-IP`、`X-Forwarded-For`，最后使用连接 IP；前置 HTTPS 反代需要正确透传这些请求头。
 * OpenResty 会缓存 `IP -> 国家码`，默认缓存有效识别结果 24 小时；本地库和在线 API 都查不到时会短暂缓存未知结果，避免每个请求重复查库。
-* Agent 会自动下载并更新 Country 数据库，默认来源为 `https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb`，默认路径为 Agent 数据目录下的 `var/lib/openflare/geoip/GeoLite2-Country.mmdb`，默认每 24 小时检查更新一次。
+* Agent 会自动下载并更新 Country 数据库，默认来源为 `https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb`，默认路径为 Agent 数据目录下的 `var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb`，默认每 24 小时检查更新一次。
 * 如你后续搭建自己的在线 IP 精确查询服务，可在 Agent 配置里设置 `geoip_lookup_api_url` 和 `geoip_lookup_api_token`，或安装时追加 `--geoip-api-url`、`--geoip-api-token`；查询顺序是先本地 GeoIP，未识别到国家码时再请求 API。API 返回 JSON 中的 `country_code`、`countryCode`、`iso_code`、`isoCode` 或 `country` 字段均可识别。
 * 修改地区限制后需要发布并激活新配置，Agent 应用 OpenResty 配置后才会在节点侧生效。
 
@@ -297,19 +297,19 @@ GeoIP 地区限制说明：
 如果服务器上还没有源码目录，先克隆自己的仓库：
 
 ```bash
-git clone https://github.com/SatanDS/OpenCDN.git /opt/opencdn
+git clone https://github.com/SatanDS/DuShengCDN.git /opt/dushengcdn
 ```
 
 服务器使用 Docker Compose 部署时，更新面板端：
 
 ```bash
-cd /opt/opencdn/openflare_server && git pull origin main && docker compose up -d --build && docker compose ps
+cd /opt/dushengcdn/dushengcdn_server && git pull origin main && docker compose up -d --build && docker compose ps
 ```
 
 节点使用 Docker Compose 部署 Agent 时，更新节点端：
 
 ```bash
-cd /opt/opencdn && git pull origin main && docker compose -f docker-compose.agent.yaml up -d --build && docker compose -f docker-compose.agent.yaml ps
+cd /opt/dushengcdn && git pull origin main && docker compose -f docker-compose.agent.yaml up -d --build && docker compose -f docker-compose.agent.yaml ps
 ```
 
 节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。
@@ -320,8 +320,8 @@ cd /opt/opencdn && git pull origin main && docker compose -f docker-compose.agen
 
 * 发布二进制：进入 GitHub 仓库 `Actions` -> `Release` -> `Run workflow`，填写版本号，例如 `v1.0.0` 或 `v1.0.0-beta`。工作流会构建 Server、Agent 多平台二进制并上传到 Release。
 * `v1.0.0` 这类纯数字版本会作为正式 Release；`v1.0.0-beta` 这类带后缀版本会作为 prerelease。GitHub 的 `releases/latest` 会指向最新正式 Release。
-* 发布 Docker 镜像：进入 `Actions` -> `Docker image builds` -> `Run workflow`，填写同一个版本号。工作流会推送 `ghcr.io/satands/opencdn:<version>`、`ghcr.io/satands/opencdn:latest`、`ghcr.io/satands/opencdn-agent:<version>` 和 `ghcr.io/satands/opencdn-agent:latest`。
-* 安装脚本会优先读取 `https://github.com/SatanDS/OpenCDN/releases/latest` 中的 Agent 资产；没有匹配资产时才回退到源码构建。
+* 发布 Docker 镜像：进入 `Actions` -> `Docker image builds` -> `Run workflow`，填写同一个版本号。工作流会推送 `ghcr.io/satands/dushengcdn:<version>`、`ghcr.io/satands/dushengcdn:latest`、`ghcr.io/satands/dushengcdn-agent:<version>` 和 `ghcr.io/satands/dushengcdn-agent:latest`。
+* 安装脚本会优先读取 `https://github.com/SatanDS/DuShengCDN/releases/latest` 中的 Agent 资产；没有匹配资产时才回退到源码构建。
 * GitHub Actions 已切换到支持 Node.js 24 的动作版本，并显式启用 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`，用于规避 Node.js 20 弃用警告。
 
 
@@ -329,15 +329,15 @@ cd /opt/opencdn && git pull origin main && docker compose -f docker-compose.agen
 
 ### 仪表盘总览
 
-![OpenFlare dashboard overview](./docs/assets/readme/dashboard-overview.png)
+![DuShengCDN dashboard overview](./docs/assets/readme/dashboard-overview.png)
 
 ### 节点详情
 
-![OpenFlare node detail](./docs/assets/readme/node-detail.png)
+![DuShengCDN node detail](./docs/assets/readme/node-detail.png)
 
 ### 配置新增
 
-![OpenFlare version release](./docs/assets/readme/proxy-route-detail.png)
+![DuShengCDN version release](./docs/assets/readme/proxy-route-detail.png)
 
 ## 管理端与接口
 
@@ -363,10 +363,10 @@ cd /opt/opencdn && git pull origin main && docker compose -f docker-compose.agen
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=SatanDS%2FOpenCDN&type=date&legend=bottom-right">
+<a href="https://www.star-history.com/?repos=SatanDS%2FDuShengCDN&type=date&legend=bottom-right">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=SatanDS/OpenCDN&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=SatanDS/OpenCDN&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=SatanDS/OpenCDN&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=SatanDS/DuShengCDN&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=SatanDS/DuShengCDN&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=SatanDS/DuShengCDN&type=date&legend=top-left" />
  </picture>
 </a>

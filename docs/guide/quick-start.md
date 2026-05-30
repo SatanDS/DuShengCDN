@@ -1,8 +1,8 @@
 # 快速开始
 
-你会学到：如何用 Docker Compose 启动 OpenFlare Server、完成首次登录、接入第一个 Agent，并验证一份配置是否已经发布到节点。
+你会学到：如何用 Docker Compose 启动 DuShengCDN Server、完成首次登录、接入第一个 Agent，并验证一份配置是否已经发布到节点。
 
-OpenFlare 的最小运行单元包含：
+DuShengCDN 的最小运行单元包含：
 
 | 组件 | 职责 |
 | --- | --- |
@@ -33,19 +33,19 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: openflare
-      POSTGRES_USER: openflare
+      POSTGRES_DB: dushengcdn
+      POSTGRES_USER: dushengcdn
       POSTGRES_PASSWORD: replace-with-strong-password
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openflare -d openflare"]
+      test: ["CMD-SHELL", "pg_isready -U dushengcdn -d dushengcdn"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  openflare:
-    image: ghcr.io/rain-kl/openflare:latest
+  dushengcdn:
+    image: ghcr.io/satands/dushengcdn:latest
     restart: unless-stopped
     depends_on:
       postgres:
@@ -54,7 +54,7 @@ services:
       - "3000:3000"
     environment:
       SESSION_SECRET: replace-with-a-long-random-string
-      DSN: postgres://openflare:replace-with-strong-password@postgres:5432/openflare?sslmode=disable
+      DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
       GIN_MODE: release
       LOG_LEVEL: info
 
@@ -72,10 +72,10 @@ docker compose up -d
 
 ```bash
 docker compose ps
-docker compose logs -f openflare
+docker compose logs -f dushengcdn
 ```
 
-看到 `server listening` 且 `openflare` 容器状态为 running 后，访问：
+看到 `server listening` 且 `dushengcdn` 容器状态为 running 后，访问：
 
 ```text
 http://localhost:3000
@@ -109,7 +109,7 @@ Agent 可以用两类凭证接入：
 使用 `discovery_token`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --discovery-token YOUR_DISCOVERY_TOKEN
 ```
@@ -117,7 +117,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 使用节点专属 `agent_token`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
@@ -126,16 +126,16 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 
 | 项目 | 默认值 |
 | --- | --- |
-| 安装目录 | `/opt/openflare-agent` |
-| 配置文件 | `/opt/openflare-agent/agent.json` |
-| systemd 服务 | `openflare-agent.service` |
+| 安装目录 | `/opt/dushengcdn-agent` |
+| 配置文件 | `/opt/dushengcdn-agent/agent.json` |
+| systemd 服务 | `dushengcdn-agent.service` |
 | OpenResty 路径 | 未指定时自动查找 `openresty` |
 
 确认 Agent 服务状态：
 
 ```bash
-systemctl status openflare-agent
-journalctl -u openflare-agent -f
+systemctl status dushengcdn-agent
+journalctl -u dushengcdn-agent -f
 ```
 
 如果没有 systemd，脚本会输出手动启动命令。
@@ -166,7 +166,7 @@ journalctl -u openflare-agent -f
 在 Agent 节点确认：
 
 ```bash
-journalctl -u openflare-agent -n 100 --no-pager
+journalctl -u dushengcdn-agent -n 100 --no-pager
 ```
 
 ## 常见失败原因
@@ -177,6 +177,6 @@ journalctl -u openflare-agent -n 100 --no-pager
 | 登录后数据无法保存 | 检查 PostgreSQL 容器健康状态，以及 `DSN` 中的用户名、密码、库名是否一致 |
 | Agent 无法注册 | 确认 Agent 节点能访问 `--server-url`，并检查 Token 是否填错或已失效 |
 | Agent 在线但没有应用配置 | 确认网站配置已启用，并且已经发布并激活版本 |
-| OpenResty 应用失败 | 查看节点应用记录和 `journalctl -u openflare-agent`，重点检查域名、证书、源站地址和端口占用 |
+| OpenResty 应用失败 | 查看节点应用记录和 `journalctl -u dushengcdn-agent`，重点检查域名、证书、源站地址和端口占用 |
 
 更多排查路径见 [故障排查](./troubleshooting.md)。

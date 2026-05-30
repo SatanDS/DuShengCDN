@@ -1,15 +1,15 @@
 # Commands and Scripts
 
-You will learn: Common commands for starting, building, testing, installing, and uninstalling the OpenFlare Server, management console frontend, Agent, Swagger, and documentation site.
+You will learn: Common commands for starting, building, testing, installing, and uninstalling the DuShengCDN Server, management console frontend, Agent, Swagger, and documentation site.
 
 ## Server
 
 Start from source:
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='replace-with-random-string'
-export SQLITE_PATH='./openflare.db'
+export SQLITE_PATH='./dushengcdn.db'
 export LOG_LEVEL='info'
 go run .
 ```
@@ -23,8 +23,8 @@ go run . --port 3000 --log-dir ./logs
 Test:
 
 ```bash
-cd openflare_server
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_server
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 ## Frontend
@@ -32,7 +32,7 @@ GOCACHE=/tmp/openflare-go-cache go test ./...
 Development:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm install
 pnpm dev
 ```
@@ -40,14 +40,14 @@ pnpm dev
 Build static artifacts:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm build
 ```
 
 Checks:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -58,28 +58,28 @@ pnpm test
 Run from source:
 
 ```bash
-cd openflare_agent
+cd dushengcdn_agent
 go run ./cmd/agent -config /path/to/agent.json
 ```
 
 Compile:
 
 ```bash
-cd openflare_agent
-go build -o openflare-agent ./cmd/agent
+cd dushengcdn_agent
+go build -o dushengcdn-agent ./cmd/agent
 ```
 
 Test:
 
 ```bash
-cd openflare_agent
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_agent
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 ## Install Agent
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
@@ -87,7 +87,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 ## Uninstall Agent
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/uninstall-agent.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uninstall-agent.sh | bash
 ```
 
 ## Swagger
@@ -96,7 +96,7 @@ Regenerate Swagger documentation:
 
 ```bash
 go install github.com/swaggo/swag/cmd/swag@v1.16.4
-cd openflare_server
+cd dushengcdn_server
 swag init -g main.go -o docs
 ```
 

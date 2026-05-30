@@ -1,6 +1,6 @@
 # Deployment
 
-You will learn the recommended OpenFlare deployment model, Server and Agent requirements, source startup workflow, integration steps, upgrade paths, and uninstall entry points.
+You will learn the recommended DuShengCDN deployment model, Server and Agent requirements, source startup workflow, integration steps, upgrade paths, and uninstall entry points.
 
 For production, use PostgreSQL for the Server database and set `SESSION_SECRET` explicitly. Agent controls OpenResty through the OpenResty binary; Docker deployments run the Agent image that already includes OpenResty.
 
@@ -10,11 +10,11 @@ For production, use PostgreSQL for the Server database and set `SESSION_SECRET` 
 Browser
   |
   v
-OpenFlare Server :3000
+DuShengCDN Server :3000
   |
   | Agent API / heartbeat / config pull
   v
-OpenFlare Agent
+DuShengCDN Agent
   |
   v
 OpenResty binary
@@ -56,20 +56,20 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: openflare
-      POSTGRES_USER: openflare
+      POSTGRES_DB: dushengcdn
+      POSTGRES_USER: dushengcdn
       POSTGRES_PASSWORD: replace-with-strong-password
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openflare -d openflare"]
+      test: ["CMD-SHELL", "pg_isready -U dushengcdn -d dushengcdn"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  openflare:
-    image: ghcr.io/rain-kl/openflare:latest
-    container_name: openflare
+  dushengcdn:
+    image: ghcr.io/satands/dushengcdn:latest
+    container_name: dushengcdn
     restart: unless-stopped
     depends_on:
       postgres:
@@ -78,15 +78,15 @@ services:
       - "3000:3000"
     environment:
       SESSION_SECRET: replace-with-a-long-random-string
-      DSN: postgres://openflare:replace-with-strong-password@postgres:5432/openflare?sslmode=disable
+      DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
       GIN_MODE: release
       LOG_LEVEL: info
     volumes:
-      - openflare-data:/data
+      - dushengcdn-data:/data
 
 volumes:
   postgres-data:
-  openflare-data:
+  dushengcdn-data:
 ```
 
 Start:
@@ -94,7 +94,7 @@ Start:
 ```bash
 docker compose up -d
 docker compose ps
-docker compose logs -f openflare
+docker compose logs -f dushengcdn
 ```
 
 Open `http://localhost:3000`. The default account is `root` / `123456`; change it immediately.
@@ -104,7 +104,7 @@ Open `http://localhost:3000`. The default account is `root` / `123456`; change i
 Build the management UI first:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 corepack enable
 pnpm install
 pnpm build
@@ -113,12 +113,12 @@ pnpm build
 Then start Server:
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='replace-with-a-long-random-string'
-export SQLITE_PATH='./openflare.db'
+export SQLITE_PATH='./dushengcdn.db'
 export LOG_LEVEL='info'
 # Optional: PostgreSQL takes precedence when set.
-# export DSN='postgres://openflare:secret@127.0.0.1:5432/openflare?sslmode=disable'
+# export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
 go run .
 ```
 
@@ -133,7 +133,7 @@ go run . --port 3000 --log-dir ./logs
 With `discovery_token`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --discovery-token YOUR_DISCOVERY_TOKEN
 ```
@@ -141,7 +141,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 With node-specific `agent_token`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
@@ -153,16 +153,16 @@ Supported options:
 | `--server-url` | Server URL, required |
 | `--discovery-token` | First-registration token, mutually exclusive with `--agent-token` |
 | `--agent-token` | Node-specific token, mutually exclusive with `--discovery-token` |
-| `--install-dir` | Install directory, default `/opt/openflare-agent` |
+| `--install-dir` | Install directory, default `/opt/dushengcdn-agent` |
 | `--openresty-path` | OpenResty binary path, auto-detected when omitted |
-| `--repo` | GitHub repository for Agent downloads, default `Rain-kl/OpenFlare` |
+| `--repo` | GitHub repository for Agent downloads, default `SatanDS/DuShengCDN` |
 | `--no-service` | Do not create a systemd service |
 
 Check status:
 
 ```bash
-systemctl status openflare-agent
-journalctl -u openflare-agent -f
+systemctl status dushengcdn-agent
+journalctl -u dushengcdn-agent -f
 ```
 
 ## Run Agent Manually
@@ -170,7 +170,7 @@ journalctl -u openflare-agent -f
 From source:
 
 ```bash
-cd openflare_agent
+cd dushengcdn_agent
 export LOG_LEVEL='info'
 go run ./cmd/agent -config /path/to/agent.json
 ```
@@ -178,10 +178,10 @@ go run ./cmd/agent -config /path/to/agent.json
 Build and run:
 
 ```bash
-cd openflare_agent
-go build -o openflare-agent ./cmd/agent
+cd dushengcdn_agent
+go build -o dushengcdn-agent ./cmd/agent
 export LOG_LEVEL='info'
-./openflare-agent -config /path/to/agent.json
+./dushengcdn-agent -config /path/to/agent.json
 ```
 
 Minimal `agent.json`:
@@ -226,7 +226,7 @@ Agent:
 Uninstall Agent:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/uninstall-agent.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uninstall-agent.sh | bash
 ```
 
 The uninstall script stops Agent and removes the systemd service and install directory. It does not remove the local OpenResty installation.
@@ -236,21 +236,21 @@ The uninstall script stops Agent and removes the systemd service and install dir
 Server:
 
 ```bash
-cd openflare_server
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_server
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 Agent:
 
 ```bash
-cd openflare_agent
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_agent
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 Frontend:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm build
 ```
 
@@ -258,6 +258,6 @@ Swagger:
 
 ```bash
 go install github.com/swaggo/swag/cmd/swag@v1.16.4
-cd openflare_server
+cd dushengcdn_server
 swag init -g main.go -o docs
 ```

@@ -1,8 +1,8 @@
 # Development Constraints
 
-You will learn: The admission criteria for OpenFlare code modifications, backend/Agent/frontend tiered constraints, data model boundaries, API conventions, database migration requirements, and test delivery baselines.
+You will learn: The admission criteria for DuShengCDN code modifications, backend/Agent/frontend tiered constraints, data model boundaries, API conventions, database migration requirements, and test delivery baselines.
 
-This document integrates the original development specifications, frontend specifications, and development plans, and serves as the engineering constraints entry point for OpenFlare after `1.0.0`.
+This document integrates the original development specifications, frontend specifications, and development plans, and serves as the engineering constraints entry point for DuShengCDN after `1.0.0`.
 
 ## Current Conclusions
 
@@ -174,7 +174,7 @@ General constraints:
 
 Any modification involving table structures, indexes, column types, sharding rules, or internal persistence metadata must upgrade the database version number in sync.
 
-The database version number is defined in `openflare_server/model`, and it must not rely solely on `AutoMigrate` for implicit upgrades of existing databases.
+The database version number is defined in `dushengcdn_server/model`, and it must not rely solely on `AutoMigrate` for implicit upgrades of existing databases.
 
 Every time the database version number is upgraded, an explicit migration method from the previous version to the new version must be added. The migration method must contain validation logic after the upgrade; only when the validation passes can the new database version record be written.
 

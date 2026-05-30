@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: OpenFlare
+  name: DuShengCDN
   text: 自托管 OpenResty 控制面
   tagline: 管理反向代理规则、配置发布、节点同步、TLS 证书与基础观测。
   actions:
@@ -14,7 +14,7 @@ hero:
       link: /design/
     - theme: alt
       text: GitHub
-      link: https://github.com/Rain-kl/OpenFlare
+      link: https://github.com/SatanDS/DuShengCDN
 
 features:
   - icon: 🧭

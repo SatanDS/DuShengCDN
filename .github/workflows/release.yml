@@ -82,7 +82,7 @@ jobs:
           CI: ""
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          cd openflare_server/web
+          cd dushengcdn_server/web
           corepack enable
           pnpm install --frozen-lockfile
           NEXT_PUBLIC_APP_VERSION="$VERSION" pnpm build
@@ -91,7 +91,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: frontend-build
-          path: openflare_server/web/build
+          path: dushengcdn_server/web/build
           retention-days: 1
 
   build-binaries:
@@ -106,19 +106,19 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
-            asset_name: openflare-server-linux-amd64
+            asset_name: dushengcdn-server-linux-amd64
           - goos: linux
             goarch: arm64
-            asset_name: openflare-server-linux-arm64
+            asset_name: dushengcdn-server-linux-arm64
           - goos: darwin
             goarch: amd64
-            asset_name: openflare-server-darwin-amd64
+            asset_name: dushengcdn-server-darwin-amd64
           - goos: darwin
             goarch: arm64
-            asset_name: openflare-server-darwin-arm64
+            asset_name: dushengcdn-server-darwin-arm64
           - goos: windows
             goarch: amd64
-            asset_name: openflare-server-windows-amd64.exe
+            asset_name: dushengcdn-server-windows-amd64.exe
 
     steps:
       - name: Checkout
@@ -130,16 +130,16 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-build
-          path: openflare_server/web/build
+          path: dushengcdn_server/web/build
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: openflare_server/go.mod
-          cache-dependency-path: openflare_server/go.sum
+          go-version-file: dushengcdn_server/go.mod
+          cache-dependency-path: dushengcdn_server/go.sum
 
       - name: Build Server
-        working-directory: openflare_server
+        working-directory: dushengcdn_server
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
@@ -149,7 +149,7 @@ jobs:
         run: |
           go mod download
           mkdir -p ../dist
-          go build -trimpath -ldflags "-s -w -X 'openflare/common.Version=$VERSION'" -o "../dist/$ASSET_NAME" .
+          go build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION'" -o "../dist/$ASSET_NAME" .
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v7
@@ -168,16 +168,16 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
-            asset_name: openflare-agent-linux-amd64
+            asset_name: dushengcdn-agent-linux-amd64
           - goos: linux
             goarch: arm64
-            asset_name: openflare-agent-linux-arm64
+            asset_name: dushengcdn-agent-linux-arm64
           - goos: darwin
             goarch: amd64
-            asset_name: openflare-agent-darwin-amd64
+            asset_name: dushengcdn-agent-darwin-amd64
           - goos: darwin
             goarch: arm64
-            asset_name: openflare-agent-darwin-arm64
+            asset_name: dushengcdn-agent-darwin-arm64
 
     steps:
       - name: Checkout
@@ -188,11 +188,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: openflare_agent/go.mod
-          cache-dependency-path: openflare_agent/go.sum
+          go-version-file: dushengcdn_agent/go.mod
+          cache-dependency-path: dushengcdn_agent/go.sum
 
       - name: Build Agent
-        working-directory: openflare_agent
+        working-directory: dushengcdn_agent
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
@@ -202,7 +202,7 @@ jobs:
         run: |
           go mod download
           mkdir -p ../dist
-          go build -trimpath -ldflags "-s -w -X 'openflare-agent/internal/config.AgentVersion=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/agent
+          go build -trimpath -ldflags "-s -w -X 'dushengcdn-agent/internal/config.AgentVersion=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/agent
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
 
       - name: Upload Agent Artifact

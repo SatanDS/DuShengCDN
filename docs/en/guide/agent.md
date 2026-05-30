@@ -1,6 +1,6 @@
 # Connect Agent
 
-OpenFlare Agent runs on proxy nodes. It handles registration, heartbeat, configuration sync, OpenResty file writes, validation, reload, rollback, and self-update.
+DuShengCDN Agent runs on proxy nodes. It handles registration, heartbeat, configuration sync, OpenResty file writes, validation, reload, rollback, and self-update.
 
 ## Authentication
 
@@ -14,7 +14,7 @@ At least one of them is required.
 ## Install Script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 Or with discovery:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --discovery-token YOUR_DISCOVERY_TOKEN
 ```
@@ -49,17 +49,17 @@ Agent self-update requires the GitHub Release to include both the target binary 
 ## Docker
 
 ```bash
-docker run -d --name openflare-agent --restart unless-stopped \
+docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
-  -e OPENFLARE_SERVER_URL=http://your-server:3000 \
-  -e OPENFLARE_AGENT_TOKEN=YOUR_AGENT_TOKEN \
-  ghcr.io/rain-kl/openflare-agent:latest
+  -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
+  -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
+  ghcr.io/satands/dushengcdn-agent:latest
 ```
 
 ## Run from Source
 
 ```bash
-cd openflare_agent
+cd dushengcdn_agent
 export LOG_LEVEL='info'
 go run ./cmd/agent -config /path/to/agent.json
 ```
@@ -67,5 +67,5 @@ go run ./cmd/agent -config /path/to/agent.json
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/uninstall-agent.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uninstall-agent.sh | bash
 ```

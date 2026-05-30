@@ -1,8 +1,8 @@
 # 故障排查
 
-你会学到：如何按症状排查 OpenFlare Server、数据库、登录、Agent、OpenResty、配置发布和前端构建问题。
+你会学到：如何按症状排查 DuShengCDN Server、数据库、登录、Agent、OpenResty、配置发布和前端构建问题。
 
-排查时先确认问题发生在哪一层：浏览器、Server、数据库、Agent、OpenResty、源站或 DNS。OpenFlare 的配置不会直接在线写入所有节点，只有激活版本变化后，Agent 才会在 heartbeat 中发现并应用。
+排查时先确认问题发生在哪一层：浏览器、Server、数据库、Agent、OpenResty、源站或 DNS。DuShengCDN 的配置不会直接在线写入所有节点，只有激活版本变化后，Agent 才会在 heartbeat 中发现并应用。
 
 ## 快速定位
 
@@ -21,7 +21,7 @@
 1. 查看日志：
 
 ```bash
-docker compose logs -n 200 openflare
+docker compose logs -n 200 dushengcdn
 ```
 
 源码运行时查看终端输出。
@@ -42,7 +42,7 @@ docker compose logs -n 100 postgres
 4. 如果使用 SQLite，确认数据库文件目录可写：
 
 ```bash
-ls -ld "$(dirname /path/to/openflare.db)"
+ls -ld "$(dirname /path/to/dushengcdn.db)"
 ```
 
 常见原因：
@@ -64,7 +64,7 @@ curl -I http://127.0.0.1:3000
 2. 如果是源码运行，确认已经构建前端静态产物：
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm build
 ```
 
@@ -73,7 +73,7 @@ pnpm build
 4. 如果通过前端开发服务器访问，确认后端代理地址：
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 NEXT_DEV_BACKEND_URL=http://127.0.0.1:3000 pnpm dev
 ```
 
@@ -101,13 +101,13 @@ curl -I http://your-server:3000
 查看 Agent 日志：
 
 ```bash
-journalctl -u openflare-agent -n 200 --no-pager
+journalctl -u dushengcdn-agent -n 200 --no-pager
 ```
 
 检查配置文件：
 
 ```bash
-sed -n '1,160p' /opt/openflare-agent/agent.json
+sed -n '1,160p' /opt/dushengcdn-agent/agent.json
 ```
 
 重点确认：
@@ -122,7 +122,7 @@ sed -n '1,160p' /opt/openflare-agent/agent.json
 如果日志提示 Token 无效，重新在管理端准备 Token 并更新 `agent.json`，然后重启：
 
 ```bash
-systemctl restart openflare-agent
+systemctl restart dushengcdn-agent
 ```
 
 ## 发布后节点没有应用新版本
@@ -138,12 +138,12 @@ systemctl restart openflare-agent
 查看 Agent 日志：
 
 ```bash
-journalctl -u openflare-agent -f
+journalctl -u dushengcdn-agent -f
 ```
 
 注意：某个目标 `version + checksum` 一旦应用失败并回退，Agent 会在本地状态中阻断该目标重复应用。修正配置后需要重新发布生成新的 checksum，或激活旧版本回滚。
 
-如果这是 Agent 首次应用配置，且本地没有历史 `nginx.conf` 可回滚，失败目标仍会被阻断，但 Agent 会尝试进入安全兜底运行态。此时应用记录和 Agent 日志会包含 `fallback runtime started`，OpenResty 对外只监听 `80` 端口并统一返回 `503` 与 `OpenFlare: No Valid Configuration`，同时保留本地 `stub_status` 健康检查入口。修正配置并重新发布新版本后，Agent 会覆盖兜底配置并恢复正常代理。
+如果这是 Agent 首次应用配置，且本地没有历史 `nginx.conf` 可回滚，失败目标仍会被阻断，但 Agent 会尝试进入安全兜底运行态。此时应用记录和 Agent 日志会包含 `fallback runtime started`，OpenResty 对外只监听 `80` 端口并统一返回 `503` 与 `DuShengCDN: No Valid Configuration`，同时保留本地 `stub_status` 健康检查入口。修正配置并重新发布新版本后，Agent 会覆盖兜底配置并恢复正常代理。
 
 ## OpenResty 应用失败
 
@@ -160,7 +160,7 @@ journalctl -u openflare-agent -f
 OpenResty 配置校验：
 
 ```bash
-openresty -t -c /path/to/openflare/data/etc/nginx/nginx.conf
+openresty -t -c /path/to/dushengcdn/data/etc/nginx/nginx.conf
 ```
 
 OpenResty 运行状态：
@@ -169,7 +169,7 @@ OpenResty 运行状态：
 ps aux | grep openresty
 ```
 
-Agent 周期性健康检查通过本地 `http://127.0.0.1:<openresty_observability_port>/openflare/stub_status` 判断 OpenResty 是否存活，不会反复执行 `openresty -t`。如果节点被标记为 unhealthy，优先确认该本地观测端口是否正在监听；如果只在应用配置时出现 `host not found in upstream`，说明失败来自配置校验或 reload，而不是周期性健康探针。
+Agent 周期性健康检查通过本地 `http://127.0.0.1:<openresty_observability_port>/dushengcdn/stub_status` 判断 OpenResty 是否存活，不会反复执行 `openresty -t`。如果节点被标记为 unhealthy，优先确认该本地观测端口是否正在监听；如果只在应用配置时出现 `host not found in upstream`，说明失败来自配置校验或 reload，而不是周期性健康探针。
 
 实际二进制路径和主配置路径以 `agent.json` 中的 `openresty_path` 与 `main_config_path` 为准。
 
@@ -200,7 +200,7 @@ curl -Iv https://your-domain
 执行：
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 corepack enable
 pnpm install
 pnpm lint

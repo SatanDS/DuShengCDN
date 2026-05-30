@@ -1,9 +1,9 @@
 services:
-  openflare-agent:
+  dushengcdn-agent:
     build:
         context: .
-        dockerfile: openflare_agent/Dockerfile
-    container_name: openflare-agent
+        dockerfile: dushengcdn_agent/Dockerfile
+    container_name: dushengcdn-agent
     restart: unless-stopped
 
     ports:
@@ -12,14 +12,14 @@ services:
       - "127.0.0.1:18081:18081"
 
     volumes:
-      - ./openflare_agent/data/:/data
+      - ./dushengcdn_agent/data/:/data
 
     environment:
-      OPENFLARE_SERVER_URL: "http://host.docker.internal:3000"
-      OPENFLARE_AGENT_TOKEN: "373956188ddead1df6dd7c86cd330b73"
+      DUSHENGCDN_SERVER_URL: "http://host.docker.internal:3000"
+      DUSHENGCDN_AGENT_TOKEN: "replace-with-agent-token"
       # Optional precise IP lookup API. Local GeoIP is used first; this API is queried only when local GeoIP has no country.
-      # OPENFLARE_GEOIP_LOOKUP_API_URL: "https://ipdb.example.com/lookup"
-      # OPENFLARE_GEOIP_LOOKUP_API_TOKEN: "replace-with-api-token"
+      # DUSHENGCDN_GEOIP_LOOKUP_API_URL: "https://ipdb.example.com/lookup"
+      # DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN: "replace-with-api-token"
       LOG_LEVEL: "debug"
 
     extra_hosts:

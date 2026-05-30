@@ -1,0 +1,9 @@
+{
+  "server_url": "http://127.0.0.1:3000",
+  "agent_token": "replace-with-agent-token",
+  "data_dir": "./data",
+  "geoip_database_path": "./data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
+  "openresty_path": "openresty",
+  "heartbeat_interval": 10000,
+  "request_timeout": 10000
+}

@@ -1,8 +1,8 @@
 # Starting the Server
 
-You will learn: How to build the management console frontend from source, start OpenFlare Server, select SQLite or PostgreSQL, and access Swagger.
+You will learn: How to build the management console frontend from source, start DuShengCDN Server, select SQLite or PostgreSQL, and access Swagger.
 
-OpenFlare Server is a Gin + GORM monolithic control plane, responsible for the management console UI, management APIs, Agent APIs, configuration rendering, version releases, data storage, and aggregated queries.
+DuShengCDN Server is a Gin + GORM monolithic control plane, responsible for the management console UI, management APIs, Agent APIs, configuration rendering, version releases, data storage, and aggregated queries.
 
 ## Prerequisites
 
@@ -17,10 +17,10 @@ In production environments, it is recommended to explicitly configure `SESSION_S
 
 ## Build the Management Console Frontend
 
-The Go Server hosts the static artifacts in `openflare_server/web/build`. Before starting from source, build the frontend first:
+The Go Server hosts the static artifacts in `dushengcdn_server/web/build`. Before starting from source, build the frontend first:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 corepack enable
 pnpm install
 pnpm build
@@ -37,9 +37,9 @@ pnpm test
 ## Start with SQLite
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='replace-with-a-long-random-string'
-export SQLITE_PATH='./openflare.db'
+export SQLITE_PATH='./dushengcdn.db'
 export LOG_LEVEL='info'
 go run .
 ```
@@ -53,9 +53,9 @@ http://localhost:3000
 ## Start with PostgreSQL
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='replace-with-a-long-random-string'
-export DSN='postgres://openflare:secret@127.0.0.1:5432/openflare?sslmode=disable'
+export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
 export LOG_LEVEL='info'
 go run .
 ```
@@ -99,8 +99,8 @@ Regenerate Swagger locally:
 
 ```bash
 go install github.com/swaggo/swag/cmd/swag@v1.16.4
-cd openflare_server
+cd dushengcdn_server
 swag init -g main.go -o docs
 ```
 
-The generated Swagger files are located in `openflare_server/docs`.
+The generated Swagger files are located in `dushengcdn_server/docs`.

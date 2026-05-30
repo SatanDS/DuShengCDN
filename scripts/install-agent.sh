@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# OpenFlare Agent Installer
+# DuShengCDN Agent Installer
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/SatanDS/OpenCDN/main/scripts/install-agent.sh | bash -s -- \
+#   curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
 #     --server-url http://your-server:3000 \
 #     --discovery-token your-token
 
-INSTALL_DIR="/opt/openflare-agent"
-REPO="SatanDS/OpenCDN"
+INSTALL_DIR="/opt/dushengcdn-agent"
+REPO="SatanDS/DuShengCDN"
 SERVER_URL=""
 DISCOVERY_TOKEN=""
 AGENT_TOKEN=""
 CREATE_SERVICE="true"
-SERVICE_NAME="openflare-agent"
+SERVICE_NAME="dushengcdn-agent"
 OPENRESTY_PATH=""
 AUTO_INSTALL_DEPS="true"
 SOURCE_REF="${SOURCE_REF:-main}"
@@ -22,7 +22,7 @@ GEOIP_LOOKUP_API_TOKEN=""
 
 usage() {
   cat <<EOF
-OpenFlare Agent Installer
+DuShengCDN Agent Installer
 
 Usage:
   install-agent.sh [OPTIONS]
@@ -31,9 +31,9 @@ Options:
   --server-url URL          Server URL (required)
   --discovery-token TOKEN   Discovery token for auto-registration
   --agent-token TOKEN       Node-specific agent token
-  --install-dir DIR         Installation directory (default: /opt/openflare-agent)
+  --install-dir DIR         Installation directory (default: /opt/dushengcdn-agent)
   --openresty-path PATH     OpenResty binary path (default: auto-detect from PATH)
-  --repo REPO               GitHub repository (default: SatanDS/OpenCDN)
+  --repo REPO               GitHub repository (default: SatanDS/DuShengCDN)
   --source-ref REF          Git branch, tag, or commit used when building from source (default: main)
   --geoip-api-url URL       Optional precise IP lookup API URL used when local GeoIP has no country
   --geoip-api-token TOKEN   Optional bearer token for --geoip-api-url
@@ -287,7 +287,7 @@ disable_default_openresty_service() {
     return
   fi
 
-  log "Disabling the package default openresty.service; OpenFlare Agent will manage OpenResty directly."
+  log "Disabling the package default openresty.service; DuShengCDN Agent will manage OpenResty directly."
   run_as_root systemctl disable --now openresty.service >/dev/null 2>&1 || true
   run_as_root systemctl reset-failed openresty.service >/dev/null 2>&1 || true
 }
@@ -775,7 +775,7 @@ download_release_binary() {
 
 build_binary_from_source() {
   local source_dir
-  source_dir="$(mktemp -d "/tmp/opencdn-source.XXXXXX")"
+  source_dir="$(mktemp -d "/tmp/dushengcdn-source.XXXXXX")"
 
   ensure_source_build_tools
   ensure_go
@@ -790,7 +790,7 @@ build_binary_from_source() {
   git -C "$source_dir" checkout --detach FETCH_HEAD >/dev/null 2>&1
 
   (
-    cd "$source_dir/openflare_agent"
+    cd "$source_dir/dushengcdn_agent"
     go mod download
     CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$TMP_BINARY" ./cmd/agent
   )
@@ -840,7 +840,7 @@ if [[ ! -x "$OPENRESTY_PATH" ]]; then
   exit 1
 fi
 
-ASSET_NAME="openflare-agent-${OS}-${ARCH}"
+ASSET_NAME="dushengcdn-agent-${OS}-${ARCH}"
 echo "Detected platform: ${OS}/${ARCH}"
 
 SYSTEMCTL_AVAILABLE="false"
@@ -848,7 +848,7 @@ if command -v systemctl >/dev/null 2>&1; then
   SYSTEMCTL_AVAILABLE="true"
 fi
 
-TMP_BINARY="$(mktemp "/tmp/openflare-agent.tmp.XXXXXX")"
+TMP_BINARY="$(mktemp "/tmp/dushengcdn-agent.tmp.XXXXXX")"
 cleanup() {
   rm -f "$TMP_BINARY"
 }
@@ -881,10 +881,10 @@ fi
 echo "Installing to ${INSTALL_DIR}..."
 if [[ "$NEEDS_ROOT" == "true" ]]; then
   run_as_root mkdir -p "${INSTALL_DIR}/data"
-  run_as_root install -m 0755 "$TMP_BINARY" "${INSTALL_DIR}/openflare-agent"
+  run_as_root install -m 0755 "$TMP_BINARY" "${INSTALL_DIR}/dushengcdn-agent"
 else
   mkdir -p "${INSTALL_DIR}/data"
-  mv -f "$TMP_BINARY" "${INSTALL_DIR}/openflare-agent"
+  mv -f "$TMP_BINARY" "${INSTALL_DIR}/dushengcdn-agent"
 fi
 trap - EXIT
 
@@ -899,8 +899,8 @@ if [[ -n "$AGENT_TOKEN" ]]; then
   "agent_token": "$(json_escape "$AGENT_TOKEN")",
   "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
-  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
-  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
+  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
+  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
   "heartbeat_interval": 30000,
   "request_timeout": 10000$(geoip_api_config_json)
 }
@@ -912,8 +912,8 @@ CFGEOF
   "agent_token": "$(json_escape "$AGENT_TOKEN")",
   "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
-  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
-  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
+  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
+  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
   "heartbeat_interval": 30000,
   "request_timeout": 10000$(geoip_api_config_json)
 }
@@ -927,8 +927,8 @@ else
   "discovery_token": "$(json_escape "$DISCOVERY_TOKEN")",
   "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
-  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
-  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
+  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
+  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
   "heartbeat_interval": 30000,
   "request_timeout": 10000$(geoip_api_config_json)
 }
@@ -940,8 +940,8 @@ CFGEOF
   "discovery_token": "$(json_escape "$DISCOVERY_TOKEN")",
   "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
-  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
-  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/openflare/geoip/GeoLite2-Country.mmdb",
+  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
+  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
   "heartbeat_interval": 30000,
   "request_timeout": 10000$(geoip_api_config_json)
 }
@@ -952,14 +952,14 @@ fi
 # Create systemd service
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   echo "Creating systemd service..."
-  write_file_as_root /etc/systemd/system/openflare-agent.service <<SVCEOF
+  write_file_as_root /etc/systemd/system/dushengcdn-agent.service <<SVCEOF
 [Unit]
-Description=OpenFlare Agent
+Description=DuShengCDN Agent
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/openflare-agent -config ${CONFIG_FILE}
+ExecStart=${INSTALL_DIR}/dushengcdn-agent -config ${CONFIG_FILE}
 WorkingDirectory=${INSTALL_DIR}
 Restart=always
 RestartSec=10
@@ -979,12 +979,12 @@ SVCEOF
 else
   echo ""
   echo "To start the agent manually:"
-  echo "  ${INSTALL_DIR}/openflare-agent -config ${CONFIG_FILE}"
+  echo "  ${INSTALL_DIR}/dushengcdn-agent -config ${CONFIG_FILE}"
 fi
 
 echo ""
-echo "OpenFlare Agent installed successfully!"
-echo "  Binary: ${INSTALL_DIR}/openflare-agent"
+echo "DuShengCDN Agent installed successfully!"
+echo "  Binary: ${INSTALL_DIR}/dushengcdn-agent"
 echo "  Config: ${CONFIG_FILE}"
 echo "  Data:   ${INSTALL_DIR}/data"
 echo "  OpenResty: ${OPENRESTY_PATH}"

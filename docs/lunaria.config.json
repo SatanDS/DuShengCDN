@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/@lunariajs/core/config.schema.json",
   "repository": {
-    "name": "Rain-kl/OpenFlare",
+    "name": "SatanDS/DuShengCDN",
     "rootDir": "docs"
   },
   "files": [

@@ -1,12 +1,12 @@
 # Guide
 
-You will learn how the OpenFlare documentation is organized, which pages to read for a first run, and where to find deployment, usage, troubleshooting, and development information.
+You will learn how the DuShengCDN documentation is organized, which pages to read for a first run, and where to find deployment, usage, troubleshooting, and development information.
 
-OpenFlare is a self-hosted OpenResty control plane. It brings reverse proxy site configuration, immutable releases, Agent-based node sync, TLS certificates, and basic observability into one management UI for a single team or organization.
+DuShengCDN is a self-hosted OpenResty control plane. It brings reverse proxy site configuration, immutable releases, Agent-based node sync, TLS certificates, and basic observability into one management UI for a single team or organization.
 
 ## Recommended Path
 
-If you are new to OpenFlare, read these pages in order:
+If you are new to DuShengCDN, read these pages in order:
 
 1. [Quick Start](./quick-start.md): start the Server with Docker Compose, sign in, and connect the first Agent.
 2. [Usage](./usage.md): learn common operations for sites, origins, certificates, releases, rollbacks, and observability.

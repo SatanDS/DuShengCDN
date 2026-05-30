@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是 OpenFlare 的 AI 接手入口，不承载详细设计、规范和计划。接手项目时，先按顺序阅读以下 VitePress 文档源文件：
+本文件是 DuShengCDN 的 AI 接手入口，不承载详细设计、规范和计划。接手项目时，先按顺序阅读以下 VitePress 文档源文件：
 
 1. [docs/design/index.md](./docs/design/index.md)
    作用：理解当前 MVP 的产品范围、系统边界、核心对象和长期约束。

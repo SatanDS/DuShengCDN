@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: OpenFlare
+  name: DuShengCDN
   text: Self-hosted OpenResty control plane
   tagline: Manage reverse proxy rules, configuration releases, node sync, TLS certificates, and basic observability.
   actions:
@@ -14,7 +14,7 @@ hero:
       link: /en/design/
     - theme: alt
       text: GitHub
-      link: https://github.com/Rain-kl/OpenFlare
+      link: https://github.com/SatanDS/DuShengCDN
 
 features:
   - icon: 🧭

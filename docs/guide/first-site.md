@@ -2,7 +2,7 @@
 
 你会学到：如何创建第一条网站配置、绑定源站与证书、发布配置版本，并确认 Agent 已经应用。
 
-OpenFlare 的发布链路以完整配置版本为中心。你在管理端修改网站配置后，需要发布并激活新版本，Agent 才会在后续 heartbeat 中拉取并应用。
+DuShengCDN 的发布链路以完整配置版本为中心。你在管理端修改网站配置后，需要发布并激活新版本，Agent 才会在后续 heartbeat 中拉取并应用。
 
 ## 发布前检查
 
@@ -67,7 +67,7 @@ HTTPS 证书按域名绑定。没有绑定证书的域名不会被自动放入 `
 在节点上确认 Agent 日志：
 
 ```bash
-journalctl -u openflare-agent -n 100 --no-pager
+journalctl -u dushengcdn-agent -n 100 --no-pager
 ```
 
 用域名访问：

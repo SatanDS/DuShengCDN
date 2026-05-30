@@ -4,7 +4,7 @@ import llmstxt from 'vitepress-plugin-llms'
 const prod = !!process.env.NETLIFY
 
 export default defineConfig({
-  title: 'OpenFlare',
+  title: 'DuShengCDN',
   lastUpdated: true,
   cleanUrls: true,
   metaChunk: true,
@@ -19,19 +19,19 @@ export default defineConfig({
   },
 
   sitemap: {
-    hostname: 'https://openflare.io'
+    hostname: 'https://dushengcdn.io'
   },
 
   head: [
     ['meta', { name: 'theme-color', content: '#10b981' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:site_name', content: 'OpenFlare' }],
-    ['meta', { property: 'og:url', content: 'https://openflare.io/' }]
+    ['meta', { property: 'og:site_name', content: 'DuShengCDN' }],
+    ['meta', { property: 'og:url', content: 'https://dushengcdn.io/' }]
   ],
 
   themeConfig: {
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/Rain-kl/OpenFlare' }
+      { icon: 'github', link: 'https://github.com/SatanDS/DuShengCDN' }
     ],
     search: {
       provider: 'local'

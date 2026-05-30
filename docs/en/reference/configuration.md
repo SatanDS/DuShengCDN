@@ -17,7 +17,7 @@
 | `GIN_MODE` | Gin mode | release unless `debug` |
 | `LOG_LEVEL` | Log level | `info` |
 | `SESSION_SECRET` | Session signing secret | random on startup |
-| `SQLITE_PATH` | SQLite database path | `openflare.db` |
+| `SQLITE_PATH` | SQLite database path | `dushengcdn.db` |
 | `DSN` | PostgreSQL DSN, preferred over SQLite | empty |
 | `SQL_DSN` | Legacy PostgreSQL DSN, lower priority than `DSN` | empty |
 | `REDIS_CONN_STRING` | Redis connection string | empty |
@@ -42,14 +42,14 @@ The settings page maintains these hot-updatable options:
 | --- | --- | --- |
 | `AgentHeartbeatInterval` | Agent heartbeat interval in milliseconds | `10000` |
 | `NodeOfflineThreshold` | Node offline threshold in milliseconds | `120000` |
-| `AgentUpdateRepo` | Agent update repository | `Rain-kl/OpenFlare` |
+| `AgentUpdateRepo` | Agent update repository | `SatanDS/DuShengCDN` |
 | `GeoIPProvider` | Node/IP region provider | `ipinfo` |
 | `DatabaseAutoCleanupEnabled` | Enable daily observability cleanup | `false` |
 | `DatabaseAutoCleanupRetentionDays` | Retention days | `30` |
 
 OpenResty performance and cache options are also stored in the Option table, including `OpenRestyWorkerProcesses`, `OpenRestyWorkerConnections`, `OpenRestyProxyConnectTimeout`, `OpenRestyProxyReadTimeout`, `OpenRestyCacheEnabled`, `OpenRestyCachePath`, and `OpenRestyCacheMaxSize`.
 
-`AgentUpdateRepo` releases must publish a matching `.sha256` file for each Agent binary, such as `openflare-agent-linux-amd64.sha256`. Agent self-update verifies the SHA-256 digest before replacing the executable.
+`AgentUpdateRepo` releases must publish a matching `.sha256` file for each Agent binary, such as `dushengcdn-agent-linux-amd64.sha256`. Agent self-update verifies the SHA-256 digest before replacing the executable.
 
 ## Agent Configuration
 
@@ -68,8 +68,8 @@ Agent supports the `-config` CLI flag, an `agent.json` file, and the `LOG_LEVEL`
 | `openresty_observability_port` | Local observability and OpenResty health-check port | no | `18081` |
 | `docker_binary` | Deprecated Docker-control field, read for compatibility only | no | empty |
 | `data_dir` | Agent data directory | no | `data` under config directory |
-| `access_log_path` | OpenResty access log path | no | `data_dir/var/log/openflare/access.log` |
-| `runtime_config_dir` | Runtime config directory, including `pow_config.json` | no | `data_dir/etc/openflare` |
+| `access_log_path` | OpenResty access log path | no | `data_dir/var/log/dushengcdn/access.log` |
+| `runtime_config_dir` | Runtime config directory, including `pow_config.json` | no | `data_dir/etc/dushengcdn` |
 | `heartbeat_interval` | Heartbeat interval | no | `10000` ms |
 | `request_timeout` | HTTP timeout | no | `10000` ms |
 

@@ -1,12 +1,12 @@
 # 仓库结构
 
-你会学到：OpenFlare 仓库中 Server、Agent、前端、脚本和文档目录分别负责什么，以及贡献代码时应把逻辑放到哪一层。
+你会学到：DuShengCDN 仓库中 Server、Agent、前端、脚本和文档目录分别负责什么，以及贡献代码时应把逻辑放到哪一层。
 
 | 路径 | 职责 |
 | --- | --- |
-| `openflare_server` | Gin + GORM + SQLite/PostgreSQL 单体控制面 |
-| `openflare_server/web` | Next.js 15 App Router 管理端前端，静态导出后由 Go Server 托管 |
-| `openflare_agent` | Go 单体 Agent，运行在节点侧 |
+| `dushengcdn_server` | Gin + GORM + SQLite/PostgreSQL 单体控制面 |
+| `dushengcdn_server/web` | Next.js 15 App Router 管理端前端，静态导出后由 Go Server 托管 |
+| `dushengcdn_agent` | Go 单体 Agent，运行在节点侧 |
 | `scripts` | Agent 安装、卸载等辅助脚本 |
 | `docs` | VitePress 文档站、设计基线、开发规范、部署与配置文档 |
 

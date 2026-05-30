@@ -1,8 +1,8 @@
 # Release Model
 
-You will learn: Why OpenFlare uses a complete configuration version as the release unit, and how publishing, activation, Agent application, and rollback work.
+You will learn: Why DuShengCDN uses a complete configuration version as the release unit, and how publishing, activation, Agent application, and rollback work.
 
-OpenFlare's release model is centered on complete configuration versions rather than modifying node configurations online.
+DuShengCDN's release model is centered on complete configuration versions rather than modifying node configurations online.
 
 Standard link:
 

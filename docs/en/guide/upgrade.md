@@ -14,7 +14,7 @@ After upgrading, confirm:
 
 ```bash
 docker compose ps
-docker compose logs -n 100 openflare
+docker compose logs -n 100 dushengcdn
 ```
 
 If it is a source deployment, confirm that there are no database migration or startup errors in the logs after restarting the Server.
@@ -26,7 +26,7 @@ Node Agents follow stable versions by default for automatic updates. Preview upg
 The installation script can be executed repeatedly to reinstall or upgrade the Agent:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
@@ -36,8 +36,8 @@ Note: Currently, the installation script will delete the entire installation dir
 After upgrading, confirm:
 
 ```bash
-systemctl status openflare-agent
-journalctl -u openflare-agent -n 100 --no-pager
+systemctl status dushengcdn-agent
+journalctl -u dushengcdn-agent -n 100 --no-pager
 ```
 
 ## Data Maintenance
@@ -56,21 +56,21 @@ Once enabled, the Server will clean up access logs, metric snapshots, and reques
 Server:
 
 ```bash
-cd openflare_server
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_server
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 Agent:
 
 ```bash
-cd openflare_agent
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_agent
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 Frontend:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm lint
 pnpm typecheck
 pnpm test

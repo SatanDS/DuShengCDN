@@ -1,12 +1,12 @@
 # Repository Layout
 
-You will learn: What the Server, Agent, frontend, scripts, and documentation directories in the OpenFlare repository are responsible for, and which layer to place your logic when contributing code.
+You will learn: What the Server, Agent, frontend, scripts, and documentation directories in the DuShengCDN repository are responsible for, and which layer to place your logic when contributing code.
 
 | Path | Responsibility |
 | --- | --- |
-| `openflare_server` | Gin + GORM + SQLite/PostgreSQL monolithic control plane |
-| `openflare_server/web` | Next.js 15 App Router management console frontend, statically exported and hosted by the Go Server |
-| `openflare_agent` | Go monolithic Agent, running on the node side |
+| `dushengcdn_server` | Gin + GORM + SQLite/PostgreSQL monolithic control plane |
+| `dushengcdn_server/web` | Next.js 15 App Router management console frontend, statically exported and hosted by the Go Server |
+| `dushengcdn_agent` | Go monolithic Agent, running on the node side |
 | `scripts` | Helper scripts such as Agent installation, uninstallation, etc. |
 | `docs` | VitePress documentation site, design baseline, development constraints, deployment, and configuration documents |
 

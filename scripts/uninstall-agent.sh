@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="/opt/openflare-agent"
-SERVICE_NAME="openflare-agent"
+INSTALL_DIR="/opt/dushengcdn-agent"
+SERVICE_NAME="dushengcdn-agent"
 
 usage() {
   cat <<EOF
-OpenFlare Agent Uninstaller
+DuShengCDN Agent Uninstaller
 
 Usage:
   uninstall-agent.sh [OPTIONS]
 
 Options:
-  --install-dir DIR         Installation directory (default: /opt/openflare-agent)
-  --service-name NAME       systemd service name (default: openflare-agent)
+  --install-dir DIR         Installation directory (default: /opt/dushengcdn-agent)
+  --service-name NAME       systemd service name (default: dushengcdn-agent)
   -h, --help                Show this help message
 
 Behavior:
@@ -23,7 +23,7 @@ Behavior:
 
 Examples:
   uninstall-agent.sh
-  uninstall-agent.sh --install-dir /srv/openflare-agent
+  uninstall-agent.sh --install-dir /srv/dushengcdn-agent
 EOF
   exit 0
 }
@@ -42,7 +42,7 @@ if [[ -z "$INSTALL_DIR" || "$INSTALL_DIR" == "/" || "$INSTALL_DIR" == "." ]]; th
   exit 1
 fi
 
-AGENT_BINARY="${INSTALL_DIR}/openflare-agent"
+AGENT_BINARY="${INSTALL_DIR}/dushengcdn-agent"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 SYSTEMCTL_AVAILABLE="false"
@@ -50,7 +50,7 @@ if command -v systemctl >/dev/null 2>&1; then
   SYSTEMCTL_AVAILABLE="true"
 fi
 
-echo "Uninstalling OpenFlare Agent from ${INSTALL_DIR}..."
+echo "Uninstalling DuShengCDN Agent from ${INSTALL_DIR}..."
 
 if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   if systemctl is-active --quiet "$SERVICE_NAME"; then
@@ -99,4 +99,4 @@ fi
 echo "Agent uninstall complete."
 echo ""
 echo "Local OpenResty was not modified. Remove it manually if you no longer need it."
-echo "OpenFlare Agent uninstall finished."
+echo "DuShengCDN Agent uninstall finished."

@@ -2,7 +2,7 @@ import { defineAdditionalConfig, type DefaultTheme } from 'vitepress'
 
 export default defineAdditionalConfig({
   description:
-    'OpenFlare 是轻量、自托管的 OpenResty 控制面，用于管理反向代理、配置发布、节点同步、TLS 证书与基础观测。',
+    'DuShengCDN 是轻量、自托管的 OpenResty 控制面，用于管理反向代理、配置发布、节点同步、TLS 证书与基础观测。',
 
   themeConfig: {
     nav: nav(),
@@ -14,13 +14,13 @@ export default defineAdditionalConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/Rain-kl/OpenFlare/edit/main/docs/:path',
+      pattern: 'https://github.com/SatanDS/DuShengCDN/edit/main/docs/:path',
       text: '在 GitHub 上编辑此页面'
     },
 
     footer: {
       message: '基于 Apache License 2.0 发布',
-      copyright: 'Copyright © OpenFlare contributors'
+      copyright: 'Copyright © DuShengCDN contributors'
     },
 
     docFooter: {
@@ -40,7 +40,7 @@ export default defineAdditionalConfig({
       title: '页面未找到',
       quote: '这份文档还没有对应页面。',
       linkLabel: '前往首页',
-      linkText: '回到 OpenFlare 文档'
+      linkText: '回到 DuShengCDN 文档'
     },
 
     langMenuLabel: '语言',

@@ -2,7 +2,7 @@ import { defineAdditionalConfig, type DefaultTheme } from 'vitepress'
 
 export default defineAdditionalConfig({
   description:
-    'OpenFlare is a lightweight, self-hosted OpenResty control plane for reverse proxy rules, releases, node sync, TLS certificates, and basic observability.',
+    'DuShengCDN is a lightweight, self-hosted OpenResty control plane for reverse proxy rules, releases, node sync, TLS certificates, and basic observability.',
 
   themeConfig: {
     nav: nav(),
@@ -14,13 +14,13 @@ export default defineAdditionalConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/Rain-kl/OpenFlare/edit/main/docs/:path',
+      pattern: 'https://github.com/SatanDS/DuShengCDN/edit/main/docs/:path',
       text: 'Edit this page on GitHub'
     },
 
     footer: {
       message: 'Released under the Apache License 2.0.',
-      copyright: 'Copyright © OpenFlare contributors'
+      copyright: 'Copyright © DuShengCDN contributors'
     }
   }
 })

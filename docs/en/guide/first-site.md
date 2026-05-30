@@ -2,7 +2,7 @@
 
 You will learn: How to create your first site configuration, bind origins and certificates, publish a configuration version, and confirm that the Agent has applied it.
 
-OpenFlare's release link is centered on complete configuration versions. After modifying site configurations on the management console, you need to publish and activate the new version before the Agent pulls and applies it in subsequent heartbeats.
+DuShengCDN's release link is centered on complete configuration versions. After modifying site configurations on the management console, you need to publish and activate the new version before the Agent pulls and applies it in subsequent heartbeats.
 
 ## Pre-release Check
 
@@ -67,7 +67,7 @@ After publishing, confirm on the management console:
 Confirm the Agent logs on the node:
 
 ```bash
-journalctl -u openflare-agent -n 100 --no-pager
+journalctl -u dushengcdn-agent -n 100 --no-pager
 ```
 
 Access using the domain:

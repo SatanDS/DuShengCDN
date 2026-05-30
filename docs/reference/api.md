@@ -1,8 +1,8 @@
 # API 约定
 
-你会学到：OpenFlare 管理端 API 与 Agent API 的响应结构、路径约定、鉴权方式和 Swagger 入口。
+你会学到：DuShengCDN 管理端 API 与 Agent API 的响应结构、路径约定、鉴权方式和 Swagger 入口。
 
-OpenFlare 的管理端 API 与 Agent API 都使用 JSON。
+DuShengCDN 的管理端 API 与 Agent API 都使用 JSON。
 
 ## 响应结构
 
@@ -45,4 +45,4 @@ X-Agent-Token: <token>
 /swagger/index.html
 ```
 
-Swagger 文件位于 `openflare_server/docs`，由 `swag init` 生成。
+Swagger 文件位于 `dushengcdn_server/docs`，由 `swag init` 生成。

@@ -1,8 +1,8 @@
 # Usage
 
-You will learn what sites, origins, certificates, versions, nodes, and observability mean in OpenFlare, and which order to follow for daily operations.
+You will learn what sites, origins, certificates, versions, nodes, and observability mean in DuShengCDN, and which order to follow for daily operations.
 
-OpenFlare does not patch OpenResty configuration files online. You edit control-plane data in the UI; Agents pull and apply a full configuration only after you publish and activate a new version.
+DuShengCDN does not patch OpenResty configuration files online. You edit control-plane data in the UI; Agents pull and apply a full configuration only after you publish and activate a new version.
 
 ## Core Concepts
 
@@ -49,7 +49,7 @@ Example:
 
 Upstream rules:
 
-* A single upstream may include a base path or query string, such as `https://app.example.com/base?from=openflare`.
+* A single upstream may include a base path or query string, such as `https://app.example.com/base?from=dushengcdn`.
 * Multiple upstreams are used for load balancing and must be plain `scheme://host[:port]`.
 * Multiple upstreams in the same site should use the same protocol.
 
@@ -96,7 +96,7 @@ Node pages answer three questions:
 | Which version is running? | Current version on the node detail page |
 | Did the last apply succeed? | Apply logs |
 
-Access analytics and resource snapshots provide basic observability. OpenFlare only keeps access details for a controlled time window; it is not a general-purpose log platform. Use a dedicated logging system for long-term log search.
+Access analytics and resource snapshots provide basic observability. DuShengCDN only keeps access details for a controlled time window; it is not a general-purpose log platform. Use a dedicated logging system for long-term log search.
 
 ## Common Scenarios
 
@@ -131,4 +131,4 @@ Access analytics and resource snapshots provide basic observability. OpenFlare o
 * Preview or diff changes before release.
 * Check node details and apply logs after each release.
 * Keep the network path from Agents to the Server stable.
-* Do not manually edit OpenFlare-managed OpenResty files on nodes; the next release will overwrite them.
+* Do not manually edit DuShengCDN-managed OpenResty files on nodes; the next release will overwrite them.

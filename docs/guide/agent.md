@@ -2,7 +2,7 @@
 
 你会学到：Agent 的职责、两种接入 Token 的区别、安装脚本参数、`agent.json` 配置方式，以及如何确认节点已经上线。
 
-OpenFlare Agent 运行在代理节点侧。它不会接收远程 shell 指令，而是通过 Agent API 拉取控制面发布的配置版本，在本地写入 OpenResty 文件、执行配置校验、reload，并在失败时尝试回滚到可运行配置。
+DuShengCDN Agent 运行在代理节点侧。它不会接收远程 shell 指令，而是通过 Agent API 拉取控制面发布的配置版本，在本地写入 OpenResty 文件、执行配置校验、reload，并在失败时尝试回滚到可运行配置。
 
 ## 接入方式
 
@@ -20,7 +20,7 @@ OpenFlare Agent 运行在代理节点侧。它不会接收远程 shell 指令，
 使用 `discovery_token`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --discovery-token YOUR_DISCOVERY_TOKEN
 ```
@@ -28,12 +28,12 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 使用节点专属 `agent_token`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/install-agent.sh | bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
 ```
 
-安装脚本会下载最新 Agent，默认写入 `/opt/openflare-agent`，生成 `agent.json`，并在 Linux + systemd 环境创建 `openflare-agent.service`。
+安装脚本会下载最新 Agent，默认写入 `/opt/dushengcdn-agent`，生成 `agent.json`，并在 Linux + systemd 环境创建 `dushengcdn-agent.service`。
 
 支持参数：
 
@@ -42,9 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 | `--server-url` | Server 地址，必填 |
 | `--discovery-token` | 首次自动注册 Token |
 | `--agent-token` | 节点专属 Token |
-| `--install-dir` | 安装目录，默认 `/opt/openflare-agent` |
+| `--install-dir` | 安装目录，默认 `/opt/dushengcdn-agent` |
 | `--openresty-path` | OpenResty 二进制路径，未传时自动查找 `openresty` |
-| `--repo` | 下载 Agent 的 GitHub 仓库，默认 `Rain-kl/OpenFlare` |
+| `--repo` | 下载 Agent 的 GitHub 仓库，默认 `SatanDS/DuShengCDN` |
 | `--no-service` | 不创建 systemd 服务 |
 
 ## 配置文件
@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 默认配置文件路径：
 
 ```text
-/opt/openflare-agent/agent.json
+/opt/dushengcdn-agent/agent.json
 ```
 
 本地配置示例：
@@ -76,14 +76,14 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 {
   "server_url": "http://127.0.0.1:3000",
   "agent_token": "replace-with-node-auth-token",
-  "data_dir": "/var/lib/openflare-agent",
+  "data_dir": "/var/lib/dushengcdn-agent",
   "openresty_path": "/usr/local/openresty/nginx/sbin/openresty",
-  "main_config_path": "/var/lib/openflare-agent/etc/nginx/nginx.conf",
-  "route_config_path": "/var/lib/openflare-agent/etc/nginx/conf.d/openflare_routes.conf",
-  "access_log_path": "/var/lib/openflare-agent/var/log/openflare/access.log",
-  "cert_dir": "/var/lib/openflare-agent/etc/nginx/certs",
-  "lua_dir": "/var/lib/openflare-agent/etc/nginx/lua",
-  "runtime_config_dir": "/var/lib/openflare-agent/etc/openflare",
+  "main_config_path": "/var/lib/dushengcdn-agent/etc/nginx/nginx.conf",
+  "route_config_path": "/var/lib/dushengcdn-agent/etc/nginx/conf.d/dushengcdn_routes.conf",
+  "access_log_path": "/var/lib/dushengcdn-agent/var/log/dushengcdn/access.log",
+  "cert_dir": "/var/lib/dushengcdn-agent/etc/nginx/certs",
+  "lua_dir": "/var/lib/dushengcdn-agent/etc/nginx/lua",
+  "runtime_config_dir": "/var/lib/dushengcdn-agent/etc/dushengcdn",
   "heartbeat_interval": 10000,
   "request_timeout": 10000
 }
@@ -96,11 +96,11 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/inst
 Docker 部署时直接运行内置 OpenResty 的 Agent 镜像：
 
 ```bash
-docker run -d --name openflare-agent --restart unless-stopped \
+docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
-  -e OPENFLARE_SERVER_URL=http://your-server:3000 \
-  -e OPENFLARE_AGENT_TOKEN=YOUR_AGENT_TOKEN \
-  ghcr.io/rain-kl/openflare-agent:latest
+  -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
+  -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
+  ghcr.io/satands/dushengcdn-agent:latest
 ```
 
 ## 启动与验证
@@ -108,20 +108,20 @@ docker run -d --name openflare-agent --restart unless-stopped \
 systemd 环境：
 
 ```bash
-systemctl status openflare-agent
-journalctl -u openflare-agent -f
+systemctl status dushengcdn-agent
+journalctl -u dushengcdn-agent -f
 ```
 
 手动启动：
 
 ```bash
-/opt/openflare-agent/openflare-agent -config /opt/openflare-agent/agent.json
+/opt/dushengcdn-agent/dushengcdn-agent -config /opt/dushengcdn-agent/agent.json
 ```
 
 源码运行：
 
 ```bash
-cd openflare_agent
+cd dushengcdn_agent
 export LOG_LEVEL='info'
 go run ./cmd/agent -config /path/to/agent.json
 ```
@@ -129,10 +129,10 @@ go run ./cmd/agent -config /path/to/agent.json
 编译后二进制运行：
 
 ```bash
-cd openflare_agent
-go build -o openflare-agent ./cmd/agent
+cd dushengcdn_agent
+go build -o dushengcdn-agent ./cmd/agent
 export LOG_LEVEL='info'
-./openflare-agent -config /path/to/agent.json
+./dushengcdn-agent -config /path/to/agent.json
 ```
 
 在管理端确认：
@@ -148,15 +148,15 @@ export LOG_LEVEL='info'
 如需彻底卸载 Agent 并清空本地数据：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/uninstall-agent.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uninstall-agent.sh | bash
 ```
 
 支持参数：
 
 | 参数 | 说明 |
 | --- | --- |
-| `--install-dir` | 安装目录，默认 `/opt/openflare-agent` |
-| `--service-name` | systemd 服务名，默认 `openflare-agent` |
+| `--install-dir` | 安装目录，默认 `/opt/dushengcdn-agent` |
+| `--service-name` | systemd 服务名，默认 `dushengcdn-agent` |
 
 卸载脚本只移除 Agent 服务、进程和安装目录，不会删除本机 OpenResty。
 
@@ -166,5 +166,5 @@ curl -fsSL https://raw.githubusercontent.com/Rain-kl/OpenFlare/main/scripts/unin
 | --- | --- |
 | `agent_token 和 discovery_token 不能同时为空` | 检查 `agent.json` 至少配置了一个 Token |
 | 节点一直离线 | 在 Agent 节点执行 `curl -I http://your-server:3000`，确认 Server 地址可达 |
-| OpenResty 没有启动 | 查看 `journalctl -u openflare-agent`，确认 `openresty_path` 可执行且 80/443 端口未被占用 |
+| OpenResty 没有启动 | 查看 `journalctl -u dushengcdn-agent`，确认 `openresty_path` 可执行且 80/443 端口未被占用 |
 | 发布后重复失败 | Agent 会阻断同一 `version + checksum` 的重复应用；需要修正配置后重新发布，或激活旧版本回滚 |

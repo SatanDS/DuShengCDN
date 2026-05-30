@@ -1,6 +1,6 @@
 # 本地开发
 
-你会学到：如何搭建 OpenFlare 的本地开发环境、启动 Server、Agent 和管理端前端，运行测试与构建命令，并理解贡献代码前需要遵守的边界。
+你会学到：如何搭建 DuShengCDN 的本地开发环境、启动 Server、Agent 和管理端前端，运行测试与构建命令，并理解贡献代码前需要遵守的边界。
 
 本页面向贡献者。产品边界、数据模型约束、API 约定和前端分层规范以 [开发约束](../design/development.md) 为准；本页只提供可执行的本地开发流程。
 
@@ -8,9 +8,9 @@
 
 | 路径 | 职责 |
 | --- | --- |
-| `openflare_server` | Gin + GORM + SQLite/PostgreSQL 单体控制面 |
-| `openflare_server/web` | Next.js 管理端前端，静态导出后由 Go Server 托管 |
-| `openflare_agent` | Go 单体 Agent，运行在节点侧 |
+| `dushengcdn_server` | Gin + GORM + SQLite/PostgreSQL 单体控制面 |
+| `dushengcdn_server/web` | Next.js 管理端前端，静态导出后由 Go Server 托管 |
+| `dushengcdn_agent` | Go 单体 Agent，运行在节点侧 |
 | `scripts` | Agent 安装与卸载脚本 |
 | `docs` | VitePress 文档站 |
 
@@ -28,7 +28,7 @@
 ## 初始化前端依赖
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 corepack enable
 pnpm install
 ```
@@ -44,9 +44,9 @@ pnpm build
 SQLite 模式：
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='dev-session-secret'
-export SQLITE_PATH='./openflare-dev.db'
+export SQLITE_PATH='./dushengcdn-dev.db'
 export LOG_LEVEL='debug'
 go run .
 ```
@@ -54,9 +54,9 @@ go run .
 PostgreSQL 模式：
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='dev-session-secret'
-export DSN='postgres://openflare:secret@127.0.0.1:5432/openflare?sslmode=disable'
+export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
 export LOG_LEVEL='debug'
 go run .
 ```
@@ -74,7 +74,7 @@ http://localhost:3000
 前端开发服务器默认监听 `3001`，并通过 `NEXT_DEV_BACKEND_URL` 代理到后端：
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 export NEXT_DEV_BACKEND_URL='http://127.0.0.1:3000'
 pnpm dev
 ```
@@ -102,7 +102,7 @@ http://localhost:3001
 运行：
 
 ```bash
-cd openflare_agent
+cd dushengcdn_agent
 export LOG_LEVEL='debug'
 go run ./cmd/agent -config ./agent.json
 ```
@@ -114,21 +114,21 @@ go run ./cmd/agent -config ./agent.json
 Server：
 
 ```bash
-cd openflare_server
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_server
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 Agent：
 
 ```bash
-cd openflare_agent
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_agent
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 Frontend：
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -147,22 +147,22 @@ pnpm build
 管理端静态产物：
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm build
 ```
 
 Server 二进制：
 
 ```bash
-cd openflare_server
-go build -o openflare-server .
+cd dushengcdn_server
+go build -o dushengcdn-server .
 ```
 
 Agent 二进制：
 
 ```bash
-cd openflare_agent
-go build -o openflare-agent ./cmd/agent
+cd dushengcdn_agent
+go build -o dushengcdn-agent ./cmd/agent
 ```
 
 ## 调试入口

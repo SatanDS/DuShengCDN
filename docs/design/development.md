@@ -1,8 +1,8 @@
 # 开发约束
 
-你会学到：OpenFlare 代码修改的准入标准、后端/Agent/前端分层约束、数据模型边界、API 约定、数据库迁移要求和测试交付基线。
+你会学到：DuShengCDN 代码修改的准入标准、后端/Agent/前端分层约束、数据模型边界、API 约定、数据库迁移要求和测试交付基线。
 
-本文档融合原开发规范、前端规范与开发计划，是 OpenFlare `1.0.0` 之后的工程约束入口。
+本文档融合原开发规范、前端规范与开发计划，是 DuShengCDN `1.0.0` 之后的工程约束入口。
 
 ## 当前结论
 
@@ -174,7 +174,7 @@ tests/
 
 任何涉及表结构、索引、列类型、分表规则或内部持久化元数据的修改，都必须同步提升数据库版本号。
 
-数据库版本号定义在 `openflare_server/model`，不得只依赖 `AutoMigrate` 隐式升级存量数据库。
+数据库版本号定义在 `dushengcdn_server/model`，不得只依赖 `AutoMigrate` 隐式升级存量数据库。
 
 每次提升数据库版本号时，必须补充从上一版本升级到新版本的显式迁移方法。迁移方法必须包含升级后的校验逻辑；只有校验通过，才能写入新的数据库版本记录。
 
@@ -238,7 +238,7 @@ Agent 必须满足：
 * 发现新版本时先备份旧文件。
 * 写入主配置、路由配置与必要证书文件。
 * 写入新配置后执行 `openresty -t -c <main_config_path>`，再 reload；reload 发现运行时未启动时允许直接启动 OpenResty。
-* 周期性运行时健康检查不得调用 `openresty -t`，避免健康探针触发 upstream 域名同步解析；应优先请求本地 `openresty_observability_port` 上的 `/openflare/stub_status`，以 HTTP `200 OK` 作为 OpenResty 主进程和 worker 正在提供服务的判断依据。
+* 周期性运行时健康检查不得调用 `openresty -t`，避免健康探针触发 upstream 域名同步解析；应优先请求本地 `openresty_observability_port` 上的 `/dushengcdn/stub_status`，以 HTTP `200 OK` 作为 OpenResty 主进程和 worker 正在提供服务的判断依据。
 * 新配置激活失败时必须先尝试用目标配置恢复运行，再回滚到旧配置并重新拉起 OpenResty。
 * 回滚后 OpenResty 恢复正常时上报警告；如果本地没有历史主配置可恢复，必须允许写入内置安全兜底配置并拉起对外只监听 `80` 端口、统一返回 `503` 的 OpenResty 运行态；兜底配置仍需保留本地 `stub_status` 健康检查入口。
 * 兜底运行态不得清除失败目标的阻断状态；应用记录必须能体现目标版本失败但 fallback runtime 已启动。存在历史主配置但回滚后仍无法恢复运行时上报失败。

@@ -21,7 +21,7 @@ jobs:
         env:
           CI: ""
         run: |
-          cd openflare_server/web
+          cd dushengcdn_server/web
           corepack enable
           pnpm install --frozen-lockfile
           pnpm build
@@ -31,4 +31,4 @@ jobs:
         with:
           token: ${{ secrets.ACCESS_TOKEN }}
           branch: gh-pages
-          folder: openflare_server/web/build
+          folder: dushengcdn_server/web/build

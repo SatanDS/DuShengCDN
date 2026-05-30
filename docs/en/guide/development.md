@@ -1,6 +1,6 @@
 # Local Development
 
-You will learn how to set up a local OpenFlare development environment, run the Server, Agent, and frontend, execute tests and builds, and understand the boundaries contributors must follow.
+You will learn how to set up a local DuShengCDN development environment, run the Server, Agent, and frontend, execute tests and builds, and understand the boundaries contributors must follow.
 
 This page is for contributors. Product boundaries, data model constraints, API conventions, and frontend layering are defined in [Development Constraints](../design/development.md). This page focuses on executable local workflows.
 
@@ -8,9 +8,9 @@ This page is for contributors. Product boundaries, data model constraints, API c
 
 | Path | Responsibility |
 | --- | --- |
-| `openflare_server` | Gin + GORM + SQLite/PostgreSQL monolithic control plane |
-| `openflare_server/web` | Next.js management UI, statically exported and served by the Go Server |
-| `openflare_agent` | Go Agent binary running on nodes |
+| `dushengcdn_server` | Gin + GORM + SQLite/PostgreSQL monolithic control plane |
+| `dushengcdn_server/web` | Next.js management UI, statically exported and served by the Go Server |
+| `dushengcdn_agent` | Go Agent binary running on nodes |
 | `scripts` | Agent install and uninstall scripts |
 | `docs` | VitePress documentation site |
 
@@ -28,7 +28,7 @@ This page is for contributors. Product boundaries, data model constraints, API c
 ## Install Frontend Dependencies
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 corepack enable
 pnpm install
 ```
@@ -44,9 +44,9 @@ pnpm build
 SQLite:
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='dev-session-secret'
-export SQLITE_PATH='./openflare-dev.db'
+export SQLITE_PATH='./dushengcdn-dev.db'
 export LOG_LEVEL='debug'
 go run .
 ```
@@ -54,9 +54,9 @@ go run .
 PostgreSQL:
 
 ```bash
-cd openflare_server
+cd dushengcdn_server
 export SESSION_SECRET='dev-session-secret'
-export DSN='postgres://openflare:secret@127.0.0.1:5432/openflare?sslmode=disable'
+export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
 export LOG_LEVEL='debug'
 go run .
 ```
@@ -74,7 +74,7 @@ Default account: `root` / `123456`.
 The frontend dev server listens on `3001` by default and proxies API requests through `NEXT_DEV_BACKEND_URL`:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 export NEXT_DEV_BACKEND_URL='http://127.0.0.1:3000'
 pnpm dev
 ```
@@ -102,7 +102,7 @@ Create a local `agent.json`:
 Run:
 
 ```bash
-cd openflare_agent
+cd dushengcdn_agent
 export LOG_LEVEL='debug'
 go run ./cmd/agent -config ./agent.json
 ```
@@ -114,21 +114,21 @@ When `openresty_path` is not configured, the Agent runs `openresty`. For debuggi
 Server:
 
 ```bash
-cd openflare_server
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_server
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 Agent:
 
 ```bash
-cd openflare_agent
-GOCACHE=/tmp/openflare-go-cache go test ./...
+cd dushengcdn_agent
+GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```
 
 Frontend:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -147,22 +147,22 @@ pnpm build
 Frontend static assets:
 
 ```bash
-cd openflare_server/web
+cd dushengcdn_server/web
 pnpm build
 ```
 
 Server binary:
 
 ```bash
-cd openflare_server
-go build -o openflare-server .
+cd dushengcdn_server
+go build -o dushengcdn-server .
 ```
 
 Agent binary:
 
 ```bash
-cd openflare_agent
-go build -o openflare-agent ./cmd/agent
+cd dushengcdn_agent
+go build -o dushengcdn-agent ./cmd/agent
 ```
 
 ## Debugging Entrypoints

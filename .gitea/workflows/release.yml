@@ -50,7 +50,7 @@ jobs:
           CI: ""
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cd openflare_server/web
+          cd dushengcdn_server/web
           corepack enable
           pnpm install --frozen-lockfile
           NEXT_PUBLIC_APP_VERSION="$VERSION" pnpm build
@@ -59,7 +59,7 @@ jobs:
         if: steps.version.outputs.should_run == 'true'
         uses: https://github.com/actions/setup-go@v5
         with:
-          go-version-file: openflare_server/go.mod
+          go-version-file: dushengcdn_server/go.mod
 
       - name: Build Server Binaries
         if: steps.version.outputs.should_run == 'true'
@@ -72,18 +72,18 @@ jobs:
 
           mkdir -p dist
 
-          cd openflare_server
+          cd dushengcdn_server
           go mod download
 
           while read -r GOOS GOARCH ASSET_NAME; do
             GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -trimpath -ldflags "-s -w -X 'openflare/common.Version=$VERSION'" -o "../dist/$ASSET_NAME" .
+              go build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION'" -o "../dist/$ASSET_NAME" .
           done <<'EOF'
-          linux amd64 openflare-server-linux-amd64
-          linux arm64 openflare-server-linux-arm64
-          darwin amd64 openflare-server-darwin-amd64
-          darwin arm64 openflare-server-darwin-arm64
-          windows amd64 openflare-server-windows-amd64.exe
+          linux amd64 dushengcdn-server-linux-amd64
+          linux arm64 dushengcdn-server-linux-arm64
+          darwin amd64 dushengcdn-server-darwin-amd64
+          darwin arm64 dushengcdn-server-darwin-arm64
+          windows amd64 dushengcdn-server-windows-amd64.exe
           EOF
 
       - name: Build Agent Binaries
@@ -95,18 +95,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          cd openflare_agent
+          cd dushengcdn_agent
           go mod download
 
           while read -r GOOS GOARCH ASSET_NAME; do
             GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -trimpath -ldflags "-s -w -X 'openflare-agent/internal/config.AgentVersion=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/agent
+              go build -trimpath -ldflags "-s -w -X 'dushengcdn-agent/internal/config.AgentVersion=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/agent
           done <<'EOF'
-          linux amd64 openflare-agent-linux-amd64
-          linux arm64 openflare-agent-linux-arm64
-          darwin amd64 openflare-agent-darwin-amd64
-          darwin arm64 openflare-agent-darwin-arm64
-          windows amd64 openflare-agent-windows-amd64.exe
+          linux amd64 dushengcdn-agent-linux-amd64
+          linux arm64 dushengcdn-agent-linux-arm64
+          darwin amd64 dushengcdn-agent-darwin-amd64
+          darwin arm64 dushengcdn-agent-darwin-arm64
+          windows amd64 dushengcdn-agent-windows-amd64.exe
           EOF
 
       - name: Publish Release

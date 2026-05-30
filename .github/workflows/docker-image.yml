@@ -77,8 +77,8 @@ jobs:
         id: build
         uses: docker/build-push-action@v7
         with:
-          context: ./openflare_server
-          file: ./openflare_server/Dockerfile
+          context: ./dushengcdn_server
+          file: ./dushengcdn_server/Dockerfile
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
@@ -241,7 +241,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ./openflare_agent/Dockerfile
+          file: ./dushengcdn_agent/Dockerfile
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
