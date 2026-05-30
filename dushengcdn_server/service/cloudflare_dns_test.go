@@ -240,6 +240,57 @@ func TestParseCloudflareAPITokenVariants(t *testing.T) {
 	}
 }
 
+func TestNormalizeDNSAccountAuthorization(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "raw", raw: "raw-token", want: `{"api_token":"raw-token"}`},
+		{name: "bearer", raw: " Bearer bearer-token ", want: `{"api_token":"bearer-token"}`},
+		{name: "json api_token", raw: `{"api_token":"json-token"}`, want: `{"api_token":"json-token"}`},
+		{name: "json apiToken", raw: `{"apiToken":"camel-token"}`, want: `{"api_token":"camel-token"}`},
+		{name: "quoted", raw: `"quoted-token"`, want: `{"api_token":"quoted-token"}`},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &model.DnsAccount{
+				Type:          " CloudFlare ",
+				Authorization: tt.raw,
+			}
+			if err := NormalizeDNSAccountAuthorization(account); err != nil {
+				t.Fatalf("normalize authorization: %v", err)
+			}
+			if account.Type != "cloudflare" {
+				t.Fatalf("expected normalized type cloudflare, got %q", account.Type)
+			}
+			if account.Authorization != tt.want {
+				t.Fatalf("authorization = %q, want %q", account.Authorization, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeDNSAccountAuthorizationRejectsInvalidInput(t *testing.T) {
+	cases := []struct {
+		name    string
+		account *model.DnsAccount
+	}{
+		{name: "nil", account: nil},
+		{name: "empty type", account: &model.DnsAccount{Type: "", Authorization: "token"}},
+		{name: "unsupported type", account: &model.DnsAccount{Type: "route53", Authorization: "token"}},
+		{name: "empty token", account: &model.DnsAccount{Type: "cloudflare", Authorization: " "}},
+		{name: "invalid json token", account: &model.DnsAccount{Type: "cloudflare", Authorization: `{"api_token":`}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := NormalizeDNSAccountAuthorization(tt.account); err == nil {
+				t.Fatal("expected invalid input to fail")
+			}
+		})
+	}
+}
+
 func TestSelectHealthyNodeDNSTargetsByPoolAndWeight(t *testing.T) {
 	setupServiceTestDB(t)
 

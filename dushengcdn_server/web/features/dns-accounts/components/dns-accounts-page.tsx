@@ -152,12 +152,7 @@ function DnsAccountCreateModal({ isOpen, onClose, onCreated }: { isOpen: boolean
 
   const onSubmit = handleSubmit((values) => {
     setError('');
-    // for cloudflare we wrap the token in JSON if it isn't already (the backend expects JSON)
-    let auth = values.authorization;
-    if (!auth.startsWith('{')) {
-      auth = JSON.stringify({ api_token: values.authorization });
-    }
-    createMutation.mutate({ ...values, authorization: auth });
+    createMutation.mutate({ ...values, authorization: values.authorization.trim() });
   });
 
   return (

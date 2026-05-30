@@ -129,16 +129,40 @@ func parseCloudflareCredentials(account *model.DnsAccount) (*CloudflareCredentia
 
 func parseCloudflareCredentialsV2(account *model.DnsAccount) (*CloudflareCredentials, error) {
 	if account == nil {
-		return nil, errors.New("DNS account does not exist")
+		return nil, errors.New("DNS 账号不存在")
 	}
 	if strings.ToLower(strings.TrimSpace(account.Type)) != cloudflareDNSProviderType {
-		return nil, fmt.Errorf("DNS account type %s does not support automatic DNS; only Cloudflare is supported", account.Type)
+		return nil, fmt.Errorf("DNS 账号类型 %s 不支持自动 DNS，同步功能目前仅支持 Cloudflare", account.Type)
 	}
 	token := parseCloudflareAPIToken(account.Authorization)
 	if token == "" {
-		return nil, errors.New("Cloudflare DNS account is missing api_token")
+		return nil, errors.New("Cloudflare DNS 账号缺少 api_token")
 	}
 	return &CloudflareCredentials{APIToken: token}, nil
+}
+
+func NormalizeDNSAccountAuthorization(account *model.DnsAccount) error {
+	if account == nil {
+		return errors.New("DNS 账号不存在")
+	}
+	account.Type = strings.ToLower(strings.TrimSpace(account.Type))
+	switch account.Type {
+	case cloudflareDNSProviderType:
+		token := parseCloudflareAPIToken(account.Authorization)
+		if token == "" {
+			return errors.New("Cloudflare DNS 账号缺少 api_token")
+		}
+		raw, err := json.Marshal(CloudflareCredentials{APIToken: token})
+		if err != nil {
+			return err
+		}
+		account.Authorization = string(raw)
+		return nil
+	case "":
+		return errors.New("DNS 账号类型不能为空")
+	default:
+		return fmt.Errorf("DNS 账号类型 %s 暂不支持", account.Type)
+	}
 }
 
 func parseCloudflareAPIToken(raw string) string {
