@@ -159,12 +159,6 @@ export function TlsCertificatesPage() {
               >
                 刷新证书
               </SecondaryButton>
-              <Link
-                href="/dns-account"
-                className="inline-flex min-h-[46px] items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
-              >
-                DNS 账号
-              </Link>
               <PrimaryButton
                 type="button"
                 onClick={() => setIsImportOpen(true)}
