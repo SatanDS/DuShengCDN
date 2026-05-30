@@ -11,12 +11,13 @@ import { ProxyRouteConfigPage } from '@/features/proxy-routes/components/proxy-r
 import { ProxyRoutesPage } from '@/features/proxy-routes/components/proxy-routes-page';
 
 const pushMock = vi.fn();
+let searchParamsMock = new URLSearchParams();
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: pushMock,
   }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => searchParamsMock,
 }));
 
 function stubMatchMedia() {
@@ -178,6 +179,7 @@ function renderWithProviders(ui: ReactNode) {
 describe('Proxy route website pages', () => {
   beforeEach(() => {
     pushMock.mockReset();
+    searchParamsMock = new URLSearchParams();
     stubMatchMedia();
   });
 
@@ -228,6 +230,67 @@ describe('Proxy route website pages', () => {
     expect(screen.getByRole('link')).toHaveAttribute(
       'href',
       '/proxy-route/detail?id=9&section=domains',
+    );
+  });
+
+  it('renders selected feature section as an expandable configuration page', async () => {
+    searchParamsMock = new URLSearchParams('section=cache');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes('/proxy-routes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  buildRoute({
+                    cache_enabled: true,
+                    cache_policy: 'path_prefix',
+                    cache_rule_list: ['/assets', '/static'],
+                  }),
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/config-versions/diff')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildDiff(),
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(<ProxyRoutesPage />);
+
+    expect(await screen.findByText('缓存策略配置')).toBeInTheDocument();
+    expect(screen.getByText('缓存已启用')).toBeInTheDocument();
+    expect(screen.getByText('启用站点缓存')).toBeInTheDocument();
+    expect(screen.getByText('缓存规则')).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue(
+        (value) => value.includes('/assets') && value.includes('/static'),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '清理全部缓存' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '配置缓存策略' })).toHaveAttribute(
+      'href',
+      '/proxy-route/detail?id=9&section=cache',
     );
   });
 

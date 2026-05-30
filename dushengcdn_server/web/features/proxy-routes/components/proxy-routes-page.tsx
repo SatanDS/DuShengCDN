@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronDown } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { EmptyState } from '@/components/feedback/empty-state';
@@ -17,19 +18,35 @@ import {
   getConfigVersionDiff,
   publishConfigVersion,
 } from '@/features/config-versions/api/config-versions';
+import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import { ProxyRouteCreateDrawer } from '@/features/proxy-routes/components/proxy-route-create-drawer';
+import {
+  BasicAuthSection,
+  CacheSection,
+  DNSAutomationSection,
+  PowSection,
+  RegionRestrictionSection,
+  WAFSection,
+  type SaveContext,
+} from '@/features/proxy-routes/components/proxy-route-config-page';
 import {
   getErrorMessage,
   getWebsiteConfigSection,
   getUpstreamSummary,
   getWebsiteStatusBadges,
   websiteConfigSections,
+  type WebsiteConfigSectionKey,
 } from '@/features/proxy-routes/helpers';
 import {
   deleteProxyRoute,
   getProxyRoutes,
+  updateProxyRoute,
 } from '@/features/proxy-routes/api/proxy-routes';
-import type { ProxyRouteItem } from '@/features/proxy-routes/types';
+import type {
+  ProxyRouteItem,
+  ProxyRouteMutationPayload,
+} from '@/features/proxy-routes/types';
+import type { DnsAccountItem } from '@/features/dns-accounts/types';
 import {
   DangerButton,
   PrimaryButton,
@@ -41,6 +58,23 @@ type FeedbackState = {
   tone: 'info' | 'success' | 'danger';
   message: string;
 };
+
+const featureSectionKeys = [
+  'dns',
+  'cache',
+  'pow',
+  'waf',
+  'region',
+  'auth',
+] as const;
+
+type FeatureSectionKey = (typeof featureSectionKeys)[number];
+
+function isFeatureSection(
+  section: WebsiteConfigSectionKey,
+): section is FeatureSectionKey {
+  return featureSectionKeys.includes(section as FeatureSectionKey);
+}
 
 function hasConfigChanges(diff: {
   active_version?: string;
@@ -66,6 +100,327 @@ function hasConfigChanges(diff: {
   );
 }
 
+function isFeatureEnabled(route: ProxyRouteItem, section: FeatureSectionKey) {
+  switch (section) {
+    case 'dns':
+      return route.dns_auto_sync;
+    case 'cache':
+      return route.cache_enabled;
+    case 'pow':
+      return route.pow_enabled;
+    case 'waf':
+      return route.waf_enabled;
+    case 'region':
+      return route.region_restriction_enabled;
+    case 'auth':
+      return route.basic_auth_enabled;
+  }
+}
+
+function getFeatureStatus(route: ProxyRouteItem, section: FeatureSectionKey) {
+  switch (section) {
+    case 'dns':
+      return {
+        label: route.dns_auto_sync ? '自动 DNS 已启用' : '自动 DNS 未启用',
+        variant: route.dns_auto_sync ? 'success' : 'warning',
+      } as const;
+    case 'cache':
+      return {
+        label: route.cache_enabled ? '缓存已启用' : '缓存未启用',
+        variant: route.cache_enabled ? 'success' : 'warning',
+      } as const;
+    case 'pow':
+      return {
+        label: route.pow_enabled ? 'PoW 已启用' : 'PoW 未启用',
+        variant: route.pow_enabled ? 'success' : 'warning',
+      } as const;
+    case 'waf':
+      return {
+        label: route.waf_enabled
+          ? route.waf_mode === 'log'
+            ? 'WAF 观察模式'
+            : 'WAF 拦截模式'
+          : 'WAF 未启用',
+        variant: route.waf_enabled
+          ? route.waf_mode === 'log'
+            ? 'info'
+            : 'success'
+          : 'warning',
+      } as const;
+    case 'region':
+      return {
+        label: route.region_restriction_enabled
+          ? '地区限制已启用'
+          : '地区限制未启用',
+        variant: route.region_restriction_enabled ? 'success' : 'warning',
+      } as const;
+    case 'auth':
+      return {
+        label: route.basic_auth_enabled ? '认证已启用' : '认证未启用',
+        variant: route.basic_auth_enabled ? 'success' : 'warning',
+      } as const;
+  }
+}
+
+function FeatureSectionList({
+  section,
+  sectionLabel,
+  routes,
+  totalRoutes,
+  keyword,
+  onKeywordChange,
+  dnsAccounts,
+  savingRouteID,
+  onSave,
+}: {
+  section: FeatureSectionKey;
+  sectionLabel: string;
+  routes: ProxyRouteItem[];
+  totalRoutes: number;
+  keyword: string;
+  onKeywordChange: (value: string) => void;
+  dnsAccounts: DnsAccountItem[];
+  savingRouteID: number | null;
+  onSave: (
+    route: ProxyRouteItem,
+    payload: ProxyRouteMutationPayload,
+    context: SaveContext,
+  ) => void;
+}) {
+  const [expandedRouteIDs, setExpandedRouteIDs] = useState<Set<number>>(
+    () => new Set(routes.slice(0, 1).map((route) => route.id)),
+  );
+  const enabledCount = routes.filter((route) =>
+    isFeatureEnabled(route, section),
+  ).length;
+
+  const toggleExpanded = (routeID: number) => {
+    setExpandedRouteIDs((current) => {
+      const next = new Set(current);
+      if (next.has(routeID)) {
+        next.delete(routeID);
+      } else {
+        next.add(routeID);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <AppCard
+      title={`${sectionLabel}配置`}
+      description="这里按网站折叠展示该功能配置；展开站点后可以直接编辑并保存对应功能。"
+    >
+      <div className="space-y-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="max-w-xl">
+            <ResourceInput
+              value={keyword}
+              onChange={(event) => onKeywordChange(event.target.value)}
+              placeholder="搜索站点"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge
+              label={`当前列表 ${routes.length}/${totalRoutes}`}
+              variant="info"
+            />
+            <StatusBadge
+              label={`已启用 ${enabledCount}`}
+              variant={enabledCount > 0 ? 'success' : 'warning'}
+            />
+          </div>
+        </div>
+
+        {routes.length === 0 ? (
+          <EmptyState
+            title={totalRoutes === 0 ? '暂无网站配置' : '没有匹配结果'}
+            description={
+              totalRoutes === 0
+                ? '先创建一个网站配置，再配置站点级功能。'
+                : '试试调整搜索词，或者清空筛选条件。'
+            }
+          />
+        ) : (
+          <div className="space-y-3">
+            {routes.map((route) => {
+              const expanded = expandedRouteIDs.has(route.id);
+              return (
+                <FeatureRoutePanel
+                  key={route.id}
+                  route={route}
+                  section={section}
+                  sectionLabel={sectionLabel}
+                  expanded={expanded}
+                  dnsAccounts={dnsAccounts}
+                  saving={savingRouteID === route.id}
+                  onSave={(payload, context) => onSave(route, payload, context)}
+                  onToggle={() => toggleExpanded(route.id)}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </AppCard>
+  );
+}
+
+function FeatureRoutePanel({
+  route,
+  section,
+  sectionLabel,
+  expanded,
+  dnsAccounts,
+  saving,
+  onSave,
+  onToggle,
+}: {
+  route: ProxyRouteItem;
+  section: FeatureSectionKey;
+  sectionLabel: string;
+  expanded: boolean;
+  dnsAccounts: DnsAccountItem[];
+  saving: boolean;
+  onSave: (payload: ProxyRouteMutationPayload, context: SaveContext) => void;
+  onToggle: () => void;
+}) {
+  const status = getFeatureStatus(route, section);
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left transition hover:bg-[var(--surface-muted)]"
+        aria-expanded={expanded}
+      >
+        <span className="min-w-0">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-base font-semibold text-[var(--foreground-primary)]">
+              {route.site_name}
+            </span>
+            <StatusBadge label={status.label} variant={status.variant} />
+          </span>
+          <span className="mt-1 block text-sm break-all text-[var(--foreground-secondary)]">
+            {route.domains.join(' / ')}
+          </span>
+        </span>
+        <ChevronDown
+          className={`h-5 w-5 shrink-0 text-[var(--foreground-secondary)] transition ${
+            expanded ? 'rotate-180' : ''
+          }`}
+          aria-hidden="true"
+        />
+      </button>
+
+      {expanded ? (
+        <div className="border-t border-[var(--border-default)] px-4 py-4">
+          <FeatureRouteForm
+            route={route}
+            section={section}
+            dnsAccounts={dnsAccounts}
+            saving={saving}
+            onSave={onSave}
+          />
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-[var(--foreground-secondary)]">
+              修改后仍需发布并激活配置，Agent 应用后才会在节点侧生效。
+            </p>
+            <Link
+              href={`/proxy-route/detail?id=${route.id}&section=${section}`}
+              className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
+            >
+              配置{sectionLabel}
+            </Link>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function FeatureRouteForm({
+  route,
+  section,
+  dnsAccounts,
+  saving,
+  onSave,
+}: {
+  route: ProxyRouteItem;
+  section: FeatureSectionKey;
+  dnsAccounts: DnsAccountItem[];
+  saving: boolean;
+  onSave: (payload: ProxyRouteMutationPayload, context: SaveContext) => void;
+}) {
+  const formId = `proxy-route-${section}-form-${route.id}`;
+
+  switch (section) {
+    case 'dns':
+      return (
+        <DNSAutomationSection
+          route={route}
+          dnsAccounts={dnsAccounts}
+          saving={saving}
+          onSave={onSave}
+          formId={formId}
+          embedded
+        />
+      );
+    case 'cache':
+      return (
+        <CacheSection
+          route={route}
+          saving={saving}
+          onSave={onSave}
+          formId={formId}
+          embedded
+        />
+      );
+    case 'pow':
+      return (
+        <PowSection
+          route={route}
+          saving={saving}
+          onSave={onSave}
+          formId={formId}
+          embedded
+        />
+      );
+    case 'waf':
+      return (
+        <WAFSection
+          route={route}
+          saving={saving}
+          onSave={onSave}
+          formId={formId}
+          embedded
+        />
+      );
+    case 'region':
+      return (
+        <RegionRestrictionSection
+          route={route}
+          saving={saving}
+          onSave={onSave}
+          formId={formId}
+          embedded
+        />
+      );
+    case 'auth':
+      return (
+        <BasicAuthSection
+          route={route}
+          saving={saving}
+          onSave={onSave}
+          formId={formId}
+          embedded
+        />
+      );
+  }
+}
+
 export function ProxyRoutesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -74,6 +429,13 @@ export function ProxyRoutesPage() {
   const confirmDialog = useConfirmDialog();
   const [keyword, setKeyword] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const preferredSection = getWebsiteConfigSection(searchParams.get('section'));
+  const preferredSectionMeta =
+    websiteConfigSections.find((section) => section.key === preferredSection) ??
+    websiteConfigSections[0];
+  const activeFeatureSection = isFeatureSection(preferredSection)
+    ? preferredSection
+    : null;
 
   const routesQuery = useQuery({
     queryKey: ['proxy-routes'],
@@ -82,6 +444,11 @@ export function ProxyRoutesPage() {
   const diffQuery = useQuery({
     queryKey: ['config-versions', 'diff'],
     queryFn: getConfigVersionDiff,
+  });
+  const dnsAccountsQuery = useQuery({
+    queryKey: ['dns-accounts'],
+    queryFn: getDnsAccounts,
+    enabled: activeFeatureSection === 'dns',
   });
 
   const deleteMutation = useMutation({
@@ -109,6 +476,31 @@ export function ProxyRoutesPage() {
       });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['config-versions'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['config-versions', 'diff'],
+        }),
+      ]);
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({
+      route,
+      payload,
+    }: {
+      route: ProxyRouteItem;
+      payload: ProxyRouteMutationPayload;
+      context: SaveContext;
+    }) => updateProxyRoute(route.id, payload),
+    onSuccess: async (updatedRoute, variables) => {
+      setFeedback({ tone: 'success', message: variables.context.message });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['proxy-routes', 'detail', updatedRoute.id],
+        }),
         queryClient.invalidateQueries({
           queryKey: ['config-versions', 'diff'],
         }),
@@ -147,11 +539,6 @@ export function ProxyRoutesPage() {
     0,
   );
   const enabledCount = routes.filter((route) => route.enabled).length;
-  const preferredSection = getWebsiteConfigSection(searchParams.get('section'));
-  const preferredSectionMeta =
-    websiteConfigSections.find((section) => section.key === preferredSection) ??
-    websiteConfigSections[0];
-
   const handleDelete = async (route: ProxyRouteItem) => {
     const confirmed = await confirmDialog({
       title: '删除规则网站',
@@ -204,6 +591,19 @@ export function ProxyRoutesPage() {
         description={getErrorMessage(routesQuery.error)}
       />
     );
+  }
+
+  if (activeFeatureSection === 'dns' && dnsAccountsQuery.isError) {
+    return (
+      <ErrorState
+        title="DNS 账号列表加载失败"
+        description={getErrorMessage(dnsAccountsQuery.error)}
+      />
+    );
+  }
+
+  if (activeFeatureSection === 'dns' && dnsAccountsQuery.isLoading) {
+    return <LoadingState />;
   }
 
   return (
@@ -287,133 +687,152 @@ export function ProxyRoutesPage() {
           </AppCard>
         </div>
 
-        <AppCard title="网站配置列表">
-          <div className="space-y-4">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="max-w-xl">
-                <ResourceInput
-                  value={keyword}
-                  onChange={(event) => setKeyword(event.target.value)}
-                  placeholder="搜索站点"
-                />
-              </div>
-              {diff && hasConfigChanges(diff) ? (
-                <div className="flex flex-wrap gap-2">
-                  {diff.modified_sites.length > 0 ? (
-                    <StatusBadge
-                      label={`修改网站 ${diff.modified_sites.length}`}
-                      variant="warning"
-                    />
-                  ) : null}
-                  {diff.added_sites.length > 0 ? (
-                    <StatusBadge
-                      label={`新增网站 ${diff.added_sites.length}`}
-                      variant="success"
-                    />
-                  ) : null}
-                  {diff.removed_sites.length > 0 ? (
-                    <StatusBadge
-                      label={`删除网站 ${diff.removed_sites.length}`}
-                      variant="danger"
-                    />
-                  ) : null}
+        {activeFeatureSection ? (
+          <FeatureSectionList
+            section={activeFeatureSection}
+            sectionLabel={preferredSectionMeta.label}
+            routes={filteredRoutes}
+            totalRoutes={routes.length}
+            keyword={keyword}
+            onKeywordChange={setKeyword}
+            dnsAccounts={dnsAccountsQuery.data ?? []}
+            savingRouteID={
+              updateMutation.isPending
+                ? (updateMutation.variables?.route.id ?? null)
+                : null
+            }
+            onSave={(route, payload, context) => {
+              setFeedback(null);
+              updateMutation.mutate({ route, payload, context });
+            }}
+          />
+        ) : (
+          <AppCard title="网站配置列表">
+            <div className="space-y-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="max-w-xl">
+                  <ResourceInput
+                    value={keyword}
+                    onChange={(event) => setKeyword(event.target.value)}
+                    placeholder="搜索站点"
+                  />
                 </div>
-              ) : null}
-            </div>
+                {diff && hasConfigChanges(diff) ? (
+                  <div className="flex flex-wrap gap-2">
+                    {diff.modified_sites.length > 0 ? (
+                      <StatusBadge
+                        label={`修改网站 ${diff.modified_sites.length}`}
+                        variant="warning"
+                      />
+                    ) : null}
+                    {diff.added_sites.length > 0 ? (
+                      <StatusBadge
+                        label={`新增网站 ${diff.added_sites.length}`}
+                        variant="success"
+                      />
+                    ) : null}
+                    {diff.removed_sites.length > 0 ? (
+                      <StatusBadge
+                        label={`删除网站 ${diff.removed_sites.length}`}
+                        variant="danger"
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
 
-            {filteredRoutes.length === 0 ? (
-              <EmptyState
-                title={routes.length === 0 ? '暂无网站配置' : '没有匹配结果'}
-                description={
-                  routes.length === 0
-                    ? '先创建一个网站配置，再进入配置子页面继续补齐 HTTPS、缓存和限流。'
-                    : '试试调整搜索词，或者清空筛选条件。'
-                }
-              />
-            ) : (
-              <div className="grid gap-4 xl:grid-cols-2">
-                {filteredRoutes.map((route) => (
-                  <article
-                    key={route.id}
-                    className="rounded-[28px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
-                  >
-                    <div className="flex flex-col gap-5">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="space-y-3">
-                          <div className="space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h2 className="text-lg font-semibold text-[var(--foreground-primary)]">
-                                {route.site_name}
-                              </h2>
-                              {getWebsiteStatusBadges(route).map((badge) => (
-                                <StatusBadge
-                                  key={`${route.id}-${badge.label}`}
-                                  label={badge.label}
-                                  variant={badge.variant}
-                                />
-                              ))}
+              {filteredRoutes.length === 0 ? (
+                <EmptyState
+                  title={routes.length === 0 ? '暂无网站配置' : '没有匹配结果'}
+                  description={
+                    routes.length === 0
+                      ? '先创建一个网站配置，再进入配置子页面继续补齐 HTTPS、缓存和限流。'
+                      : '试试调整搜索词，或者清空筛选条件。'
+                  }
+                />
+              ) : (
+                <div className="grid gap-4 xl:grid-cols-2">
+                  {filteredRoutes.map((route) => (
+                    <article
+                      key={route.id}
+                      className="rounded-[28px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
+                    >
+                      <div className="flex flex-col gap-5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-3">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h2 className="text-lg font-semibold text-[var(--foreground-primary)]">
+                                  {route.site_name}
+                                </h2>
+                                {getWebsiteStatusBadges(route).map((badge) => (
+                                  <StatusBadge
+                                    key={`${route.id}-${badge.label}`}
+                                    label={badge.label}
+                                    variant={badge.variant}
+                                  />
+                                ))}
+                              </div>
                             </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <Link
+                              href={`/proxy-route/detail?id=${route.id}&section=${preferredSection}`}
+                              className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
+                            >
+                              配置
+                            </Link>
+                            <DangerButton
+                              type="button"
+                              onClick={() => handleDelete(route)}
+                              disabled={deleteMutation.isPending}
+                            >
+                              删除
+                            </DangerButton>
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-2">
-                          <Link
-                            href={`/proxy-route/detail?id=${route.id}&section=${preferredSection}`}
-                            className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
-                          >
-                            {preferredSection === 'domains'
-                              ? '配置'
-                              : `配置${preferredSectionMeta.label}`}
-                          </Link>
-                          <DangerButton
-                            type="button"
-                            onClick={() => handleDelete(route)}
-                            disabled={deleteMutation.isPending}
-                          >
-                            删除
-                          </DangerButton>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+                            <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+                              域名列表
+                            </p>
+                            <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                              {route.domains.join(' / ')}
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+                            <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+                              节点池
+                            </p>
+                            <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                              {route.node_pool || 'default'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+                            <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+                              源站摘要
+                            </p>
+                            <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                              {getUpstreamSummary(route)}
+                            </p>
+                          </div>
                         </div>
+
+                        <p className="text-sm text-[var(--foreground-secondary)]">
+                          {route.remark || null}
+                        </p>
                       </div>
-
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
-                            域名列表
-                          </p>
-                          <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                            {route.domains.join(' / ')}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
-                            节点池
-                          </p>
-                          <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                            {route.node_pool || 'default'}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
-                            源站摘要
-                          </p>
-                          <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                            {getUpstreamSummary(route)}
-                          </p>
-                        </div>
-                      </div>
-
-                      <p className="text-sm text-[var(--foreground-secondary)]">
-                        {route.remark || null}
-                      </p>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </div>
-        </AppCard>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </AppCard>
+        )}
       </div>
 
       <ProxyRouteCreateDrawer

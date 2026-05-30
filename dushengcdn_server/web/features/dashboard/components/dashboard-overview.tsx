@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { AppCard } from '@/components/ui/app-card';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { getObservabilityMeteringOverview } from '@/features/access-logs/api/access-logs';
 import { getDashboardOverview } from '@/features/dashboard/api/overview';
 import type { DashboardNodeHealth } from '@/features/dashboard/types';
 import { WorldStage } from '@/features/dashboard/components/world-stage';
@@ -137,8 +138,8 @@ function NodeHealthRow({ node }: { node: DashboardNodeHealth }) {
           {isWSConnectedLastSeen(node.last_seen_at)
             ? ' WS 已连接'
             : node.last_seen_at
-            ? ` ${formatRelativeTime(node.last_seen_at)} · ${formatDateTime(node.last_seen_at)}`
-            : ' 暂无'}
+              ? ` ${formatRelativeTime(node.last_seen_at)} · ${formatDateTime(node.last_seen_at)}`
+              : ' 暂无'}
         </p>
       </div>
     </Link>
@@ -149,6 +150,11 @@ export function DashboardOverview() {
   const overviewQuery = useQuery({
     queryKey: ['dashboard', 'overview'],
     queryFn: getDashboardOverview,
+    refetchInterval: 10000,
+  });
+  const meteringQuery = useQuery({
+    queryKey: ['access-logs', 'metering-overview'],
+    queryFn: getObservabilityMeteringOverview,
     refetchInterval: 10000,
   });
 
@@ -184,6 +190,49 @@ export function DashboardOverview() {
         nodes={overview.nodes}
         sourceCountries={overview.distributions.source_countries}
       />
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <AppCard
+          title="带宽峰值 P95"
+          description="来自观测计量最近窗口，用于判断 CDN 出口峰值水平。"
+        >
+          <div className="space-y-3">
+            <p className="text-3xl font-semibold text-[var(--foreground-primary)]">
+              {meteringQuery.data && meteringQuery.data.bandwidth_p95_bps > 0
+                ? formatBytesPerSecond(meteringQuery.data.bandwidth_p95_bps)
+                : '暂无数据'}
+            </p>
+            <p className="text-sm text-[var(--foreground-secondary)]">
+              {meteringQuery.data
+                ? `统计窗口 ${formatDateTime(meteringQuery.data.window_started_at)} 至 ${formatDateTime(meteringQuery.data.window_ended_at)}`
+                : meteringQuery.isLoading
+                  ? '正在读取观测计量数据...'
+                  : '暂无观测计量数据'}
+            </p>
+          </div>
+        </AppCard>
+
+        <AppCard
+          title="缓存命中率"
+          description="按 OpenResty 上报的缓存命中与可分类请求计算。"
+        >
+          <div className="space-y-3">
+            <p className="text-3xl font-semibold text-[var(--foreground-primary)]">
+              {meteringQuery.data &&
+              meteringQuery.data.cache_classified_count > 0
+                ? formatPercent(meteringQuery.data.cache_hit_rate_percent)
+                : '暂无数据'}
+            </p>
+            <p className="text-sm text-[var(--foreground-secondary)]">
+              {meteringQuery.data
+                ? `命中 ${meteringQuery.data.cache_hit_count.toLocaleString('zh-CN')} / 可分类 ${meteringQuery.data.cache_classified_count.toLocaleString('zh-CN')}`
+                : meteringQuery.isLoading
+                  ? '正在读取缓存命中统计...'
+                  : '暂无缓存命中统计'}
+            </p>
+          </div>
+        </AppCard>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
         <AppCard
@@ -249,9 +298,7 @@ export function DashboardOverview() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <AppCard
-          title="24 小时网络与磁盘趋势"
-        >
+        <AppCard title="24 小时网络与磁盘趋势">
           <div className="space-y-6">
             <TrendChart
               labels={overview.trends.network_24h.map((point) =>
@@ -311,9 +358,7 @@ export function DashboardOverview() {
           </div>
         </AppCard>
 
-        <AppCard
-          title="Top 节点榜单"
-        >
+        <AppCard title="Top 节点榜单">
           <div className="grid gap-6 xl:grid-cols-1">
             <div>
               <p className="mb-3 text-xs tracking-[0.22em] text-[var(--foreground-muted)] uppercase">
@@ -352,10 +397,7 @@ export function DashboardOverview() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <AppCard
-          title="来源分布"
-          description="聚合最近 24 小时主要来源国家。"
-        >
+        <AppCard title="来源分布" description="聚合最近 24 小时主要来源国家。">
           <RankChart
             items={overview.distributions.source_countries.map((item) => ({
               label: item.key,
@@ -380,10 +422,7 @@ export function DashboardOverview() {
           />
         </AppCard>
 
-        <AppCard
-          title="Top Domain"
-          description="观察主要流量集中在哪些域名。"
-        >
+        <AppCard title="Top Domain" description="观察主要流量集中在哪些域名。">
           <RankChart
             items={overview.distributions.top_domains.map((item) => ({
               label: item.key,

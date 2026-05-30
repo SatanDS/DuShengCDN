@@ -176,6 +176,41 @@ describe('DashboardOverview', () => {
           );
         }
 
+        if (url.includes('/access-logs/metering-overview')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  generated_at: '2026-03-14T08:00:00Z',
+                  window_started_at: '2026-03-14T07:00:00Z',
+                  window_ended_at: '2026-03-14T08:00:00Z',
+                  request_count: 900,
+                  response_bytes: 5_242_880,
+                  request_bytes: 262_144,
+                  upstream_bytes: 1_048_576,
+                  upstream_bytes_supported: true,
+                  cache_hit_count: 72,
+                  cache_classified_count: 90,
+                  cache_hit_rate_percent: 80,
+                  bandwidth_p95_bps: 1_048_576,
+                  node_availability_percent: 100,
+                  online_nodes: 2,
+                  total_nodes: 2,
+                  site_traffic: [],
+                  node_traffic: [],
+                  status_codes: [],
+                  top_urls: [],
+                  top_ips: [],
+                  top_regions: [],
+                  bandwidth_trend: [],
+                },
+              }),
+            ),
+          );
+        }
+
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
       }),
     );
@@ -185,6 +220,10 @@ describe('DashboardOverview', () => {
     expect(await screen.findByText('全球态势板')).toBeInTheDocument();
     expect(await screen.findByText('24 小时请求趋势')).toBeInTheDocument();
     expect(await screen.findByText('来源分布')).toBeInTheDocument();
+    expect(await screen.findByText('带宽峰值 P95')).toBeInTheDocument();
+    expect(await screen.findByText('缓存命中率')).toBeInTheDocument();
+    expect(await screen.findByText('1 MB/s')).toBeInTheDocument();
+    expect(await screen.findByText('80%')).toBeInTheDocument();
     expect(await screen.findByText('Top Domain')).toBeInTheDocument();
     expect(await screen.findByText('Top 节点榜单')).toBeInTheDocument();
     expect(await screen.findByText('节点健康列表')).toBeInTheDocument();
@@ -239,6 +278,41 @@ describe('DashboardOverview', () => {
                     disk_io_24h: null,
                   },
                   nodes: null,
+                },
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/access-logs/metering-overview')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  generated_at: '2026-03-14T08:00:00Z',
+                  window_started_at: '2026-03-14T07:00:00Z',
+                  window_ended_at: '2026-03-14T08:00:00Z',
+                  request_count: 0,
+                  response_bytes: 0,
+                  request_bytes: 0,
+                  upstream_bytes: 0,
+                  upstream_bytes_supported: true,
+                  cache_hit_count: 0,
+                  cache_classified_count: 0,
+                  cache_hit_rate_percent: 0,
+                  bandwidth_p95_bps: 0,
+                  node_availability_percent: 0,
+                  online_nodes: 0,
+                  total_nodes: 0,
+                  site_traffic: [],
+                  node_traffic: [],
+                  status_codes: [],
+                  top_urls: [],
+                  top_ips: [],
+                  top_regions: [],
+                  bandwidth_trend: [],
                 },
               }),
             ),

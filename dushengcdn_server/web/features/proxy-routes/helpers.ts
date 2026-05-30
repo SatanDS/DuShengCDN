@@ -27,7 +27,7 @@ export const websiteConfigSections = [
   },
   {
     key: 'cache',
-    label: '缓存',
+    label: '缓存策略',
     description: '配置站点缓存策略。',
   },
   {

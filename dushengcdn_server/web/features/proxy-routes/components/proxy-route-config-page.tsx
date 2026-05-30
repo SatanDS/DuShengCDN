@@ -66,14 +66,19 @@ type FeedbackState = {
   message: string;
 };
 
-type SaveContext = {
+export type SaveContext = {
   message: string;
 };
 
-type SaveHandler = (
+export type SaveHandler = (
   payload: ProxyRouteMutationPayload,
   context: SaveContext,
 ) => void;
+
+type ConfigSectionPresentationProps = {
+  formId?: string;
+  embedded?: boolean;
+};
 
 const domainSettingsSchema = z
   .object({
@@ -127,7 +132,10 @@ const rateLimitSchema = z
     limit_rate: z.string(),
   })
   .superRefine((value, context) => {
-    for (const field of ['limit_conn_per_server', 'limit_conn_per_ip'] as const) {
+    for (const field of [
+      'limit_conn_per_server',
+      'limit_conn_per_ip',
+    ] as const) {
       const rawValue = value[field].trim();
       if (!rawValue) {
         continue;
@@ -154,10 +162,7 @@ const rateLimitSchema = z
 const reverseProxySchema = z
   .object({
     origin_urls_text: z.string().trim().min(1, '请至少填写一个源站地址'),
-    node_pool: z
-      .string()
-      .trim()
-      .max(64, '节点池名称不能超过 64 个字符'),
+    node_pool: z.string().trim().max(64, '节点池名称不能超过 64 个字符'),
     origin_host: z.string(),
     custom_headers_text: z.string(),
     remark: z.string().max(255, '备注不能超过 255 个字符'),
@@ -317,14 +322,37 @@ function ConfigSectionShell({
   description,
   formId,
   saving,
+  embedded = false,
   children,
 }: {
   title: string;
   description: string;
   formId: string;
   saving: boolean;
+  embedded?: boolean;
   children: ReactNode;
 }) {
+  if (embedded) {
+    return (
+      <section className="space-y-5">
+        <div className="flex flex-col gap-3 border-b border-[var(--border-default)] pb-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-[var(--foreground-primary)]">
+              {title}
+            </h3>
+            <p className="mt-1 text-sm leading-6 text-[var(--foreground-secondary)]">
+              {description}
+            </p>
+          </div>
+          <PrimaryButton type="submit" form={formId} disabled={saving}>
+            {saving ? '保存中...' : '保存'}
+          </PrimaryButton>
+        </div>
+        {children}
+      </section>
+    );
+  }
+
   return (
     <AppCard
       title={title}
@@ -432,7 +460,9 @@ function DomainSettingsSection({
         <ResourceField
           label="域名列表"
           hint="每行配置一个域名。可为不同域名选择不同证书，相同证书也可以重复选择。"
-          error={form.formState.errors.domain_rows?.message as string | undefined}
+          error={
+            form.formState.errors.domain_rows?.message as string | undefined
+          }
           container="div"
         >
           <Controller
@@ -553,7 +583,10 @@ function RateLimitSection({
           error={form.formState.errors.limit_rate?.message}
           className="md:col-span-2"
         >
-          <ResourceInput placeholder="512k/1m" {...form.register('limit_rate')} />
+          <ResourceInput
+            placeholder="512k/1m"
+            {...form.register('limit_rate')}
+          />
         </ResourceField>
       </form>
     </ConfigSectionShell>
@@ -603,7 +636,9 @@ function ReverseProxySection({
         onSubmit={form.handleSubmit((values) => {
           const { urls } = parseOriginUrls(values.origin_urls_text);
           const primaryOrigin = parseOriginUrl(urls[0]);
-          const { headers } = parseCustomHeadersText(values.custom_headers_text);
+          const { headers } = parseCustomHeadersText(
+            values.custom_headers_text,
+          );
 
           onSave(
             buildPayloadFromRoute(route, {
@@ -631,7 +666,9 @@ function ReverseProxySection({
           <ResourceTextarea
             aria-label="源站地址"
             className="min-h-40"
-            placeholder={'https://origin-a.internal:443\nhttps://origin-b.internal:443'}
+            placeholder={
+              'https://origin-a.internal:443\nhttps://origin-b.internal:443'
+            }
             {...form.register('origin_urls_text')}
           />
         </ResourceField>
@@ -670,7 +707,10 @@ function ReverseProxySection({
           />
         </ResourceField>
 
-        <ResourceField label="备注" error={form.formState.errors.remark?.message}>
+        <ResourceField
+          label="备注"
+          error={form.formState.errors.remark?.message}
+        >
           <ResourceTextarea
             placeholder="例如：多活回源，优先使用上海入口"
             {...form.register('remark')}
@@ -681,17 +721,19 @@ function ReverseProxySection({
   );
 }
 
-function DNSAutomationSection({
+export function DNSAutomationSection({
   route,
   dnsAccounts,
   saving,
   onSave,
+  formId = 'proxy-route-dns-form',
+  embedded = false,
 }: {
   route: ProxyRouteItem;
   dnsAccounts: DnsAccountItem[];
   saving: boolean;
   onSave: SaveHandler;
-}) {
+} & ConfigSectionPresentationProps) {
   const form = useForm<DNSAutomationValues>({
     defaultValues: {
       dns_auto_sync: route.dns_auto_sync,
@@ -732,11 +774,12 @@ function DNSAutomationSection({
     <ConfigSectionShell
       title="自动 DNS"
       description="绑定 Cloudflare 后，创建或保存规则时自动解析域名；节点离线时后台任务会切换到在线节点。"
-      formId="proxy-route-dns-form"
+      formId={formId}
       saving={saving}
+      embedded={embedded}
     >
       <form
-        id="proxy-route-dns-form"
+        id={formId}
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           const dnsAccountID = Number(values.dns_account_id);
@@ -744,7 +787,9 @@ function DNSAutomationSection({
             buildPayloadFromRoute(route, {
               dns_auto_sync: values.dns_auto_sync,
               dns_account_id:
-                values.dns_auto_sync && Number.isFinite(dnsAccountID) && dnsAccountID > 0
+                values.dns_auto_sync &&
+                Number.isFinite(dnsAccountID) &&
+                dnsAccountID > 0
                   ? dnsAccountID
                   : null,
               dns_zone_id: values.dns_zone_id.trim(),
@@ -844,7 +889,11 @@ function DNSAutomationSection({
         >
           <ResourceInput
             disabled={!autoSyncEnabled || autoTarget}
-            placeholder={recordType === 'CNAME' ? 'target.example.com' : '留空自动选择，或填写多个 IP'}
+            placeholder={
+              recordType === 'CNAME'
+                ? 'target.example.com'
+                : '留空自动选择，或填写多个 IP'
+            }
             {...form.register('dns_record_content')}
           />
         </ResourceField>
@@ -898,7 +947,9 @@ function DNSAutomationSection({
             checked={form.watch('cloudflare_proxied')}
             disabled={!autoSyncEnabled}
             onChange={(checked) =>
-              form.setValue('cloudflare_proxied', checked, { shouldDirty: true })
+              form.setValue('cloudflare_proxied', checked, {
+                shouldDirty: true,
+              })
             }
           />
 
@@ -920,7 +971,8 @@ function DNSAutomationSection({
         {route.dns_last_sync_status ? (
           <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--foreground-secondary)]">
             <p className="font-medium text-[var(--foreground-primary)]">
-              最近同步：{route.dns_last_sync_status === 'success' ? '成功' : '失败'}
+              最近同步：
+              {route.dns_last_sync_status === 'success' ? '成功' : '失败'}
             </p>
             <p className="mt-1 break-words">{route.dns_last_sync_message}</p>
           </div>
@@ -930,22 +982,25 @@ function DNSAutomationSection({
   );
 }
 
-function CacheSection({
+export function CacheSection({
   route,
   saving,
   onSave,
+  formId = 'proxy-route-cache-form',
+  embedded = false,
 }: {
   route: ProxyRouteItem;
   saving: boolean;
   onSave: SaveHandler;
-}) {
+} & ConfigSectionPresentationProps) {
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
   const form = useForm<CacheValues>({
     resolver: zodResolver(cacheSchema),
     defaultValues: {
       cache_enabled: route.cache_enabled,
-      cache_policy: (route.cache_policy || 'url') as CacheValues['cache_policy'],
+      cache_policy: (route.cache_policy ||
+        'url') as CacheValues['cache_policy'],
       cache_rules_text: route.cache_rule_list.join('\n'),
     },
   });
@@ -953,7 +1008,8 @@ function CacheSection({
   useEffect(() => {
     form.reset({
       cache_enabled: route.cache_enabled,
-      cache_policy: (route.cache_policy || 'url') as CacheValues['cache_policy'],
+      cache_policy: (route.cache_policy ||
+        'url') as CacheValues['cache_policy'],
       cache_rules_text: route.cache_rule_list.join('\n'),
     });
   }, [form, route]);
@@ -998,11 +1054,12 @@ function CacheSection({
     <ConfigSectionShell
       title="缓存"
       description="保留现有安全绕过逻辑，只对当前站点生效。"
-      formId="proxy-route-cache-form"
+      formId={formId}
       saving={saving}
+      embedded={embedded}
     >
       <form
-        id="proxy-route-cache-form"
+        id={formId}
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           const rules = linesFromTextarea(values.cache_rules_text);
@@ -1011,7 +1068,9 @@ function CacheSection({
               cache_enabled: values.cache_enabled,
               cache_policy: values.cache_enabled ? values.cache_policy : 'url',
               cache_rules:
-                values.cache_enabled && values.cache_policy !== 'url' ? rules : [],
+                values.cache_enabled && values.cache_policy !== 'url'
+                  ? rules
+                  : [],
             }),
             { message: '缓存设置已保存。' },
           );
@@ -1153,12 +1212,32 @@ type WAFRuleKey =
   | 'sensitive_paths'
   | 'bad_bots';
 
-const wafBuiltinRules: Array<{ key: WAFRuleKey; label: string; description: string }> = [
-  { key: 'sqli', label: 'SQL 注入', description: '匹配常见 SQL 注入探测片段。' },
+const wafBuiltinRules: Array<{
+  key: WAFRuleKey;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: 'sqli',
+    label: 'SQL 注入',
+    description: '匹配常见 SQL 注入探测片段。',
+  },
   { key: 'xss', label: 'XSS', description: '匹配脚本注入和危险事件属性。' },
-  { key: 'path_traversal', label: '路径穿越', description: '匹配 ../ 和编码后的目录穿越。' },
-  { key: 'sensitive_paths', label: '敏感路径', description: '拦截 .env、.git、wp-config 等扫描。' },
-  { key: 'bad_bots', label: '恶意工具 UA', description: '匹配 sqlmap、nikto、nmap 等扫描器。' },
+  {
+    key: 'path_traversal',
+    label: '路径穿越',
+    description: '匹配 ../ 和编码后的目录穿越。',
+  },
+  {
+    key: 'sensitive_paths',
+    label: '敏感路径',
+    description: '拦截 .env、.git、wp-config 等扫描。',
+  },
+  {
+    key: 'bad_bots',
+    label: '恶意工具 UA',
+    description: '匹配 sqlmap、nikto、nmap 等扫描器。',
+  },
 ];
 
 const wafSchema = z
@@ -1240,7 +1319,13 @@ function buildWAFValuesFromRoute(route: ProxyRouteItem): WAFValues {
 
 function buildPowListFromConfig(
   list:
-    | { ips?: string[]; ip_cidrs?: string[]; paths?: string[]; path_regexes?: string[]; user_agents?: string[] }
+    | {
+        ips?: string[];
+        ip_cidrs?: string[];
+        paths?: string[];
+        path_regexes?: string[];
+        user_agents?: string[];
+      }
     | undefined,
 ): PowListValues {
   return {
@@ -1252,15 +1337,17 @@ function buildPowListFromConfig(
   };
 }
 
-function PowSection({
+export function PowSection({
   route,
   saving,
   onSave,
+  formId = 'proxy-route-pow-form',
+  embedded = false,
 }: {
   route: ProxyRouteItem;
   saving: boolean;
   onSave: SaveHandler;
-}) {
+} & ConfigSectionPresentationProps) {
   const powConfig = route.pow_config;
   const form = useForm<PowValues>({
     resolver: zodResolver(powSchema),
@@ -1296,11 +1383,12 @@ function PowSection({
     <ConfigSectionShell
       title="PoW 防护"
       description="启用 Proof-of-Work 反爬虫验证。首次访问的浏览器需要完成计算挑战才能继续。"
-      formId="proxy-route-pow-form"
+      formId={formId}
       saving={saving}
+      embedded={embedded}
     >
       <form
-        id="proxy-route-pow-form"
+        id={formId}
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           const powConfigPayload = JSON.stringify({
@@ -1393,7 +1481,7 @@ function PowSection({
 
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <fieldset disabled={!watchedEnabled} className="space-y-4">
-            <legend className="text-sm font-medium text-[var(--foreground-primary)] mb-2">
+            <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
               白名单（匹配的请求跳过 PoW）
             </legend>
             <ResourceField label="IP" hint="每行一个 IP 地址">
@@ -1434,7 +1522,7 @@ function PowSection({
           </fieldset>
 
           <fieldset disabled={!watchedEnabled} className="space-y-4">
-            <legend className="text-sm font-medium text-[var(--foreground-primary)] mb-2">
+            <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
               黑名单（匹配的请求必须 PoW）
             </legend>
             <ResourceField label="IP" hint="每行一个 IP 地址">
@@ -1490,15 +1578,17 @@ function PowSection({
   );
 }
 
-function WAFSection({
+export function WAFSection({
   route,
   saving,
   onSave,
+  formId = 'proxy-route-waf-form',
+  embedded = false,
 }: {
   route: ProxyRouteItem;
   saving: boolean;
   onSave: SaveHandler;
-}) {
+} & ConfigSectionPresentationProps) {
   const form = useForm<WAFValues>({
     resolver: zodResolver(wafSchema),
     defaultValues: buildWAFValuesFromRoute(route),
@@ -1527,11 +1617,12 @@ function WAFSection({
     <ConfigSectionShell
       title="WAF 防护"
       description="启用节点本地轻量 WAF，在地区限制之后、PoW 之前检查恶意请求。"
-      formId="proxy-route-waf-form"
+      formId={formId}
       saving={saving}
+      embedded={embedded}
     >
       <form
-        id="proxy-route-waf-form"
+        id={formId}
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           const wafConfigPayload = JSON.stringify({
@@ -1542,10 +1633,16 @@ function WAFSection({
               paths: linesFromTextarea(values.whitelist.paths),
             },
             block_rules: {
-              path_contains: linesFromTextarea(values.block_rules.path_contains),
+              path_contains: linesFromTextarea(
+                values.block_rules.path_contains,
+              ),
               path_regexes: linesFromTextarea(values.block_rules.path_regexes),
-              query_contains: linesFromTextarea(values.block_rules.query_contains),
-              header_contains: linesFromTextarea(values.block_rules.header_contains),
+              query_contains: linesFromTextarea(
+                values.block_rules.query_contains,
+              ),
+              header_contains: linesFromTextarea(
+                values.block_rules.header_contains,
+              ),
               user_agents: linesFromTextarea(values.block_rules.user_agents),
             },
           });
@@ -1576,7 +1673,10 @@ function WAFSection({
               : '命中规则后直接返回 403。'
           }
         >
-          <ResourceSelect disabled={!watchedEnabled} {...form.register('waf_mode')}>
+          <ResourceSelect
+            disabled={!watchedEnabled}
+            {...form.register('waf_mode')}
+          >
             <option value="block">拦截模式</option>
             <option value="log">观察模式</option>
           </ResourceSelect>
@@ -1697,15 +1797,17 @@ function WAFSection({
   );
 }
 
-function RegionRestrictionSection({
+export function RegionRestrictionSection({
   route,
   saving,
   onSave,
+  formId = 'proxy-route-region-form',
+  embedded = false,
 }: {
   route: ProxyRouteItem;
   saving: boolean;
   onSave: SaveHandler;
-}) {
+} & ConfigSectionPresentationProps) {
   const form = useForm<RegionRestrictionValues>({
     resolver: zodResolver(regionRestrictionSchema),
     defaultValues: {
@@ -1732,11 +1834,12 @@ function RegionRestrictionSection({
     <ConfigSectionShell
       title="地区限制"
       description="基于节点本地 GeoIP 数据库按国家或地区代码放行或拦截访问。"
-      formId="proxy-route-region-form"
+      formId={formId}
       saving={saving}
+      embedded={embedded}
     >
       <form
-        id="proxy-route-region-form"
+        id={formId}
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           const countries = parseRegionCountriesText(
@@ -1785,7 +1888,9 @@ function RegionRestrictionSection({
         <ResourceField
           label="国家/地区代码"
           hint="每行或用逗号分隔一个 ISO 3166-1 两位代码，例如 CN、US、HK。"
-          error={form.formState.errors.region_restriction_countries_text?.message}
+          error={
+            form.formState.errors.region_restriction_countries_text?.message
+          }
         >
           <ResourceTextarea
             disabled={!watchedEnabled}
@@ -1796,7 +1901,9 @@ function RegionRestrictionSection({
         </ResourceField>
 
         <div className="rounded-2xl border border-[var(--status-info-border)] bg-[var(--status-info-soft)] px-4 py-3 text-sm leading-6 text-[var(--status-info-foreground)]">
-          该功能由 Agent 节点本地 GeoIP 数据库识别真实客户端 IP，前置反代需要正确透传 CF-Connecting-IP、X-Real-IP 或 X-Forwarded-For。
+          该功能由 Agent 节点本地 GeoIP 数据库识别真实客户端
+          IP，前置反代需要正确透传 CF-Connecting-IP、X-Real-IP 或
+          X-Forwarded-For。
         </div>
       </form>
     </ConfigSectionShell>
@@ -1830,15 +1937,17 @@ const basicAuthSchema = z
 
 type BasicAuthValues = z.infer<typeof basicAuthSchema>;
 
-function BasicAuthSection({
+export function BasicAuthSection({
   route,
   saving,
   onSave,
+  formId = 'proxy-route-auth-form',
+  embedded = false,
 }: {
   route: ProxyRouteItem;
   saving: boolean;
   onSave: SaveHandler;
-}) {
+} & ConfigSectionPresentationProps) {
   const form = useForm<BasicAuthValues>({
     resolver: zodResolver(basicAuthSchema),
     defaultValues: {
@@ -1862,11 +1971,12 @@ function BasicAuthSection({
     <ConfigSectionShell
       title="认证配置"
       description="配置基础鉴权访问，需要输入账号密码才能访问网站。"
-      formId="proxy-route-auth-form"
+      formId={formId}
       saving={saving}
+      embedded={embedded}
     >
       <form
-        id="proxy-route-auth-form"
+        id={formId}
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           onSave(
@@ -1965,7 +2075,9 @@ export function ProxyRouteConfigPage({
       setFeedback({ tone: 'success', message: context.message });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
-        queryClient.invalidateQueries({ queryKey: ['config-versions', 'diff'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['config-versions', 'diff'],
+        }),
       ]);
     },
     onError: (error) => {
@@ -1999,7 +2111,11 @@ export function ProxyRouteConfigPage({
     );
   }
 
-  if (routeQuery.isLoading || certificatesQuery.isLoading || dnsAccountsQuery.isLoading) {
+  if (
+    routeQuery.isLoading ||
+    certificatesQuery.isLoading ||
+    dnsAccountsQuery.isLoading
+  ) {
     return <LoadingState />;
   }
 
