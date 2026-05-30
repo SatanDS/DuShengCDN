@@ -60,6 +60,15 @@ func main() {
 		}
 	}()
 
+	if *common.ResetRootPassword != "" {
+		if err := model.ResetRootPassword(*common.ResetRootPassword); err != nil {
+			slog.Error("reset root password failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("root password reset completed")
+		return
+	}
+
 	// Initialize Redis
 	err = common.InitRedisClient()
 	if err != nil {

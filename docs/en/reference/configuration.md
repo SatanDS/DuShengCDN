@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | `--port` | Server listen port | `3000` |
 | `--log-dir` | Log directory | empty |
+| `--reset-root-password` | Reset the `root` password and exit without starting HTTP service | empty |
 | `--version` | Print version and exit | `false` |
 | `--help` | Print help and exit | `false` |
 

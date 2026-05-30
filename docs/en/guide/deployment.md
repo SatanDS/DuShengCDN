@@ -44,7 +44,14 @@ Agent:
 | Docker | Required only when running the Agent Docker image |
 | Network | Agent node must reach the Server URL |
 
-[Needs confirmation: recommended production CPU, memory, and disk size]
+Recommended production sizing:
+
+| Scenario | Suggested resources |
+| --- | --- |
+| Small management plane, 1-5 nodes, short observability retention | 2 vCPU, 2 GB memory, 20 GB usable disk |
+| Medium management plane, 10+ nodes or heavier analytics | 4 vCPU, 4 GB memory, 50 GB+ usable disk |
+| PostgreSQL | Dedicated volume or database instance with regular backups |
+| Agent node | Start from 1 vCPU and 512 MB memory, then size for real OpenResty traffic, TLS, and cache pressure |
 
 ## Docker Compose Server
 
@@ -126,6 +133,13 @@ Default port is `3000`. You can also set it explicitly:
 
 ```bash
 go run . --port 3000 --log-dir ./logs
+```
+
+If the host port `3000` is already in use, change only the host-side mapping, for example:
+
+```yaml
+ports:
+  - "3010:3000"
 ```
 
 ## Connect Agent
@@ -216,6 +230,29 @@ Server:
 * Root users can check and upgrade stable Server releases from the top bar.
 * Preview releases can be checked manually.
 * Binary upload upgrades are also supported.
+* For source or Compose deployments, back up local `docker-compose.yaml` settings or move them into an override before pulling new code.
+
+Source directory + Compose upgrade:
+
+```bash
+cd /opt/dushengcdn
+git fetch origin main
+git pull --ff-only origin main
+cd dushengcdn_server
+docker compose up -d --build
+docker compose ps
+```
+
+If local Compose edits block the pull, record host ports, DSN, passwords, and tokens first. After confirming there are no source changes to keep:
+
+```bash
+cd /opt/dushengcdn
+git fetch origin main
+git reset --hard origin/main
+cd dushengcdn_server
+docker compose up -d --build
+docker compose ps
+```
 
 Agent:
 
@@ -230,6 +267,26 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 ```
 
 The uninstall script stops Agent and removes the systemd service and install directory. It does not remove the local OpenResty installation.
+
+## Backup and Root Password Reset
+
+PostgreSQL Compose backup example:
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+mkdir -p backups
+docker compose exec -T postgres pg_dump -U dushengcdn -d dushengcdn > backups/dushengcdn-$(date +%F-%H%M%S).sql
+tar -czf backups/dushengcdn-data-$(date +%F-%H%M%S).tar.gz dushengcdn-data
+```
+
+If the root password is lost but you still have server access:
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+docker compose up -d
+```
 
 ## Validation Commands
 

@@ -20,6 +20,13 @@ go run .
 go run . --port 3000 --log-dir ./logs
 ```
 
+离线重置 root 密码：
+
+```bash
+cd dushengcdn_server
+./dushengcdn-server --reset-root-password 'replace-with-new-password'
+```
+
 测试：
 
 ```bash

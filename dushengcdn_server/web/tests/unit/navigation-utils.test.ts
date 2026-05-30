@@ -29,6 +29,6 @@ describe('navigation utils', () => {
       'TLS证书',
     );
     expect(getCurrentNavigationItem('/certificate')?.label).toBe('TLS证书');
-    expect(getCurrentNavigationItem('/dns-account')?.label).toBe('DNS账号');
+    expect(getCurrentNavigationItem('/dns-account')).toBeUndefined();
   });
 });

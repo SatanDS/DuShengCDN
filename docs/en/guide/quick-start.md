@@ -21,7 +21,7 @@ Agent controls OpenResty through the OpenResty binary. Local installs need an `o
 | Reachable ports | Server listens on `3000` by default. Agent nodes must reach the Server URL. |
 | Browser | Used to open the management UI |
 
-[Needs confirmation: minimum recommended Docker and Docker Compose versions]
+Docker Engine 24+ and Docker Compose v2 are recommended. Older versions may still work, but Compose v2 is the tested command style used by the documentation.
 
 ## 1. Start Server
 
@@ -98,9 +98,12 @@ Agents can connect with either:
 | `discovery_token` | First-time automatic node registration. Server exchanges it for a node-specific token. |
 | `agent_token` | A node-specific token created or assigned in the management UI. |
 
-Prepare one of them in the management UI before continuing.
+Prepare one of them in the management UI before continuing:
 
-[Needs confirmation: exact UI menu path for creating or viewing `discovery_token` and node `agent_token`]
+| Credential | UI Path |
+| --- | --- |
+| `discovery_token` | Settings -> Operations -> Discovery Token and deployment commands |
+| `agent_token` | Nodes/IP Pools -> create or select a node -> Details -> Node information -> Node identity and deployment |
 
 ## 3. Install Agent
 

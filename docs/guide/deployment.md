@@ -44,7 +44,16 @@ Agent：
 | Docker | 仅 Docker 部署 Agent 镜像时需要 |
 | 网络 | Agent 节点必须能访问 Server 地址 |
 
-[需要确认：生产环境推荐的最低 CPU、内存与磁盘容量]
+推荐生产规格：
+
+| 场景 | 建议规格 |
+| --- | --- |
+| 小规模管理端（1-5 个节点，访问明细保留 30 天以内） | 2 vCPU、2 GB 内存、20 GB 可用磁盘 |
+| 中等规模管理端（10+ 节点或访问分析较多） | 4 vCPU、4 GB 内存、50 GB 以上可用磁盘 |
+| PostgreSQL | 独立卷或独立数据库实例，并纳入常规备份 |
+| Agent 节点 | 1 vCPU、512 MB 内存起步，按实际 OpenResty 流量、TLS 和缓存压力扩容 |
+
+观测数据会持续增长。生产环境建议开启观测数据自动清理，并为 PostgreSQL 或 SQLite 文件目录配置外部备份。
 
 ## Docker Compose 部署 Server
 
@@ -253,6 +262,31 @@ Server：
 * Root 用户可在管理端顶栏检查并升级正式版。
 * 如需尝试 preview 版本，可手动检查对应发布。
 * 也可通过上传 Server 二进制的方式执行确认升级。
+* 源码或 Compose 部署时，先提交、备份或保留本地 `docker-compose.yaml` 改动，再拉取新版代码。端口映射、密码、DSN 这类本地部署配置不要直接依赖仓库默认值。
+
+源码目录部署且只想更新面板端时：
+
+```bash
+cd /opt/dushengcdn
+git fetch origin main
+git pull --ff-only origin main
+cd dushengcdn_server
+docker compose up -d --build
+docker compose ps
+```
+
+如果服务器上曾经直接改过仓库里的 `docker-compose.yaml`，`git pull` 可能提示本地改动会被覆盖。推荐把本地端口、密码、DSN 先记录到独立备份文件或 Compose override，再执行：
+
+```bash
+cd /opt/dushengcdn
+git fetch origin main
+git reset --hard origin/main
+cd dushengcdn_server
+docker compose up -d --build
+docker compose ps
+```
+
+执行 `git reset --hard` 前请确认仓库内没有需要保留的源码修改。
 
 Agent：
 
@@ -268,6 +302,44 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 ```
 
 卸载脚本会停止 Agent、删除 systemd 服务和安装目录，不会删除本机 OpenResty。
+
+## 备份与恢复
+
+升级前至少备份数据库和上传目录。PostgreSQL Compose 部署示例：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+mkdir -p backups
+docker compose exec -T postgres pg_dump -U dushengcdn -d dushengcdn > backups/dushengcdn-$(date +%F-%H%M%S).sql
+tar -czf backups/dushengcdn-data-$(date +%F-%H%M%S).tar.gz dushengcdn-data
+```
+
+SQLite 部署示例：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+mkdir -p backups
+cp dushengcdn-data/dushengcdn.db backups/dushengcdn-$(date +%F-%H%M%S).db
+tar -czf backups/dushengcdn-data-$(date +%F-%H%M%S).tar.gz dushengcdn-data
+```
+
+恢复前先停止 Server，再恢复数据库与上传目录。PostgreSQL 恢复示例：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+docker compose exec -T postgres psql -U dushengcdn -d dushengcdn < backups/your-backup.sql
+docker compose up -d
+```
+
+如果忘记 root 密码，但仍能进入服务器，可以在停止 Server 后用同一数据库配置执行：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+docker compose up -d
+```
 
 ## 常用验证命令
 

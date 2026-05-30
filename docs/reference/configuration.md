@@ -39,6 +39,7 @@ go run . --port 3000 --log-dir ./logs
 | --- | --- | --- |
 | `--port` | 指定 Server 监听端口 | `3000` |
 | `--log-dir` | 指定日志目录 | 空 |
+| `--reset-root-password` | 重置 `root` 用户密码后退出，不启动 HTTP 服务 | 空 |
 | `--version` | 输出当前版本后退出 | `false` |
 | `--help` | 输出帮助信息后退出 | `false` |
 
@@ -162,6 +163,13 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `DUSHENGCDN_NODE_IP` | 节点 IP，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_DATA_DIR` | Agent 数据目录，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_OPENRESTY_PATH` | OpenResty 二进制路径，可覆盖 `agent.json` | 空 |
+| `DUSHENGCDN_GEOIP_DATABASE_URL` | Agent GeoIP Country 数据库下载地址，可覆盖 `agent.json` | 空 |
+| `DUSHENGCDN_GEOIP_DATABASE_PATH` | Agent 本地 GeoIP 数据库写入路径，可覆盖 `agent.json` | 空 |
+| `DUSHENGCDN_OPENRESTY_GEOIP_DATABASE_PATH` | OpenResty/Lua 运行时读取的 GeoIP 数据库路径，可覆盖 `agent.json` | 空 |
+| `DUSHENGCDN_GEOIP_UPDATE_INTERVAL` | Agent GeoIP 数据库更新间隔，可覆盖 `agent.json` | 空 |
+| `DUSHENGCDN_GEOIP_LOOKUP_API_URL` | 可选在线 IP 精确查询 API 地址，可覆盖 `agent.json` | 空 |
+| `DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN` | 可选在线 IP 精确查询 API Bearer Token，可覆盖 `agent.json` | 空 |
+| `DUSHENGCDN_GEOIP_LOOKUP_API_TIMEOUT` | 在线 IP 精确查询 API 超时，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_HEARTBEAT_INTERVAL` | 心跳间隔，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_REQUEST_TIMEOUT` | 请求超时，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_OPENRESTY_OBSERVABILITY_PORT` | 本地观测端口，可覆盖 `agent.json` | 空 |
@@ -197,6 +205,13 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `runtime_config_dir` | Agent 运行时配置写入目录，如 `pow_config.json` | 否 | `data_dir/etc/dushengcdn` |
 | `observability_buffer_path` | 观测补报缓冲文件路径 | 否 | `data_dir/var/lib/dushengcdn/observability-buffer.json` |
 | `observability_replay_minutes` | 自动补传最近观测窗口分钟数 | 否 | `15` |
+| `geoip_database_url` | GeoIP Country 数据库下载地址 | 否 | `https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb` |
+| `geoip_database_path` | Agent 本地 GeoIP 数据库写入路径 | 否 | `data_dir/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb` |
+| `openresty_geoip_database_path` | OpenResty/Lua 运行时读取的 GeoIP 数据库路径 | 否 | 同 `geoip_database_path` |
+| `geoip_update_interval` | GeoIP 数据库更新间隔 | 否 | `24h` |
+| `geoip_lookup_api_url` | 可选在线 IP 精确查询 API；本地库未识别国家码时调用 | 否 | 空 |
+| `geoip_lookup_api_token` | 可选在线 IP 精确查询 API Bearer Token | 否 | 空 |
+| `geoip_lookup_api_timeout` | 在线 IP 精确查询 API 超时 | 否 | `250ms` |
 | `state_path` | Agent 本地状态文件路径 | 否 | `data_dir/var/lib/dushengcdn/agent-state.json` |
 | `heartbeat_interval` | 心跳间隔 | 否 | `10000` 毫秒 |
 | `request_timeout` | HTTP 请求超时 | 否 | `10000` 毫秒 |
@@ -211,6 +226,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 * 如果 `agent.json` 不存在，但 `DUSHENGCDN_SERVER_URL` 与 Token 等环境变量足够，Agent 可以直接启动；两者同时存在时环境变量优先。
 * Agent 自动探测到私网 `node_ip` 时，Server 会在注册/心跳阶段优先保留 Agent 直连来源的公网地址，避免 NAT/多网卡场景误登记内网网卡地址。
 * `access_log_path` 指向的访问日志会被 Agent 增量解析并上报到 Server。新版受控日志格式包含 `request_length`、`bytes_sent` 与 `upstream_response_length`，分别用于观测计量中的请求入站、出站流量和回源流量；旧日志缺少的字段不会补算。
+* 地区限制由节点本地 GeoIP 数据库优先识别；配置 `geoip_lookup_api_url` 后，本地库未识别国家码时再请求在线 API。API 返回 JSON 中的 `country_code`、`countryCode`、`iso_code`、`isoCode` 或 `country` 字段均可识别。
 
 ## 常见配置组合
 

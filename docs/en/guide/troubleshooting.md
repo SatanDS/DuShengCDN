@@ -87,8 +87,24 @@ Steps:
 2. Check Server logs to see whether it uses `sqlite` or `postgres`.
 3. If deployed behind replicas or a reverse proxy, ensure `SESSION_SECRET` is fixed and consistent across instances.
 4. Clear browser cookies and try again.
+5. If you still have server access, reset the root password offline.
 
-[Needs confirmation: whether the project provides a safe root password reset command or procedure]
+Docker Compose deployment:
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+docker compose up -d
+```
+
+Source deployment:
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+export DSN='postgres://dushengcdn:password@127.0.0.1:5432/dushengcdn?sslmode=disable'
+./dushengcdn --reset-root-password 'replace-with-new-password'
+```
 
 ## Agent Cannot Register or Stays Offline
 
@@ -170,6 +186,16 @@ ps aux | grep openresty
 Agent periodic health checks use local `http://127.0.0.1:<openresty_observability_port>/dushengcdn/stub_status` instead of repeatedly running `openresty -t`. If a node is unhealthy, first confirm that the local observability port is listening. If `host not found in upstream` only appears during apply, the failure comes from config validation or reload, not the periodic health probe.
 
 Use the actual `openresty_path` and `main_config_path` from `agent.json`.
+
+## Git Pull Is Blocked by Local Compose Changes
+
+This usually means the server-side repository copy has local edits in Compose files, often for ports, database passwords, DSN, or tokens.
+
+1. Record those local deployment parameters first.
+2. If there are no source changes to keep, run `git fetch origin main && git reset --hard origin/main`.
+3. Reapply local deployment parameters through an external deployment note or Compose override.
+
+Port conflicts only require changing the host-side mapping, for example `8080:3000`; the container still listens on `3000`.
 
 ## HTTPS Does Not Work
 

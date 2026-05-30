@@ -74,8 +74,17 @@ go run . --port 3000 --log-dir ./logs
 | --- | --- | --- |
 | `--port` | Specify the Server listening port | `3000` |
 | `--log-dir` | Specify the log directory | Empty (outputs to standard output) |
+| `--reset-root-password` | Reset the `root` password and exit without starting HTTP service | Empty |
 | `--version` | Output the version and exit | `false` |
 | `--help` | Output the help information and exit | `false` |
+
+Reset the root password offline with the same database configuration:
+
+```bash
+cd dushengcdn_server
+export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
+./dushengcdn-server --reset-root-password 'replace-with-new-password'
+```
 
 ## First Login
 

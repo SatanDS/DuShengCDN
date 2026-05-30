@@ -10,3 +10,4 @@
 | [命令与脚本](./cli.md) | 常用启动、构建、测试、安装和卸载命令 |
 | [API 约定](./api.md) | 管理端 API 与 Agent API 的响应结构、鉴权和路径约定 |
 | [仓库结构](./repository.md) | `dushengcdn_server`、`dushengcdn_agent`、`dushengcdn_server/web` 与 `docs` 的职责 |
+| [项目审计报告](./audit-report.md) | 当前架构审计结论、已修复问题、验证命令和后续运维建议 |

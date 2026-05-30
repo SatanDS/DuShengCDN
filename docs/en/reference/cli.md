@@ -20,6 +20,14 @@ Specify listening port and log directory:
 go run . --port 3000 --log-dir ./logs
 ```
 
+Reset the root password offline:
+
+```bash
+cd dushengcdn_server
+export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
+./dushengcdn-server --reset-root-password 'replace-with-new-password'
+```
+
 Test:
 
 ```bash

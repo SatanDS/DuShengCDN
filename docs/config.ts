@@ -69,6 +69,7 @@ function sidebarGuide(): DefaultTheme.SidebarItem[] {
         { text: '概览', link: '' },
         { text: '快速开始', link: 'quick-start' },
         { text: '基础使用', link: 'usage' },
+        { text: '完整使用教程', link: 'full-tutorial' },
         { text: '部署说明', link: 'deployment' },
         { text: 'SSO 登录配置', link: 'sso' },
         { text: '启动 Server', link: 'server' },
@@ -91,7 +92,8 @@ function sidebarReference(): DefaultTheme.SidebarItem[] {
         { text: '配置项', link: 'configuration' },
         { text: '命令与脚本', link: 'cli' },
         { text: 'API 约定', link: 'api' },
-        { text: '仓库结构', link: 'repository' }
+        { text: '仓库结构', link: 'repository' },
+        { text: '项目审计报告', link: 'audit-report' }
       ]
     }
   ]

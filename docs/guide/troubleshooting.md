@@ -81,7 +81,7 @@ cd dushengcdn_server/web
 NEXT_DEV_BACKEND_URL=http://127.0.0.1:3000 pnpm dev
 ```
 
-## 默认账号无法登录
+## 默认账号或 root 无法登录
 
 默认账号是 `root` / `123456`。首次登录后如果已经修改密码，应使用修改后的密码。
 
@@ -92,7 +92,45 @@ NEXT_DEV_BACKEND_URL=http://127.0.0.1:3000 pnpm dev
 3. 如果部署在多副本或反向代理后，确认 `SESSION_SECRET` 固定且各实例一致。
 4. 清理浏览器 Cookie 后重新登录。
 
-[需要确认：当前项目是否提供安全的 root 密码重置命令或流程]
+如果确认需要离线重置 root 密码，并且你可以进入 Server 所在机器，先停止 Server，再用同一数据库配置执行一次性命令。
+
+Docker Compose 部署：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+docker compose up -d
+```
+
+源码或二进制部署：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+export SESSION_SECRET='same-session-secret'
+export DSN='postgres://dushengcdn:password@127.0.0.1:5432/dushengcdn?sslmode=disable'
+./dushengcdn --reset-root-password 'replace-with-new-password'
+```
+
+如果使用 SQLite，把 `DSN` 换成实际 `SQLITE_PATH`。重置完成后请重新启动 Server，并登录后再次设置一个只自己知道的强密码。
+
+## 更新代码时提示本地改动冲突
+
+典型报错：
+
+```text
+error: Your local changes to the following files would be overwritten by merge:
+        dushengcdn_server/docker-compose.yaml
+```
+
+原因通常是服务器上直接改过仓库里的 Compose 文件，例如为了改端口、数据库密码或 Token。处理方式：
+
+1. 先把本地 Compose 文件中的端口、密码、DSN、Token 记录下来。
+2. 如果没有需要保留的源码修改，执行 `git fetch origin main && git reset --hard origin/main` 拉回仓库新版。
+3. 重新把本地部署参数写回，或改用 Compose override 保存本地差异。
+4. 再执行 `docker compose up -d --build`。
+
+端口冲突只需要改宿主机侧端口，例如 `8080:3000` 或 `3010:3000`；容器内仍监听 `3000`。
 
 ## Agent 无法注册或一直离线
 

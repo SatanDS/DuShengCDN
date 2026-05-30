@@ -74,8 +74,19 @@ go run . --port 3000 --log-dir ./logs
 | --- | --- | --- |
 | `--port` | 指定 Server 监听端口 | `3000` |
 | `--log-dir` | 指定日志目录 | 空，输出到标准输出 |
+| `--reset-root-password` | 重置 `root` 用户密码后退出，不启动 HTTP 服务 | 空 |
 | `--version` | 输出版本后退出 | `false` |
 | `--help` | 输出帮助后退出 | `false` |
+
+离线重置 root 密码：
+
+```bash
+cd dushengcdn_server
+export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
+./dushengcdn-server --reset-root-password 'replace-with-new-password'
+```
+
+如果使用 SQLite，把 `DSN` 换成实际 `SQLITE_PATH`。执行前建议先停止正在运行的 Server。
 
 ## 首次登录
 

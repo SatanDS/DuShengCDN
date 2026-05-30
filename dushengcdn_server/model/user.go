@@ -5,6 +5,8 @@ import (
 	"dushengcdn/utils/security"
 	"errors"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
@@ -188,4 +190,63 @@ func ResetUserPasswordByEmail(email string, password string) error {
 	}
 	err = DB.Model(&User{}).Where("email = ?", email).Update("password", hashedPassword).Error
 	return err
+}
+
+func ResetUserPasswordByUsername(username string, password string) error {
+	username = strings.TrimSpace(username)
+	if username == "" || password == "" {
+		return errors.New("用户名或密码为空！")
+	}
+	hashedPassword, err := security.Password2Hash(password)
+	if err != nil {
+		return err
+	}
+	result := DB.Model(&User{}).Where("username = ?", username).Update("password", hashedPassword)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("用户不存在")
+	}
+	return nil
+}
+
+func ResetRootPassword(password string) error {
+	if password == "" {
+		return errors.New("密码为空！")
+	}
+	hashedPassword, err := security.Password2Hash(password)
+	if err != nil {
+		return err
+	}
+	var root User
+	err = DB.Where("username = ?", "root").First(&root).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		root = User{
+			Username:    "root",
+			Password:    hashedPassword,
+			DisplayName: "Root User",
+			Role:        common.RoleRootUser,
+			Status:      common.UserStatusEnabled,
+		}
+		return DB.Create(&root).Error
+	}
+	if err != nil {
+		return err
+	}
+	return DB.Model(&root).Updates(map[string]any{
+		"password":     hashedPassword,
+		"role":         common.RoleRootUser,
+		"status":       common.UserStatusEnabled,
+		"display_name": firstNonEmptyUserValue(root.DisplayName, "Root User"),
+	}).Error
+}
+
+func firstNonEmptyUserValue(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

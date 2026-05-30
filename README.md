@@ -44,7 +44,7 @@
 * OpenResty 主配置、性能参数、缓存参数与 Lua 资源托管
 * 本地 GeoIP 地区限制、真实客户端 IP 国家码识别、IP 国家码缓存与在线精确查询 API 回退
 * 可选本地轻量 WAF，支持观察/拦截模式、内置攻击规则、白名单与自定义规则
-* 管理端左侧在网站配置下提供自动 DNS、缓存策略、PoW、WAF、地区限制和认证配置直达入口
+* 网站配置详情页提供自动 DNS、缓存策略、PoW、WAF、地区限制和认证配置分区
 * TLS 证书、域名资产、节点凭证与版本状态管理
 * 节点池、公网 IP 池、权重调度、排空模式与 Cloudflare 多目标自动 DNS
 * Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换与 DDoS 自动切换橙云
@@ -164,9 +164,9 @@ proxy_set_header Connection "upgrade";
 
 在管理端操作：
 
-1. 进入 `网站证书 / DNS 账号` 页面，添加 Cloudflare DNS 账号。
+1. 准备 Cloudflare DNS 账号；如需维护账号，可直接打开 `/dns-account`。
 2. 在节点详情中维护节点池、公网 IP 池、权重、调度开关和排空状态。
-3. 新建反代规则时选择节点池，并开启 `创建时自动解析 DNS`。
+3. 新建网站配置时选择节点池，并开启 `创建时自动解析 DNS`；已有站点可在详情页的 `自动 DNS` 分区维护。
 4. 选择 Cloudflare DNS 账号，记录类型通常选择 `A`；IPv6 节点选择 `AAAA`。
 5. `记录内容` 留空时，系统会自动选择该节点池中的在线公网 IP，并把 `自动选择在线节点 IP` 打开。
 6. 如需隐藏源站或抗攻击，可开启 `Cloudflare 代理`；如需自动切换橙云，将 `DDoS 防护模式` 设置为 `自动`。
@@ -262,7 +262,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 
 ### 5. 发布第一份配置
 
-1. 登录管理端并新增反代规则
+1. 登录管理端并新增网站配置
 2. 在发布前查看预览或变更摘要
 3. 激活新版本
 4. Agent 通过 WebSocket 通知或后续 heartbeat 拉取并应用配置
@@ -279,7 +279,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 GeoIP 地区限制说明：
 
 * GeoIP 地区限制基于节点侧 OpenResty 实时执行，用于按国家或地区代码放行或拦截访问；功能不依赖 Cloudflare 橙云，适合自建 CDN 节点直接使用。
-* 进入 `反代规则` -> 选择站点 `配置` -> 左侧 `地区限制` 分区，可以按国家或地区代码限制访问。
+* 进入 `网站配置` -> 选择站点 `配置` -> `地区限制` 分区，可以按国家或地区代码限制访问。
 * `拦截列表内地区`：列表内地区返回 `403`，无法识别地区的请求继续放行。
 * `只允许列表内地区`：只有列表内地区可以访问，无法识别地区的请求也会返回 `403`。
 * 国家或地区代码使用 ISO 3166-1 两位代码，例如 `CN`、`US`、`HK`，可一行一个，也可以用逗号分隔。
@@ -293,7 +293,7 @@ GeoIP 地区限制说明：
 本地 WAF 说明：
 
 * WAF 是独立于 GeoIP 的可选本地模块，默认关闭；GeoIP 负责“哪个地区能访问”，WAF 负责“请求是否像攻击或扫描”。
-* 进入 `反代规则` -> 选择站点 `配置` -> 左侧 `WAF 防护` 分区，可以为单个站点启用 WAF。
+* 进入 `网站配置` -> 选择站点 `配置` -> `WAF 防护` 分区，可以为单个站点启用 WAF。
 * 节点访问处理顺序为：真实 IP 识别 -> GeoIP 地区限制 -> WAF -> PoW -> 反向代理源站。
 * `观察模式` 只记录命中的规则并继续放行，适合上线前观察误杀；`拦截模式` 会对命中的请求直接返回 `403`。
 * 内置规则支持 SQL 注入、XSS、路径穿越、敏感路径扫描和常见恶意工具 User-Agent。
@@ -320,14 +320,25 @@ git clone https://github.com/SatanDS/DuShengCDN.git /opt/dushengcdn
 服务器使用 Docker Compose 部署时，更新面板端：
 
 ```bash
-cd /opt/dushengcdn/dushengcdn_server && git pull origin main && docker compose up -d --build && docker compose ps
+cd /opt/dushengcdn
+git fetch origin main
+git pull --ff-only origin main
+cd dushengcdn_server
+docker compose up -d --build
+docker compose ps
 ```
 
 节点使用 Docker Compose 部署 Agent 时，更新节点端：
 
 ```bash
-cd /opt/dushengcdn && git pull origin main && docker compose -f docker-compose.agent.yaml up -d --build && docker compose -f docker-compose.agent.yaml ps
+cd /opt/dushengcdn
+git fetch origin main
+git pull --ff-only origin main
+docker compose -f docker-compose.agent.yaml up -d --build
+docker compose -f docker-compose.agent.yaml ps
 ```
+
+如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `8080:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token；确认没有需要保留的源码修改后，再使用 `git fetch origin main && git reset --hard origin/main` 拉回新版。
 
 节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。
 
@@ -360,12 +371,11 @@ cd /opt/dushengcdn && git pull origin main && docker compose -f docker-compose.a
 
 管理端当前覆盖：
 
-* 反代规则
+* 网站配置
 * 配置版本
 * 节点管理
 * 应用记录
 * TLS 证书
-* DNS 账号
 * 域名管理
 * 用户管理
 * 设置

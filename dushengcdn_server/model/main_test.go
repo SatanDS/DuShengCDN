@@ -208,6 +208,81 @@ func TestIsDatabaseEmpty(t *testing.T) {
 	}
 }
 
+func TestResetUserPasswordByUsername(t *testing.T) {
+	db := openTestSQLiteDB(t, "reset-password.db")
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	root := &User{
+		Username:    "root",
+		Password:    "old-password",
+		DisplayName: "Root User",
+		Role:        100,
+		Status:      1,
+	}
+	if err := root.Insert(); err != nil {
+		t.Fatalf("insert root user: %v", err)
+	}
+
+	if err := ResetUserPasswordByUsername("root", "new-password"); err != nil {
+		t.Fatalf("reset root password: %v", err)
+	}
+
+	user := &User{Username: "root", Password: "new-password"}
+	if err := user.ValidateAndFill(); err != nil {
+		t.Fatalf("expected new password to validate: %v", err)
+	}
+
+	oldUser := &User{Username: "root", Password: "old-password"}
+	if err := oldUser.ValidateAndFill(); err == nil {
+		t.Fatal("expected old password to be rejected")
+	}
+
+	if err := ResetUserPasswordByUsername("missing", "new-password"); err == nil {
+		t.Fatal("expected missing user reset to fail")
+	}
+}
+
+func TestResetRootPasswordCreatesAndEnablesRoot(t *testing.T) {
+	db := openTestSQLiteDB(t, "reset-root.db")
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	if err := ResetRootPassword("new-password"); err != nil {
+		t.Fatalf("create root with reset password: %v", err)
+	}
+
+	user := &User{Username: "root", Password: "new-password"}
+	if err := user.ValidateAndFill(); err != nil {
+		t.Fatalf("expected created root to validate: %v", err)
+	}
+	if user.Role != 100 || user.Status != 1 {
+		t.Fatalf("expected enabled root role, got role=%d status=%d", user.Role, user.Status)
+	}
+
+	user.Status = 2
+	user.Role = 1
+	if err := user.Update(false); err != nil {
+		t.Fatalf("disable/demote root for reset test: %v", err)
+	}
+	if err := ResetRootPassword("another-password"); err != nil {
+		t.Fatalf("reset existing root: %v", err)
+	}
+	resetUser := &User{Username: "root", Password: "another-password"}
+	if err := resetUser.ValidateAndFill(); err != nil {
+		t.Fatalf("expected reset root to validate: %v", err)
+	}
+	if resetUser.Role != 100 || resetUser.Status != 1 {
+		t.Fatalf("expected reset root to be enabled root role, got role=%d status=%d", resetUser.Role, resetUser.Status)
+	}
+}
+
 func TestMigrateTableDataCopiesRows(t *testing.T) {
 	source := openTestSQLiteDB(t, "source.db")
 	target := openTestSQLiteDB(t, "target.db")

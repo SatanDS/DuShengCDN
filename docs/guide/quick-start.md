@@ -21,7 +21,7 @@ Agent 统一通过 OpenResty 二进制控制运行时。本地部署需要节点
 | 可访问端口 | Server 默认监听 `3000`，Agent 节点需要能访问 Server 地址 |
 | 浏览器 | 用于访问管理端 |
 
-[需要确认：项目建议的最低 Docker 与 Docker Compose 版本]
+建议使用 Docker Engine 24+ 与 Docker Compose v2。实际要求是支持 Compose 文件中的 `depends_on.condition: service_healthy`，并能运行 PostgreSQL 17 与 DuShengCDN 镜像。
 
 ## 1. 启动 Server
 
@@ -100,7 +100,12 @@ Agent 可以用两类凭证接入：
 
 在管理端准备其中一种凭证后，进入下一步。
 
-[需要确认：当前管理端中创建或查看 `discovery_token` 与节点 `agent_token` 的准确菜单路径]
+获取路径：
+
+| 凭证 | 管理端位置 |
+| --- | --- |
+| `discovery_token` | 左侧「设置」->「运维设置」->「Discovery Token 与部署命令」 |
+| `agent_token` | 左侧「节点/IP池」-> 新增或选择节点 ->「详情」->「节点信息」->「节点标识与部署」 |
 
 ## 3. 安装 Agent
 
@@ -174,7 +179,7 @@ journalctl -u dushengcdn-agent -n 100 --no-pager
 
 | 现象 | 排查方向 |
 | --- | --- |
-| 浏览器打不开管理端 | 确认 `docker compose ps` 中 Server 正在运行，宿主机 `3000` 端口没有被占用 |
+| 浏览器打不开管理端 | 确认 `docker compose ps` 中 Server 正在运行，宿主机端口没有被占用；端口冲突时可把宿主侧改为 `3010:3000` 或其它空闲端口 |
 | 登录后数据无法保存 | 检查 PostgreSQL 容器健康状态，以及 `DSN` 中的用户名、密码、库名是否一致 |
 | Agent 无法注册 | 确认 Agent 节点能访问 `--server-url`，并检查 Token 是否填错或已失效 |
 | Agent 在线但没有应用配置 | 确认网站配置已启用，并且已经发布并激活版本 |
