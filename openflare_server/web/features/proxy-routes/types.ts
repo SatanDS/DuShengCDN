@@ -52,6 +52,18 @@ export interface ProxyRouteItem {
   basic_auth_enabled: boolean;
   basic_auth_username: string;
   basic_auth_password: string;
+  dns_auto_sync: boolean;
+  dns_account_id: number | null;
+  dns_zone_id: string;
+  dns_record_type: 'A' | 'AAAA' | 'CNAME';
+  dns_record_name: string;
+  dns_record_content: string;
+  dns_record_ids: Record<string, string>;
+  cloudflare_proxied: boolean;
+  ddos_protection_mode: 'off' | 'manual' | 'auto';
+  dns_last_sync_status: string;
+  dns_last_sync_message: string;
+  dns_last_synced_at?: string | null;
   remark: string;
   created_at: string;
   updated_at: string;
@@ -87,6 +99,14 @@ export interface ProxyRouteMutationPayload {
   basic_auth_enabled: boolean;
   basic_auth_username?: string;
   basic_auth_password?: string;
+  dns_auto_sync?: boolean;
+  dns_account_id?: number | null;
+  dns_zone_id?: string;
+  dns_record_type?: 'A' | 'AAAA' | 'CNAME';
+  dns_record_name?: string;
+  dns_record_content?: string;
+  cloudflare_proxied?: boolean;
+  ddos_protection_mode?: 'off' | 'manual' | 'auto';
   remark: string;
 }
 

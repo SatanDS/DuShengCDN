@@ -58,6 +58,8 @@ var AgentUpdateRepo = "SatanDS/OpenCDN"
 var GeoIPProvider = "ipinfo"
 var DatabaseAutoCleanupEnabled = false
 var DatabaseAutoCleanupRetentionDays = 30
+var CloudflareDDoSRequestThreshold int64 = 20000
+var CloudflareDDoSErrorRateThreshold = 30.0
 
 // V5 OpenResty performance settings (hot-reloadable via Option table)
 var OpenRestyWorkerProcesses = "auto"

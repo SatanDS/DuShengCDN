@@ -60,6 +60,14 @@ type ProxyRouteInput struct {
 	BasicAuthEnabled   bool                          `json:"basic_auth_enabled"`
 	BasicAuthUsername  string                        `json:"basic_auth_username"`
 	BasicAuthPassword  string                        `json:"basic_auth_password"`
+	DNSAutoSync        bool                          `json:"dns_auto_sync"`
+	DNSAccountID       *uint                         `json:"dns_account_id"`
+	DNSZoneID          string                        `json:"dns_zone_id"`
+	DNSRecordType      string                        `json:"dns_record_type"`
+	DNSRecordName      string                        `json:"dns_record_name"`
+	DNSRecordContent   string                        `json:"dns_record_content"`
+	CloudflareProxied  bool                          `json:"cloudflare_proxied"`
+	DDOSProtectionMode string                        `json:"ddos_protection_mode"`
 	Remark             string                        `json:"remark"`
 }
 
@@ -95,6 +103,18 @@ type ProxyRouteView struct {
 	BasicAuthEnabled   bool                          `json:"basic_auth_enabled"`
 	BasicAuthUsername  string                        `json:"basic_auth_username"`
 	BasicAuthPassword  string                        `json:"basic_auth_password"`
+	DNSAutoSync        bool                          `json:"dns_auto_sync"`
+	DNSAccountID       *uint                         `json:"dns_account_id"`
+	DNSZoneID          string                        `json:"dns_zone_id"`
+	DNSRecordType      string                        `json:"dns_record_type"`
+	DNSRecordName      string                        `json:"dns_record_name"`
+	DNSRecordContent   string                        `json:"dns_record_content"`
+	DNSRecordIDs       map[string]string             `json:"dns_record_ids"`
+	CloudflareProxied  bool                          `json:"cloudflare_proxied"`
+	DDOSProtectionMode string                        `json:"ddos_protection_mode"`
+	DNSLastSyncStatus  string                        `json:"dns_last_sync_status"`
+	DNSLastSyncMessage string                        `json:"dns_last_sync_message"`
+	DNSLastSyncedAt    *time.Time                    `json:"dns_last_synced_at"`
 	Remark             string                        `json:"remark"`
 	CreatedAt          time.Time                     `json:"created_at"`
 	UpdatedAt          time.Time                     `json:"updated_at"`
@@ -127,6 +147,12 @@ func CreateProxyRoute(input ProxyRouteInput) (*ProxyRouteView, error) {
 		}
 		return nil, err
 	}
+	if route.DNSAutoSync {
+		if err := SyncProxyRouteDNS(route); err != nil {
+			_ = route.Delete()
+			return nil, err
+		}
+	}
 	return buildProxyRouteView(route)
 }
 
@@ -145,6 +171,11 @@ func UpdateProxyRoute(id uint, input ProxyRouteInput) (*ProxyRouteView, error) {
 		}
 		return nil, err
 	}
+	if route.DNSAutoSync {
+		if err := SyncProxyRouteDNS(route); err != nil {
+			return nil, err
+		}
+	}
 	return buildProxyRouteView(route)
 }
 
@@ -152,6 +183,11 @@ func DeleteProxyRoute(id uint) error {
 	route, err := model.GetProxyRouteByID(id)
 	if err != nil {
 		return err
+	}
+	if route.DNSAutoSync {
+		if err := DeleteProxyRouteDNSRecords(route); err != nil {
+			return err
+		}
 	}
 	return route.Delete()
 }
@@ -277,6 +313,11 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		input.BasicAuthPassword = ""
 	}
 
+	dnsAccountID, dnsZoneID, dnsRecordType, dnsRecordName, dnsRecordContent, ddosMode, err := normalizeProxyRouteDNSSettings(input)
+	if err != nil {
+		return nil, err
+	}
+
 	if route == nil {
 		route = &model.ProxyRoute{}
 	}
@@ -305,6 +346,14 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.BasicAuthEnabled = input.BasicAuthEnabled
 	route.BasicAuthUsername = input.BasicAuthUsername
 	route.BasicAuthPassword = input.BasicAuthPassword
+	route.DNSAutoSync = input.DNSAutoSync
+	route.DNSAccountID = dnsAccountID
+	route.DNSZoneID = dnsZoneID
+	route.DNSRecordType = dnsRecordType
+	route.DNSRecordName = dnsRecordName
+	route.DNSRecordContent = dnsRecordContent
+	route.CloudflareProxied = input.CloudflareProxied
+	route.DDOSProtectionMode = ddosMode
 	route.Remark = remark
 	return route, nil
 }
@@ -390,6 +439,18 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		BasicAuthEnabled:   route.BasicAuthEnabled,
 		BasicAuthUsername:  route.BasicAuthUsername,
 		BasicAuthPassword:  route.BasicAuthPassword,
+		DNSAutoSync:        route.DNSAutoSync,
+		DNSAccountID:       route.DNSAccountID,
+		DNSZoneID:          route.DNSZoneID,
+		DNSRecordType:      normalizeDNSRecordType(route.DNSRecordType),
+		DNSRecordName:      route.DNSRecordName,
+		DNSRecordContent:   route.DNSRecordContent,
+		DNSRecordIDs:       decodeDNSRecordIDs(route.DNSRecordIDs),
+		CloudflareProxied:  route.CloudflareProxied,
+		DDOSProtectionMode: normalizeDDOSProtectionMode(route.DDOSProtectionMode),
+		DNSLastSyncStatus:  route.DNSLastSyncStatus,
+		DNSLastSyncMessage: route.DNSLastSyncMessage,
+		DNSLastSyncedAt:    route.DNSLastSyncedAt,
 		Remark:             route.Remark,
 		CreatedAt:          route.CreatedAt,
 		UpdatedAt:          route.UpdatedAt,
@@ -533,6 +594,50 @@ func validateProxyRouteIdentityUniqueness(route *model.ProxyRoute, siteName stri
 	}
 
 	return nil
+}
+
+func normalizeProxyRouteDNSSettings(input ProxyRouteInput) (*uint, string, string, string, string, string, error) {
+	ddosMode := normalizeDDOSProtectionMode(input.DDOSProtectionMode)
+	if !input.DNSAutoSync {
+		return nil, "", normalizeDNSRecordType(input.DNSRecordType), "", "", ddosMode, nil
+	}
+
+	if input.DNSAccountID == nil || *input.DNSAccountID == 0 {
+		return nil, "", "", "", "", "", errors.New("启用自动 DNS 时必须选择 DNS 账号")
+	}
+	account, err := model.GetDnsAccountByID(*input.DNSAccountID)
+	if err != nil {
+		return nil, "", "", "", "", "", errors.New("选择的 DNS 账号不存在")
+	}
+	if strings.ToLower(strings.TrimSpace(account.Type)) != cloudflareDNSProviderType {
+		return nil, "", "", "", "", "", errors.New("自动 DNS 目前仅支持 Cloudflare DNS 账号")
+	}
+
+	recordType := normalizeDNSRecordType(input.DNSRecordType)
+	recordName := normalizeDNSRecordName(input.DNSRecordName)
+	recordContent := strings.TrimSpace(input.DNSRecordContent)
+	if recordName != "" && !isValidProxyRouteDomain(recordName) {
+		return nil, "", "", "", "", "", errors.New("DNS 记录名格式无效")
+	}
+	if recordContent != "" {
+		if err := validateDNSRecordContent(recordType, recordContent); err != nil {
+			return nil, "", "", "", "", "", err
+		}
+	}
+
+	dnsAccountID := *input.DNSAccountID
+	return &dnsAccountID, strings.TrimSpace(input.DNSZoneID), recordType, recordName, recordContent, ddosMode, nil
+}
+
+func normalizeDDOSProtectionMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case DDOSProtectionModeManual:
+		return DDOSProtectionModeManual
+	case DDOSProtectionModeAuto:
+		return DDOSProtectionModeAuto
+	default:
+		return DDOSProtectionModeOff
+	}
 }
 
 func normalizeProxyRouteLimitConnValue(value int, field string) (int, error) {

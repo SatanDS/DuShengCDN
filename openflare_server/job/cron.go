@@ -18,6 +18,13 @@ func InitCronJobs() {
 		slog.Info("registered SSL renew cron job")
 	}
 
+	_, err = cronRunner.AddJob("@every 1m", &CloudflareDNSReconcileJob{})
+	if err != nil {
+		slog.Error("failed to register Cloudflare DNS reconcile cron job", "error", err)
+	} else {
+		slog.Info("registered Cloudflare DNS reconcile cron job")
+	}
+
 	cronRunner.Start()
 }
 

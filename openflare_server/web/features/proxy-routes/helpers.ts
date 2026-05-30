@@ -21,6 +21,11 @@ export const websiteConfigSections = [
     description: '配置主源站地址和源站负载均衡。',
   },
   {
+    key: 'dns',
+    label: '自动 DNS',
+    description: '绑定 Cloudflare，自动解析和切换橙云。',
+  },
+  {
     key: 'cache',
     label: '缓存',
     description: '配置站点缓存策略。',
@@ -300,6 +305,14 @@ export function buildPayloadFromRoute(
     basic_auth_enabled: route.basic_auth_enabled,
     basic_auth_username: route.basic_auth_username,
     basic_auth_password: route.basic_auth_password,
+    dns_auto_sync: route.dns_auto_sync,
+    dns_account_id: route.dns_account_id,
+    dns_zone_id: route.dns_zone_id,
+    dns_record_type: route.dns_record_type,
+    dns_record_name: route.dns_record_name,
+    dns_record_content: route.dns_record_content,
+    cloudflare_proxied: route.cloudflare_proxied,
+    ddos_protection_mode: route.ddos_protection_mode,
     ...overrides,
   };
 }

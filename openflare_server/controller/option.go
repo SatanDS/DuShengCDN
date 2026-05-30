@@ -92,6 +92,25 @@ func validateDatabaseCleanupOption(key string, value string) error {
 	}
 }
 
+func validateCloudflareOption(key string, value string) error {
+	switch key {
+	case "CloudflareDDoSRequestThreshold":
+		intValue, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || intValue <= 0 {
+			return fmt.Errorf("%s 必须为大于 0 的整数", key)
+		}
+		return nil
+	case "CloudflareDDoSErrorRateThreshold":
+		floatValue, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || floatValue <= 0 || floatValue > 100 {
+			return fmt.Errorf("%s 必须为 0 到 100 之间的数字", key)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
 func validateAgentOption(key string, value string) error {
 	switch key {
 	case "AgentWebsocketUpgradeEnabled":
@@ -252,6 +271,9 @@ func validateOptionWithState(option model.Option, state map[string]string) error
 		return err
 	}
 	if err := validateDatabaseCleanupOption(option.Key, option.Value); err != nil {
+		return err
+	}
+	if err := validateCloudflareOption(option.Key, option.Value); err != nil {
 		return err
 	}
 	if err := validateAgentOption(option.Key, option.Value); err != nil {

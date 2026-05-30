@@ -60,6 +60,8 @@ func InitOptionMap() {
 	common.OptionMap["GeoIPProvider"] = common.GeoIPProvider
 	common.OptionMap["DatabaseAutoCleanupEnabled"] = strconv.FormatBool(common.DatabaseAutoCleanupEnabled)
 	common.OptionMap["DatabaseAutoCleanupRetentionDays"] = strconv.Itoa(common.DatabaseAutoCleanupRetentionDays)
+	common.OptionMap["CloudflareDDoSRequestThreshold"] = strconv.FormatInt(common.CloudflareDDoSRequestThreshold, 10)
+	common.OptionMap["CloudflareDDoSErrorRateThreshold"] = strconv.FormatFloat(common.CloudflareDDoSErrorRateThreshold, 'f', -1, 64)
 	common.OptionMap["OpenRestyWorkerProcesses"] = common.OpenRestyWorkerProcesses
 	common.OptionMap["OpenRestyWorkerConnections"] = strconv.Itoa(common.OpenRestyWorkerConnections)
 	common.OptionMap["OpenRestyWorkerRlimitNofile"] = strconv.Itoa(common.OpenRestyWorkerRlimitNofile)
@@ -242,6 +244,14 @@ func updateOptionMap(key string, value string) {
 	case "DatabaseAutoCleanupRetentionDays":
 		if v, err := strconv.Atoi(value); err == nil && v >= 1 {
 			common.DatabaseAutoCleanupRetentionDays = v
+		}
+	case "CloudflareDDoSRequestThreshold":
+		if v, err := strconv.ParseInt(value, 10, 64); err == nil && v > 0 {
+			common.CloudflareDDoSRequestThreshold = v
+		}
+	case "CloudflareDDoSErrorRateThreshold":
+		if v, err := strconv.ParseFloat(value, 64); err == nil && v > 0 {
+			common.CloudflareDDoSErrorRateThreshold = v
 		}
 	case "OpenRestyWorkerProcesses":
 		if strings.TrimSpace(value) != "" {

@@ -1388,6 +1388,33 @@ func validateDatabaseSchemaV12(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV13 adds Cloudflare DNS automation fields to proxy_routes.
+func migrateV13(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDatabaseSchemaV13(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV12(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "dns_auto_sync") {
+		return fmt.Errorf("column proxy_routes.dns_auto_sync is missing")
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "dns_account_id") {
+		return fmt.Errorf("column proxy_routes.dns_account_id is missing")
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "cloudflare_proxied") {
+		return fmt.Errorf("column proxy_routes.cloudflare_proxied is missing")
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "ddos_protection_mode") {
+		return fmt.Errorf("column proxy_routes.ddos_protection_mode is missing")
+	}
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1401,6 +1428,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 9, toVersion: 10, migrate: migrateV10, validate: validateDatabaseSchemaV10},
 		{fromVersion: 10, toVersion: 11, migrate: migrateV11, validate: validateDatabaseSchemaV11},
 		{fromVersion: 11, toVersion: 12, migrate: migrateV12, validate: validateDatabaseSchemaV12},
+		{fromVersion: 12, toVersion: 13, migrate: migrateV13, validate: validateDatabaseSchemaV13},
 	}
 }
 
@@ -1486,7 +1514,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureDefaultGitHubAuthSource(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV12(db, backend); err != nil {
+	if err := validateDatabaseSchemaV13(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

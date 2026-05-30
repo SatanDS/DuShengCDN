@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"openflare/model"
+	"openflare/service"
 	"strconv"
+	"time"
 )
 
 type DnsAccountInput struct {
@@ -60,6 +63,17 @@ func CreateDnsAccount(c *gin.Context) {
 		Name:          input.Name,
 		Type:          input.Type,
 		Authorization: input.Authorization,
+	}
+	if account.Type == "cloudflare" {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+		defer cancel()
+		if err := service.VerifyCloudflareDnsAccount(ctx, account); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "Cloudflare API Token 校验失败：" + err.Error(),
+			})
+			return
+		}
 	}
 
 	if err := account.Insert(); err != nil {
@@ -118,6 +132,17 @@ func UpdateDnsAccount(c *gin.Context) {
 	account.Name = input.Name
 	account.Type = input.Type
 	account.Authorization = input.Authorization
+	if account.Type == "cloudflare" {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+		defer cancel()
+		if err := service.VerifyCloudflareDnsAccount(ctx, account); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "Cloudflare API Token 校验失败：" + err.Error(),
+			})
+			return
+		}
+	}
 
 	if err := account.Update(); err != nil {
 		c.JSON(http.StatusOK, gin.H{

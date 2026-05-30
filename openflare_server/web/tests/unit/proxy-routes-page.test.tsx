@@ -63,6 +63,42 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
     cache_rule_list: ['/assets'],
     custom_headers: JSON.stringify([{ key: 'X-Site', value: 'marketing' }]),
     custom_header_list: [{ key: 'X-Site', value: 'marketing' }],
+    pow_enabled: false,
+    pow_config: {
+      difficulty: 4,
+      algorithm: 'fast',
+      session_ttl: 600,
+      challenge_ttl: 300,
+      whitelist: {
+        ips: [],
+        ip_cidrs: [],
+        paths: [],
+        path_regexes: [],
+        user_agents: [],
+      },
+      blacklist: {
+        ips: [],
+        ip_cidrs: [],
+        paths: [],
+        path_regexes: [],
+        user_agents: [],
+      },
+    },
+    basic_auth_enabled: false,
+    basic_auth_username: '',
+    basic_auth_password: '',
+    dns_auto_sync: false,
+    dns_account_id: null,
+    dns_zone_id: '',
+    dns_record_type: 'A',
+    dns_record_name: '',
+    dns_record_content: '',
+    dns_record_ids: {},
+    cloudflare_proxied: false,
+    ddos_protection_mode: 'off',
+    dns_last_sync_status: '',
+    dns_last_sync_message: '',
+    dns_last_synced_at: null,
     remark: 'Marketing website',
     created_at: '2026-03-20T08:00:00Z',
     updated_at: '2026-03-21T08:00:00Z',
@@ -203,6 +239,18 @@ describe('Proxy route website pages', () => {
             cache_rule_list: [],
             custom_headers: '[]',
             custom_header_list: [],
+            dns_auto_sync: payload.dns_auto_sync ?? false,
+            dns_account_id: payload.dns_account_id ?? null,
+            dns_zone_id: payload.dns_zone_id ?? '',
+            dns_record_type: payload.dns_record_type ?? 'A',
+            dns_record_name: payload.dns_record_name ?? '',
+            dns_record_content: payload.dns_record_content ?? '',
+            dns_record_ids: {},
+            cloudflare_proxied: payload.cloudflare_proxied ?? false,
+            ddos_protection_mode: payload.ddos_protection_mode ?? 'off',
+            dns_last_sync_status: '',
+            dns_last_sync_message: '',
+            dns_last_synced_at: null,
             remark: payload.remark,
           });
           routes.splice(0, routes.length, created);
@@ -261,6 +309,18 @@ describe('Proxy route website pages', () => {
                 success: true,
                 message: '',
                 data: [{ id: 1, name: 'example-cert', not_after: null }],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-accounts/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
               }),
             ),
           );
@@ -384,6 +444,18 @@ describe('Proxy route website pages', () => {
                 success: true,
                 message: '',
                 data: [{ id: 1, domain: '*.example.com', cert_id: 1, enabled: true }],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-accounts/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
               }),
             ),
           );
