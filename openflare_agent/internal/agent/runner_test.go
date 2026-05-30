@@ -615,7 +615,7 @@ func TestRunnerHandlesWebSocketSettingsDisabled(t *testing.T) {
 	}
 }
 
-func TestRunnerIgnoresAutoUpdateSettingWithoutManualRequest(t *testing.T) {
+func TestRunnerHonorsAutoUpdateSetting(t *testing.T) {
 	updater := &fakeUpdater{}
 	runner := &Runner{
 		Updater:                 updater,
@@ -636,8 +636,38 @@ func TestRunnerIgnoresAutoUpdateSettingWithoutManualRequest(t *testing.T) {
 	}, &fakeWebSocketConnection{}); err != nil {
 		t.Fatalf("handle websocket settings: %v", err)
 	}
+	if updater.calls != 1 {
+		t.Fatalf("expected one auto update check, got %d updater calls", updater.calls)
+	}
+	if updater.repo != "SatanDS/OpenCDN" {
+		t.Fatalf("unexpected update repo: %s", updater.repo)
+	}
+	if updater.options.Channel != "stable" || updater.options.TagName != "" || updater.options.Force {
+		t.Fatalf("unexpected update options: %+v", updater.options)
+	}
+	if runner.lastAutoUpdateCheck.IsZero() {
+		t.Fatal("expected auto update check timestamp to be recorded")
+	}
+}
+
+func TestRunnerThrottlesAutoUpdateChecks(t *testing.T) {
+	updater := &fakeUpdater{}
+	runner := &Runner{
+		Updater:             updater,
+		autoUpdate:          true,
+		updateRepo:          "SatanDS/OpenCDN",
+		lastAutoUpdateCheck: time.Now(),
+	}
+
+	runner.tryAutoUpdate(context.Background())
 	if updater.calls != 0 {
-		t.Fatalf("expected auto_update setting to be ignored, got %d updater calls", updater.calls)
+		t.Fatalf("expected recent auto update check to be throttled, got %d updater calls", updater.calls)
+	}
+
+	runner.lastAutoUpdateCheck = time.Now().Add(-autoUpdateCheckInterval - time.Minute)
+	runner.tryAutoUpdate(context.Background())
+	if updater.calls != 1 {
+		t.Fatalf("expected stale auto update check to run, got %d updater calls", updater.calls)
 	}
 }
 

@@ -191,7 +191,7 @@ func buildAgentSettings(node *model.Node, updateNow bool, updateChannel string, 
 	return &AgentSettings{
 		HeartbeatInterval:       common.AgentHeartbeatInterval,
 		WebsocketUpgradeEnabled: common.AgentWebsocketUpgradeEnabled,
-		AutoUpdate:              false,
+		AutoUpdate:              node.AutoUpdateEnabled,
 		UpdateRepo:              common.AgentUpdateRepo,
 		UpdateNow:               updateNow,
 		UpdateChannel:           updateChannel,

@@ -47,6 +47,8 @@ type UpdateOptions struct {
 	Force   bool
 }
 
+const autoUpdateCheckInterval = 6 * time.Hour
+
 type Runner struct {
 	Config              *config.Config
 	StateStore          *state.Store
@@ -62,6 +64,7 @@ type Runner struct {
 	updateRepo              string
 	updateChan              string
 	updateTag               string
+	lastAutoUpdateCheck     time.Time
 	restartOpenrestyNow     bool
 	websocketUpgradeEnabled bool
 }
@@ -404,7 +407,7 @@ func (r *Runner) tryRestartOpenresty(ctx context.Context) {
 
 func (r *Runner) tryAutoUpdate(ctx context.Context) {
 	force := r.updateNow
-	shouldCheck := force
+	shouldCheck := force || r.shouldCheckAutoUpdate()
 	r.updateNow = false
 	r.updateTag = strings.TrimSpace(r.updateTag)
 	if !shouldCheck || r.Updater == nil || r.updateRepo == "" {
@@ -421,10 +424,23 @@ func (r *Runner) tryAutoUpdate(ctx context.Context) {
 	}); err != nil {
 		slog.Error("agent update check failed", "error", err)
 	}
+	if !force {
+		r.lastAutoUpdateCheck = time.Now()
+	}
 	if force {
 		r.updateTag = ""
 		r.updateChan = ""
 	}
+}
+
+func (r *Runner) shouldCheckAutoUpdate() bool {
+	if !r.autoUpdate {
+		return false
+	}
+	if r.lastAutoUpdateCheck.IsZero() {
+		return true
+	}
+	return time.Since(r.lastAutoUpdateCheck) >= autoUpdateCheckInterval
 }
 
 func (r *Runner) tryRegister(ctx context.Context, nodeID *string) error {

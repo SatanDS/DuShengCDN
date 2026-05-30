@@ -114,6 +114,17 @@ server {
 }
 ```
 
+Nginx Proxy Manager 可在 `Proxy Hosts` -> 选择对应域名 -> `Edit Proxy Host` -> 齿轮图标或 `Advanced` -> `Custom Nginx Configuration` 中填入：
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+```
+
 宝塔面板可在网站的“反向代理 -> 配置文件”里把 `proxy_set_header` 相关配置加入对应的 `location /` 块，保存后重载 Nginx。
 
 ### 2. 安装 Agent

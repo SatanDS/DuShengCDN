@@ -204,7 +204,7 @@ function toPayload(values: NodeEditorValues): NodeMutationPayload {
     return {
       name: values.name.trim(),
       ip: values.ip.trim(),
-      auto_update_enabled: false,
+      auto_update_enabled: values.auto_update_enabled,
       geo_manual_override: false,
       geo_name: '',
       geo_latitude: null,
@@ -215,7 +215,7 @@ function toPayload(values: NodeEditorValues): NodeMutationPayload {
   return {
     name: values.name.trim(),
     ip: values.ip.trim(),
-    auto_update_enabled: false,
+    auto_update_enabled: values.auto_update_enabled,
     geo_manual_override: true,
     geo_name: values.geo_name.trim(),
     geo_latitude:
@@ -310,6 +310,18 @@ export function NodeEditorModal({
         >
           <ResourceInput placeholder="203.0.113.10" {...form.register('ip')} />
         </ResourceField>
+
+        <ToggleField
+          label="Agent 自动更新"
+          description="开启后，Agent 会在心跳或 WebSocket 状态同步时自动检查正式版 Release，并在发现新版本后自更新。"
+          checked={form.watch('auto_update_enabled')}
+          onChange={(checked) => {
+            form.setValue('auto_update_enabled', checked, {
+              shouldDirty: true,
+              shouldValidate: true,
+            });
+          }}
+        />
 
         <ToggleField
           label="手动指定地图地区"

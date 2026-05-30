@@ -218,6 +218,9 @@ func TestHeartbeatNodeReturnsPreviewUpdateSettings(t *testing.T) {
 	if resp.AgentSettings.UpdateTag != "v0.5.0-rc.1" {
 		t.Fatalf("unexpected update tag: %s", resp.AgentSettings.UpdateTag)
 	}
+	if resp.AgentSettings.AutoUpdate {
+		t.Fatal("expected auto update setting to be disabled")
+	}
 	if !resp.AgentSettings.RestartOpenrestyNow {
 		t.Fatal("expected restart_openresty_now to be true")
 	}
@@ -246,6 +249,47 @@ func TestHeartbeatNodeReturnsPreviewUpdateSettings(t *testing.T) {
 	}
 }
 
+func TestHeartbeatNodeReturnsAutoUpdateSetting(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:            "node-auto-update-1",
+		Name:              "auto-update-edge-1",
+		IP:                "10.0.0.8",
+		AgentToken:        "agent-token",
+		AgentVersion:      "v0.4.0",
+		NginxVersion:      "1.27.1.2",
+		Status:            NodeStatusOnline,
+		AutoUpdateEnabled: true,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+
+	resp, err := HeartbeatNode(node, AgentNodePayload{
+		NodeID:       node.NodeID,
+		Name:         node.Name,
+		IP:           node.IP,
+		AgentVersion: node.AgentVersion,
+		NginxVersion: node.NginxVersion,
+	})
+	if err != nil {
+		t.Fatalf("expected heartbeat to succeed: %v", err)
+	}
+	if resp.AgentSettings == nil {
+		t.Fatal("expected agent settings in heartbeat response")
+	}
+	if !resp.AgentSettings.AutoUpdate {
+		t.Fatal("expected auto update setting to be enabled")
+	}
+	if resp.AgentSettings.UpdateNow {
+		t.Fatal("expected update_now to remain false")
+	}
+	if resp.AgentSettings.UpdateChannel != "stable" {
+		t.Fatalf("expected stable update channel, got %s", resp.AgentSettings.UpdateChannel)
+	}
+}
+
 func TestUpdateNodeValidatesAndPersistsGeoMetadata(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -270,8 +314,8 @@ func TestUpdateNodeValidatesAndPersistsGeoMetadata(t *testing.T) {
 	if updated.GeoName != "San Francisco" || updated.GeoLatitude == nil || updated.GeoLongitude == nil {
 		t.Fatalf("expected geo metadata in view, got %+v", updated)
 	}
-	if updated.AutoUpdateEnabled {
-		t.Fatal("expected auto update to remain disabled")
+	if !updated.AutoUpdateEnabled {
+		t.Fatal("expected auto update to be enabled")
 	}
 
 	stored, err := model.GetNodeByID(node.ID)
@@ -281,8 +325,8 @@ func TestUpdateNodeValidatesAndPersistsGeoMetadata(t *testing.T) {
 	if stored.GeoName != "San Francisco" || stored.GeoLatitude == nil || stored.GeoLongitude == nil {
 		t.Fatalf("expected geo metadata persisted, got %+v", stored)
 	}
-	if stored.AutoUpdateEnabled {
-		t.Fatal("expected auto update to remain disabled in storage")
+	if !stored.AutoUpdateEnabled {
+		t.Fatal("expected auto update to be enabled in storage")
 	}
 }
 
