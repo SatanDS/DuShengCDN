@@ -373,6 +373,66 @@ describe('Authoritative DNS page', () => {
                   snapshot_at: '2026-05-31T08:20:00Z',
                   message:
                     '模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。',
+                  matched_pools: [
+                    {
+                      name: 'hk',
+                      weight: 80,
+                      countries: ['HK'],
+                      matched: true,
+                      reason: '匹配来源国家 HK',
+                    },
+                    {
+                      name: 'eu',
+                      weight: 20,
+                      countries: ['DE'],
+                      matched: false,
+                      reason: '未匹配来源国家',
+                    },
+                  ],
+                  nodes: [
+                    {
+                      node_id: 'node-hk',
+                      name: 'hk-edge',
+                      pool_name: 'hk',
+                      status: 'online',
+                      openresty_status: 'healthy',
+                      scheduling_enabled: true,
+                      drain_mode: false,
+                      last_seen_at: '2026-05-31T08:19:00Z',
+                      public_ips: ['8.8.4.4'],
+                      candidate_targets: ['8.8.4.4'],
+                      selected_targets: ['8.8.4.4'],
+                      eligible: true,
+                      selected: true,
+                      reasons: ['可参与当前调度'],
+                      has_metric: true,
+                      openresty_connections: 12,
+                      cpu_usage_percent: 10,
+                      memory_usage_percent: 30,
+                      score: 8000,
+                    },
+                    {
+                      node_id: 'node-hot',
+                      name: 'hot-edge',
+                      pool_name: 'hk',
+                      status: 'online',
+                      openresty_status: 'healthy',
+                      scheduling_enabled: true,
+                      drain_mode: false,
+                      last_seen_at: '2026-05-31T08:19:00Z',
+                      public_ips: ['9.9.9.9'],
+                      candidate_targets: ['9.9.9.9'],
+                      selected_targets: [],
+                      eligible: false,
+                      selected: false,
+                      reasons: ['节点负载超过 GSLB 阈值'],
+                      has_metric: true,
+                      openresty_connections: 99,
+                      cpu_usage_percent: 20,
+                      memory_usage_percent: 40,
+                      score: 0,
+                    },
+                  ],
                 },
               }),
             ),
@@ -611,9 +671,16 @@ describe('Authoritative DNS page', () => {
     await userEvent
       .setup()
       .click(screen.getByRole('button', { name: '模拟调度' }));
-    expect(await screen.findByText('8.8.4.4')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByText('8.8.4.4').length).toBeGreaterThan(0);
+    });
     expect(screen.getAllByText('country:HK').length).toBeGreaterThan(0);
     expect(screen.getByText(/snapshot-c/)).toBeInTheDocument();
+    expect(screen.getByText('节点池匹配')).toBeInTheDocument();
+    expect(screen.getByText('节点诊断')).toBeInTheDocument();
+    expect(screen.getByText('hk-edge')).toBeInTheDocument();
+    expect(screen.getByText('hot-edge')).toBeInTheDocument();
+    expect(screen.getByText('节点负载超过 GSLB 阈值')).toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '检查委派' }));

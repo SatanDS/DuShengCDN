@@ -113,6 +113,38 @@ export interface DNSGSLBSimulationResult {
   snapshot_version: string;
   snapshot_at: string;
   message: string;
+  matched_pools: DNSGSLBSimulationPool[];
+  nodes: DNSGSLBSimulationNode[];
+}
+
+export interface DNSGSLBSimulationPool {
+  name: string;
+  weight: number;
+  countries: string[];
+  matched: boolean;
+  reason: string;
+}
+
+export interface DNSGSLBSimulationNode {
+  node_id: string;
+  name: string;
+  pool_name: string;
+  status: string;
+  openresty_status: string;
+  scheduling_enabled: boolean;
+  drain_mode: boolean;
+  last_seen_at?: string | null;
+  public_ips: string[];
+  candidate_targets: string[];
+  selected_targets: string[];
+  eligible: boolean;
+  selected: boolean;
+  reasons: string[];
+  has_metric: boolean;
+  openresty_connections: number;
+  cpu_usage_percent: number;
+  memory_usage_percent: number;
+  score: number;
 }
 
 export interface DNSObservabilityCounterItem {

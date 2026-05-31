@@ -152,7 +152,7 @@ route_id + record_type + source_scope
 * 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 查询延迟、可用率、错误率、返回码、返回目标、来源作用域和动态站点分布。
 * DNS Worker 列表支持按需探测单个 Worker 的公网 UDP/TCP 53，返回 RTT、RCODE、应答数量和错误信息，并在刷新后继续展示最近一次结果，用于验证 Server 到该 NS 的解析可达性。
 * Worker 可用性面板会把最近一次公网探测归类为 `healthy`、`partial`、`failed`、`stale` 或 `unknown`，迁移向导会要求至少一个在线 Worker 通过最新 UDP/TCP 53 探测后再标记站点为可切换。
-* 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，不改变真实调度状态。
+* 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，并展示匹配节点池、候选节点、被跳过节点与原因，不改变真实调度状态。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
 * 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否已启用站点 GSLB，并跳转到对应网站详情执行切换。
@@ -226,7 +226,7 @@ TTL 规则：
 ### 阶段 3：观测、联调与迁移体验
 
 * DNS Worker 已上报查询聚合、返回目标分布、来源作用域分布、错误码分布和本地查询处理耗时。
-* 管理端已展示 DNS Worker 状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 可用率、查询错误率、平均/最大查询延迟、返回码、来源作用域、Worker/Zone/站点维度、返回目标分布、按需 Worker UDP/TCP 53 探测、最近公网探测健康状态、Zone 委派检查和 Glue 提示。
+* 管理端已展示 DNS Worker 状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 可用率、查询错误率、平均/最大查询延迟、返回码、来源作用域、Worker/Zone/站点维度、返回目标分布、按需 Worker UDP/TCP 53 探测、最近公网探测健康状态、GSLB 调度模拟诊断、Zone 委派检查和 Glue 提示。
 * 已提供从 Cloudflare 同步模式切换到自建权威 DNS 模式的迁移检查向导。
 * 文档补充注册商 NS、Glue、端口、防火墙和回滚步骤。
 
@@ -257,7 +257,7 @@ TTL 规则：
 
 第三阶段完成时：
 
-* 管理端能展示 DNS Worker 在线状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、查询延迟、可用率、错误率、错误码、来源作用域、返回目标、按需 Worker 探测和委派检查。
+* 管理端能展示 DNS Worker 在线状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、查询延迟、可用率、错误率、错误码、来源作用域、返回目标、GSLB 模拟诊断、按需 Worker 探测和委派检查。
 * 管理端能在「权威 DNS」迁移向导里列出 Cloudflare 模式站点候选，并检查 Zone、在线 Worker、公网 UDP/TCP 53 探测、GSLB 与回滚提示。
 * 文档能指导用户从 Cloudflare 模式迁移到自建权威 DNS，并说明回滚方式。
 * 生产部署建议明确要求至少两个 DNS Worker 和 UDP/TCP 53 防火墙放行。

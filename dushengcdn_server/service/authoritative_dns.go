@@ -162,21 +162,53 @@ type DNSGSLBSimulationInput struct {
 }
 
 type DNSGSLBSimulationView struct {
-	ProxyRouteID    uint      `json:"proxy_route_id"`
-	SiteName        string    `json:"site_name"`
-	QName           string    `json:"qname"`
-	RecordType      string    `json:"record_type"`
-	Country         string    `json:"country"`
-	SourceIP        string    `json:"source_ip"`
-	SourceScope     string    `json:"source_scope"`
-	TTL             int       `json:"ttl"`
-	Targets         []string  `json:"targets"`
-	TargetCount     int       `json:"target_count"`
-	Strategy        string    `json:"strategy"`
-	GSLBEnabled     bool      `json:"gslb_enabled"`
-	SnapshotVersion string    `json:"snapshot_version"`
-	SnapshotAt      time.Time `json:"snapshot_at"`
-	Message         string    `json:"message"`
+	ProxyRouteID    uint                        `json:"proxy_route_id"`
+	SiteName        string                      `json:"site_name"`
+	QName           string                      `json:"qname"`
+	RecordType      string                      `json:"record_type"`
+	Country         string                      `json:"country"`
+	SourceIP        string                      `json:"source_ip"`
+	SourceScope     string                      `json:"source_scope"`
+	TTL             int                         `json:"ttl"`
+	Targets         []string                    `json:"targets"`
+	TargetCount     int                         `json:"target_count"`
+	Strategy        string                      `json:"strategy"`
+	GSLBEnabled     bool                        `json:"gslb_enabled"`
+	SnapshotVersion string                      `json:"snapshot_version"`
+	SnapshotAt      time.Time                   `json:"snapshot_at"`
+	Message         string                      `json:"message"`
+	MatchedPools    []DNSGSLBSimulationPoolView `json:"matched_pools"`
+	Nodes           []DNSGSLBSimulationNodeView `json:"nodes"`
+}
+
+type DNSGSLBSimulationPoolView struct {
+	Name      string   `json:"name"`
+	Weight    int      `json:"weight"`
+	Countries []string `json:"countries"`
+	Matched   bool     `json:"matched"`
+	Reason    string   `json:"reason"`
+}
+
+type DNSGSLBSimulationNodeView struct {
+	NodeID               string     `json:"node_id"`
+	Name                 string     `json:"name"`
+	PoolName             string     `json:"pool_name"`
+	Status               string     `json:"status"`
+	OpenrestyStatus      string     `json:"openresty_status"`
+	SchedulingEnabled    bool       `json:"scheduling_enabled"`
+	DrainMode            bool       `json:"drain_mode"`
+	LastSeenAt           *time.Time `json:"last_seen_at"`
+	PublicIPs            []string   `json:"public_ips"`
+	CandidateTargets     []string   `json:"candidate_targets"`
+	SelectedTargets      []string   `json:"selected_targets"`
+	Eligible             bool       `json:"eligible"`
+	Selected             bool       `json:"selected"`
+	Reasons              []string   `json:"reasons"`
+	HasMetric            bool       `json:"has_metric"`
+	OpenrestyConnections int64      `json:"openresty_connections"`
+	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
+	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
+	Score                float64    `json:"score"`
 }
 
 type DNSWorkerProbeView struct {
@@ -919,7 +951,15 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 	if !workerRoute.GSLBEnabled {
 		policy.Strategy = workerRoute.ScheduleMode
 		policy.TargetCount = workerRoute.TargetCount
+		policy.Pools = []dnsworker.GSLBPoolPolicy{
+			{
+				Name:    normalizeNodePoolName(workerRoute.NodePool),
+				Weight:  100,
+				Enabled: true,
+			},
+		}
 	}
+	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, policy, GSLBSourceContext{IP: sourceIP, Country: country}, targets)
 	message := "模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。"
 	if sourceScope == defaultGSLBScopeKey && country == "" {
 		message += " 未指定国家代码时使用 global 作用域。"
@@ -940,6 +980,8 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 		SnapshotVersion: snapshot.SnapshotVersion,
 		SnapshotAt:      snapshot.GeneratedAt,
 		Message:         message,
+		MatchedPools:    diagnostics.pools,
+		Nodes:           diagnostics.nodes,
 	}, nil
 }
 
@@ -954,6 +996,280 @@ func authoritativeRouteHasDomain(route *dnsworker.SnapshotRoute, qname string) b
 		}
 	}
 	return false
+}
+
+type dnsGSLBSimulationDiagnostics struct {
+	pools []DNSGSLBSimulationPoolView
+	nodes []DNSGSLBSimulationNodeView
+}
+
+func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBPolicy, source GSLBSourceContext, selectedTargets []string) dnsGSLBSimulationDiagnostics {
+	servicePolicy := convertWorkerGSLBPolicyToAuthoritative(policy)
+	servicePolicy, err := normalizeGSLBPolicy(servicePolicy, "default", servicePolicy.TargetCount, servicePolicy.Strategy, servicePolicy.TTL)
+	if err != nil {
+		return dnsGSLBSimulationDiagnostics{}
+	}
+	matchedPools := matchGSLBPoolsForSource(servicePolicy.Pools, source)
+	diagnostics := dnsGSLBSimulationDiagnostics{
+		pools: buildDNSGSLBSimulationPoolViews(servicePolicy.Pools, matchedPools, source),
+		nodes: []DNSGSLBSimulationNodeView{},
+	}
+	nodes, err := model.ListNodes()
+	if err != nil {
+		return diagnostics
+	}
+	metrics := latestNodeMetricSnapshots()
+	selectedSet := make(map[string]struct{}, len(selectedTargets))
+	for _, target := range selectedTargets {
+		selectedSet[strings.TrimSpace(target)] = struct{}{}
+	}
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		view := buildDNSGSLBSimulationNodeView(node, recordType, servicePolicy, matchedPools, metrics[node.NodeID], selectedSet)
+		diagnostics.nodes = append(diagnostics.nodes, view)
+	}
+	sort.SliceStable(diagnostics.nodes, func(i, j int) bool {
+		left := diagnostics.nodes[i]
+		right := diagnostics.nodes[j]
+		if left.Selected != right.Selected {
+			return left.Selected
+		}
+		if left.Eligible != right.Eligible {
+			return left.Eligible
+		}
+		if left.PoolName != right.PoolName {
+			return left.PoolName < right.PoolName
+		}
+		if left.Score != right.Score {
+			return left.Score > right.Score
+		}
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+		return left.NodeID < right.NodeID
+	})
+	return diagnostics
+}
+
+func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPools map[string]ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) []DNSGSLBSimulationPoolView {
+	result := make([]DNSGSLBSimulationPoolView, 0, len(pools))
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	for _, pool := range pools {
+		name := normalizeNodePoolName(pool.Name)
+		if name == "" || !pool.Enabled {
+			continue
+		}
+		_, matched := matchedPools[name]
+		reason := "参与全局调度"
+		if country != "" {
+			reason = "未匹配来源国家"
+			for _, poolCountry := range pool.Countries {
+				if country == strings.ToUpper(strings.TrimSpace(poolCountry)) {
+					reason = "匹配来源国家 " + country
+					break
+				}
+			}
+			if len(matchedPools) == len(enabledGSLBPoolNames(pools)) && reason == "未匹配来源国家" {
+				reason = "未命中国家专属池，回退参与调度"
+			}
+		}
+		result = append(result, DNSGSLBSimulationPoolView{
+			Name:      name,
+			Weight:    pool.Weight,
+			Countries: append([]string(nil), pool.Countries...),
+			Matched:   matched,
+			Reason:    reason,
+		})
+	}
+	return result
+}
+
+func enabledGSLBPoolNames(pools []ProxyRouteGSLBPoolPolicy) map[string]struct{} {
+	result := make(map[string]struct{}, len(pools))
+	for _, pool := range pools {
+		if !pool.Enabled {
+			continue
+		}
+		name := normalizeNodePoolName(pool.Name)
+		if name != "" {
+			result[name] = struct{}{}
+		}
+	}
+	return result
+}
+
+func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy ProxyRouteGSLBPolicy, matchedPools map[string]ProxyRouteGSLBPoolPolicy, metric *model.NodeMetricSnapshot, selectedSet map[string]struct{}) DNSGSLBSimulationNodeView {
+	poolName := normalizeNodePoolName(node.PoolName)
+	poolPolicy, poolMatched := matchedPools[poolName]
+	reasons := []string{}
+	if !poolMatched {
+		reasons = append(reasons, "节点池未匹配当前来源")
+	}
+	if node.DrainMode {
+		reasons = append(reasons, "节点处于排空模式")
+	}
+	if !isNodeSchedulableForDNS(node) {
+		reasons = append(reasons, "节点已关闭自动调度")
+	}
+	if !isNodeOnlineAndOpenRestyHealthy(node) {
+		reasons = append(reasons, "节点离线或 OpenResty 不健康")
+	}
+	publicIPs := resolveNodePublicIPs(node)
+	candidateTargets, ipReasons := filterDNSGSLBSimulationTargets(publicIPs, recordType)
+	reasons = append(reasons, ipReasons...)
+	hasMetric := metric != nil
+	openrestyConnections := int64(0)
+	cpuUsage := float64(0)
+	memoryUsage := float64(0)
+	if metric != nil {
+		openrestyConnections = metric.OpenrestyConnections
+		cpuUsage = metric.CPUUsagePercent
+		memoryUsage = nodeMetricMemoryUsagePercent(metric)
+		if !metricWithinGSLBThresholds(metric, policy.LoadThresholds) {
+			reasons = append(reasons, "节点负载超过 GSLB 阈值")
+		}
+	}
+	selected := []string{}
+	for _, target := range candidateTargets {
+		if _, ok := selectedSet[target]; ok {
+			selected = append(selected, target)
+		}
+	}
+	eligible := poolMatched &&
+		isNodeSchedulableForDNS(node) &&
+		isNodeOnlineAndOpenRestyHealthy(node) &&
+		(!hasMetric || metricWithinGSLBThresholds(metric, policy.LoadThresholds)) &&
+		len(candidateTargets) > 0
+	if eligible {
+		reasons = append(reasons, "可参与当前调度")
+	}
+	score := float64(0)
+	if poolMatched {
+		score = scoreGSLBCandidate(gslbDNSTargetCandidate{
+			NodeID:               node.NodeID,
+			PoolName:             poolName,
+			NodeWeight:           normalizeNodeWeight(node.Weight),
+			PoolWeight:           poolPolicy.Weight,
+			LastSeenAt:           node.LastSeenAt,
+			OpenrestyConnections: openrestyConnections,
+			CPUUsagePercent:      cpuUsage,
+			MemoryUsagePercent:   memoryUsage,
+			HasMetric:            hasMetric,
+		}, policy.Strategy)
+	}
+	lastSeenAt := node.LastSeenAt
+	return DNSGSLBSimulationNodeView{
+		NodeID:               node.NodeID,
+		Name:                 node.Name,
+		PoolName:             poolName,
+		Status:               computeNodeStatus(node),
+		OpenrestyStatus:      normalizeOpenrestyStatus(node.OpenrestyStatus),
+		SchedulingEnabled:    isNodeSchedulableForDNS(node),
+		DrainMode:            node.DrainMode,
+		LastSeenAt:           &lastSeenAt,
+		PublicIPs:            publicIPs,
+		CandidateTargets:     candidateTargets,
+		SelectedTargets:      selected,
+		Eligible:             eligible,
+		Selected:             len(selected) > 0,
+		Reasons:              dedupeStrings(reasons),
+		HasMetric:            hasMetric,
+		OpenrestyConnections: openrestyConnections,
+		CPUUsagePercent:      cpuUsage,
+		MemoryUsagePercent:   memoryUsage,
+		Score:                score,
+	}
+}
+
+func filterDNSGSLBSimulationTargets(values []string, recordType string) ([]string, []string) {
+	targets := []string{}
+	reasons := []string{}
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		ip := iputil.NormalizeIP(value)
+		parsed := net.ParseIP(ip)
+		if parsed == nil {
+			reasons = append(reasons, "公网 IP 格式无效")
+			continue
+		}
+		if !iputil.IsPublicString(ip) {
+			reasons = append(reasons, "公网 IP 不是可路由公网地址")
+			continue
+		}
+		if recordType == "A" && parsed.To4() == nil {
+			reasons = append(reasons, "缺少 IPv4 公网 IP")
+			continue
+		}
+		if recordType == "AAAA" && parsed.To4() != nil {
+			reasons = append(reasons, "缺少 IPv6 公网 IP")
+			continue
+		}
+		content := parsed.String()
+		if _, ok := seen[content]; ok {
+			continue
+		}
+		seen[content] = struct{}{}
+		targets = append(targets, content)
+	}
+	if len(values) == 0 {
+		reasons = append(reasons, "未配置节点公网 IP 池")
+	} else if len(targets) == 0 {
+		reasons = append(reasons, "没有符合记录类型的公网 IP")
+	}
+	return targets, dedupeStrings(reasons)
+}
+
+func convertWorkerGSLBPolicyToAuthoritative(policy dnsworker.GSLBPolicy) ProxyRouteGSLBPolicy {
+	result := ProxyRouteGSLBPolicy{
+		Mode:        policy.Mode,
+		Strategy:    policy.Strategy,
+		TargetCount: policy.TargetCount,
+		TTL:         policy.TTL,
+		SourceIP: ProxyRouteGSLBSourceIPProvider{
+			Provider: policy.SourceIP.Provider,
+			APIURL:   policy.SourceIP.APIURL,
+			APIToken: policy.SourceIP.APIToken,
+		},
+		LoadThresholds: ProxyRouteGSLBLoadThresholds{
+			MaxOpenrestyConnections: policy.LoadThresholds.MaxOpenrestyConnections,
+			MaxCPUPercent:           policy.LoadThresholds.MaxCPUPercent,
+			MaxMemoryPercent:        policy.LoadThresholds.MaxMemoryPercent,
+		},
+		Debounce: ProxyRouteGSLBDebounce{
+			CooldownSeconds:    policy.Debounce.CooldownSeconds,
+			UnhealthyThreshold: policy.Debounce.UnhealthyThreshold,
+			RecoveryThreshold:  policy.Debounce.RecoveryThreshold,
+		},
+		Pools: make([]ProxyRouteGSLBPoolPolicy, 0, len(policy.Pools)),
+	}
+	for _, pool := range policy.Pools {
+		result.Pools = append(result.Pools, ProxyRouteGSLBPoolPolicy{
+			Name:      pool.Name,
+			Weight:    pool.Weight,
+			Countries: append([]string(nil), pool.Countries...),
+			Enabled:   pool.Enabled,
+		})
+	}
+	return result
+}
+
+func dedupeStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		item := strings.TrimSpace(value)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
 }
 
 func buildDNSZone(zone *model.DNSZone, input DNSZoneInput) (*model.DNSZone, error) {

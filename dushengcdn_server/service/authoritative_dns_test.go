@@ -686,6 +686,11 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	if len(hk.Targets) != 1 || hk.Targets[0] != "8.8.4.4" {
 		t.Fatalf("expected HK pool target without overloaded node, got %+v", hk.Targets)
 	}
+	assertSimulationPool(t, hk.MatchedPools, "hk", true)
+	assertSimulationPool(t, hk.MatchedPools, "eu", false)
+	assertSimulationNode(t, hk.Nodes, "node-hk", true, true, "可参与当前调度")
+	assertSimulationNode(t, hk.Nodes, "node-hot", false, false, "节点负载超过 GSLB 阈值")
+	assertSimulationNode(t, hk.Nodes, "node-eu", false, false, "节点池未匹配当前来源")
 
 	de, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
 		ProxyRouteID: route.ID,
@@ -699,6 +704,8 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	if de.SourceScope != "country:DE" || len(de.Targets) != 1 || de.Targets[0] != "1.1.1.1" {
 		t.Fatalf("expected DE pool target, got %+v", de)
 	}
+	assertSimulationPool(t, de.MatchedPools, "eu", true)
+	assertSimulationNode(t, de.Nodes, "node-eu", true, true, "可参与当前调度")
 }
 
 func TestDNSWorkerProbeStateClassifiesFailedPartialAndStale(t *testing.T) {
@@ -769,4 +776,36 @@ func assertCounter(t *testing.T, counters []DNSObservabilityCounterView, key str
 		}
 	}
 	t.Fatalf("missing counter %s in %+v", key, counters)
+}
+
+func assertSimulationPool(t *testing.T, pools []DNSGSLBSimulationPoolView, name string, matched bool) {
+	t.Helper()
+	for _, pool := range pools {
+		if pool.Name == name {
+			if pool.Matched != matched {
+				t.Fatalf("unexpected simulation pool %s: %+v", name, pool)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing simulation pool %s in %+v", name, pools)
+}
+
+func assertSimulationNode(t *testing.T, nodes []DNSGSLBSimulationNodeView, nodeID string, eligible bool, selected bool, reason string) {
+	t.Helper()
+	for _, node := range nodes {
+		if node.NodeID != nodeID {
+			continue
+		}
+		if node.Eligible != eligible || node.Selected != selected {
+			t.Fatalf("unexpected simulation node %s: %+v", nodeID, node)
+		}
+		for _, item := range node.Reasons {
+			if item == reason {
+				return
+			}
+		}
+		t.Fatalf("missing reason %q for node %s: %+v", reason, nodeID, node.Reasons)
+	}
+	t.Fatalf("missing simulation node %s in %+v", nodeID, nodes)
 }

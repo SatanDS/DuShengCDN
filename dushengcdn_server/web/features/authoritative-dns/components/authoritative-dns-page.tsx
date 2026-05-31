@@ -1655,6 +1655,7 @@ function GSLBSimulationPanel({
                 {result.message ? (
                   <InlineMessage tone="info" message={result.message} />
                 ) : null}
+                <GSLBSimulationDiagnostics result={result} />
               </div>
             ) : (
               <p className="mt-3 text-sm leading-6 text-[var(--foreground-secondary)]">
@@ -1665,6 +1666,125 @@ function GSLBSimulationPanel({
         </div>
       )}
     </AppCard>
+  );
+}
+
+function GSLBSimulationDiagnostics({
+  result,
+}: {
+  result: DNSGSLBSimulationResult;
+}) {
+  return (
+    <div className="space-y-4">
+      {result.matched_pools.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+            节点池匹配
+          </p>
+          <div className="grid gap-2 md:grid-cols-2">
+            {result.matched_pools.map((pool) => (
+              <div
+                key={pool.name}
+                className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-[var(--foreground-primary)]">
+                    {pool.name}
+                  </span>
+                  <StatusBadge
+                    label={pool.matched ? '参与' : '跳过'}
+                    variant={pool.matched ? 'success' : 'warning'}
+                  />
+                </div>
+                <p className="mt-2 text-xs text-[var(--foreground-secondary)]">
+                  权重 {pool.weight}
+                  {pool.countries.length > 0
+                    ? ` · 国家 ${pool.countries.join(', ')}`
+                    : ''}
+                </p>
+                <p className="mt-1 text-xs text-[var(--foreground-muted)]">
+                  {pool.reason}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {result.nodes.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+            节点诊断
+          </p>
+          <div className="grid gap-2 xl:grid-cols-2">
+            {result.nodes.map((node) => (
+              <div
+                key={node.node_id}
+                className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-3"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-[var(--foreground-primary)]">
+                      {node.name || node.node_id}
+                    </p>
+                    <p className="mt-1 text-xs text-[var(--foreground-muted)]">
+                      {node.pool_name} · {node.node_id}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <StatusBadge
+                      label={
+                        node.selected ? '已选中' : node.eligible ? '候选' : '跳过'
+                      }
+                      variant={
+                        node.selected
+                          ? 'success'
+                          : node.eligible
+                            ? 'info'
+                            : 'warning'
+                      }
+                    />
+                    <StatusBadge label={node.status || 'unknown'} />
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <InfoTile
+                    label="候选目标"
+                    value={node.candidate_targets.join(', ') || '—'}
+                  />
+                  <InfoTile
+                    label="选中目标"
+                    value={node.selected_targets.join(', ') || '—'}
+                  />
+                  <InfoTile
+                    label="连接数"
+                    value={
+                      node.has_metric
+                        ? formatCount(node.openresty_connections)
+                        : '无指标'
+                    }
+                  />
+                  <InfoTile
+                    label="评分"
+                    value={node.score > 0 ? node.score.toFixed(2) : '—'}
+                  />
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {node.reasons.map((reason) => (
+                    <span
+                      key={`${node.node_id}-${reason}`}
+                      className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-2.5 py-1 text-xs text-[var(--foreground-secondary)]"
+                    >
+                      {reason}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
