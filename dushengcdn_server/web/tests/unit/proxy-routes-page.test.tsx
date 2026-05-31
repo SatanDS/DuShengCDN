@@ -162,6 +162,8 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
     dns_last_sync_status: '',
     dns_last_sync_message: '',
     dns_last_synced_at: null,
+    dns_provider_mode: 'cloudflare',
+    dns_zone_id_ref: null,
     remark: 'Marketing website',
     created_at: '2026-03-20T08:00:00Z',
     updated_at: '2026-03-21T08:00:00Z',
@@ -383,6 +385,8 @@ describe('Proxy route website pages', () => {
             dns_last_sync_status: '',
             dns_last_sync_message: '',
             dns_last_synced_at: null,
+            dns_provider_mode: payload.dns_provider_mode ?? 'cloudflare',
+            dns_zone_id_ref: payload.dns_zone_id_ref ?? null,
             region_restriction_enabled:
               payload.region_restriction_enabled ?? false,
             region_restriction_mode: payload.region_restriction_mode ?? 'block',
@@ -614,6 +618,18 @@ describe('Proxy route website pages', () => {
                 success: true,
                 message: '',
                 data: [{ id: 1, pool_name: 'edge-hk' }],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
               }),
             ),
           );
@@ -912,6 +928,18 @@ describe('Proxy route website pages', () => {
           );
         }
 
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
         if (
           url.includes('/tls-certificates/') ||
           url.includes('/managed-domains/') ||
@@ -986,6 +1014,135 @@ describe('Proxy route website pages', () => {
           },
         ],
       },
+    });
+  });
+
+  it('saves authoritative DNS mode from automatic DNS config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  dns_provider_mode: payload.dns_provider_mode,
+                  dns_zone_id_ref: payload.dns_zone_id_ref,
+                  dns_auto_sync: payload.dns_auto_sync,
+                  dns_account_id: payload.dns_account_id,
+                  cloudflare_proxied: payload.cloudflare_proxied,
+                  ddos_protection_mode: payload.ddos_protection_mode,
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute(),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    id: 11,
+                    name: 'example.com',
+                    soa_email: 'hostmaster@example.com',
+                    primary_ns: 'ns1.example.net',
+                    name_servers: ['ns1.example.net', 'ns2.example.net'],
+                    default_ttl: 300,
+                    serial: 2026053101,
+                    enabled: true,
+                    record_count: 0,
+                    created_at: '2026-05-31T08:00:00Z',
+                    updated_at: '2026-05-31T08:00:00Z',
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/nodes/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="dns" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: '自动 DNS' }),
+    ).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('DNS 模式'), 'authoritative');
+    await user.selectOptions(screen.getByLabelText('权威 DNS Zone'), '11');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-dns-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing dns save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      dns_provider_mode: 'authoritative',
+      dns_zone_id_ref: 11,
+      dns_auto_sync: false,
+      dns_account_id: null,
+      dns_auto_target: true,
+      cloudflare_proxied: false,
+      ddos_protection_mode: 'off',
     });
   });
 

@@ -287,6 +287,8 @@ export function ProxyRouteCreateDrawer({
         dns_target_count: values.dns_target_count,
         dns_schedule_mode: values.dns_schedule_mode,
         dns_ttl: values.dns_ttl,
+        dns_provider_mode: 'cloudflare',
+        dns_zone_id_ref: null,
         gslb_enabled: false,
         gslb_policy: {
           ...gslbPolicy,

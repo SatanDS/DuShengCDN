@@ -129,6 +129,8 @@ export interface ProxyRouteItem {
   dns_last_sync_status: string;
   dns_last_sync_message: string;
   dns_last_synced_at?: string | null;
+  dns_provider_mode: 'cloudflare' | 'authoritative';
+  dns_zone_id_ref: number | null;
   remark: string;
   created_at: string;
   updated_at: string;
@@ -181,6 +183,8 @@ export interface ProxyRouteMutationPayload {
   dns_target_count?: number;
   dns_schedule_mode?: 'healthy' | 'weighted' | 'load_aware';
   dns_ttl?: number;
+  dns_provider_mode?: 'cloudflare' | 'authoritative';
+  dns_zone_id_ref?: number | null;
   gslb_enabled?: boolean;
   gslb_policy?: ProxyRouteGSLBPolicy;
   cloudflare_proxied?: boolean;

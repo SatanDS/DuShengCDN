@@ -257,7 +257,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 ### 4. 可选：部署自建权威 DNS Worker
 
-如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端创建 DNS Zone 和 DNS Worker Token，然后把域名 NS 委派到 DNS Worker。
+如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker Token，然后把域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里切换到自建权威 DNS。
 
 Docker 运行示例：
 

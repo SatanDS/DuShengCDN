@@ -159,11 +159,18 @@ go run . --port 3000 --log-dir ./logs
 
 生产环境建议在节点详情中维护节点池、公网 IP 池、调度权重和排空状态。自动 DNS 默认会按网站绑定的节点池选择在线且 OpenResty 健康的公网 IP；启用网站 GSLB 后，可在自动 DNS 配置中绑定多个节点池，按池权重、节点负载和防抖冷却时间同步 Cloudflare A/AAAA 记录。缓存清理和预热仍下发到网站默认节点池内的在线 Agent。
 
-当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度。Server 侧已经提供自建权威 DNS 的 Zone、Worker Token、心跳和只读快照 API；如需真正按每次 DNS 查询的来源 IP/地区返回不同节点，还需要部署后续的 DNS Worker 查询面或具备实时流量调度能力的 DNS 服务。
+当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度。自建权威 DNS 模式已经提供管理端 Zone/记录/Worker 入口、网站模式选择、DNS Worker 查询面、心跳和只读快照 API；如需按每次 DNS 查询来源返回不同节点，应在左侧「权威 DNS」创建 Zone 和 DNS Worker，并在网站详情「自动 DNS」里切换到自建权威 DNS。
 
 ## 自建权威 DNS 部署规划
 
 自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。
+
+管理端操作顺序：
+
+1. 在左侧「权威 DNS」创建 Zone，填写注册商需要委派的 NS。
+2. 在同一页面创建 DNS Worker，复制创建后弹出的 Token 或部署命令。
+3. 部署至少两个 DNS Worker，并在注册商处把域名 NS 委派到 Worker。
+4. 到网站详情的「自动 DNS」分区，把 `DNS 模式` 切换为 `自建权威 DNS` 并选择对应 Zone。
 
 Docker 运行示例：
 

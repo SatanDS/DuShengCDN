@@ -24,7 +24,7 @@ export const websiteConfigSections = [
   {
     key: 'dns',
     label: '自动 DNS',
-    description: '绑定 Cloudflare，自动解析和切换橙云。',
+    description: '选择 Cloudflare 同步或自建权威 DNS。',
   },
   {
     key: 'cache',
@@ -367,6 +367,8 @@ export function buildPayloadFromRoute(
     dns_target_count: route.dns_target_count || 1,
     dns_schedule_mode: route.dns_schedule_mode || 'healthy',
     dns_ttl: route.dns_ttl || 1,
+    dns_provider_mode: route.dns_provider_mode || 'cloudflare',
+    dns_zone_id_ref: route.dns_zone_id_ref,
     gslb_enabled: route.gslb_enabled,
     gslb_policy:
       route.gslb_policy || buildDefaultGSLBPolicy(route.node_pool || 'default'),

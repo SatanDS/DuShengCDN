@@ -62,6 +62,16 @@ function SidebarIcon({ icon }: { icon: NavigationIconKey }) {
           <rect x="3.5" y="5" width="17" height="14" rx="3" />
         </svg>
       );
+    case 'dns':
+      return (
+        <svg {...commonProps}>
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M3.5 12h17" />
+          <path d="M12 3.5v17" />
+          <path d="M7.2 7.5h9.6" />
+          <path d="M7.2 16.5h9.6" />
+        </svg>
+      );
     case 'certificate':
       return (
         <svg {...commonProps}>

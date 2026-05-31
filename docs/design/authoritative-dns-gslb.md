@@ -142,13 +142,17 @@ route_id + record_type + source_scope
 | `GET /api/dns-snapshot` | DNS Worker 拉取只读调度快照，需 Worker Token |
 | `POST /api/dns-worker-heartbeat` | DNS Worker 上报状态、快照版本和聚合指标 |
 
-前端入口仍待补齐：
+已落地的前端入口：
 
-* 左侧新增「权威 DNS」主菜单，作为独立基础设施资源。
-* 网站配置的「自动 DNS」分区增加 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
+* 左侧「权威 DNS」主菜单作为独立基础设施资源入口。
+* 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳和快照时间。
+* 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
 * GSLB 节点池策略继续放在网站配置里，权威 DNS 只负责实时执行策略。
-* Zone 页面显示注册商需要配置的 NS、Glue 提示、SOA 序列号、静态记录和委派检查结果。
-* DNS Worker 页面显示 Worker 在线状态、监听地址、最近快照、查询量、SERVFAIL/NXDOMAIN 比例和返回目标分布。
+
+仍待增强的前端能力：
+
+* Zone 委派检查、Glue 提示和迁移向导。
+* DNS Worker 查询量、SERVFAIL/NXDOMAIN 比例和返回目标分布。
 
 ## DNS 协议行为
 
@@ -196,7 +200,7 @@ TTL 规则：
 * 已扩展 `gslb_scheduling_states` 的 `scope_key` 维度。
 * 已为 `proxy_routes` 增加 `dns_provider_mode` 和 `dns_zone_id_ref`。
 * 已提供 Zone、Worker、静态记录、Worker 心跳/聚合上报和只读快照 API。
-* 待补：前端新增「权威 DNS」入口和网站自动 DNS 模式选择。
+* 已提供前端「权威 DNS」入口和网站自动 DNS 模式选择。
 
 ### 阶段 2：权威 DNS Worker MVP（已落地）
 

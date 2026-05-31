@@ -161,7 +161,7 @@ journalctl -u dushengcdn-agent -f
 
 ## 5. 可选：启用自建权威 DNS
 
-如果希望域名按每次 DNS 查询来源实时调度到不同边缘节点，需要部署 DNS Worker：
+如果希望域名按每次 DNS 查询来源实时调度到不同边缘节点，先在左侧「权威 DNS」创建 Zone 和 DNS Worker Token，再部署 DNS Worker：
 
 ```bash
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
@@ -172,7 +172,7 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   ghcr.io/satands/dushengcdn-dns-worker:latest
 ```
 
-然后在注册商处把需要托管的域名 NS 委派到 DNS Worker。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。
+然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里把 `DNS 模式` 切换为 `自建权威 DNS`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。
 
 ## 5. 验证是否成功
 

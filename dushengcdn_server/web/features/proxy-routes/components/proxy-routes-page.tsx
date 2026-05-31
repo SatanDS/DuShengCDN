@@ -18,6 +18,8 @@ import {
   getConfigVersionDiff,
   publishConfigVersion,
 } from '@/features/config-versions/api/config-versions';
+import { getDNSZones } from '@/features/authoritative-dns/api/authoritative-dns';
+import type { DNSZoneItem } from '@/features/authoritative-dns/types';
 import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import { ProxyRouteCreateDrawer } from '@/features/proxy-routes/components/proxy-route-create-drawer';
 import {
@@ -103,7 +105,9 @@ function hasConfigChanges(diff: {
 function isFeatureEnabled(route: ProxyRouteItem, section: FeatureSectionKey) {
   switch (section) {
     case 'dns':
-      return route.dns_auto_sync;
+      return (
+        route.dns_auto_sync || route.dns_provider_mode === 'authoritative'
+      );
     case 'cache':
       return route.cache_enabled;
     case 'pow':
@@ -121,8 +125,16 @@ function getFeatureStatus(route: ProxyRouteItem, section: FeatureSectionKey) {
   switch (section) {
     case 'dns':
       return {
-        label: route.dns_auto_sync ? '自动 DNS 已启用' : '自动 DNS 未启用',
-        variant: route.dns_auto_sync ? 'success' : 'warning',
+        label:
+          route.dns_provider_mode === 'authoritative'
+            ? '权威 DNS 已启用'
+            : route.dns_auto_sync
+              ? '自动 DNS 已启用'
+              : '自动 DNS 未启用',
+        variant:
+          route.dns_auto_sync || route.dns_provider_mode === 'authoritative'
+            ? 'success'
+            : 'warning',
       } as const;
     case 'cache':
       return {
@@ -170,6 +182,8 @@ function FeatureSectionList({
   keyword,
   onKeywordChange,
   dnsAccounts,
+  dnsZones,
+  dnsZonesLoading,
   savingRouteID,
   onSave,
 }: {
@@ -180,6 +194,8 @@ function FeatureSectionList({
   keyword: string;
   onKeywordChange: (value: string) => void;
   dnsAccounts: DnsAccountItem[];
+  dnsZones: DNSZoneItem[];
+  dnsZonesLoading: boolean;
   savingRouteID: number | null;
   onSave: (
     route: ProxyRouteItem,
@@ -253,6 +269,8 @@ function FeatureSectionList({
                   sectionLabel={sectionLabel}
                   expanded={expanded}
                   dnsAccounts={dnsAccounts}
+                  dnsZones={dnsZones}
+                  dnsZonesLoading={dnsZonesLoading}
                   saving={savingRouteID === route.id}
                   onSave={(payload, context) => onSave(route, payload, context)}
                   onToggle={() => toggleExpanded(route.id)}
@@ -272,6 +290,8 @@ function FeatureRoutePanel({
   sectionLabel,
   expanded,
   dnsAccounts,
+  dnsZones,
+  dnsZonesLoading,
   saving,
   onSave,
   onToggle,
@@ -281,6 +301,8 @@ function FeatureRoutePanel({
   sectionLabel: string;
   expanded: boolean;
   dnsAccounts: DnsAccountItem[];
+  dnsZones: DNSZoneItem[];
+  dnsZonesLoading: boolean;
   saving: boolean;
   onSave: (payload: ProxyRouteMutationPayload, context: SaveContext) => void;
   onToggle: () => void;
@@ -320,6 +342,8 @@ function FeatureRoutePanel({
             route={route}
             section={section}
             dnsAccounts={dnsAccounts}
+            dnsZones={dnsZones}
+            dnsZonesLoading={dnsZonesLoading}
             saving={saving}
             onSave={onSave}
           />
@@ -345,12 +369,16 @@ function FeatureRouteForm({
   route,
   section,
   dnsAccounts,
+  dnsZones,
+  dnsZonesLoading,
   saving,
   onSave,
 }: {
   route: ProxyRouteItem;
   section: FeatureSectionKey;
   dnsAccounts: DnsAccountItem[];
+  dnsZones: DNSZoneItem[];
+  dnsZonesLoading: boolean;
   saving: boolean;
   onSave: (payload: ProxyRouteMutationPayload, context: SaveContext) => void;
 }) {
@@ -362,6 +390,8 @@ function FeatureRouteForm({
         <DNSAutomationSection
           route={route}
           dnsAccounts={dnsAccounts}
+          dnsZones={dnsZones}
+          dnsZonesLoading={dnsZonesLoading}
           saving={saving}
           onSave={onSave}
           formId={formId}
@@ -448,6 +478,11 @@ export function ProxyRoutesPage() {
   const dnsAccountsQuery = useQuery({
     queryKey: ['dns-accounts'],
     queryFn: getDnsAccounts,
+    enabled: activeFeatureSection === 'dns',
+  });
+  const dnsZonesQuery = useQuery({
+    queryKey: ['authoritative-dns', 'zones'],
+    queryFn: getDNSZones,
     enabled: activeFeatureSection === 'dns',
   });
 
@@ -602,7 +637,19 @@ export function ProxyRoutesPage() {
     );
   }
 
-  if (activeFeatureSection === 'dns' && dnsAccountsQuery.isLoading) {
+  if (activeFeatureSection === 'dns' && dnsZonesQuery.isError) {
+    return (
+      <ErrorState
+        title="权威 DNS Zone 加载失败"
+        description={getErrorMessage(dnsZonesQuery.error)}
+      />
+    );
+  }
+
+  if (
+    activeFeatureSection === 'dns' &&
+    (dnsAccountsQuery.isLoading || dnsZonesQuery.isLoading)
+  ) {
     return <LoadingState />;
   }
 
@@ -696,6 +743,8 @@ export function ProxyRoutesPage() {
             keyword={keyword}
             onKeywordChange={setKeyword}
             dnsAccounts={dnsAccountsQuery.data ?? []}
+            dnsZones={dnsZonesQuery.data ?? []}
+            dnsZonesLoading={dnsZonesQuery.isLoading}
             savingRouteID={
               updateMutation.isPending
                 ? (updateMutation.variables?.route.id ?? null)

@@ -27,6 +27,11 @@ export const dashboardNavigation: NavigationItem[] = [
     icon: 'domain',
   },
   {
+    href: '/authoritative-dns',
+    label: '权威 DNS',
+    icon: 'dns',
+  },
+  {
     href: '/origin',
     label: '源站',
     icon: 'origin',

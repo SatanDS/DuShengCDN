@@ -15,6 +15,8 @@ import { LoadingState } from '@/components/feedback/loading-state';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
+import { getDNSZones } from '@/features/authoritative-dns/api/authoritative-dns';
+import type { DNSZoneItem } from '@/features/authoritative-dns/types';
 import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import type { DnsAccountItem } from '@/features/dns-accounts/types';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
@@ -267,8 +269,10 @@ type CacheValues = z.infer<typeof cacheSchema>;
 type RegionRestrictionValues = z.infer<typeof regionRestrictionSchema>;
 
 type DNSAutomationValues = {
+  dns_provider_mode: 'cloudflare' | 'authoritative';
   dns_auto_sync: boolean;
   dns_account_id: string;
+  dns_zone_id_ref: string;
   dns_zone_id: string;
   dns_record_type: 'A' | 'AAAA' | 'CNAME';
   dns_record_name: string;
@@ -293,7 +297,7 @@ type GSLBPoolRow = {
 };
 
 const dnsTTLHint =
-  '0 表示自动 TTL；1 表示 Cloudflare 自动 TTL；2-29 秒会在保存时提升到 30 秒；30 秒及以上按填写值同步，最高 86400 秒。';
+  'Cloudflare 模式下 0/1 表示自动 TTL，2-29 秒会在保存时提升到 30 秒；权威 DNS 模式下 0/1 映射为默认 30 秒，最高 86400 秒。';
 const gslbPoolActionButtonClassName = 'h-11 w-11 shrink-0 rounded-2xl px-0';
 const gslbPoolRemoveButtonClassName =
   'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] hover:border-[var(--status-danger-border)] hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger-foreground)] disabled:border-[var(--border-default)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--foreground-muted)]';
@@ -819,6 +823,8 @@ function ReverseProxySection({
 export function DNSAutomationSection({
   route,
   dnsAccounts,
+  dnsZones = [],
+  dnsZonesLoading = false,
   saving,
   onSave,
   formId = 'proxy-route-dns-form',
@@ -826,13 +832,19 @@ export function DNSAutomationSection({
 }: {
   route: ProxyRouteItem;
   dnsAccounts: DnsAccountItem[];
+  dnsZones?: DNSZoneItem[];
+  dnsZonesLoading?: boolean;
   saving: boolean;
   onSave: SaveHandler;
 } & ConfigSectionPresentationProps) {
   const form = useForm<DNSAutomationValues>({
     defaultValues: {
+      dns_provider_mode: route.dns_provider_mode || 'cloudflare',
       dns_auto_sync: route.dns_auto_sync,
       dns_account_id: route.dns_account_id ? String(route.dns_account_id) : '',
+      dns_zone_id_ref: route.dns_zone_id_ref
+        ? String(route.dns_zone_id_ref)
+        : '',
       dns_zone_id: route.dns_zone_id || '',
       dns_record_type: route.dns_record_type || 'A',
       dns_record_name: route.dns_record_name || '',
@@ -854,8 +866,12 @@ export function DNSAutomationSection({
 
   useEffect(() => {
     form.reset({
+      dns_provider_mode: route.dns_provider_mode || 'cloudflare',
       dns_auto_sync: route.dns_auto_sync,
       dns_account_id: route.dns_account_id ? String(route.dns_account_id) : '',
+      dns_zone_id_ref: route.dns_zone_id_ref
+        ? String(route.dns_zone_id_ref)
+        : '',
       dns_zone_id: route.dns_zone_id || '',
       dns_record_type: route.dns_record_type || 'A',
       dns_record_name: route.dns_record_name || '',
@@ -875,7 +891,9 @@ export function DNSAutomationSection({
     });
   }, [form, route]);
 
-  const autoSyncEnabled = form.watch('dns_auto_sync');
+  const providerMode = form.watch('dns_provider_mode');
+  const isAuthoritativeMode = providerMode === 'authoritative';
+  const autoSyncEnabled = isAuthoritativeMode || form.watch('dns_auto_sync');
   const recordType = form.watch('dns_record_type');
   const autoTarget = form.watch('dns_auto_target');
   const gslbEnabled = form.watch('gslb_enabled');
@@ -883,7 +901,7 @@ export function DNSAutomationSection({
   return (
     <ConfigSectionShell
       title="自动 DNS"
-      description="绑定 Cloudflare 后，创建或保存规则时自动解析域名；节点离线时后台任务会切换到在线节点。"
+      description="选择 Cloudflare 后台同步，或切换到自建权威 DNS 让 Worker 按每次查询来源实时返回边缘 IP。"
       formId={formId}
       saving={saving}
       embedded={embedded}
@@ -893,23 +911,35 @@ export function DNSAutomationSection({
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           const dnsAccountID = Number(values.dns_account_id);
+          const dnsZoneIDRef = Number(values.dns_zone_id_ref);
           const baseGSLBPolicy =
             route.gslb_policy || buildDefaultGSLBPolicy(route.node_pool);
           const gslbPools = parseGSLBPoolRows(values.gslb_pool_rows);
+          const authoritativeMode = values.dns_provider_mode === 'authoritative';
           onSave(
             buildPayloadFromRoute(route, {
-              dns_auto_sync: values.dns_auto_sync,
+              dns_provider_mode: values.dns_provider_mode,
+              dns_zone_id_ref:
+                authoritativeMode &&
+                Number.isFinite(dnsZoneIDRef) &&
+                dnsZoneIDRef > 0
+                  ? dnsZoneIDRef
+                  : null,
+              dns_auto_sync: authoritativeMode ? false : values.dns_auto_sync,
               dns_account_id:
+                !authoritativeMode &&
                 values.dns_auto_sync &&
                 Number.isFinite(dnsAccountID) &&
                 dnsAccountID > 0
                   ? dnsAccountID
                   : null,
-              dns_zone_id: values.dns_zone_id.trim(),
+              dns_zone_id: authoritativeMode ? '' : values.dns_zone_id.trim(),
               dns_record_type: values.dns_record_type,
               dns_record_name: values.dns_record_name.trim(),
-              dns_record_content: values.dns_record_content.trim(),
-              dns_auto_target: values.gslb_enabled
+              dns_record_content: authoritativeMode
+                ? ''
+                : values.dns_record_content.trim(),
+              dns_auto_target: authoritativeMode || values.gslb_enabled
                 ? true
                 : values.dns_auto_target,
               dns_target_count: values.dns_target_count,
@@ -936,114 +966,204 @@ export function DNSAutomationSection({
                   cooldown_seconds: values.gslb_cooldown_seconds,
                 },
               },
-              cloudflare_proxied: values.cloudflare_proxied,
-              ddos_protection_mode: values.ddos_protection_mode,
+              cloudflare_proxied: authoritativeMode
+                ? false
+                : values.cloudflare_proxied,
+              ddos_protection_mode: authoritativeMode
+                ? 'off'
+                : values.ddos_protection_mode,
             }),
-            { message: '自动 DNS 设置已保存。' },
+            {
+              message: authoritativeMode
+                ? '权威 DNS 设置已保存。'
+                : '自动 DNS 设置已保存。',
+            },
           );
         })}
       >
-        <ToggleField
-          label="启用 Cloudflare 自动 DNS"
-          description="开启后会为当前规则域名创建或更新 Cloudflare DNS 记录。"
-          checked={autoSyncEnabled}
-          onChange={(checked) =>
-            form.setValue('dns_auto_sync', checked, { shouldDirty: true })
-          }
-        />
+        <ResourceField
+          label="DNS 模式"
+          hint="Cloudflare 模式会后台同步 DNS 记录；自建权威 DNS 会进入 DNS Worker 快照并在查询时实时调度。"
+        >
+          <ResourceSelect
+            aria-label="DNS 模式"
+            {...form.register('dns_provider_mode', {
+              onChange: (event) => {
+                const mode = event.target
+                  .value as DNSAutomationValues['dns_provider_mode'];
+                if (mode === 'authoritative') {
+                  form.setValue('dns_auto_sync', false, { shouldDirty: true });
+                  form.setValue('dns_auto_target', true, { shouldDirty: true });
+                  form.setValue('cloudflare_proxied', false, {
+                    shouldDirty: true,
+                  });
+                  form.setValue('ddos_protection_mode', 'off', {
+                    shouldDirty: true,
+                  });
+                }
+              },
+            })}
+          >
+            <option value="cloudflare">Cloudflare 同步</option>
+            <option value="authoritative">自建权威 DNS</option>
+          </ResourceSelect>
+        </ResourceField>
 
-        <div className="grid gap-5 md:grid-cols-2">
+        {isAuthoritativeMode ? (
           <ResourceField
-            label="DNS 账号"
-            hint="需要 Cloudflare API Token 具备 Zone Read 和 DNS Edit 权限。"
+            label="权威 DNS Zone"
+            hint="网站域名必须属于所选 Zone；Zone 可在左侧「权威 DNS」页面创建。"
             error={
-              autoSyncEnabled && !form.watch('dns_account_id')
-                ? '启用自动 DNS 时请选择 DNS 账号'
-                : undefined
+              !form.watch('dns_zone_id_ref') ? '请选择 DNS Zone' : undefined
             }
           >
             <ResourceSelect
-              disabled={!autoSyncEnabled}
-              {...form.register('dns_account_id')}
+              aria-label="权威 DNS Zone"
+              disabled={dnsZonesLoading}
+              {...form.register('dns_zone_id_ref')}
             >
-              <option value="">请选择 DNS 账号</option>
-              {dnsAccounts
-                .filter((account) => account.type === 'cloudflare')
-                .map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name}
-                  </option>
-                ))}
+              <option value="">
+                {dnsZonesLoading ? '正在加载 Zone...' : '请选择 DNS Zone'}
+              </option>
+              {dnsZones.map((zone) => (
+                <option key={zone.id} value={zone.id}>
+                  {zone.name}
+                  {zone.enabled ? '' : '（已停用）'}
+                </option>
+              ))}
             </ResourceSelect>
           </ResourceField>
+        ) : (
+          <ToggleField
+            label="启用 Cloudflare 自动 DNS"
+            description="开启后会为当前规则域名创建或更新 Cloudflare DNS 记录。"
+            checked={autoSyncEnabled}
+            onChange={(checked) =>
+              form.setValue('dns_auto_sync', checked, { shouldDirty: true })
+            }
+          />
+        )}
 
-          <ResourceField
-            label="记录类型"
-            hint="默认 A 记录。自动选择节点时只支持 A 或 AAAA。"
-          >
-            <ResourceSelect
-              disabled={!autoSyncEnabled}
-              {...form.register('dns_record_type')}
+        {!isAuthoritativeMode ? (
+          <div className="grid gap-5 md:grid-cols-2">
+            <ResourceField
+              label="DNS 账号"
+              hint="需要 Cloudflare API Token 具备 Zone Read 和 DNS Edit 权限。"
+              error={
+                autoSyncEnabled && !form.watch('dns_account_id')
+                  ? '启用自动 DNS 时请选择 DNS 账号'
+                  : undefined
+              }
             >
+              <ResourceSelect
+                disabled={!autoSyncEnabled}
+                {...form.register('dns_account_id')}
+              >
+                <option value="">请选择 DNS 账号</option>
+                {dnsAccounts
+                  .filter((account) => account.type === 'cloudflare')
+                  .map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+              </ResourceSelect>
+            </ResourceField>
+
+            <ResourceField
+              label="记录类型"
+              hint="默认 A 记录。自动选择节点时只支持 A 或 AAAA。"
+            >
+              <ResourceSelect
+                disabled={!autoSyncEnabled}
+                {...form.register('dns_record_type')}
+              >
+                <option value="A">A</option>
+                <option value="AAAA">AAAA</option>
+                <option value="CNAME">CNAME</option>
+              </ResourceSelect>
+            </ResourceField>
+          </div>
+        ) : (
+          <ResourceField
+            label="动态记录类型"
+            hint="自建权威 DNS 的 GSLB 动态回答仅支持 A 或 AAAA。"
+          >
+            <ResourceSelect {...form.register('dns_record_type')}>
               <option value="A">A</option>
               <option value="AAAA">AAAA</option>
-              <option value="CNAME">CNAME</option>
             </ResourceSelect>
           </ResourceField>
-        </div>
+        )}
 
-        <div className="grid gap-5 md:grid-cols-2">
-          <ResourceField
-            label="Zone ID"
-            hint="可留空，系统会按主域名自动查找 Cloudflare Zone。"
-          >
-            <ResourceInput
-              disabled={!autoSyncEnabled}
-              placeholder="留空自动识别"
-              {...form.register('dns_zone_id')}
-            />
-          </ResourceField>
+        {!isAuthoritativeMode ? (
+          <div className="grid gap-5 md:grid-cols-2">
+            <ResourceField
+              label="Zone ID"
+              hint="可留空，系统会按主域名自动查找 Cloudflare Zone。"
+            >
+              <ResourceInput
+                disabled={!autoSyncEnabled}
+                placeholder="留空自动识别"
+                {...form.register('dns_zone_id')}
+              />
+            </ResourceField>
 
+            <ResourceField
+              label="记录名称"
+              hint="可留空，默认同步规则里的所有域名。单域名规则可手动指定。"
+            >
+              <ResourceInput
+                disabled={!autoSyncEnabled}
+                placeholder={route.primary_domain}
+                {...form.register('dns_record_name')}
+              />
+            </ResourceField>
+          </div>
+        ) : (
           <ResourceField
             label="记录名称"
-            hint="可留空，默认同步规则里的所有域名。单域名规则可手动指定。"
+            hint="可留空，默认使用当前网站的全部域名。"
           >
             <ResourceInput
-              disabled={!autoSyncEnabled}
               placeholder={route.primary_domain}
               {...form.register('dns_record_name')}
             />
           </ResourceField>
-        </div>
+        )}
 
-        <ResourceField
-          label="记录内容"
-          hint={
-            recordType === 'CNAME'
-              ? 'CNAME 必须手动填写目标域名。'
-              : '启用自动选择时，系统会使用节点池中的在线公网 IP；关闭后可固定多个 A/AAAA 内容。'
-          }
-        >
-          <ResourceInput
-            disabled={!autoSyncEnabled || autoTarget}
-            placeholder={
+        {!isAuthoritativeMode ? (
+          <ResourceField
+            label="记录内容"
+            hint={
               recordType === 'CNAME'
-                ? 'target.example.com'
-                : '留空自动选择，或填写多个 IP'
+                ? 'CNAME 必须手动填写目标域名。'
+                : '启用自动选择时，系统会使用节点池中的在线公网 IP；关闭后可固定多个 A/AAAA 内容。'
             }
-            {...form.register('dns_record_content')}
-          />
-        </ResourceField>
+          >
+            <ResourceInput
+              disabled={!autoSyncEnabled || autoTarget}
+              placeholder={
+                recordType === 'CNAME'
+                  ? 'target.example.com'
+                  : '留空自动选择，或填写多个 IP'
+              }
+              {...form.register('dns_record_content')}
+            />
+          </ResourceField>
+        ) : null}
 
-        <ToggleField
-          label="自动选择在线节点 IP"
-          description="开启后节点离线会自动切换到其他在线节点；手动记录内容不会被后台任务覆盖。"
-          checked={autoTarget}
-          disabled={!autoSyncEnabled || recordType === 'CNAME'}
-          onChange={(checked) =>
-            form.setValue('dns_auto_target', checked, { shouldDirty: true })
-          }
-        />
+        {!isAuthoritativeMode ? (
+          <ToggleField
+            label="自动选择在线节点 IP"
+            description="开启后节点离线会自动切换到其他在线节点；手动记录内容不会被后台任务覆盖。"
+            checked={autoTarget}
+            disabled={!autoSyncEnabled || recordType === 'CNAME'}
+            onChange={(checked) =>
+              form.setValue('dns_auto_target', checked, { shouldDirty: true })
+            }
+          />
+        ) : null}
 
         {recordType !== 'CNAME' ? (
           <div className="grid gap-5 md:grid-cols-3">
@@ -1271,33 +1391,35 @@ export function DNSAutomationSection({
           </div>
         ) : null}
 
-        <div className="grid gap-5 md:grid-cols-2">
-          <ToggleField
-            label="开启 Cloudflare 代理"
-            description="开启后 Cloudflare DNS 记录会切到橙云，用于隐藏源站和抗攻击。"
-            checked={form.watch('cloudflare_proxied')}
-            disabled={!autoSyncEnabled}
-            onChange={(checked) =>
-              form.setValue('cloudflare_proxied', checked, {
-                shouldDirty: true,
-              })
-            }
-          />
-
-          <ResourceField
-            label="DDoS 防护模式"
-            hint="自动模式会在 5 分钟请求量或错误率超过阈值时打开橙云。"
-          >
-            <ResourceSelect
+        {!isAuthoritativeMode ? (
+          <div className="grid gap-5 md:grid-cols-2">
+            <ToggleField
+              label="开启 Cloudflare 代理"
+              description="开启后 Cloudflare DNS 记录会切到橙云，用于隐藏源站和抗攻击。"
+              checked={form.watch('cloudflare_proxied')}
               disabled={!autoSyncEnabled}
-              {...form.register('ddos_protection_mode')}
+              onChange={(checked) =>
+                form.setValue('cloudflare_proxied', checked, {
+                  shouldDirty: true,
+                })
+              }
+            />
+
+            <ResourceField
+              label="DDoS 防护模式"
+              hint="自动模式会在 5 分钟请求量或错误率超过阈值时打开橙云。"
             >
-              <option value="off">关闭</option>
-              <option value="manual">手动</option>
-              <option value="auto">自动</option>
-            </ResourceSelect>
-          </ResourceField>
-        </div>
+              <ResourceSelect
+                disabled={!autoSyncEnabled}
+                {...form.register('ddos_protection_mode')}
+              >
+                <option value="off">关闭</option>
+                <option value="manual">手动</option>
+                <option value="auto">自动</option>
+              </ResourceSelect>
+            </ResourceField>
+          </div>
+        ) : null}
 
         {route.dns_last_sync_status ? (
           <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--foreground-secondary)]">
@@ -2382,6 +2504,11 @@ export function ProxyRouteConfigPage({
     queryKey: ['dns-accounts'],
     queryFn: getDnsAccounts,
   });
+  const dnsZonesQuery = useQuery({
+    queryKey: ['authoritative-dns', 'zones'],
+    queryFn: getDNSZones,
+    enabled: currentSection === 'dns',
+  });
   const nodesQuery = useQuery({
     queryKey: ['nodes'],
     queryFn: getNodes,
@@ -2429,6 +2556,10 @@ export function ProxyRouteConfigPage({
   const dnsAccounts = useMemo(
     () => dnsAccountsQuery.data ?? [],
     [dnsAccountsQuery.data],
+  );
+  const dnsZones = useMemo(
+    () => dnsZonesQuery.data ?? [],
+    [dnsZonesQuery.data],
   );
   const domainSuggestionSources = useMemo(
     () => [
@@ -2482,6 +2613,15 @@ export function ProxyRouteConfigPage({
       <ErrorState
         title="DNS 账号列表加载失败"
         description={getErrorMessage(dnsAccountsQuery.error)}
+      />
+    );
+  }
+
+  if (currentSection === 'dns' && dnsZonesQuery.isError) {
+    return (
+      <ErrorState
+        title="权威 DNS Zone 加载失败"
+        description={getErrorMessage(dnsZonesQuery.error)}
       />
     );
   }
@@ -2600,6 +2740,8 @@ export function ProxyRouteConfigPage({
             <DNSAutomationSection
               route={route}
               dnsAccounts={dnsAccounts}
+              dnsZones={dnsZones}
+              dnsZonesLoading={dnsZonesQuery.isLoading}
               saving={saveMutation.isPending}
               onSave={(payload, context) =>
                 saveMutation.mutate({ payload, context })
