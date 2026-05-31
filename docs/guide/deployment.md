@@ -44,6 +44,15 @@ Agent：
 | Docker | 仅 Docker 部署 Agent 镜像时需要 |
 | 网络 | Agent 节点必须能访问 Server 地址 |
 
+DNS Worker（规划中的自建权威 DNS 运行角色）：
+
+| 项目 | 要求 |
+| --- | --- |
+| 端口 | 对公网开放 UDP `53` 和 TCP `53` |
+| 数量 | 生产至少 2 个 Worker，并在注册商配置多个 NS |
+| 网络 | Worker 必须能通过 HTTPS 访问 Server 拉取只读调度快照 |
+| 数据 | Worker 本地保存最后一次有效快照，Server 短暂不可用时继续回答 |
+
 推荐生产规格：
 
 | 场景 | 建议规格 |
@@ -151,6 +160,19 @@ go run . --port 3000 --log-dir ./logs
 生产环境建议在节点详情中维护节点池、公网 IP 池、调度权重和排空状态。自动 DNS 默认会按网站绑定的节点池选择在线且 OpenResty 健康的公网 IP；启用网站 GSLB 后，可在自动 DNS 配置中绑定多个节点池，按池权重、节点负载和防抖冷却时间同步 Cloudflare A/AAAA 记录。缓存清理和预热仍下发到网站默认节点池内的在线 Agent。
 
 当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度；如需按每次 DNS 查询的来源 IP/地区返回不同节点，需要后续接入自建权威 DNS 或具备实时流量调度能力的 DNS 服务。
+
+## 自建权威 DNS 部署规划
+
+自建权威 DNS 会新增 DNS Worker 运行角色。它负责监听 UDP/TCP `53`，加载 Server 下发的只读调度快照，并在每次 DNS 查询时执行 GSLB 选点。该能力仍在规划阶段，设计细节见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
+
+生产部署原则：
+
+* 至少部署两个 DNS Worker，例如 `ns1.example.net` 和 `ns2.example.net`。
+* 在注册商处将需要托管的域名 NS 委派到这些 Worker，并按需配置 Glue 记录。
+* 防火墙必须同时放行 UDP `53` 和 TCP `53`。
+* Worker 到 Server 的快照拉取接口必须使用 HTTPS 和专属 Worker Token。
+* Server 短暂不可用时，Worker 使用最后一次有效快照继续回答；快照超过最大有效期后动态 GSLB 记录应返回 `SERVFAIL`。
+* DNS Worker 不替代 Agent/OpenResty。反向代理配置修改后仍需发布并激活版本，Agent 才会应用。
 
 使用 `discovery_token` 自动注册：
 

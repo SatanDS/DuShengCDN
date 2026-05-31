@@ -159,6 +159,9 @@ tests/
 * `proxy_routes.node_pool` 只保存网站绑定的默认节点池名称，用于自动 DNS 选点和缓存运行时操作，不得演变成按节点分组的配置版本。
 * `proxy_routes.gslb_policy` 只保存站点级 DNS 调度策略，可引用多个节点池用于 GSLB 选点；它不能用于生成按节点池拆分的 OpenResty 配置版本。
 * `gslb_scheduling_states` 只保存运行时 DNS 调度状态和防抖信息，不参与配置版本快照。
+* 自建权威 DNS 阶段允许新增 `dns_zones`、`dns_records`、`dns_workers`、`dns_query_rollups` 等 DNS 基础对象；这些对象只服务权威 DNS 查询、Worker 快照和观测聚合，不得承载 OpenResty 反向代理配置。
+* DNS Worker 使用 Server 下发的只读快照回答查询，查询路径不得访问数据库、不得调用外部 GeoIP HTTP API、不得执行远程命令。
+* 权威 DNS 的逐来源防抖状态必须包含来源作用域，例如 `global` 或 `country:HK`，不能继续只按 `proxy_route_id` 覆盖全局选择。
 * 遗留 `domain` 字段只能作为 `domains[0]` 的兼容镜像；新代码不得继续以该字段作为唯一业务输入。
 * `proxy_routes` 如关联 `origins`，必须同时保存可直接渲染的 `origin_url`。
 * 源站统一使用 named `upstream` + keepalive；单源站如带 base path 或 query，应在 `proxy_pass` 上补回 URI，多源站仅允许纯 `scheme://host[:port]`。
@@ -232,6 +235,7 @@ tests/
 * 不做按节点分组的差异化版本。
 * 预览与 diff 是只读能力，不产生发布记录。
 * 缓存清理和缓存预热是运行时指令，不产生配置版本，不允许扩展成远程命令执行入口。
+* 权威 DNS 快照分发是 DNS 运行时数据，不产生 OpenResty 配置版本，不允许绕过 DNS Worker Token 鉴权。
 
 Agent 必须满足：
 
@@ -289,6 +293,7 @@ Agent 必须满足：
 * Agent 主链路修改必须验证同步、应用与回滚。
 * 前端页面至少覆盖加载态、空态、错误态与成功反馈。
 * Go 版本调整时，同步检查 `go.mod`、Dockerfile 与 CI 工作流。
+* 权威 DNS 修改必须覆盖 DNS 协议响应、GSLB 选点、ECS/来源识别、TTL、防抖、快照失效和 Worker 心跳/聚合上报。
 
 ## 后续维护方式
 
@@ -301,3 +306,5 @@ Agent 必须满足：
 如果未来出现明确的新阶段目标，再单独新增专项计划文档；不要把已完成的历史计划继续堆回本文档。
 
 当前专项“网站级规则与配置界面改造”的模型边界已纳入 [产品边界](./)，执行时仍按数据模型、接口、前端页面、迁移测试与文档联动的顺序推进。
+
+当前专项“自建权威 DNS 与 GSLB 调度”的设计边界见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)。实现时应先落数据模型和快照 API，再实现 DNS Worker 查询面，最后补管理端和迁移体验。

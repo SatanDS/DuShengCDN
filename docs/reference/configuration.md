@@ -24,6 +24,7 @@ Agent 支持：
 | --- | --- | --- |
 | Server SQLite | `dushengcdn.db` | 可通过 `SQLITE_PATH` 修改 |
 | Server 上传目录 | `upload` | 可通过 `UPLOAD_PATH` 修改 |
+| DNS Worker 快照缓存（规划） | `data/dns-worker-snapshot.json` | 由 DNS Worker 保存最后一次有效调度快照 |
 | Agent 配置文件 | `./agent.json` | 可通过 `-config` 指定 |
 | 一键安装 Agent 配置 | `/opt/dushengcdn-agent/agent.json` | 安装脚本默认生成 |
 | Agent 数据目录 | 配置文件所在目录下的 `data` | 可通过 `data_dir` 修改 |
@@ -84,6 +85,10 @@ go run . --port 3000 --log-dir ./logs
 | `UploadRateLimitNum` / `UploadRateLimitDuration` | 上传接口限流次数 / 时间窗口 | `50` / `60` |
 | `DownloadRateLimitNum` / `DownloadRateLimitDuration` | 下载接口限流次数 / 时间窗口 | `50` / `60` |
 | `CriticalRateLimitNum` / `CriticalRateLimitDuration` | 敏感接口限流次数 / 时间窗口 | `100` / `1200` |
+| `AuthoritativeDNSEnabled`（规划） | 是否启用内置权威 DNS 服务 | `false` |
+| `AuthoritativeDNSListenAddr`（规划） | 内置权威 DNS 监听地址，需同时监听 UDP/TCP | `:53` |
+| `AuthoritativeDNSDefaultTTL`（规划） | 权威 DNS 模式下 `0/1` TTL 映射值 | `30` |
+| `AuthoritativeDNSSnapshotMaxAge`（规划） | DNS Worker 最后有效快照最大使用时间 | `300` |
 
 说明：
 
@@ -143,11 +148,19 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `proxy_routes.dns_target_count` | 网站配置 | 自动 DNS 最多同步的目标 IP 数量 |
 | `proxy_routes.dns_schedule_mode` | 网站配置 | 自动 DNS 选点模式：`healthy`、`weighted` 或 `load_aware` |
 | `proxy_routes.dns_ttl` | 网站配置 | Cloudflare DNS 记录 TTL；`0` 和 `1` 表示自动 TTL，`2-29` 会提升到 `30`，最高 `86400` |
+| `proxy_routes.dns_provider_mode`（规划） | 网站配置 | DNS 模式：`cloudflare` 后台同步，或 `authoritative` 自建权威 DNS 实时回答 |
 | `proxy_routes.gslb_enabled` | 网站配置 | 是否启用站点级 GSLB 多节点池调度 |
 | `proxy_routes.gslb_policy` | 网站配置 | GSLB 策略 JSON，包含节点池权重、目标数量、TTL、来源识别接口、负载阈值和防抖参数 |
-| `gslb_scheduling_states.selected_targets` | 运行时状态 | 最近一次实际同步的 GSLB DNS 目标 |
+| `gslb_scheduling_states.scope_key`（规划） | 运行时状态 | 权威 DNS 模式下按来源作用域保存防抖状态，例如 `global` 或 `country:HK` |
+| `gslb_scheduling_states.selected_targets` | 运行时状态 | 最近一次实际选择的 GSLB DNS 目标 |
 | `gslb_scheduling_states.desired_targets` | 运行时状态 | 最近一次评估得到的期望 GSLB DNS 目标 |
 | `gslb_scheduling_states.last_changed_at` | 运行时状态 | 最近一次实际切换 DNS 目标的时间，用于防抖冷却 |
+| `dns_zones`（规划） | 权威 DNS | 托管 Zone、SOA、NS、默认 TTL、启用状态和序列号 |
+| `dns_records`（规划） | 权威 DNS | Zone 内静态记录，至少支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA` |
+| `dns_workers`（规划） | 权威 DNS | DNS Worker 身份、Token、公网地址、版本、心跳和快照状态 |
+| `dns_query_rollups`（规划） | 权威 DNS | DNS 查询聚合指标，按时间窗口、Zone、站点、qtype、rcode 和 Worker 统计 |
+
+自建权威 DNS 的完整设计见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
 
 ## 前端构建环境变量
 
@@ -187,6 +200,11 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `DUSHENGCDN_HEARTBEAT_INTERVAL` | 心跳间隔，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_REQUEST_TIMEOUT` | 请求超时，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_OPENRESTY_OBSERVABILITY_PORT` | 本地观测端口，可覆盖 `agent.json` | 空 |
+| `DUSHENGCDN_DNS_WORKER_SERVER_URL`（规划） | DNS Worker 连接 Server 的地址 | 空 |
+| `DUSHENGCDN_DNS_WORKER_TOKEN`（规划） | DNS Worker 专属认证 Token | 空 |
+| `DUSHENGCDN_DNS_WORKER_LISTEN_ADDR`（规划） | DNS Worker UDP/TCP 监听地址 | `:53` |
+| `DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH`（规划） | DNS Worker 本地快照缓存路径 | `data/dns-worker-snapshot.json` |
+| `DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL`（规划） | DNS Worker 心跳和快照检查间隔 | `10000` 毫秒 |
 
 ## Agent 命令行参数
 

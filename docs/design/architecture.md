@@ -2,7 +2,7 @@
 
 你会学到：DuShengCDN 的整体架构、Server、Agent、OpenResty 与管理端前端的职责边界，以及一次配置发布从管理端到节点生效的请求流。
 
-DuShengCDN 由 Server、Agent、节点本地 OpenResty 和管理端前端组成。Server 是控制面，Agent 是节点侧唯一受控落地入口，OpenResty 是实际数据面。
+DuShengCDN 由 Server、Agent、节点本地 OpenResty 和管理端前端组成。Server 是控制面，Agent 是节点侧唯一受控落地入口，OpenResty 是实际数据面。下一阶段的自建权威 DNS 会新增 DNS Worker 运行角色，用于逐次 DNS 查询实时执行 GSLB 调度；它不替代 Agent/OpenResty 数据面。
 
 ```text
 Browser
@@ -24,6 +24,24 @@ OpenResty binary
 Origin
 ```
 
+自建权威 DNS 阶段增加入口调度链路：
+
+```text
+Recursive Resolver
+  |
+  | UDP/TCP 53
+  v
+DuShengCDN DNS Worker
+  |
+  | snapshot pull / heartbeat
+  v
+DuShengCDN Server
+  |
+  | metrics / node state
+  v
+Agent + OpenResty edge nodes
+```
+
 ## 组件职责
 
 | 组件 | 职责 |
@@ -32,6 +50,7 @@ Origin
 | Agent | 注册、心跳、同步、写入文件、校验、reload、失败回滚、自更新与轻量采集 |
 | OpenResty | 接收真实流量，按 DuShengCDN 渲染的配置执行反向代理 |
 | Frontend | 管理网站配置、源站、证书、节点、版本、用户、设置与观测页面 |
+| DNS Worker | 规划中的权威 DNS 查询服务，加载 Server 下发的只读调度快照，按来源、地区、节点健康和负载实时返回 A/AAAA 答案 |
 
 ## Server
 
@@ -109,6 +128,16 @@ ProxyRoute DNS 设置 -> Server 选择单节点池或 GSLB 多节点池在线公
 
 启用 `proxy_routes.gslb_enabled` 后，Server 改用 `proxy_routes.gslb_policy` 里的多节点池策略：先按来源国家代码匹配可用池（当前 Cloudflare DNS 同步模式使用全局默认上下文，来源接口为后续实时权威 DNS 预留），再按池权重、节点权重、最新 `node_metric_snapshots` 负载评分和阈值筛选目标。最近一次选择会写入 `gslb_scheduling_states`，在冷却期内旧目标仍健康时保持不变，避免 DNS 记录来回抖动。
 
+### 权威 DNS 实时调度流
+
+```text
+DNS Query -> DNS Worker 匹配 Zone/站点 -> 读取本地调度快照 -> 复用 GSLB 选点 -> 返回 A/AAAA/静态记录
+```
+
+自建权威 DNS 模式下，DNS Worker 不在查询路径访问数据库，也不向节点发命令。它从 Server 拉取只读快照，快照包含启用 Zone、静态记录、网站域名、GSLB 策略、节点公网 IP、节点健康摘要和负载摘要。查询时优先使用 EDNS Client Subnet 识别用户来源，未提供时使用递归解析器 IP；来源会被解析成 `GSLBSourceContext`，用于按国家代码匹配节点池。
+
+DNS Worker 的防抖状态按 `route_id + record_type + source_scope` 保存，避免不同来源地区互相覆盖选择结果。查询聚合按窗口批量上报 Server，用于展示 QPS、rcode、返回目标和错误原因；默认不保存完整原始查询日志。
+
 ### 反向代理流
 
 ```text
@@ -123,6 +152,10 @@ Client -> OpenResty server block -> named upstream -> Origin
 
 * `proxy_routes`
 * `gslb_scheduling_states`
+* `dns_zones`（规划）
+* `dns_records`（规划）
+* `dns_workers`（规划）
+* `dns_query_rollups`（规划）
 * `origins`
 * `config_versions`
 * `nodes`
@@ -147,6 +180,7 @@ Client -> OpenResty server block -> named upstream -> Origin
 | 全局单激活版本 | 降低 MVP 复杂度，保证所有节点默认一致 |
 | 网站配置聚合多域名 | 支持一个业务站点共享站点级策略，同时允许按域名绑定证书 |
 | 节点池只影响调度与运行时操作 | 保持配置发布仍是全局完整版本，避免引入按节点分组版本模型 |
+| 权威 DNS 使用只读快照 | 查询路径不能依赖数据库或外部 API，Server 短暂不可用时仍可使用最后一次有效快照回答 |
 | 观测数据服务端聚合 | 避免前端临时统计造成口径不一致 |
 
 ## 贡献者阅读建议

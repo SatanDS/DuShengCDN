@@ -77,6 +77,14 @@ Cloudflare 自动 DNS 支持：
 * 当前 Cloudflare 模式是后台重算并同步 DNS A/AAAA 记录，受 TTL 和递归 DNS 缓存影响；按每次用户来源实时返回不同 IP 需要后续接入自建权威 DNS。
 * Cloudflare API Token 可直接填写原始 Token，也兼容 `Bearer ...` 和包含 `api_token` / `apiToken` / `token` 的 JSON。
 
+下一阶段的自建权威 DNS 会提供实时 GSLB 模式：
+
+* 域名需要在注册商处把 NS 委派到 DuShengCDN DNS Worker。
+* DNS Worker 会在每次 A/AAAA 查询时根据来源、国家代码、节点池权重、节点健康和负载评分返回边缘 IP。
+* 这种模式不依赖 Cloudflare API，也不支持 Cloudflare 橙云代理；需要自行保证 DNS Worker 的公网可达和高可用。
+* 生产环境至少部署两个 DNS Worker，并放行 UDP/TCP 53。
+* 详细设计见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
+
 ## 缓存清理与预热
 
 网站缓存策略仍通过发布版本生效；缓存清理与预热属于运行时操作：
