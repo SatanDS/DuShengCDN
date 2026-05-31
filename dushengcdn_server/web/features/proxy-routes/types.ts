@@ -46,6 +46,7 @@ export interface ProxyRouteGSLBPoolPolicy {
   name: string;
   weight: number;
   countries: string[];
+  source_cidrs: string[];
   enabled: boolean;
 }
 

@@ -183,11 +183,12 @@ type DNSGSLBSimulationView struct {
 }
 
 type DNSGSLBSimulationPoolView struct {
-	Name      string   `json:"name"`
-	Weight    int      `json:"weight"`
-	Countries []string `json:"countries"`
-	Matched   bool     `json:"matched"`
-	Reason    string   `json:"reason"`
+	Name        string   `json:"name"`
+	Weight      int      `json:"weight"`
+	Countries   []string `json:"countries"`
+	SourceCIDRs []string `json:"source_cidrs"`
+	Matched     bool     `json:"matched"`
+	Reason      string   `json:"reason"`
 }
 
 type DNSGSLBSimulationNodeView struct {
@@ -1154,6 +1155,13 @@ func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBP
 func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPools map[string]ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) []DNSGSLBSimulationPoolView {
 	result := make([]DNSGSLBSimulationPoolView, 0, len(pools))
 	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	cidrMatched := false
+	for _, pool := range pools {
+		if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+			cidrMatched = true
+			break
+		}
+	}
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
 		if name == "" || !pool.Enabled {
@@ -1161,7 +1169,11 @@ func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPo
 		}
 		_, matched := matchedPools[name]
 		reason := "参与全局调度"
-		if country != "" {
+		if matchedCIDR, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+			reason = "匹配来源网段 " + matchedCIDR
+		} else if cidrMatched {
+			reason = "未匹配来源网段"
+		} else if country != "" {
 			reason = "未匹配来源国家"
 			for _, poolCountry := range pool.Countries {
 				if country == strings.ToUpper(strings.TrimSpace(poolCountry)) {
@@ -1174,11 +1186,12 @@ func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPo
 			}
 		}
 		result = append(result, DNSGSLBSimulationPoolView{
-			Name:      name,
-			Weight:    pool.Weight,
-			Countries: append([]string(nil), pool.Countries...),
-			Matched:   matched,
-			Reason:    reason,
+			Name:        name,
+			Weight:      pool.Weight,
+			Countries:   append([]string(nil), pool.Countries...),
+			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
+			Matched:     matched,
+			Reason:      reason,
 		})
 	}
 	return result
@@ -1344,10 +1357,11 @@ func convertWorkerGSLBPolicyToAuthoritative(policy dnsworker.GSLBPolicy) ProxyRo
 	}
 	for _, pool := range policy.Pools {
 		result.Pools = append(result.Pools, ProxyRouteGSLBPoolPolicy{
-			Name:      pool.Name,
-			Weight:    pool.Weight,
-			Countries: append([]string(nil), pool.Countries...),
-			Enabled:   pool.Enabled,
+			Name:        pool.Name,
+			Weight:      pool.Weight,
+			Countries:   append([]string(nil), pool.Countries...),
+			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
+			Enabled:     pool.Enabled,
 		})
 	}
 	return result
@@ -1900,10 +1914,11 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 	}
 	for _, pool := range policy.Pools {
 		result.Pools = append(result.Pools, dnsworker.GSLBPoolPolicy{
-			Name:      pool.Name,
-			Weight:    pool.Weight,
-			Countries: append([]string(nil), pool.Countries...),
-			Enabled:   pool.Enabled,
+			Name:        pool.Name,
+			Weight:      pool.Weight,
+			Countries:   append([]string(nil), pool.Countries...),
+			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
+			Enabled:     pool.Enabled,
 		})
 	}
 	return result
@@ -2096,11 +2111,16 @@ func normalizeDNSSourceScope(raw string) string {
 	if value == "" {
 		return defaultGSLBScopeKey
 	}
-	prefix, country, ok := strings.Cut(value, ":")
+	prefix, scopeValue, ok := strings.Cut(value, ":")
 	if ok && strings.EqualFold(strings.TrimSpace(prefix), "country") {
-		country = strings.ToUpper(strings.TrimSpace(country))
-		if len(country) == 2 {
-			return "country:" + country
+		scopeValue = strings.ToUpper(strings.TrimSpace(scopeValue))
+		if len(scopeValue) == 2 {
+			return "country:" + scopeValue
+		}
+	}
+	if ok && strings.EqualFold(strings.TrimSpace(prefix), "cidr") {
+		if cidr, valid := normalizeGSLBCIDR(scopeValue); valid {
+			return "cidr:" + cidr
 		}
 	}
 	if len(value) > 64 {

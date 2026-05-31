@@ -1888,6 +1888,9 @@ function GSLBSimulationDiagnostics({
                   {pool.countries.length > 0
                     ? ` · 国家 ${pool.countries.join(', ')}`
                     : ''}
+                  {pool.source_cidrs.length > 0
+                    ? ` · CIDR ${pool.source_cidrs.join(', ')}`
+                    : ''}
                 </p>
                 <p className="mt-1 text-xs text-[var(--foreground-muted)]">
                   {pool.reason}

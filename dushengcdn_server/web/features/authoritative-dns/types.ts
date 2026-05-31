@@ -121,6 +121,7 @@ export interface DNSGSLBSimulationPool {
   name: string;
   weight: number;
   countries: string[];
+  source_cidrs: string[];
   matched: boolean;
   reason: string;
 }

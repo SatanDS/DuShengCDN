@@ -89,10 +89,11 @@ type SnapshotSchedulingState struct {
 }
 
 type GSLBPoolPolicy struct {
-	Name      string   `json:"name"`
-	Weight    int      `json:"weight"`
-	Countries []string `json:"countries"`
-	Enabled   bool     `json:"enabled"`
+	Name        string   `json:"name"`
+	Weight      int      `json:"weight"`
+	Countries   []string `json:"countries"`
+	SourceCIDRs []string `json:"source_cidrs"`
+	Enabled     bool     `json:"enabled"`
 }
 
 type GSLBSourceIPProvider struct {

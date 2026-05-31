@@ -166,7 +166,7 @@ func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType 
 			Debounce: normalizeDebounce(GSLBDebounce{}),
 		}
 	}
-	scopeKey := sourceScopeKey(source)
+	scopeKey := sourceScopeKeyForPolicy(policy, source)
 	candidates := buildCandidates(snapshot, recordType, policy, source)
 	if len(candidates) == 0 {
 		return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("no online public node IP is available for %s records", recordType)
@@ -291,6 +291,7 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 
 func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[string]GSLBPoolPolicy {
 	all := map[string]GSLBPoolPolicy{}
+	cidrMatched := map[string]GSLBPoolPolicy{}
 	matched := map[string]GSLBPoolPolicy{}
 	country := strings.ToUpper(strings.TrimSpace(source.Country))
 	for _, pool := range pools {
@@ -299,6 +300,10 @@ func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[strin
 			continue
 		}
 		all[name] = pool
+		if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+			cidrMatched[name] = pool
+			continue
+		}
 		if country == "" {
 			continue
 		}
@@ -309,10 +314,49 @@ func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[strin
 			}
 		}
 	}
+	if len(cidrMatched) > 0 {
+		return cidrMatched
+	}
 	if len(matched) > 0 {
 		return matched
 	}
 	return all
+}
+
+func sourceScopeKeyForPolicy(policy GSLBPolicy, source SourceContext) string {
+	for _, pool := range policy.Pools {
+		if !pool.Enabled {
+			continue
+		}
+		if cidr, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+			return "cidr:" + cidr
+		}
+	}
+	return sourceScopeKey(source)
+}
+
+func sourceIPMatchesCIDRList(sourceIP string, cidrs []string) (string, bool) {
+	ip := net.ParseIP(strings.TrimSpace(sourceIP))
+	if ip == nil {
+		return "", false
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+	}
+	for _, value := range cidrs {
+		cidr, ok := normalizeCIDR(value)
+		if !ok {
+			continue
+		}
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return cidr, true
+		}
+	}
+	return "", false
 }
 
 func isNodeSchedulable(node SnapshotNode) bool {

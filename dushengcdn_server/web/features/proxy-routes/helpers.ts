@@ -74,6 +74,7 @@ export function buildDefaultGSLBPolicy(
         name: nodePool.trim() || 'default',
         weight: 100,
         countries: [],
+        source_cidrs: [],
         enabled: true,
       },
     ],

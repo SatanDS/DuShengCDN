@@ -68,7 +68,7 @@ func selectGSLBDNSTargetsForSource(route *model.ProxyRoute, recordType string, s
 	selection := proxyRouteDNSTargetSelection{
 		TTL:      cloudflareDefaultRecordTTL,
 		GSLB:     true,
-		ScopeKey: gslbScopeKeyFromSource(source),
+		ScopeKey: defaultGSLBScopeKey,
 	}
 	if route == nil {
 		return selection, errors.New("proxy route is nil")
@@ -87,6 +87,7 @@ func selectGSLBDNSTargetsForSource(route *model.ProxyRoute, recordType string, s
 		return selection, err
 	}
 	selection.TTL = normalizeDNSTTL(policy.TTL)
+	selection.ScopeKey = gslbScopeKeyForPolicy(policy, source)
 
 	candidates, err := buildGSLBDNSTargetCandidates(recordType, policy, source)
 	if err != nil {
@@ -151,6 +152,18 @@ func gslbScopeKeyFromSource(source GSLBSourceContext) string {
 		return "country:" + country
 	}
 	return defaultGSLBScopeKey
+}
+
+func gslbScopeKeyForPolicy(policy ProxyRouteGSLBPolicy, source GSLBSourceContext) string {
+	for _, pool := range policy.Pools {
+		if !pool.Enabled {
+			continue
+		}
+		if cidr, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+			return "cidr:" + cidr
+		}
+	}
+	return gslbScopeKeyFromSource(source)
 }
 
 func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext) ([]gslbDNSTargetCandidate, error) {
@@ -234,6 +247,7 @@ func latestNodeMetricSnapshots() map[string]*model.NodeMetricSnapshot {
 func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) map[string]ProxyRouteGSLBPoolPolicy {
 	result := make(map[string]ProxyRouteGSLBPoolPolicy, len(pools))
 	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	matchedByCIDR := make(map[string]ProxyRouteGSLBPoolPolicy)
 	matchedByCountry := make(map[string]ProxyRouteGSLBPoolPolicy)
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
@@ -241,6 +255,10 @@ func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSource
 			continue
 		}
 		result[name] = pool
+		if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+			matchedByCIDR[name] = pool
+			continue
+		}
 		if country == "" {
 			continue
 		}
@@ -250,6 +268,9 @@ func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSource
 				break
 			}
 		}
+	}
+	if len(matchedByCIDR) > 0 {
+		return matchedByCIDR
 	}
 	if len(matchedByCountry) > 0 {
 		return matchedByCountry

@@ -1,6 +1,7 @@
 package dnsworker
 
 import (
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -171,6 +172,14 @@ func normalizeSourceScope(raw string) string {
 		country = strings.ToUpper(strings.TrimSpace(country))
 		if len(country) == 2 {
 			return "country:" + country
+		}
+	}
+	if ok && strings.EqualFold(strings.TrimSpace(prefix), "cidr") {
+		if cidr, valid := normalizeCIDR(country); valid {
+			return "cidr:" + cidr
+		}
+		if _, network, err := net.ParseCIDR(strings.TrimSpace(country)); err == nil {
+			return "cidr:" + network.String()
 		}
 	}
 	return value

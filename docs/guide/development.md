@@ -133,7 +133,7 @@ dig @127.0.0.1 -p 1053 example.com SOA
 dig @127.0.0.1 -p 1053 www.example.com A
 ```
 
-如果要测试按国家代码匹配 GSLB 节点池，可追加 `--geoip-database /path/to/GeoLite2-Country.mmdb`。未配置本地 GeoIP 库时，Worker 不调用外部 HTTP GeoIP API，来源作用域会回退为 `global`。
+如果要测试按国家代码匹配 GSLB 节点池，可追加 `--geoip-database /path/to/GeoLite2-Country.mmdb`。如果节点池配置了来源 CIDR，可直接用带 EDNS Client Subnet 的查询验证 `cidr:...` 作用域；未配置本地 GeoIP 库且未命中来源 CIDR 时，Worker 不调用外部 HTTP GeoIP API，来源作用域会回退为 `global`。
 
 ## 测试
 

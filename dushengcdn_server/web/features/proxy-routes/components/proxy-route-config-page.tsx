@@ -294,6 +294,7 @@ type GSLBPoolRow = {
   name: string;
   weight: string;
   countries: string;
+  sourceCidrs: string;
 };
 
 const dnsTTLHint =
@@ -337,6 +338,7 @@ function createGSLBPoolRow(
     name: '',
     weight: '100',
     countries: '',
+    sourceCidrs: '',
     ...values,
   };
 }
@@ -380,6 +382,7 @@ function buildGSLBPoolRows(route: ProxyRouteItem) {
           name: pool.name,
           weight: String(pool.weight || 100),
           countries: pool.countries?.join(',') || '',
+          sourceCidrs: pool.source_cidrs?.join('\n') || '',
         }),
       ),
   );
@@ -395,6 +398,10 @@ function parseGSLBPoolRows(rows: GSLBPoolRow[]) {
         .split(/[\s,，;；]+/)
         .map((item) => item.trim().toUpperCase())
         .filter((item) => /^[A-Z0-9]{2}$/.test(item)),
+      source_cidrs: row.sourceCidrs
+        .split(/[\s,，;；]+/)
+        .map((item) => item.trim())
+        .filter(Boolean),
       enabled: true,
     };
   });
@@ -1234,7 +1241,7 @@ export function DNSAutomationSection({
               <>
                 <ResourceField
                   label="节点池权重"
-                  hint="国家代码可用逗号、空格或分号分隔，例如 HK,TW。"
+                  hint="国家代码和来源 CIDR 可用逗号、空格或分号分隔；CIDR 会优先于国家代码匹配。"
                   container="div"
                 >
                   <Controller
@@ -1248,16 +1255,17 @@ export function DNSAutomationSection({
 
                       return (
                         <div className="space-y-3">
-                          <div className="hidden gap-3 pl-[56px] text-xs font-medium text-[var(--foreground-secondary)] md:grid md:grid-cols-[minmax(0,1fr)_120px_minmax(0,1fr)]">
+                          <div className="hidden gap-3 pl-[56px] text-xs font-medium text-[var(--foreground-secondary)] md:grid md:grid-cols-[minmax(0,1fr)_110px_minmax(0,0.9fr)_minmax(0,1.2fr)]">
                             <span>池名</span>
                             <span>权重</span>
                             <span>国家代码</span>
+                            <span>来源 CIDR</span>
                           </div>
 
                           {rows.map((row, index) => (
                             <div
                               key={row.id}
-                              className="grid gap-3 md:grid-cols-[44px_minmax(0,1fr)_120px_minmax(0,1fr)] md:items-start"
+                              className="grid gap-3 md:grid-cols-[44px_minmax(0,1fr)_110px_minmax(0,0.9fr)_minmax(0,1.2fr)] md:items-start"
                             >
                               <SecondaryButton
                                 type="button"
@@ -1328,6 +1336,22 @@ export function DNSAutomationSection({
                                   nextRows[index] = {
                                     ...row,
                                     countries: event.target.value,
+                                  };
+                                  updateRows(nextRows);
+                                }}
+                                className="h-11"
+                              />
+
+                              <ResourceInput
+                                value={row.sourceCidrs}
+                                aria-label={`节点池来源 CIDR ${index + 1}`}
+                                placeholder="203.0.113.0/24"
+                                disabled={!autoSyncEnabled}
+                                onChange={(event) => {
+                                  const nextRows = rows.slice();
+                                  nextRows[index] = {
+                                    ...row,
+                                    sourceCidrs: event.target.value,
                                   };
                                   updateRows(nextRows);
                                 }}

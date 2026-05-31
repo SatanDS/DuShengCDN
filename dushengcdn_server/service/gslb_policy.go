@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
 )
 
@@ -14,10 +15,11 @@ const (
 )
 
 type ProxyRouteGSLBPoolPolicy struct {
-	Name      string   `json:"name"`
-	Weight    int      `json:"weight"`
-	Countries []string `json:"countries"`
-	Enabled   bool     `json:"enabled"`
+	Name        string   `json:"name"`
+	Weight      int      `json:"weight"`
+	Countries   []string `json:"countries"`
+	SourceCIDRs []string `json:"source_cidrs"`
+	Enabled     bool     `json:"enabled"`
 }
 
 type ProxyRouteGSLBSourceIPProvider struct {
@@ -57,10 +59,11 @@ func defaultGSLBPolicy(nodePool string, targetCount int, scheduleMode string, tt
 		TTL:         normalizeDNSTTL(ttl),
 		Pools: []ProxyRouteGSLBPoolPolicy{
 			{
-				Name:      normalizeNodePoolName(nodePool),
-				Weight:    100,
-				Countries: []string{},
-				Enabled:   true,
+				Name:        normalizeNodePoolName(nodePool),
+				Weight:      100,
+				Countries:   []string{},
+				SourceCIDRs: []string{},
+				Enabled:     true,
 			},
 		},
 		SourceIP: ProxyRouteGSLBSourceIPProvider{
@@ -145,17 +148,23 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 			weight = 1000
 		}
 		countries := normalizeGSLBCountryList(pool.Countries)
+		sourceCIDRs, err := normalizeGSLBCIDRList(pool.SourceCIDRs)
+		if err != nil {
+			return nil, err
+		}
 		if existingIndex, ok := seen[name]; ok {
 			result[existingIndex].Weight = weight
-			result[existingIndex].Countries = countries
+			result[existingIndex].Countries = mergeGSLBStringLists(result[existingIndex].Countries, countries)
+			result[existingIndex].SourceCIDRs = mergeGSLBStringLists(result[existingIndex].SourceCIDRs, sourceCIDRs)
 			continue
 		}
 		seen[name] = len(result)
 		result = append(result, ProxyRouteGSLBPoolPolicy{
-			Name:      name,
-			Weight:    weight,
-			Countries: countries,
-			Enabled:   true,
+			Name:        name,
+			Weight:      weight,
+			Countries:   countries,
+			SourceCIDRs: sourceCIDRs,
+			Enabled:     true,
 		})
 	}
 	if len(result) == 0 {
@@ -177,6 +186,94 @@ func normalizeGSLBCountryList(values []string) []string {
 		}
 		seen[country] = struct{}{}
 		result = append(result, country)
+	}
+	return result
+}
+
+func normalizeGSLBCIDRList(values []string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		cidr, ok := normalizeGSLBCIDR(value)
+		if !ok {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			return nil, errors.New("gslb_policy.pools.source_cidrs contains invalid CIDR")
+		}
+		if _, exists := seen[cidr]; exists {
+			continue
+		}
+		seen[cidr] = struct{}{}
+		result = append(result, cidr)
+	}
+	return result, nil
+}
+
+func normalizeGSLBCIDR(value string) (string, bool) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return "", false
+	}
+	if strings.Contains(text, "/") {
+		ip, network, err := net.ParseCIDR(text)
+		if err != nil {
+			return "", false
+		}
+		if ipv4 := ip.To4(); ipv4 != nil {
+			ip = ipv4
+		}
+		network.IP = ip.Mask(network.Mask)
+		return network.String(), true
+	}
+	ip := net.ParseIP(text)
+	if ip == nil {
+		return "", false
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		network := net.IPNet{IP: ipv4, Mask: net.CIDRMask(32, 32)}
+		return network.String(), true
+	}
+	network := net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
+	return network.String(), true
+}
+
+func sourceIPMatchesCIDRList(sourceIP string, cidrs []string) (string, bool) {
+	ip := net.ParseIP(strings.TrimSpace(sourceIP))
+	if ip == nil {
+		return "", false
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+	}
+	for _, value := range cidrs {
+		cidr, ok := normalizeGSLBCIDR(value)
+		if !ok {
+			continue
+		}
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return cidr, true
+		}
+	}
+	return "", false
+}
+
+func mergeGSLBStringLists(left []string, right []string) []string {
+	result := append([]string(nil), left...)
+	seen := make(map[string]struct{}, len(left)+len(right))
+	for _, value := range result {
+		seen[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
 	return result
 }

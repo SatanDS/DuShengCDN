@@ -129,6 +129,51 @@ func TestResolveGSLBMatchesECSCountryPools(t *testing.T) {
 	}
 }
 
+func TestResolveGSLBMatchesSourceCIDRBeforeCountry(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           18,
+			Domains:      []string{"cdn.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Countries: []string{"HK"}, SourceCIDRs: []string{"198.51.100.0/24"}, Enabled: true},
+					{Name: "eu", Weight: 100, Countries: []string{"DE"}, SourceCIDRs: []string{"203.0.113.0/24"}, Enabled: true},
+				},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("hk-node", "hk", "8.8.4.4", 100, 1),
+		testNode("eu-node", "eu", "9.9.9.9", 100, 1),
+	}
+	server := testServer(t, snapshot)
+	server.Scheduler = NewScheduler()
+	server.Scheduler.now = func() time.Time { return time.Unix(100, 0) }
+
+	response := server.Resolve(testQuery("cdn.example.com", dns.TypeA, "203.0.113.10"), &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 53000})
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected CIDR route answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "9.9.9.9" {
+		t.Fatalf("expected EU target for source CIDR, got %s", got)
+	}
+	states := server.Scheduler.SnapshotStates(snapshot)
+	if len(states) != 1 || states[0].ScopeKey != "cidr:203.0.113.0/24" {
+		t.Fatalf("expected CIDR scoped debounce state, got %+v", states)
+	}
+}
+
 func TestSchedulerRestoresDebounceFromSnapshotState(t *testing.T) {
 	now := time.Unix(200, 0).UTC()
 	snapshot := baseSnapshot()

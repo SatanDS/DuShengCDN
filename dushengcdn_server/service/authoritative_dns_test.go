@@ -823,8 +823,8 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	policy := defaultGSLBPolicy("hk", 1, "weighted", 30)
 	policy.TargetCount = 2
 	policy.Pools = []ProxyRouteGSLBPoolPolicy{
-		{Name: "hk", Weight: 80, Countries: []string{"HK"}, Enabled: true},
-		{Name: "eu", Weight: 20, Countries: []string{"DE"}, Enabled: true},
+		{Name: "hk", Weight: 80, Countries: []string{"HK"}, SourceCIDRs: []string{"198.51.100.0/24"}, Enabled: true},
+		{Name: "eu", Weight: 20, Countries: []string{"DE"}, SourceCIDRs: []string{"203.0.113.0/24"}, Enabled: true},
 	}
 	policy.LoadThresholds.MaxOpenrestyConnections = 50
 	route := &model.ProxyRoute{
@@ -884,6 +884,23 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	}
 	assertSimulationPool(t, de.MatchedPools, "eu", true)
 	assertSimulationNode(t, de.Nodes, "node-eu", true, true, "可参与当前调度")
+
+	cidr, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+		Country:      "HK",
+		SourceIP:     "203.0.113.10",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB CIDR: %v", err)
+	}
+	if cidr.SourceScope != "cidr:203.0.113.0/24" || len(cidr.Targets) != 1 || cidr.Targets[0] != "1.1.1.1" {
+		t.Fatalf("expected CIDR pool target to override country, got %+v", cidr)
+	}
+	assertSimulationPool(t, cidr.MatchedPools, "eu", true)
+	assertSimulationPool(t, cidr.MatchedPools, "hk", false)
+	assertSimulationPoolReason(t, cidr.MatchedPools, "eu", "匹配来源网段 203.0.113.0/24")
 }
 
 func TestDNSWorkerProbeStateClassifiesFailedPartialAndStale(t *testing.T) {
@@ -965,6 +982,20 @@ func assertSimulationPool(t *testing.T, pools []DNSGSLBSimulationPoolView, name 
 			}
 			return
 		}
+	}
+	t.Fatalf("missing simulation pool %s in %+v", name, pools)
+}
+
+func assertSimulationPoolReason(t *testing.T, pools []DNSGSLBSimulationPoolView, name string, reason string) {
+	t.Helper()
+	for _, pool := range pools {
+		if pool.Name != name {
+			continue
+		}
+		if pool.Reason != reason {
+			t.Fatalf("unexpected simulation pool reason %s: %+v", name, pool)
+		}
+		return
 	}
 	t.Fatalf("missing simulation pool %s in %+v", name, pools)
 }

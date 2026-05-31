@@ -37,7 +37,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 | HTTPS/TLS | 托管证书与域名资产，并按域名绑定证书 |
 | 基础观测 | 聚合节点请求、缓存命中、回源错误、资源快照、健康事件和访问分析 |
 | 节点管理 | 节点状态、令牌体系、节点池、公网 IP 池、调度权重、部署与更新链路 |
-| 自动 DNS / GSLB 调度 | 支持 Cloudflare A/AAAA 多目标同步；可按单节点池健康状态和权重选点，也可启用站点级 GSLB 策略在多个节点池之间按权重、负载评分和防抖状态选择在线公网 IP |
+| 自动 DNS / GSLB 调度 | 支持 Cloudflare A/AAAA 多目标同步；可按单节点池健康状态和权重选点，也可启用站点级 GSLB 策略在多个节点池之间按来源 CIDR、国家代码、权重、负载评分和防抖状态选择在线公网 IP |
 | 缓存运行时操作 | 支持按网站向目标节点池下发缓存清理与基础预热指令 |
 | 管理端前端 | 基于 Next.js 的正式管理端 |
 | 认证源登录 | 支持以认证源形式配置 GitHub 与标准 OIDC 登录入口，并允许第三方账号绑定已有本地用户 |
@@ -52,7 +52,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 
 | 能力 | 说明 |
 | --- | --- |
-| 自建权威 DNS / 实时 GSLB 增强 | 已提供 DNS Worker MVP、管理端入口、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Zone 委派检查、迁移向导、Worker 查询延迟/可用性看板和 Server 侧按需 Worker UDP/TCP 探测；后续可补主动多地 RTT 探测，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md) |
+| 自建权威 DNS / 实时 GSLB 增强 | 已提供 DNS Worker MVP、管理端入口、来源 CIDR/国家代码调度、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Zone 委派检查、迁移向导、Worker 查询延迟/可用性看板和 Server 侧按需 Worker UDP/TCP 探测；后续可补主动多地 RTT 探测，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md) |
 
 ## 典型使用场景
 

@@ -126,7 +126,7 @@ ProxyRoute DNS 设置 -> Server 选择单节点池或 GSLB 多节点池在线公
 
 节点池、公网 IP 池、权重、调度开关和排空状态保存在 `nodes`。网站配置通过 `proxy_routes.node_pool` 绑定默认目标节点池；当启用 Cloudflare 自动 DNS 且记录内容交给系统自动选择时，Server 会按记录类型、节点健康状态、OpenResty 状态、节点池和调度模式选择一个或多个公网 IP，并同步到 Cloudflare。
 
-启用 `proxy_routes.gslb_enabled` 后，Server 改用 `proxy_routes.gslb_policy` 里的多节点池策略：先按来源国家代码匹配可用池（当前 Cloudflare DNS 同步模式使用全局默认上下文，来源接口为后续实时权威 DNS 预留），再按池权重、节点权重、最新 `node_metric_snapshots` 负载评分和阈值筛选目标。最近一次选择会写入 `gslb_scheduling_states`，在冷却期内旧目标仍健康时保持不变，避免 DNS 记录来回抖动。
+启用 `proxy_routes.gslb_enabled` 后，Server 改用 `proxy_routes.gslb_policy` 里的多节点池策略：先按来源 CIDR 匹配可用池，再按来源国家代码匹配可用池（Cloudflare DNS 同步模式默认使用全局上下文；实时来源主要由权威 DNS Worker 提供），最后按池权重、节点权重、最新 `node_metric_snapshots` 负载评分和阈值筛选目标。最近一次选择会写入 `gslb_scheduling_states`，在冷却期内旧目标仍健康时保持不变，避免 DNS 记录来回抖动。
 
 ### 权威 DNS 实时调度流
 
@@ -134,7 +134,7 @@ ProxyRoute DNS 设置 -> Server 选择单节点池或 GSLB 多节点池在线公
 DNS Query -> DNS Worker 匹配 Zone/站点 -> 读取本地调度快照 -> 复用 GSLB 选点 -> 返回 A/AAAA/静态记录
 ```
 
-自建权威 DNS 模式下，DNS Worker 不在查询路径访问数据库，也不向节点发命令。它从 Server 拉取只读快照，快照包含启用 Zone、静态记录、网站域名、GSLB 策略、节点公网 IP、节点健康摘要和负载摘要。查询时优先使用 EDNS Client Subnet 识别用户来源，未提供时使用递归解析器 IP；来源会被解析成 `GSLBSourceContext`，用于按国家代码匹配节点池。
+自建权威 DNS 模式下，DNS Worker 不在查询路径访问数据库，也不向节点发命令。它从 Server 拉取只读快照，快照包含启用 Zone、静态记录、网站域名、GSLB 策略、节点公网 IP、节点健康摘要和负载摘要。查询时优先使用 EDNS Client Subnet 识别用户来源，未提供时使用递归解析器 IP；来源会被解析成 `GSLBSourceContext`，用于先按来源 CIDR、再按国家代码匹配节点池。
 
 DNS Worker 的防抖状态按 `route_id + record_type + source_scope` 保存，避免不同来源地区互相覆盖选择结果。查询聚合按窗口批量上报 Server，用于展示 QPS、rcode、返回目标和错误原因；默认不保存完整原始查询日志。
 

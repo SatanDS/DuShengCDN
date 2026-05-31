@@ -4,7 +4,7 @@
 
 本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
 
-当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。DNS Worker 查询面已经提供按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，超限查询返回 `REFUSED`，超大 UDP 响应设置 TC 位让递归解析器回退 TCP。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、来源作用域分布、GSLB 调度状态、GSLB 调度模拟、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、`country:HK` / `country:DE` / `global` 等来源作用域、当前实际目标、期望目标、防抖冷却状态、注册商 NS 匹配状态、Glue 提示、当前快照按来源模拟返回目标以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态。
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。DNS Worker 查询面已经提供按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，超限查询返回 `REFUSED`，超大 UDP 响应设置 TC 位让递归解析器回退 TCP。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、来源作用域分布、GSLB 调度状态、GSLB 调度模拟、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、`cidr:203.0.113.0/24` / `country:HK` / `country:DE` / `global` 等来源作用域、当前实际目标、期望目标、防抖冷却状态、注册商 NS 匹配状态、Glue 提示、当前快照按来源模拟返回目标以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态。
 
 ## 目标能力
 
@@ -88,7 +88,7 @@ DNS Worker 不应该在查询路径里访问数据库，也不应该在每个查
 3. 对 `A` / `AAAA` 查询：
    * 若站点启用 GSLB，读取 `proxy_routes.gslb_policy`。
    * 根据来源 IP 或 ECS 解析国家代码，生成 `GSLBSourceContext`。
-   * 按国家代码匹配节点池；未命中时回退到全部启用池。
+   * 先按节点池策略中的来源 CIDR 匹配，再按国家代码匹配节点池；未命中时回退到全部启用池。
    * 按节点健康、OpenResty 状态、排空状态、调度开关和公网 IP 类型筛选候选。
    * 按池权重、节点权重、连接数、CPU、内存和策略模式排序。
    * 按 `target_count` 返回一个或多个 IP。
@@ -101,7 +101,7 @@ DNS Worker 不应该在查询路径里访问数据库，也不应该在每个查
 route_id + record_type + source_scope
 ```
 
-`source_scope` 第一阶段建议使用国家代码，例如 `country:HK`、`country:DE`、`global`。这样 HK 来源和 EU 来源可以各自保持冷却窗口，避免互相覆盖。
+`source_scope` 支持 `global`、国家代码和来源 CIDR，例如 `country:HK`、`country:DE`、`cidr:203.0.113.0/24`。这样不同来源网段和地区可以各自保持冷却窗口，避免互相覆盖。
 
 ## 数据模型规划
 
@@ -219,7 +219,7 @@ TTL 规则：
 * DNS Worker 从 Server 拉取只读调度快照，写入本地缓存并在内存中构建 Zone、记录和站点索引。
 * 支持 `SOA`、`NS`、静态记录和网站 `A`/`AAAA` 动态 GSLB 回答。
 * 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、节点权重、OpenResty 健康、排空、调度开关和负载阈值选点。
-* 支持 EDNS Client Subnet 来源识别；配置本地 MaxMind Country MMDB 后可按国家代码命中节点池，否则回退到 `global` 作用域。
+* 支持 EDNS Client Subnet 来源识别；节点池策略可按来源 CIDR 优先命中，也可在配置本地 MaxMind Country MMDB 后按国家代码命中节点池，否则回退到 `global` 作用域。
 * 防抖状态按 `route_id + record_type + source_scope` 保存在 Worker 内存中。
 * 支持按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，避免异常递归解析器或放大流量压垮查询面。
 * 聚合查询指标按窗口批量 heartbeat 上报；上报失败时保留在内存中等待下次重试。
@@ -236,7 +236,7 @@ TTL 规则：
 
 * 可选 TSIG/AXFR 白名单。
 * 可选 DNSSEC 设计。
-* 更细粒度来源作用域，例如 ASN、省份或自定义 CIDR。
+* 后续更细粒度来源作用域，例如 ASN、省份等。
 * 已提供基于心跳和真实 DNS 查询聚合的 Worker 查询延迟、错误率和可用性看板。
 * 已提供 Server 侧按需 Worker UDP/TCP 53 探测，验证单个 NS 的解析可达性。
 * 后续可增加主动多地探测 Worker NS 的公网 RTT、丢包和解析可达性，作为独立多探测点链路补充现有查询面观测。
