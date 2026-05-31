@@ -192,6 +192,86 @@ func TestAuthoritativeDNSProxyRouteRequiresZoneMatch(t *testing.T) {
 	}
 }
 
+func TestSwitchProxyRouteToAuthoritativeDNSRequiresReadyWorker(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:           "edge-site",
+		Domain:             "www.example.com",
+		Domains:            `["www.example.com"]`,
+		OriginURL:          "https://origin.internal",
+		Upstreams:          `["https://origin.internal"]`,
+		NodePool:           "hk",
+		DNSAutoSync:        true,
+		DNSAccountID:       ptrUint(42),
+		DNSZoneID:          "cloudflare-zone",
+		DNSRecordType:      "A",
+		DNSRecordContent:   "203.0.113.10",
+		DNSRecordIDs:       `{"www.example.com|203.0.113.10":"record-id"}`,
+		DNSTargetCount:     2,
+		DNSScheduleMode:    "weighted",
+		DNSTTL:             120,
+		DNSProviderMode:    DNSProviderModeCloudflare,
+		CloudflareProxied:  true,
+		DDOSProtectionMode: DDOSProtectionModeAuto,
+		GSLBEnabled:        true,
+		GSLBPolicy:         mustJSON(t, defaultGSLBPolicy("hk", 2, "weighted", 120)),
+		Enabled:            true,
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	if _, err := SwitchProxyRouteToAuthoritativeDNS(route.ID, AuthoritativeDNSMigrationInput{DNSZoneIDRef: &zone.ID}); err == nil {
+		t.Fatal("expected switch without ready DNS Worker to fail")
+	}
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1", PublicAddress: "ns1.example.net"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	checkedAt := time.Now().UTC()
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	workerModel.Status = dnsWorkerStatusOnline
+	workerModel.LastSeenAt = &checkedAt
+	workerModel.LastProbeAt = &checkedAt
+	workerModel.LastProbeQuery = "example.com. SOA"
+	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
+	if err := workerModel.Update(); err != nil {
+		t.Fatalf("update worker readiness: %v", err)
+	}
+
+	view, err := SwitchProxyRouteToAuthoritativeDNS(route.ID, AuthoritativeDNSMigrationInput{DNSZoneIDRef: &zone.ID})
+	if err != nil {
+		t.Fatalf("SwitchProxyRouteToAuthoritativeDNS: %v", err)
+	}
+	if view.DNSProviderMode != DNSProviderModeAuthoritative || view.DNSZoneIDRef == nil || *view.DNSZoneIDRef != zone.ID {
+		t.Fatalf("expected authoritative DNS mode after switch: %+v", view)
+	}
+	if view.DNSAutoSync || view.DNSAccountID != nil || view.CloudflareProxied || view.DDOSProtectionMode != DDOSProtectionModeOff {
+		t.Fatalf("expected Cloudflare-only DNS settings to be disabled: %+v", view)
+	}
+	if !view.DNSAutoTarget || view.DNSRecordContent != "" || view.DNSZoneID != "" || view.DNSRecordType != "A" {
+		t.Fatalf("unexpected DNS target settings after switch: %+v", view)
+	}
+	if len(view.DNSRecordIDs) != 0 {
+		t.Fatalf("expected Cloudflare record IDs to be cleared: %+v", view.DNSRecordIDs)
+	}
+	if view.GSLBEnabled != route.GSLBEnabled || view.DNSTargetCount != 2 || view.DNSScheduleMode != "weighted" || view.DNSTTL != 120 {
+		t.Fatalf("expected existing GSLB scheduling settings to be preserved: %+v", view)
+	}
+	if view.DNSLastSyncStatus != DNSRecordSyncStatusSuccess || !strings.Contains(view.DNSLastSyncMessage, "自建权威 DNS") || view.DNSLastSyncedAt == nil {
+		t.Fatalf("expected migration status message: %+v", view)
+	}
+}
+
 func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -963,6 +1043,10 @@ func mustJSON(t *testing.T, value any) string {
 		t.Fatalf("marshal json: %v", err)
 	}
 	return string(raw)
+}
+
+func ptrUint(value uint) *uint {
+	return &value
 }
 
 func assertCounter(t *testing.T, counters []DNSObservabilityCounterView, key string, label string, count int64) {

@@ -521,6 +521,72 @@ describe('Authoritative DNS page', () => {
           );
         }
 
+        if (
+          url.includes('/proxy-routes/91/dns/switch-authoritative') &&
+          method === 'POST'
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  id: 91,
+                  site_name: 'edge-site',
+                  domain: 'www.example.com',
+                  domains: ['www.example.com'],
+                  primary_domain: 'www.example.com',
+                  domain_count: 1,
+                  enabled: true,
+                  node_pool: 'hk',
+                  dns_auto_sync: false,
+                  dns_record_type: 'A',
+                  dns_provider_mode: 'authoritative',
+                  dns_zone_id_ref: 1,
+                  gslb_enabled: true,
+                  gslb_policy: {
+                    mode: 'cloudflare_dns',
+                    strategy: 'weighted',
+                    pools: [
+                      {
+                        name: 'hk',
+                        weight: 80,
+                        countries: ['HK'],
+                        enabled: true,
+                      },
+                      {
+                        name: 'eu',
+                        weight: 20,
+                        countries: ['DE'],
+                        enabled: true,
+                      },
+                    ],
+                    target_count: 1,
+                    ttl: 30,
+                    source_ip: {
+                      provider: 'none',
+                      api_url: '',
+                      api_token: '',
+                    },
+                    load_thresholds: {
+                      max_openresty_connections: 0,
+                      max_cpu_percent: 0,
+                      max_memory_percent: 0,
+                    },
+                    debounce: {
+                      cooldown_seconds: 60,
+                      unhealthy_threshold: 1,
+                      recovery_threshold: 1,
+                    },
+                  },
+                  created_at: '2026-05-31T08:00:00Z',
+                  updated_at: '2026-05-31T08:30:00Z',
+                },
+              }),
+            ),
+          );
+        }
+
         if (url.includes('/proxy-routes/')) {
           return Promise.resolve(
             new Response(
@@ -700,6 +766,16 @@ describe('Authoritative DNS page', () => {
       'href',
       '/proxy-route/detail?id=91',
     );
+    await user.click(screen.getByRole('button', { name: '一键切换' }));
+    const switchDialog = await screen.findByRole('dialog', {
+      name: '切换到权威 DNS',
+    });
+    await user.click(within(switchDialog).getByRole('button', { name: '切换' }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/已切换“edge-site”到自建权威 DNS/),
+      ).toBeInTheDocument();
+    });
 
     await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));
     await waitFor(() => {

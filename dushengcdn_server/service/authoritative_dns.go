@@ -168,6 +168,10 @@ type DNSGSLBSimulationInput struct {
 	Fresh        *bool  `json:"fresh"`
 }
 
+type AuthoritativeDNSMigrationInput struct {
+	DNSZoneIDRef *uint `json:"dns_zone_id_ref"`
+}
+
 type DNSGSLBSimulationView struct {
 	ProxyRouteID    uint                        `json:"proxy_route_id"`
 	SiteName        string                      `json:"site_name"`
@@ -629,6 +633,79 @@ func ListAuthoritativeDNSWorkers() ([]DNSWorkerView, error) {
 		views = append(views, buildDNSWorkerView(worker, false))
 	}
 	return views, nil
+}
+
+func SwitchProxyRouteToAuthoritativeDNS(id uint, input AuthoritativeDNSMigrationInput) (*ProxyRouteView, error) {
+	route, err := model.GetProxyRouteByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if route.DNSProviderMode == DNSProviderModeAuthoritative {
+		return buildProxyRouteView(route)
+	}
+
+	domains, err := decodeStoredDomains(route.Domains, route.Domain)
+	if err != nil {
+		return nil, err
+	}
+	zone, err := resolveAuthoritativeMigrationZone(input.DNSZoneIDRef, domains)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateAuthoritativeMigrationWorkers(); err != nil {
+		return nil, err
+	}
+	recordType := normalizeDNSRecordType(route.DNSRecordType)
+	if recordType != "A" && recordType != "AAAA" {
+		return nil, errors.New("authoritative DNS migration only supports A/AAAA dynamic records")
+	}
+	if route.GSLBEnabled {
+		if _, err := decodeStoredGSLBPolicy(route.GSLBPolicy); err != nil {
+			return nil, err
+		}
+	}
+
+	now := time.Now()
+	zoneID := zone.ID
+	route.DNSProviderMode = DNSProviderModeAuthoritative
+	route.DNSZoneIDRef = &zoneID
+	route.DNSAutoSync = false
+	route.DNSAccountID = nil
+	route.DNSZoneID = ""
+	route.DNSRecordType = recordType
+	route.DNSRecordContent = ""
+	route.DNSRecordIDs = "{}"
+	route.DNSAutoTarget = true
+	route.DNSTargetCount = normalizeDNSTargetCount(route.DNSTargetCount)
+	route.DNSScheduleMode = normalizeDNSScheduleMode(route.DNSScheduleMode)
+	route.DNSTTL = normalizeDNSTTL(route.DNSTTL)
+	route.CloudflareProxied = false
+	route.DDOSProtectionMode = DDOSProtectionModeOff
+	route.DNSLastSyncStatus = DNSRecordSyncStatusSuccess
+	route.DNSLastSyncMessage = fmt.Sprintf("已切换到自建权威 DNS Zone %s；请在注册商确认 NS 委派。", zone.Name)
+	route.DNSLastSyncedAt = &now
+	if err := model.DB.Model(route).Select(
+		"dns_provider_mode",
+		"dns_zone_id_ref",
+		"dns_auto_sync",
+		"dns_account_id",
+		"dns_zone_id",
+		"dns_record_type",
+		"dns_record_content",
+		"dns_record_ids",
+		"dns_auto_target",
+		"dns_target_count",
+		"dns_schedule_mode",
+		"dns_ttl",
+		"cloudflare_proxied",
+		"ddos_protection_mode",
+		"dns_last_sync_status",
+		"dns_last_sync_message",
+		"dns_last_synced_at",
+	).Updates(route).Error; err != nil {
+		return nil, err
+	}
+	return buildProxyRouteView(route)
 }
 
 func ListAuthoritativeDNSGSLBSchedulingStates() (*DNSGSLBSchedulingStatesView, error) {
@@ -1573,6 +1650,82 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		view.Token = worker.Token
 	}
 	return view
+}
+
+func resolveAuthoritativeMigrationZone(zoneIDRef *uint, domains []string) (*model.DNSZone, error) {
+	if len(domains) == 0 {
+		return nil, errors.New("proxy route has no domains")
+	}
+	if zoneIDRef != nil && *zoneIDRef > 0 {
+		zone, err := model.GetDNSZoneByID(*zoneIDRef)
+		if err != nil {
+			return nil, errors.New("selected DNS zone does not exist")
+		}
+		if !zone.Enabled {
+			return nil, errors.New("selected DNS zone is disabled")
+		}
+		for _, domain := range domains {
+			if !domainBelongsToZone(domain, zone.Name) {
+				return nil, fmt.Errorf("domain %s is not under DNS zone %s", domain, zone.Name)
+			}
+		}
+		return zone, nil
+	}
+
+	zones, err := model.ListDNSZones()
+	if err != nil {
+		return nil, err
+	}
+	var best *model.DNSZone
+	for _, zone := range zones {
+		if zone == nil || !zone.Enabled {
+			continue
+		}
+		matched := true
+		for _, domain := range domains {
+			if !domainBelongsToZone(domain, zone.Name) {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if best == nil || len(normalizeDNSRecordName(zone.Name)) > len(normalizeDNSRecordName(best.Name)) {
+			best = zone
+		}
+	}
+	if best == nil {
+		return nil, errors.New("no enabled DNS zone covers all route domains")
+	}
+	return best, nil
+}
+
+func validateAuthoritativeMigrationWorkers() error {
+	workers, err := model.ListDNSWorkers()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	onlineCount := 0
+	healthyProbeCount := 0
+	for _, worker := range workers {
+		if worker == nil || normalizeDNSWorkerStatus(worker.Status) != dnsWorkerStatusOnline {
+			continue
+		}
+		onlineCount++
+		probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, decodeDNSWorkerProbeResults(worker.LastProbeResult))
+		if probeState.healthy {
+			healthyProbeCount++
+		}
+	}
+	if onlineCount == 0 {
+		return errors.New("no online DNS Worker is available")
+	}
+	if healthyProbeCount == 0 {
+		return errors.New("no online DNS Worker has passed recent public UDP/TCP 53 probe")
+	}
+	return nil
 }
 
 func buildDNSGSLBSchedulingStateView(state *model.GSLBSchedulingState, route *model.ProxyRoute) DNSGSLBSchedulingStateView {

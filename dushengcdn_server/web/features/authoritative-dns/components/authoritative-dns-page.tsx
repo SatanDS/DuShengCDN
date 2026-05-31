@@ -56,7 +56,10 @@ import type {
   DNSZoneItem,
   DNSZoneMutationPayload,
 } from '@/features/authoritative-dns/types';
-import { getProxyRoutes } from '@/features/proxy-routes/api/proxy-routes';
+import {
+  getProxyRoutes,
+  switchProxyRouteToAuthoritativeDNS,
+} from '@/features/proxy-routes/api/proxy-routes';
 import { getErrorMessage } from '@/features/proxy-routes/helpers';
 import type { ProxyRouteItem } from '@/features/proxy-routes/types';
 import {
@@ -591,6 +594,33 @@ export function AuthoritativeDNSPage() {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
     },
   });
+  const switchAuthoritativeMutation = useMutation({
+    mutationFn: ({
+      route,
+      zone,
+    }: {
+      route: ProxyRouteItem;
+      zone: DNSZoneItem;
+    }) =>
+      switchProxyRouteToAuthoritativeDNS(route.id, {
+        dns_zone_id_ref: zone.id,
+      }),
+    onSuccess: async (updatedRoute) => {
+      setFeedback({
+        tone: 'success',
+        message: `已切换“${getRouteDisplayName(updatedRoute)}”到自建权威 DNS。`,
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'scheduling-states'],
+        }),
+      ]);
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
 
   const openCreateZone = () => {
     setEditingZone(null);
@@ -656,6 +686,21 @@ export function AuthoritativeDNSPage() {
   const handleSimulateGSLB = (payload: DNSGSLBSimulationPayload) => {
     setFeedback(null);
     simulateGSLBMutation.mutate(payload);
+  };
+
+  const handleSwitchAuthoritative = async (
+    route: ProxyRouteItem,
+    zone: DNSZoneItem,
+  ) => {
+    const confirmed = await confirmDialog({
+      title: '切换到权威 DNS',
+      message: `确认把“${getRouteDisplayName(route)}”切换到自建权威 DNS，并绑定 Zone“${zone.name}”吗？切换后请到注册商确认 NS 委派。`,
+      confirmLabel: '切换',
+    });
+    if (confirmed) {
+      setFeedback(null);
+      switchAuthoritativeMutation.mutate({ route, zone });
+    }
   };
 
   if (zonesQuery.isLoading || workersQuery.isLoading) {
@@ -873,6 +918,12 @@ export function AuthoritativeDNSPage() {
                 ? getErrorMessage(proxyRoutesQuery.error)
                 : ''
             }
+            switchingRouteId={
+              switchAuthoritativeMutation.isPending
+                ? switchAuthoritativeMutation.variables.route.id
+                : null
+            }
+            onSwitchAuthoritative={handleSwitchAuthoritative}
           />
         )}
       </div>
@@ -2013,12 +2064,16 @@ function DNSMigrationGuidePanel({
   workers,
   routesLoading,
   routesError,
+  switchingRouteId,
+  onSwitchAuthoritative,
 }: {
   routes: ProxyRouteItem[];
   zones: DNSZoneItem[];
   workers: DNSWorkerItem[];
   routesLoading: boolean;
   routesError: string;
+  switchingRouteId: number | null;
+  onSwitchAuthoritative: (route: ProxyRouteItem, zone: DNSZoneItem) => void;
 }) {
   const enabledZones = zones.filter((zone) => zone.enabled);
   const onlineWorkers = workers.filter((worker) => worker.status === 'online');
@@ -2183,12 +2238,23 @@ function DNSMigrationGuidePanel({
                         />
                       ) : null}
                     </div>
-                    <a
-                      href={getRouteDetailHref(route)}
-                      className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
-                    >
-                      去网站详情
-                    </a>
+                    <div className="flex shrink-0 flex-wrap gap-2 md:justify-end">
+                      {matchingZone ? (
+                        <PrimaryButton
+                          type="button"
+                          disabled={!ready || switchingRouteId === route.id}
+                          onClick={() => onSwitchAuthoritative(route, matchingZone)}
+                        >
+                          {switchingRouteId === route.id ? '切换中...' : '一键切换'}
+                        </PrimaryButton>
+                      ) : null}
+                      <a
+                        href={getRouteDetailHref(route)}
+                        className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
+                      >
+                        去网站详情
+                      </a>
+                    </div>
                   </div>
                 </div>
               );

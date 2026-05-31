@@ -92,6 +92,7 @@ func SetApiRouter(router *gin.Engine) {
 			proxyRoute.GET("/:id", controller.GetProxyRoute)
 			proxyRoute.POST("/", controller.CreateProxyRoute)
 			proxyRoute.POST("/:id/update", controller.UpdateProxyRoute)
+			proxyRoute.POST("/:id/dns/switch-authoritative", controller.SwitchProxyRouteToAuthoritativeDNS)
 			proxyRoute.POST("/:id/delete", controller.DeleteProxyRoute)
 			proxyRoute.POST("/:id/cache/purge", controller.PurgeProxyRouteCache)
 			proxyRoute.POST("/:id/cache/warm", controller.WarmProxyRouteCache)

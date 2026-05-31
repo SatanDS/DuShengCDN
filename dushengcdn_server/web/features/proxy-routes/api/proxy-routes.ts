@@ -31,6 +31,19 @@ export function updateProxyRoute(id: number, payload: ProxyRouteMutationPayload)
   });
 }
 
+export function switchProxyRouteToAuthoritativeDNS(
+  id: number,
+  payload: { dns_zone_id_ref?: number | null },
+) {
+  return apiRequest<ProxyRouteItem>(
+    `/proxy-routes/${id}/dns/switch-authoritative`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export function deleteProxyRoute(id: number) {
   return apiRequest<void>(`/proxy-routes/${id}/delete`, {
     method: 'POST',

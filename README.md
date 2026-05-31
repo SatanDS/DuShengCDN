@@ -184,7 +184,7 @@ proxy_set_header Connection "upgrade";
 * 自建权威 DNS 模式下，`weighted` / `load_aware` 会按来源 IP/ECS 生成稳定分流桶，所以 HK 池权重 80、EU 池权重 20 这类配置会在不同来源桶之间形成接近 8:2 的 DNS 答案分布；Cloudflare 模式只同步一组静态记录，不具备逐查询来源分流。
 * GSLB 会记录最近一次实际目标和期望目标，旧目标仍健康且冷却时间未到时不会反复切换。
 * Cloudflare DNS 模式不是逐请求实时调度，而是后台巡检重算并同步记录；实际流量还会受到 DNS TTL 与递归解析缓存影响。
-* 自建权威 DNS 模式需要把域名 NS 委派到 DuShengCDN DNS Worker；Worker 会在查询时实时执行 GSLB 调度。左侧「权威 DNS」的「迁移向导」可检查 Cloudflare 模式网站是否已有匹配 Zone、在线 Worker 和 GSLB 配置，「GSLB 调度模拟」可按来源 IP 和国家代码预演当前快照返回目标并解释节点候选/跳过原因，Zone 详情可检查公网 NS 是否匹配，并在 Zone 内 NS 需要 Glue/主机记录时提示。未配置本地 GeoIP 库时，国家代码匹配会回退到 `global` 作用域，详见 `docs/design/authoritative-dns-gslb.md`。
+* 自建权威 DNS 模式需要把域名 NS 委派到 DuShengCDN DNS Worker；Worker 会在查询时实时执行 GSLB 调度。左侧「权威 DNS」的「迁移向导」可检查 Cloudflare 模式网站是否已有匹配 Zone、在线 Worker、公网 UDP/TCP 53 探测和 GSLB 配置，满足条件时可一键切换到自建权威 DNS；「GSLB 调度模拟」可按来源 IP 和国家代码预演当前快照返回目标并解释节点候选/跳过原因，Zone 详情可检查公网 NS 是否匹配，并在 Zone 内 NS 需要 Glue/主机记录时提示。未配置本地 GeoIP 库时，国家代码匹配会回退到 `global` 作用域，详见 `docs/design/authoritative-dns-gslb.md`。
 * 手动填写的 DNS 记录内容不会被后台覆盖；A/AAAA 可用逗号、空格或换行填写多个目标。
 * 多域名规则默认会同步规则里的所有域名；单域名规则可在详情页手动指定记录名称。
 * 删除规则时，如果该规则曾由 DuShengCDN 创建 DNS 记录，会尝试同步删除对应 Cloudflare DNS 记录。
@@ -258,7 +258,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 ### 4. 可选：部署自建权威 DNS Worker
 
-如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker Token，然后打开「迁移向导」检查 Cloudflare 模式网站的 Zone、Worker 和 GSLB 准备状态，再把域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里切换到自建权威 DNS。完成注册商 NS 配置后，可以在 Zone 详情点击「检查委派」确认公网 NS 是否匹配；如果使用 `ns1.example.com` 这类 Zone 内 NS，还需要在注册商配置 Glue/主机记录。
+如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker Token，然后打开「迁移向导」检查 Cloudflare 模式网站的 Zone、Worker、公网探测和 GSLB 准备状态；满足条件时可点击「一键切换」，也可以在网站详情「自动 DNS」里手动切换到自建权威 DNS。之后把域名 NS 委派到 DNS Worker。完成注册商 NS 配置后，可以在 Zone 详情点击「检查委派」确认公网 NS 是否匹配；如果使用 `ns1.example.com` 这类 Zone 内 NS，还需要在注册商配置 Glue/主机记录。
 
 推荐使用安装脚本部署 DNS Worker：
 
