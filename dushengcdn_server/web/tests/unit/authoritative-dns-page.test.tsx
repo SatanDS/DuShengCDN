@@ -185,6 +185,9 @@ describe('Authoritative DNS page', () => {
                     checked_at: '2026-05-31T08:10:00Z',
                     total_worker_count: 2,
                     online_worker_count: 2,
+                    probe_healthy_count: 1,
+                    probe_checked_count: 1,
+                    probe_healthy_percent: 100,
                     availability_percent: 100,
                     average_latency_ms: 12.5,
                     max_latency_ms: 48,
@@ -206,6 +209,10 @@ describe('Authoritative DNS page', () => {
                         snapshot_stale: false,
                         last_error: '',
                         last_probe_at: '2026-05-31T08:12:00Z',
+                        probe_status: 'healthy',
+                        probe_healthy: true,
+                        probe_age_seconds: 120,
+                        probe_message: 'UDP/TCP 53 均可达',
                         last_probe_results: [
                           {
                             network: 'UDP',
@@ -239,6 +246,10 @@ describe('Authoritative DNS page', () => {
                         snapshot_stale: false,
                         last_error: '',
                         last_probe_at: null,
+                        probe_status: 'unknown',
+                        probe_healthy: false,
+                        probe_age_seconds: 0,
+                        probe_message: '尚未执行公网 UDP/TCP 53 探测',
                         last_probe_results: [],
                       },
                     ],
@@ -355,6 +366,10 @@ describe('Authoritative DNS page', () => {
                   last_probe_at: null,
                   last_probe_query: '',
                   last_probe_results: [],
+                  probe_status: 'unknown',
+                  probe_healthy: false,
+                  probe_age_seconds: 0,
+                  probe_message: '尚未执行公网 UDP/TCP 53 探测',
                   created_at: '2026-05-31T08:00:00Z',
                   updated_at: '2026-05-31T08:00:00Z',
                 },
@@ -383,6 +398,10 @@ describe('Authoritative DNS page', () => {
                     last_error: '',
                     last_probe_at: '2026-05-31T08:12:00Z',
                     last_probe_query: 'example.com. SOA',
+                    probe_status: 'healthy',
+                    probe_healthy: true,
+                    probe_age_seconds: 120,
+                    probe_message: 'UDP/TCP 53 均可达',
                     last_probe_results: [
                       {
                         network: 'UDP',
@@ -528,6 +547,8 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('edge-site').length).toBeGreaterThan(0);
     expect(screen.getByText('匹配 Zone example.com')).toBeInTheDocument();
     expect(screen.getAllByText('在线 Worker').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('公网可达').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('公网可达 Worker').length).toBeGreaterThan(0);
     expect(screen.getAllByText('1 / 1').length).toBeGreaterThan(0);
     expect(
       screen.getByRole('link', { name: '去网站详情' }),

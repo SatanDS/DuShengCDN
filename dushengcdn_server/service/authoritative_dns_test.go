@@ -545,14 +545,50 @@ func TestProbeAuthoritativeDNSWorkerChecksUDPAndTCP(t *testing.T) {
 	if len(workers[0].LastProbeResults) != 2 || !workers[0].LastProbeResults[0].Reachable {
 		t.Fatalf("unexpected persisted probe results: %+v", workers[0].LastProbeResults)
 	}
+	if !workers[0].ProbeHealthy || workers[0].ProbeStatus != dnsWorkerProbeHealthy || workers[0].ProbeMessage == "" {
+		t.Fatalf("unexpected persisted probe health: %+v", workers[0])
+	}
 	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
 	if err != nil {
 		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
 	}
 	if len(summary.WorkerHealth.Workers) != 1 ||
 		summary.WorkerHealth.Workers[0].LastProbeAt == nil ||
-		len(summary.WorkerHealth.Workers[0].LastProbeResults) != 2 {
+		len(summary.WorkerHealth.Workers[0].LastProbeResults) != 2 ||
+		!summary.WorkerHealth.Workers[0].ProbeHealthy ||
+		summary.WorkerHealth.ProbeHealthyCount != 1 ||
+		summary.WorkerHealth.ProbeCheckedCount != 1 {
 		t.Fatalf("unexpected worker health probe state: %+v", summary.WorkerHealth.Workers)
+	}
+}
+
+func TestDNSWorkerProbeStateClassifiesFailedPartialAndStale(t *testing.T) {
+	now := time.Date(2026, 5, 31, 8, 0, 0, 0, time.UTC)
+
+	failedAt := now.Add(-time.Hour)
+	failed := evaluateDNSWorkerProbeState(now, &failedAt, []DNSWorkerProbeResultView{
+		{Network: "UDP", Reachable: false},
+		{Network: "TCP", Reachable: false},
+	})
+	if failed.status != dnsWorkerProbeFailed || failed.healthy {
+		t.Fatalf("unexpected failed probe state: %+v", failed)
+	}
+
+	partial := evaluateDNSWorkerProbeState(now, &failedAt, []DNSWorkerProbeResultView{
+		{Network: "UDP", Reachable: true},
+		{Network: "TCP", Reachable: false},
+	})
+	if partial.status != dnsWorkerProbePartial || partial.healthy {
+		t.Fatalf("unexpected partial probe state: %+v", partial)
+	}
+
+	staleAt := now.Add(-(defaultDNSWorkerProbeMaxAge + time.Second))
+	stale := evaluateDNSWorkerProbeState(now, &staleAt, []DNSWorkerProbeResultView{
+		{Network: "UDP", Reachable: true},
+		{Network: "TCP", Reachable: true},
+	})
+	if stale.status != dnsWorkerProbeStale || stale.healthy {
+		t.Fatalf("unexpected stale probe state: %+v", stale)
 	}
 }
 

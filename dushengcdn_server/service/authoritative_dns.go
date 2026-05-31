@@ -34,9 +34,15 @@ const (
 	dnsSnapshotStale             = "stale"
 	dnsSnapshotNoOnline          = "no_online_workers"
 	dnsSnapshotUnknown           = "unknown"
+	dnsWorkerProbeHealthy        = "healthy"
+	dnsWorkerProbePartial        = "partial"
+	dnsWorkerProbeFailed         = "failed"
+	dnsWorkerProbeStale          = "stale"
+	dnsWorkerProbeUnknown        = "unknown"
 	defaultDNSZoneTTL            = 300
 	defaultDNSSnapshotMaxAge     = 5 * time.Minute
 	defaultDNSWorkerProbeTimeout = 3 * time.Second
+	defaultDNSWorkerProbeMaxAge  = 24 * time.Hour
 )
 
 var dnsLookupNS = net.LookupNS
@@ -132,6 +138,10 @@ type DNSWorkerView struct {
 	LastProbeAt         *time.Time                 `json:"last_probe_at"`
 	LastProbeQuery      string                     `json:"last_probe_query"`
 	LastProbeResults    []DNSWorkerProbeResultView `json:"last_probe_results"`
+	ProbeStatus         string                     `json:"probe_status"`
+	ProbeHealthy        bool                       `json:"probe_healthy"`
+	ProbeAgeSeconds     int64                      `json:"probe_age_seconds"`
+	ProbeMessage        string                     `json:"probe_message"`
 	CreatedAt           time.Time                  `json:"created_at"`
 	UpdatedAt           time.Time                  `json:"updated_at"`
 }
@@ -242,6 +252,9 @@ type DNSWorkerHealthSummaryView struct {
 	CheckedAt           time.Time                 `json:"checked_at"`
 	TotalWorkerCount    int                       `json:"total_worker_count"`
 	OnlineWorkerCount   int                       `json:"online_worker_count"`
+	ProbeHealthyCount   int                       `json:"probe_healthy_count"`
+	ProbeCheckedCount   int                       `json:"probe_checked_count"`
+	ProbeHealthyPercent float64                   `json:"probe_healthy_percent"`
 	AvailabilityPercent float64                   `json:"availability_percent"`
 	AverageLatencyMs    float64                   `json:"average_latency_ms"`
 	MaxLatencyMs        int64                     `json:"max_latency_ms"`
@@ -266,6 +279,10 @@ type DNSWorkerHealthItemView struct {
 	LastError          string                     `json:"last_error"`
 	LastProbeAt        *time.Time                 `json:"last_probe_at"`
 	LastProbeResults   []DNSWorkerProbeResultView `json:"last_probe_results"`
+	ProbeStatus        string                     `json:"probe_status"`
+	ProbeHealthy       bool                       `json:"probe_healthy"`
+	ProbeAgeSeconds    int64                      `json:"probe_age_seconds"`
+	ProbeMessage       string                     `json:"probe_message"`
 }
 
 type DNSZoneDelegationCheckView struct {
@@ -933,6 +950,8 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 	if worker == nil {
 		return DNSWorkerView{}
 	}
+	probeResults := decodeDNSWorkerProbeResults(worker.LastProbeResult)
+	probeState := evaluateDNSWorkerProbeState(time.Now().UTC(), worker.LastProbeAt, probeResults)
 	view := DNSWorkerView{
 		ID:                  worker.ID,
 		WorkerID:            worker.WorkerID,
@@ -946,7 +965,11 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		LastError:           worker.LastError,
 		LastProbeAt:         worker.LastProbeAt,
 		LastProbeQuery:      worker.LastProbeQuery,
-		LastProbeResults:    decodeDNSWorkerProbeResults(worker.LastProbeResult),
+		LastProbeResults:    probeResults,
+		ProbeStatus:         probeState.status,
+		ProbeHealthy:        probeState.healthy,
+		ProbeAgeSeconds:     probeState.ageSeconds,
+		ProbeMessage:        probeState.message,
 		CreatedAt:           worker.CreatedAt,
 		UpdatedAt:           worker.UpdatedAt,
 	}
@@ -1219,6 +1242,66 @@ func decodeDNSWorkerProbeResults(raw string) []DNSWorkerProbeResultView {
 		cleaned = append(cleaned, result)
 	}
 	return cleaned
+}
+
+type dnsWorkerProbeState struct {
+	status     string
+	healthy    bool
+	ageSeconds int64
+	message    string
+}
+
+func evaluateDNSWorkerProbeState(now time.Time, checkedAt *time.Time, results []DNSWorkerProbeResultView) dnsWorkerProbeState {
+	if checkedAt == nil || len(results) == 0 {
+		return dnsWorkerProbeState{
+			status:  dnsWorkerProbeUnknown,
+			message: "尚未执行公网 UDP/TCP 53 探测",
+		}
+	}
+	checked := checkedAt.UTC()
+	age := now.UTC().Sub(checked)
+	ageSeconds := int64(0)
+	if age > 0 {
+		ageSeconds = int64(age.Seconds())
+	}
+	if age > defaultDNSWorkerProbeMaxAge {
+		return dnsWorkerProbeState{
+			status:     dnsWorkerProbeStale,
+			ageSeconds: ageSeconds,
+			message:    "最近一次公网探测已过期",
+		}
+	}
+	reachableByNetwork := map[string]bool{}
+	for _, result := range results {
+		network := strings.ToUpper(strings.TrimSpace(result.Network))
+		if network == "" {
+			continue
+		}
+		reachableByNetwork[network] = result.Reachable
+	}
+	udpReachable := reachableByNetwork["UDP"]
+	tcpReachable := reachableByNetwork["TCP"]
+	switch {
+	case udpReachable && tcpReachable:
+		return dnsWorkerProbeState{
+			status:     dnsWorkerProbeHealthy,
+			healthy:    true,
+			ageSeconds: ageSeconds,
+			message:    "UDP/TCP 53 均可达",
+		}
+	case udpReachable || tcpReachable:
+		return dnsWorkerProbeState{
+			status:     dnsWorkerProbePartial,
+			ageSeconds: ageSeconds,
+			message:    "仅部分 DNS 协议可达",
+		}
+	default:
+		return dnsWorkerProbeState{
+			status:     dnsWorkerProbeFailed,
+			ageSeconds: ageSeconds,
+			message:    "UDP/TCP 53 探测均失败",
+		}
+	}
 }
 
 func dnsWorkerLabels() (map[string]string, error) {
@@ -1653,6 +1736,14 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			}
 		}
 		snapshotStale := status == dnsWorkerStatusOnline && (worker.LastSnapshotAt == nil || now.Sub(worker.LastSnapshotAt.UTC()) > snapshotMaxAge)
+		probeResults := decodeDNSWorkerProbeResults(worker.LastProbeResult)
+		probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, probeResults)
+		if probeState.status != dnsWorkerProbeUnknown {
+			view.ProbeCheckedCount++
+		}
+		if probeState.healthy {
+			view.ProbeHealthyCount++
+		}
 		view.Workers = append(view.Workers, DNSWorkerHealthItemView{
 			WorkerID:           worker.WorkerID,
 			Name:               workerName,
@@ -1669,11 +1760,18 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			SnapshotStale:      snapshotStale,
 			LastError:          worker.LastError,
 			LastProbeAt:        worker.LastProbeAt,
-			LastProbeResults:   decodeDNSWorkerProbeResults(worker.LastProbeResult),
+			LastProbeResults:   probeResults,
+			ProbeStatus:        probeState.status,
+			ProbeHealthy:       probeState.healthy,
+			ProbeAgeSeconds:    probeState.ageSeconds,
+			ProbeMessage:       probeState.message,
 		})
 	}
 	if view.TotalWorkerCount > 0 {
 		view.AvailabilityPercent = ratioPercent(int64(view.OnlineWorkerCount), int64(view.TotalWorkerCount))
+	}
+	if view.ProbeCheckedCount > 0 {
+		view.ProbeHealthyPercent = ratioPercent(int64(view.ProbeHealthyCount), int64(view.ProbeCheckedCount))
 	}
 	sort.SliceStable(view.Workers, func(i, j int) bool {
 		if view.Workers[i].Status != view.Workers[j].Status {

@@ -50,9 +50,20 @@ export interface DNSWorkerItem {
   last_probe_at?: string | null;
   last_probe_query: string;
   last_probe_results: DNSWorkerProbeResult[];
+  probe_status: DNSWorkerProbeStatus;
+  probe_healthy: boolean;
+  probe_age_seconds: number;
+  probe_message: string;
   created_at: string;
   updated_at: string;
 }
+
+export type DNSWorkerProbeStatus =
+  | 'healthy'
+  | 'partial'
+  | 'failed'
+  | 'stale'
+  | 'unknown';
 
 export interface DNSWorkerProbeResult {
   network: string;
@@ -161,6 +172,9 @@ export interface DNSWorkerHealthSummary {
   checked_at: string;
   total_worker_count: number;
   online_worker_count: number;
+  probe_healthy_count: number;
+  probe_checked_count: number;
+  probe_healthy_percent: number;
   availability_percent: number;
   average_latency_ms: number;
   max_latency_ms: number;
@@ -185,6 +199,10 @@ export interface DNSWorkerHealthItem {
   last_error: string;
   last_probe_at?: string | null;
   last_probe_results: DNSWorkerProbeResult[];
+  probe_status: DNSWorkerProbeStatus;
+  probe_healthy: boolean;
+  probe_age_seconds: number;
+  probe_message: string;
 }
 
 export type DNSZoneDelegationStatus =

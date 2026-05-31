@@ -165,14 +165,14 @@ go run . --port 3000 --log-dir ./logs
 
 自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。
 
-Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、Worker/Zone/站点维度和返回目标分布，可用于检查实时 GSLB 是否按节点池权重、健康状态和负载阈值返回预期边缘 IP。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
+Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、Worker/Zone/站点维度和返回目标分布，可用于检查实时 GSLB 是否按节点池权重、健康状态和负载阈值返回预期边缘 IP。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
 
 管理端操作顺序：
 
 1. 在左侧「权威 DNS」创建 Zone，填写注册商需要委派的 NS。
 2. 在同一页面创建 DNS Worker，复制创建后弹出的 Token 或部署命令。
 3. 部署至少两个 DNS Worker，并在注册商处把域名 NS 委派到 Worker；NS 位于当前 Zone 内时同步配置 Glue/主机记录。
-4. 打开「权威 DNS」的「迁移向导」，确认待迁移网站已经匹配到启用 Zone、存在在线 Worker，并按需启用站点 GSLB。
+4. 打开「权威 DNS」的「迁移向导」，确认待迁移网站已经匹配到启用 Zone、存在在线 Worker、至少一个 Worker 通过公网 UDP/TCP 53 探测，并按需启用站点 GSLB。
 5. 到网站详情的「自动 DNS」分区，把 `DNS 模式` 切换为 `自建权威 DNS` 并选择对应 Zone。
 6. 回到「权威 DNS」Zone 详情执行「委派检查」，确认公网 NS 与期望 NS 匹配。
 

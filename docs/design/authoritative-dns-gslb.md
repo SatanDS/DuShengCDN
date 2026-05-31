@@ -4,7 +4,7 @@
 
 本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
 
-当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、注册商 NS 匹配状态、Glue 提示以及待迁移网站的 Zone/Worker/GSLB 准备状态。
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、注册商 NS 匹配状态、Glue 提示以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态。
 
 ## 目标能力
 
@@ -150,6 +150,7 @@ route_id + record_type + source_scope
 * 左侧「权威 DNS」主菜单作为独立基础设施资源入口。
 * 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 查询延迟、可用率、错误率、返回码、返回目标和动态站点分布。
 * DNS Worker 列表支持按需探测单个 Worker 的公网 UDP/TCP 53，返回 RTT、RCODE、应答数量和错误信息，并在刷新后继续展示最近一次结果，用于验证 Server 到该 NS 的解析可达性。
+* Worker 可用性面板会把最近一次公网探测归类为 `healthy`、`partial`、`failed`、`stale` 或 `unknown`，迁移向导会要求至少一个在线 Worker 通过最新 UDP/TCP 53 探测后再标记站点为可切换。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
 * 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否已启用站点 GSLB，并跳转到对应网站详情执行切换。
@@ -185,7 +186,7 @@ TTL 规则：
 * DNS Worker 保存最后一次有效快照和快照签名；Server 暂时不可用时继续服务。
 * 快照超过 `AuthoritativeDNSSnapshotMaxAge` 后，动态 GSLB 记录返回 `SERVFAIL`，静态 SOA/NS 可继续返回。
 * 管理端会按最近心跳检测在线 Worker 的快照版本和快照年龄，并在多 Worker 版本不一致或快照过期时告警。
-* 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；这仍不是多地域探测网络。
+* 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；最近探测会参与迁移准备状态，但这仍不是多地域探测网络。
 * DNS Worker 不直接修改数据库，不在查询路径里写入状态。
 * 防抖状态保存在 Worker 内存，Worker 重启后可从快照和上报状态恢复最近一次全局选择，但不保证逐来源状态完全恢复。
 * 查询聚合按窗口批量上报，失败时本地缓冲，避免每次查询写库。
@@ -223,7 +224,7 @@ TTL 规则：
 ### 阶段 3：观测、联调与迁移体验
 
 * DNS Worker 已上报查询聚合、返回目标分布、错误码分布和本地查询处理耗时。
-* 管理端已展示 DNS Worker 状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 可用率、查询错误率、平均/最大查询延迟、返回码、Worker/Zone/站点维度、返回目标分布、按需 Worker UDP/TCP 53 探测、Zone 委派检查和 Glue 提示。
+* 管理端已展示 DNS Worker 状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 可用率、查询错误率、平均/最大查询延迟、返回码、Worker/Zone/站点维度、返回目标分布、按需 Worker UDP/TCP 53 探测、最近公网探测健康状态、Zone 委派检查和 Glue 提示。
 * 已提供从 Cloudflare 同步模式切换到自建权威 DNS 模式的迁移检查向导。
 * 文档补充注册商 NS、Glue、端口、防火墙和回滚步骤。
 
@@ -255,6 +256,6 @@ TTL 规则：
 第三阶段完成时：
 
 * 管理端能展示 DNS Worker 在线状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、查询延迟、可用率、错误率、错误码、返回目标、按需 Worker 探测和委派检查。
-* 管理端能在「权威 DNS」迁移向导里列出 Cloudflare 模式站点候选，并检查 Zone、Worker、GSLB 与回滚提示。
+* 管理端能在「权威 DNS」迁移向导里列出 Cloudflare 模式站点候选，并检查 Zone、在线 Worker、公网 UDP/TCP 53 探测、GSLB 与回滚提示。
 * 文档能指导用户从 Cloudflare 模式迁移到自建权威 DNS，并说明回滚方式。
 * 生产部署建议明确要求至少两个 DNS Worker 和 UDP/TCP 53 防火墙放行。

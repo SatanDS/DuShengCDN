@@ -41,6 +41,7 @@ import type {
   DNSWorkerItem,
   DNSWorkerProbe,
   DNSWorkerProbeResult,
+  DNSWorkerProbeStatus,
   DNSWorkerSnapshotConsistency,
   DNSWorkerSnapshotConsistencyStatus,
   DNSZoneDelegationCheck,
@@ -251,6 +252,34 @@ function formatDurationSeconds(value: number) {
 
 function getProbeResultVariant(result: DNSWorkerProbeResult) {
   return result.reachable ? ('success' as const) : ('danger' as const);
+}
+
+function getProbeStatusLabel(status: DNSWorkerProbeStatus) {
+  switch (status) {
+    case 'healthy':
+      return '公网可达';
+    case 'partial':
+      return '部分可达';
+    case 'failed':
+      return '探测失败';
+    case 'stale':
+      return '探测过期';
+    case 'unknown':
+      return '未探测';
+  }
+}
+
+function getProbeStatusVariant(status: DNSWorkerProbeStatus) {
+  switch (status) {
+    case 'healthy':
+      return 'success' as const;
+    case 'partial':
+    case 'stale':
+    case 'unknown':
+      return 'warning' as const;
+    case 'failed':
+      return 'danger' as const;
+  }
 }
 
 function workerProbeToPanelData(worker: DNSWorkerItem): DNSWorkerProbe | null {
@@ -1242,6 +1271,10 @@ function WorkersPanel({
                       variant={getWorkerStatusVariant(worker.status)}
                     />
                     <StatusBadge
+                      label={getProbeStatusLabel(worker.probe_status)}
+                      variant={getProbeStatusVariant(worker.probe_status)}
+                    />
+                    <StatusBadge
                       label={worker.version || '未上报版本'}
                       variant="info"
                     />
@@ -1269,6 +1302,14 @@ function WorkersPanel({
                   </p>
                   {worker.last_error ? (
                     <InlineMessage tone="danger" message={worker.last_error} />
+                  ) : null}
+                  {worker.probe_message ? (
+                    <p className="text-xs text-[var(--foreground-secondary)]">
+                      探测状态：{worker.probe_message}
+                      {worker.probe_age_seconds > 0
+                        ? ` · ${formatDurationSeconds(worker.probe_age_seconds)}前`
+                        : ''}
+                    </p>
                   ) : null}
                   <DNSWorkerProbeResultPanel
                     probe={probeResults[worker.id] ?? workerProbeToPanelData(worker)}
@@ -1369,6 +1410,9 @@ function DNSMigrationGuidePanel({
 }) {
   const enabledZones = zones.filter((zone) => zone.enabled);
   const onlineWorkers = workers.filter((worker) => worker.status === 'online');
+  const publicReachableWorkers = onlineWorkers.filter(
+    (worker) => worker.probe_healthy,
+  );
   const candidates = routes
     .filter((route) => route.dns_provider_mode !== 'authoritative')
     .filter((route) => route.enabled || route.dns_auto_sync || route.gslb_enabled)
@@ -1379,10 +1423,16 @@ function DNSMigrationGuidePanel({
         !matchingZone ? '没有匹配的网站 Zone' : '',
         matchingZone && !matchingZone.enabled ? '匹配 Zone 已停用' : '',
         onlineWorkers.length === 0 ? '没有在线 DNS Worker' : '',
+        onlineWorkers.length > 0 && publicReachableWorkers.length === 0
+          ? '在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测'
+          : '',
       ].filter(Boolean);
       const warnings = [
         !route.gslb_enabled ? '未启用 GSLB，多节点池实时分流不会生效' : '',
         workers.length < 2 ? '生产环境建议至少部署 2 个 DNS Worker' : '',
+        onlineWorkers.length > publicReachableWorkers.length
+          ? '部分在线 Worker 未通过最新公网探测，迁移前建议逐个点击「探测」'
+          : '',
         route.dns_auto_sync ? '' : '当前未启用 Cloudflare 自动 DNS，请确认是否仍需要迁移',
       ].filter(Boolean);
 
@@ -1427,6 +1477,10 @@ function DNSMigrationGuidePanel({
         <InfoTile
           label="在线 Worker"
           value={`${onlineWorkers.length} / ${workers.length}`}
+        />
+        <InfoTile
+          label="公网可达"
+          value={`${publicReachableWorkers.length} / ${onlineWorkers.length}`}
         />
       </div>
 
@@ -1488,13 +1542,17 @@ function DNSMigrationGuidePanel({
                           label="记录类型"
                           value={route.dns_record_type || 'A'}
                         />
+                        <InfoTile
+                          label="公网可达 Worker"
+                          value={`${publicReachableWorkers.length} / ${onlineWorkers.length}`}
+                        />
                       </div>
                       {blockers.length > 0 ? (
                         <CheckList title="阻断项" items={blockers} tone="danger" />
                       ) : (
                         <InlineMessage
                           tone="success"
-                          message="Zone、域名归属和在线 Worker 已满足切换条件。"
+                          message="Zone、域名归属、在线 Worker 和公网 UDP/TCP 53 探测已满足切换条件。"
                         />
                       )}
                       {warnings.length > 0 ? (
@@ -1521,7 +1579,7 @@ function DNSMigrationGuidePanel({
             </h3>
             <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--foreground-secondary)]">
               <li>1. 创建覆盖网站域名的 Zone，并填写注册商要使用的 NS。</li>
-              <li>2. 部署至少两个 DNS Worker，确认 Worker 在线且能拉取快照。</li>
+              <li>2. 部署至少两个 DNS Worker，确认 Worker 在线、能拉取快照，并通过公网 UDP/TCP 53 探测。</li>
               <li>3. 在网站详情的「自动 DNS」里切换为自建权威 DNS 并选择 Zone。</li>
               <li>4. 到注册商把域名 NS 委派到 DNS Worker，再回到 Zone 详情检查委派。</li>
             </ol>
@@ -1706,6 +1764,10 @@ function DNSWorkerHealthPanel({ summary }: { summary: DNSObservabilitySummary })
           value={formatPercentValue(health.availability_percent)}
         />
         <InfoTile
+          label="公网探测通过"
+          value={`${health.probe_healthy_count} / ${health.probe_checked_count || health.total_worker_count}`}
+        />
+        <InfoTile
           label="平均延迟"
           value={formatLatencyMs(health.average_latency_ms)}
         />
@@ -1751,6 +1813,10 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
             label={worker.status}
             variant={getWorkerStatusVariant(worker.status)}
           />
+          <StatusBadge
+            label={getProbeStatusLabel(worker.probe_status)}
+            variant={getProbeStatusVariant(worker.probe_status)}
+          />
           {worker.snapshot_stale ? (
             <StatusBadge label="快照过期" variant="danger" />
           ) : null}
@@ -1787,6 +1853,14 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           tone="danger"
           message={worker.last_error}
         />
+      ) : null}
+      {worker.probe_message ? (
+        <p className="mt-3 text-xs text-[var(--foreground-secondary)]">
+          探测状态：{worker.probe_message}
+          {worker.probe_age_seconds > 0
+            ? ` · ${formatDurationSeconds(worker.probe_age_seconds)}前`
+            : ''}
+        </p>
       ) : null}
       {worker.last_probe_at && worker.last_probe_results.length > 0 ? (
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--foreground-secondary)]">
