@@ -185,7 +185,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --token YOUR_DNS_WORKER_TOKEN
 ```
 
-脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，让国家代码节点池匹配开箱可用；下载失败不会阻断安装，Worker 会继续按来源 CIDR 或 `global` 作用域运行。
 
 可选参数：
 
@@ -197,6 +197,8 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 | `--listen` | UDP/TCP 监听地址，默认 `:53` |
 | `--snapshot-path` | 快照缓存路径，默认安装目录下的 `data/dns-worker-snapshot.json` |
 | `--geoip-database` | 可选本地 MaxMind Country MMDB 路径 |
+| `--geoip-database-url` | Country MMDB 下载地址，默认使用 Loyalsoldier GeoLite2-Country |
+| `--no-geoip-download` | 不自动下载 Country MMDB |
 | `--query-rate-limit` | 按来源 IP 每秒查询上限，默认 `200` |
 | `--udp-response-size` | UDP 响应最大字节数，默认 `1232` |
 | `--no-service` | 不创建 systemd 服务 |
@@ -231,7 +233,7 @@ go run ./cmd/dns-worker \
 --geoip-database /var/lib/dushengcdn-dns-worker/GeoLite2-Country.mmdb
 ```
 
-未配置本地 GeoIP 库时，Worker 仍会优先读取 EDNS Client Subnet 的来源 IP；来源 CIDR 命中时作用域为 `cidr:...`，未命中时国家代码为空并回退为 `global`。启用 `weighted` 或 `load_aware` 后，Worker 会在来源作用域后追加 `|bucket:xx` 分流桶，用于让 80/20 这类权重在逐查询答案中稳定生效。
+未配置本地 GeoIP 库或安装脚本下载 Country MMDB 失败时，Worker 仍会优先读取 EDNS Client Subnet 的来源 IP；来源 CIDR 命中时作用域为 `cidr:...`，未命中时国家代码为空并回退为 `global`。启用 `weighted` 或 `load_aware` 后，Worker 会在来源作用域后追加 `|bucket:xx` 分流桶，用于让 80/20 这类权重在逐查询答案中稳定生效。
 
 生产部署原则：
 

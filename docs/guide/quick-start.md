@@ -169,7 +169,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --token YOUR_DNS_WORKER_TOKEN
 ```
 
-脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并保存本地快照缓存。也可以使用 Docker 方式：
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，保存本地快照缓存，并下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb` 供国家代码调度使用。也可以使用 Docker 方式：
 
 ```bash
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \

@@ -18,6 +18,9 @@ AUTO_INSTALL_DEPS="true"
 LISTEN_ADDR=":53"
 SNAPSHOT_PATH=""
 GEOIP_DATABASE=""
+GEOIP_DATABASE_EXPLICIT="false"
+GEOIP_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb}"
+AUTO_GEOIP_DOWNLOAD="true"
 HEARTBEAT_INTERVAL="10s"
 REQUEST_TIMEOUT="10s"
 SNAPSHOT_MAX_AGE="5m"
@@ -40,6 +43,8 @@ Options:
   --listen ADDR              DNS UDP/TCP listen address (default: :53)
   --snapshot-path PATH       Snapshot cache path (default: INSTALL_DIR/data/dns-worker-snapshot.json)
   --geoip-database PATH      Optional local MaxMind Country MMDB path
+  --geoip-database-url URL   Country MMDB download URL (default: Loyalsoldier GeoLite2-Country)
+  --no-geoip-download        Do not download Country MMDB automatically
   --heartbeat-interval DUR   Heartbeat and snapshot pull interval (default: 10s)
   --request-timeout DUR      Server request timeout (default: 10s)
   --snapshot-max-age DUR     Maximum dynamic-answer snapshot age (default: 5m)
@@ -56,6 +61,7 @@ Options:
 Examples:
   install-dns-worker.sh --server-url https://cdn.example.com --token worker-token
   install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --geoip-database /var/lib/GeoLite2-Country.mmdb
+  install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --no-geoip-download
 
 Notes:
   Reinstall keeps the data directory and snapshot cache, then replaces the binary
@@ -71,7 +77,9 @@ while [[ $# -gt 0 ]]; do
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --listen) LISTEN_ADDR="$2"; shift 2 ;;
     --snapshot-path) SNAPSHOT_PATH="$2"; shift 2 ;;
-    --geoip-database) GEOIP_DATABASE="$2"; shift 2 ;;
+    --geoip-database) GEOIP_DATABASE="$2"; GEOIP_DATABASE_EXPLICIT="true"; shift 2 ;;
+    --geoip-database-url) GEOIP_DATABASE_URL="$2"; shift 2 ;;
+    --no-geoip-download) AUTO_GEOIP_DOWNLOAD="false"; shift ;;
     --heartbeat-interval) HEARTBEAT_INTERVAL="$2"; shift 2 ;;
     --request-timeout) REQUEST_TIMEOUT="$2"; shift 2 ;;
     --snapshot-max-age) SNAPSHOT_MAX_AGE="$2"; shift 2 ;;
@@ -254,6 +262,76 @@ sha256_file() {
   fi
 }
 
+download_geoip_database() {
+  local parent tmp bytes
+
+  if [[ -z "$GEOIP_DATABASE" || -z "$GEOIP_DATABASE_URL" ]]; then
+    return 1
+  fi
+
+  parent="$(dirname "$GEOIP_DATABASE")"
+  log "Downloading GeoIP Country database..."
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root mkdir -p "$parent"
+    tmp="$(mktemp "/tmp/dushengcdn-dns-worker-geoip.XXXXXX")"
+    if ! curl -fsSL -o "$tmp" "$GEOIP_DATABASE_URL"; then
+      rm -f "$tmp"
+      return 1
+    fi
+    bytes="$(wc -c < "$tmp" | tr -d '[:space:]')"
+    if [[ "${bytes:-0}" -lt 1024 ]]; then
+      rm -f "$tmp"
+      return 1
+    fi
+    run_as_root install -m 0644 "$tmp" "$GEOIP_DATABASE"
+    rm -f "$tmp"
+  else
+    mkdir -p "$parent"
+    tmp="$(mktemp "${parent}/.GeoLite2-Country.XXXXXX")"
+    if ! curl -fsSL -o "$tmp" "$GEOIP_DATABASE_URL"; then
+      rm -f "$tmp"
+      return 1
+    fi
+    bytes="$(wc -c < "$tmp" | tr -d '[:space:]')"
+    if [[ "${bytes:-0}" -lt 1024 ]]; then
+      rm -f "$tmp"
+      return 1
+    fi
+    mv -f "$tmp" "$GEOIP_DATABASE"
+    chmod 0644 "$GEOIP_DATABASE"
+  fi
+
+  log "GeoIP Country database ready: ${GEOIP_DATABASE}"
+  return 0
+}
+
+prepare_geoip_database() {
+  if [[ "$AUTO_GEOIP_DOWNLOAD" != "true" ]]; then
+    if [[ "$GEOIP_DATABASE_EXPLICIT" != "true" ]]; then
+      GEOIP_DATABASE=""
+    fi
+    return
+  fi
+
+  if [[ "$GEOIP_DATABASE_EXPLICIT" == "true" && -f "$GEOIP_DATABASE" ]]; then
+    log "Using existing GeoIP Country database: ${GEOIP_DATABASE}"
+    return
+  fi
+
+  if download_geoip_database; then
+    return
+  fi
+
+  log "GeoIP Country database download failed; country-code pool matching will fall back to global unless a valid database already exists."
+  if [[ -f "$GEOIP_DATABASE" ]]; then
+    log "Using existing GeoIP Country database: ${GEOIP_DATABASE}"
+    return
+  fi
+  if [[ "$GEOIP_DATABASE_EXPLICIT" != "true" ]]; then
+    GEOIP_DATABASE=""
+  fi
+}
+
 resolve_release_binary() {
   local release_info
 
@@ -348,6 +426,12 @@ validate_install_dir
 if [[ -z "$SNAPSHOT_PATH" ]]; then
   SNAPSHOT_PATH="${INSTALL_DIR}/data/dns-worker-snapshot.json"
 fi
+if [[ -z "$GEOIP_DATABASE" && "$AUTO_GEOIP_DOWNLOAD" == "true" ]]; then
+  GEOIP_DATABASE="${INSTALL_DIR}/data/geoip/GeoLite2-Country.mmdb"
+fi
+if [[ "$AUTO_GEOIP_DOWNLOAD" != "true" && "$GEOIP_DATABASE_EXPLICIT" != "true" ]]; then
+  GEOIP_DATABASE=""
+fi
 
 if [[ "$OS" == "linux" && "$CREATE_SERVICE" == "true" && ! -d /etc/systemd/system ]]; then
   CREATE_SERVICE="false"
@@ -364,6 +448,12 @@ if [[ -d "$INSTALL_DIR" && ! -w "$INSTALL_DIR" ]]; then
 fi
 if [[ ! -e "$SNAPSHOT_PARENT" || ! -w "$SNAPSHOT_PARENT" ]]; then
   NEEDS_ROOT="true"
+fi
+if [[ -n "$GEOIP_DATABASE" ]]; then
+  GEOIP_PARENT="$(dirname "$GEOIP_DATABASE")"
+  if [[ ! -e "$GEOIP_PARENT" || ! -w "$GEOIP_PARENT" ]]; then
+    NEEDS_ROOT="true"
+  fi
 fi
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" ]]; then
   NEEDS_ROOT="true"
@@ -411,6 +501,8 @@ else
   mv -f "$TMP_BINARY" "${INSTALL_DIR}/dushengcdn-dns-worker"
 fi
 trap - EXIT
+
+prepare_geoip_database
 
 ENV_FILE="${INSTALL_DIR}/dns-worker.env"
 ENV_MODE="0600"

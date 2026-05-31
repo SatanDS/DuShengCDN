@@ -268,7 +268,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --token YOUR_DNS_WORKER_TOKEN
 ```
 
-脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。如需本地国家代码匹配，可追加 `--geoip-database /var/lib/GeoLite2-Country.mmdb`。
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，用于国家代码节点池匹配；可用 `--geoip-database` 指向已有文件、用 `--geoip-database-url` 指定自建下载源，或用 `--no-geoip-download` 关闭自动下载。
 
 Docker 运行示例也可继续使用：
 
@@ -302,7 +302,7 @@ dig @YOUR_DNS_WORKER_IP example.com SOA
 dig @YOUR_DNS_WORKER_IP www.example.com A
 ```
 
-生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。Worker 本地快照缓存会写入 SHA-256 checksum 元数据，启动加载时会校验完整性，并从快照中的 GSLB 防抖状态恢复最近可用选择；运行中产生的新防抖状态会随 heartbeat 批量回传 Server，同时兼容旧版本生成的裸快照 JSON。Worker 默认按来源 IP 每秒限制 `200` 次查询，并把 UDP 响应上限限制为 `1232` 字节；超大响应会设置 TC 位让递归解析器回退 TCP。如果要按国家代码匹配 GSLB 节点池，可配置本地 MaxMind Country MMDB；如果在节点池里配置来源 CIDR，则会优先按来源 IP/ECS 命中 `cidr:...` 作用域；启用 `weighted` 或 `load_aware` 时会追加 `|bucket:xx` 分流桶，未命中且无法识别国家时会回退到 `global` 作用域。
+生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。Worker 本地快照缓存会写入 SHA-256 checksum 元数据，启动加载时会校验完整性，并从快照中的 GSLB 防抖状态恢复最近可用选择；运行中产生的新防抖状态会随 heartbeat 批量回传 Server，同时兼容旧版本生成的裸快照 JSON。Worker 默认按来源 IP 每秒限制 `200` 次查询，并把 UDP 响应上限限制为 `1232` 字节；超大响应会设置 TC 位让递归解析器回退 TCP。安装脚本会默认准备本地 Country MMDB；如果使用 Docker 或源码方式部署且要按国家代码匹配 GSLB 节点池，需要自行配置本地 MaxMind Country MMDB。如果在节点池里配置来源 CIDR，则会优先按来源 IP/ECS 命中 `cidr:...` 作用域；启用 `weighted` 或 `load_aware` 时会追加 `|bucket:xx` 分流桶，未命中且无法识别国家时会回退到 `global` 作用域。
 
 Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前调度状态，便于确认实时 GSLB 是否按预期分流；「GSLB 调度状态」会列出每个站点、A/AAAA、`global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42` 等来源作用域的当前实际目标、期望目标和防抖状态；「GSLB 调度模拟」可在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照会返回的边缘 IP，并展示节点池匹配、候选节点、跳过节点和原因。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
 
