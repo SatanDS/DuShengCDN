@@ -2,6 +2,7 @@ package dnsworker
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,8 +170,75 @@ func TestResolveGSLBMatchesSourceCIDRBeforeCountry(t *testing.T) {
 		t.Fatalf("expected EU target for source CIDR, got %s", got)
 	}
 	states := server.Scheduler.SnapshotStates(snapshot)
-	if len(states) != 1 || states[0].ScopeKey != "cidr:203.0.113.0/24" {
+	if len(states) != 1 || !strings.HasPrefix(states[0].ScopeKey, "cidr:203.0.113.0/24|bucket:") {
 		t.Fatalf("expected CIDR scoped debounce state, got %+v", states)
+	}
+}
+
+func TestSchedulerWeightedSpreadUsesSourceBuckets(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           28,
+			Domains:      []string{"cdn.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 80, Enabled: true},
+					{Name: "eu", Weight: 20, Enabled: true},
+				},
+				Debounce: GSLBDebounce{CooldownSeconds: 600},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("hk-node", "hk", "8.8.4.4", 100, 1),
+		testNode("eu-node", "eu", "9.9.9.9", 100, 1),
+	}
+	policy := normalizePolicy(snapshot.Routes[0].GSLBPolicy, snapshot.Routes[0])
+	hkSource, euSource := findWeightedSpreadSources(t, policy, snapshot.Routes[0].ID, "A")
+	scheduler := NewScheduler()
+	scheduler.now = func() time.Time { return time.Unix(100, 0) }
+
+	hkTargets, _, hkScope, err := scheduler.Select(snapshot, &snapshot.Routes[0], "A", hkSource, true)
+	if err != nil {
+		t.Fatalf("select HK bucket: %v", err)
+	}
+	euTargets, _, euScope, err := scheduler.Select(snapshot, &snapshot.Routes[0], "A", euSource, true)
+	if err != nil {
+		t.Fatalf("select EU bucket: %v", err)
+	}
+	if len(hkTargets) != 1 || hkTargets[0] != "8.8.4.4" {
+		t.Fatalf("expected HK bucket target, got targets=%v source=%+v scope=%s", hkTargets, hkSource, hkScope)
+	}
+	if len(euTargets) != 1 || euTargets[0] != "9.9.9.9" {
+		t.Fatalf("expected EU bucket target, got targets=%v source=%+v scope=%s", euTargets, euSource, euScope)
+	}
+	if hkScope == euScope || !strings.Contains(hkScope, "|bucket:") || !strings.Contains(euScope, "|bucket:") {
+		t.Fatalf("expected distinct bucket scopes, hk=%s eu=%s", hkScope, euScope)
+	}
+	states := scheduler.SnapshotStates(snapshot)
+	if len(states) != 2 {
+		t.Fatalf("expected two bucket-scoped states, got %+v", states)
+	}
+	seenScopes := map[string]struct{}{}
+	for _, state := range states {
+		seenScopes[state.ScopeKey] = struct{}{}
+	}
+	if _, ok := seenScopes[hkScope]; !ok {
+		t.Fatalf("missing HK bucket state %s in %+v", hkScope, states)
+	}
+	if _, ok := seenScopes[euScope]; !ok {
+		t.Fatalf("missing EU bucket state %s in %+v", euScope, states)
 	}
 }
 
@@ -514,6 +582,39 @@ func testNode(id string, pool string, ip string, weight int, connections int64) 
 		OpenrestyConnections: connections,
 		MetricCapturedAt:     &now,
 	}
+}
+
+func findWeightedSpreadSources(t *testing.T, policy GSLBPolicy, routeID uint, recordType string) (SourceContext, SourceContext) {
+	t.Helper()
+	hkSource := SourceContext{}
+	euSource := SourceContext{}
+	for i := 1; i < 255; i++ {
+		source := SourceContext{IP: net.IPv4(198, 51, 100, byte(i)).String()}
+		scopeKey := sourceScopeKeyForPolicy(policy, source)
+		spread := sourceSpreadForPolicy(policy, routeID, recordType, source, scopeKey)
+		if spread == nil {
+			t.Fatal("expected source spread")
+		}
+		pool := selectPoolByBucket([]weightedAvailablePool{
+			{Name: "hk", Weight: 80},
+			{Name: "eu", Weight: 20},
+		}, spread.Bucket)
+		switch pool {
+		case "hk":
+			if hkSource.IP == "" {
+				hkSource = source
+			}
+		case "eu":
+			if euSource.IP == "" {
+				euSource = source
+			}
+		}
+		if hkSource.IP != "" && euSource.IP != "" {
+			return hkSource, euSource
+		}
+	}
+	t.Fatalf("could not find both spread sources, hk=%+v eu=%+v", hkSource, euSource)
+	return SourceContext{}, SourceContext{}
 }
 
 func testQuery(name string, qtype uint16, ecs string) *dns.Msg {

@@ -73,6 +73,7 @@ Cloudflare 自动 DNS 支持：
 * 自动模式可按健康时间选择，也可按节点权重优先选择。
 * 需要跨多个节点池分流时，在网站详情的「自动 DNS」里启用 GSLB 多节点池调度，点击 `+` 逐行添加节点池、权重、可选国家代码和来源 CIDR，例如池名 `hk`、权重 `80`、国家代码 `HK,TW`、来源 CIDR `203.0.113.0/24`。来源 CIDR 会优先于国家代码匹配。
 * GSLB 的 `负载感知` 模式会结合节点权重、池权重、OpenResty 当前连接数、CPU 和内存快照评分；超过配置阈值的节点会被跳过。
+* 在自建权威 DNS 模式下，`weighted` / `load_aware` 会按来源 IP/ECS 生成稳定分流桶，所以类似 HK 池权重 80、EU 池权重 20 的配置会在不同来源桶之间形成接近 8:2 的 DNS 答案分布；Cloudflare 模式只同步一组静态记录，不具备逐查询来源分流。
 * GSLB 会保存最近一次实际目标和期望目标，旧目标仍健康且处于冷却期时不会频繁切换 DNS；自建权威 DNS 模式下，Worker 会先在内存中维护逐来源防抖状态，再随 heartbeat 批量回传 Server。
 * 当前 Cloudflare 模式是后台重算并同步 DNS A/AAAA 记录，受 TTL 和递归 DNS 缓存影响；如需按每次用户来源实时返回不同 IP，需要切换到自建权威 DNS 并部署 DNS Worker。
 * Cloudflare API Token 可直接填写原始 Token，也兼容 `Bearer ...` 和包含 `api_token` / `apiToken` / `token` 的 JSON。
@@ -86,9 +87,9 @@ Cloudflare 自动 DNS 支持：
 * 域名需要在注册商处把 NS 委派到 DuShengCDN DNS Worker。
 * Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS，并列出缺失或额外的 NS。
 * 如果 NS 名称位于当前 Zone 内，例如 `ns1.example.com` 服务 `example.com`，需要在注册商配置 Glue/主机记录；面板会在检查结果中提示。
-* DNS Worker 会在每次 A/AAAA 查询时根据来源 IP/ECS、来源 CIDR、国家代码、节点池权重、节点健康和负载评分返回边缘 IP。
+* DNS Worker 会在每次 A/AAAA 查询时根据来源 IP/ECS、来源 CIDR、国家代码、来源分流桶、节点池权重、节点健康和负载评分返回边缘 IP。
 * DNS Worker 会从 Server 拉取只读调度快照，本地缓存最后一次有效快照，并从快照恢复最近可用的 GSLB 防抖状态；Server 短暂不可用时仍可继续回答静态记录。
-* 左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，适合确认 GSLB 是否按预期把 `cidr:203.0.113.0/24`、`country:HK`、`country:DE`、`global` 等来源分配到 HK、EU 等节点池，并发现多 Worker 快照版本不一致或快照过期问题。
+* 左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，适合确认 GSLB 是否按预期把 `cidr:203.0.113.0/24`、`country:HK`、`country:DE`、`global|bucket:42` 等来源分配到 HK、EU 等节点池，并发现多 Worker 快照版本不一致或快照过期问题。
 * 「GSLB 调度状态」会按网站、记录类型和来源作用域展示当前实际目标、期望目标、最近评估时间和防抖状态；当显示「冷却中」时，表示期望目标已经变化，但旧目标仍健康或仍处于防抖冷却期，所以 DNS 答案暂时保持当前目标。
 * 左侧「权威 DNS」的「GSLB 调度模拟」可选择权威 DNS 站点、记录类型、来源国家代码和来源 IP，预演当前快照会返回哪些边缘 IP、TTL 和来源作用域，并查看节点池匹配、候选节点、跳过节点和原因；该操作只读，不会写入真实防抖状态。
 * 在 DNS Worker 列表可点击「探测」，由 Server 对该 Worker 公网地址发起 UDP/TCP 53 的 SOA 查询，确认解析可达性、RTT、RCODE 和错误信息；最近一次探测结果会保存在 Worker 列表和可用性面板中。

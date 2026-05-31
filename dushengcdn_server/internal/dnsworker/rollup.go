@@ -1,7 +1,9 @@
 package dnsworker
 
 import (
+	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -167,6 +169,22 @@ func normalizeSourceScope(raw string) string {
 	if value == "" {
 		return "global"
 	}
+	base, suffix, hasSuffix := strings.Cut(value, "|")
+	normalizedBase := normalizeSourceScopeBase(base)
+	if hasSuffix {
+		if bucket := normalizeSourceScopeBucket(suffix); bucket != "" {
+			return normalizedBase + "|" + bucket
+		}
+		return normalizedBase
+	}
+	return normalizedBase
+}
+
+func normalizeSourceScopeBase(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "global"
+	}
 	prefix, country, ok := strings.Cut(value, ":")
 	if ok && strings.EqualFold(strings.TrimSpace(prefix), "country") {
 		country = strings.ToUpper(strings.TrimSpace(country))
@@ -183,6 +201,18 @@ func normalizeSourceScope(raw string) string {
 		}
 	}
 	return value
+}
+
+func normalizeSourceScopeBucket(raw string) string {
+	prefix, value, ok := strings.Cut(strings.TrimSpace(raw), ":")
+	if !ok || !strings.EqualFold(strings.TrimSpace(prefix), "bucket") {
+		return ""
+	}
+	bucket, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || bucket < 0 || bucket > 99 {
+		return ""
+	}
+	return fmt.Sprintf("bucket:%02d", bucket)
 }
 
 func normalizeRCode(raw string) string {

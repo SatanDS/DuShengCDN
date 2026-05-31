@@ -1610,7 +1610,7 @@ function GSLBSchedulingStateCard({ state }: { state: DNSGSLBSchedulingState }) {
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <InfoTile label="来源作用域" value={state.scope_key} />
+        <InfoTile label="来源作用域/分流桶" value={state.scope_key} />
         <InfoTile
           label="最近评估"
           value={formatRelativeTime(state.last_evaluated_at)}
@@ -1804,7 +1804,7 @@ function GSLBSimulationPanel({
               <div className="mt-4 space-y-4">
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <InfoTile label="站点" value={result.site_name || '—'} />
-                  <InfoTile label="作用域" value={result.source_scope} />
+                  <InfoTile label="作用域/分流桶" value={result.source_scope} />
                   <InfoTile label="TTL" value={`${result.ttl} 秒`} />
                   <InfoTile
                     label="策略"

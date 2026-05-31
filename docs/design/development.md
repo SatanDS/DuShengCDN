@@ -161,7 +161,7 @@ tests/
 * `gslb_scheduling_states` 只保存运行时 DNS 调度状态和防抖信息，不参与配置版本快照。
 * 自建权威 DNS 阶段允许新增 `dns_zones`、`dns_records`、`dns_workers`、`dns_query_rollups` 等 DNS 基础对象；这些对象只服务权威 DNS 查询、Worker 快照和观测聚合，不得承载 OpenResty 反向代理配置。
 * DNS Worker 使用 Server 下发的只读快照回答查询，查询路径不得访问数据库、不得调用外部 GeoIP HTTP API、不得执行远程命令。
-* 权威 DNS 的逐来源防抖状态必须包含来源作用域，例如 `global`、`country:HK` 或 `cidr:203.0.113.0/24`，不能继续只按 `proxy_route_id` 覆盖全局选择。
+* 权威 DNS 的逐来源防抖状态必须包含来源作用域，例如 `global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42`，不能继续只按 `proxy_route_id` 覆盖全局选择。
 * 遗留 `domain` 字段只能作为 `domains[0]` 的兼容镜像；新代码不得继续以该字段作为唯一业务输入。
 * `proxy_routes` 如关联 `origins`，必须同时保存可直接渲染的 `origin_url`。
 * 源站统一使用 named `upstream` + keepalive；单源站如带 base path 或 query，应在 `proxy_pass` 上补回 URI，多源站仅允许纯 `scheme://host[:port]`。

@@ -1,8 +1,11 @@
 package dnsworker
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"sort"
 	"strconv"
@@ -35,6 +38,11 @@ type targetCandidate struct {
 	MemoryUsagePercent   float64
 	HasMetric            bool
 	Score                float64
+}
+
+type sourceSpread struct {
+	Key    string
+	Bucket int
 }
 
 func NewScheduler() *Scheduler {
@@ -166,12 +174,18 @@ func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType 
 			Debounce: normalizeDebounce(GSLBDebounce{}),
 		}
 	}
-	scopeKey := sourceScopeKeyForPolicy(policy, source)
+	baseScopeKey := sourceScopeKeyForPolicy(policy, source)
+	spread := sourceSpreadForPolicy(policy, route.ID, recordType, source, baseScopeKey)
+	scopeKey := baseScopeKey
+	if spread != nil {
+		scopeKey = fmt.Sprintf("%s|bucket:%02d", baseScopeKey, spread.Bucket)
+		spread.Key = schedulerStateKey(route.ID, recordType, scopeKey)
+	}
 	candidates := buildCandidates(snapshot, recordType, policy, source)
 	if len(candidates) == 0 {
 		return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("no online public node IP is available for %s records", recordType)
 	}
-	desired := selectWeightedTargets(candidates, policy)
+	desired := selectWeightedTargets(candidates, policy, spread)
 	if len(desired) == 0 {
 		return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("no target selected for %s records", recordType)
 	}
@@ -224,9 +238,14 @@ func parseSchedulerStateKey(key string) (uint, string, string, bool) {
 	if !ok {
 		return 0, "", "", false
 	}
-	recordType, scopeKey, ok := strings.Cut(rest, "|")
-	if !ok {
+	parts := strings.SplitN(rest, "|", 3)
+	if len(parts) < 2 {
 		return 0, "", "", false
+	}
+	recordType := parts[0]
+	scopeKey := parts[1]
+	if len(parts) == 3 {
+		scopeKey += "|" + parts[2]
 	}
 	routeID, err := strconv.ParseUint(rawRouteID, 10, 0)
 	if err != nil || routeID == 0 {
@@ -335,6 +354,33 @@ func sourceScopeKeyForPolicy(policy GSLBPolicy, source SourceContext) string {
 	return sourceScopeKey(source)
 }
 
+func sourceSpreadForPolicy(policy GSLBPolicy, routeID uint, recordType string, source SourceContext, baseScopeKey string) *sourceSpread {
+	if !usesSourceWeightedSpread(policy) {
+		return nil
+	}
+	ip := net.ParseIP(strings.TrimSpace(source.IP))
+	if ip == nil {
+		return nil
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+	}
+	key := fmt.Sprintf("%d|%s|%s|ip:%s", routeID, normalizeAddressRecordType(recordType), normalizeSourceScope(baseScopeKey), ip.String())
+	return &sourceSpread{
+		Key:    key,
+		Bucket: int(stableHashUint64(key) % 100),
+	}
+}
+
+func usesSourceWeightedSpread(policy GSLBPolicy) bool {
+	switch normalizeStrategy(policy.Strategy) {
+	case "weighted", "load_aware":
+		return true
+	default:
+		return false
+	}
+}
+
 func sourceIPMatchesCIDRList(sourceIP string, cidrs []string) (string, bool) {
 	ip := net.ParseIP(strings.TrimSpace(sourceIP))
 	if ip == nil {
@@ -429,7 +475,14 @@ func sortCandidates(candidates []targetCandidate, strategy string) {
 	})
 }
 
-func selectWeightedTargets(candidates []targetCandidate, policy GSLBPolicy) []string {
+func selectWeightedTargets(candidates []targetCandidate, policy GSLBPolicy, spread *sourceSpread) []string {
+	if spread != nil && usesSourceWeightedSpread(policy) {
+		return selectSourceSpreadTargets(candidates, policy, *spread)
+	}
+	return selectRankedTargets(candidates, policy)
+}
+
+func selectRankedTargets(candidates []targetCandidate, policy GSLBPolicy) []string {
 	targetCount := normalizeTargetCount(policy.TargetCount)
 	if len(candidates) == 0 {
 		return nil
@@ -474,6 +527,157 @@ func selectWeightedTargets(candidates []targetCandidate, policy GSLBPolicy) []st
 		targets = append(targets, candidate.Content)
 	}
 	return targets
+}
+
+func selectSourceSpreadTargets(candidates []targetCandidate, policy GSLBPolicy, spread sourceSpread) []string {
+	targetCount := normalizeTargetCount(policy.TargetCount)
+	if len(candidates) == 0 {
+		return nil
+	}
+	byPool := map[string][]targetCandidate{}
+	for _, candidate := range candidates {
+		byPool[candidate.PoolName] = append(byPool[candidate.PoolName], candidate)
+	}
+	pools := weightedAvailablePools(policy.Pools, byPool)
+	if len(pools) == 0 {
+		return nil
+	}
+	selected := make([]targetCandidate, 0, targetCount)
+	usedTargets := map[string]struct{}{}
+	for slot := 0; slot < targetCount && len(selected) < len(candidates); slot++ {
+		bucket := (spread.Bucket + slot*37) % 100
+		poolName := selectPoolByBucket(pools, bucket)
+		if poolName == "" {
+			continue
+		}
+		candidate, ok := selectCandidateBySpread(byPool[poolName], policy.Strategy, spread.Key, slot, usedTargets)
+		if !ok {
+			continue
+		}
+		selected = append(selected, candidate)
+		usedTargets[candidate.Content] = struct{}{}
+	}
+	if len(selected) < targetCount {
+		for _, candidate := range selectRankedCandidates(candidates, policy.Strategy) {
+			if len(selected) >= targetCount {
+				break
+			}
+			if _, ok := usedTargets[candidate.Content]; ok {
+				continue
+			}
+			selected = append(selected, candidate)
+			usedTargets[candidate.Content] = struct{}{}
+		}
+	}
+	sortCandidates(selected, policy.Strategy)
+	targets := make([]string, 0, len(selected))
+	for _, candidate := range selected {
+		targets = append(targets, candidate.Content)
+	}
+	return targets
+}
+
+type weightedAvailablePool struct {
+	Name   string
+	Weight int
+}
+
+func weightedAvailablePools(pools []GSLBPoolPolicy, byPool map[string][]targetCandidate) []weightedAvailablePool {
+	result := make([]weightedAvailablePool, 0, len(pools))
+	seen := map[string]struct{}{}
+	for _, pool := range pools {
+		if !pool.Enabled {
+			continue
+		}
+		name := normalizeNodePoolName(pool.Name)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		if len(byPool[name]) == 0 {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, weightedAvailablePool{Name: name, Weight: normalizeWeight(pool.Weight)})
+	}
+	return result
+}
+
+func selectPoolByBucket(pools []weightedAvailablePool, bucket int) string {
+	if len(pools) == 0 {
+		return ""
+	}
+	totalWeight := 0
+	for _, pool := range pools {
+		totalWeight += normalizeWeight(pool.Weight)
+	}
+	if totalWeight <= 0 {
+		return ""
+	}
+	if bucket < 0 {
+		bucket = 0
+	}
+	if bucket > 99 {
+		bucket = bucket % 100
+	}
+	point := bucket * totalWeight / 100
+	accumulated := 0
+	for _, pool := range pools {
+		accumulated += normalizeWeight(pool.Weight)
+		if point < accumulated {
+			return pool.Name
+		}
+	}
+	return pools[len(pools)-1].Name
+}
+
+func selectCandidateBySpread(candidates []targetCandidate, strategy string, key string, slot int, used map[string]struct{}) (targetCandidate, bool) {
+	best := targetCandidate{}
+	bestScore := math.Inf(1)
+	found := false
+	for _, candidate := range candidates {
+		if _, ok := used[candidate.Content]; ok {
+			continue
+		}
+		weight := spreadCandidateWeight(candidate, strategy)
+		if weight <= 0 {
+			weight = 1
+		}
+		hashKey := fmt.Sprintf("%s|slot:%d|candidate:%s", key, slot, candidate.Content)
+		unit := stableHashUnit(hashKey)
+		score := -math.Log(unit) / weight
+		if !found || score < bestScore || (score == bestScore && candidate.Content < best.Content) {
+			best = candidate
+			bestScore = score
+			found = true
+		}
+	}
+	return best, found
+}
+
+func spreadCandidateWeight(candidate targetCandidate, strategy string) float64 {
+	if normalizeStrategy(strategy) == "load_aware" {
+		return candidate.Score
+	}
+	return float64(normalizeWeight(candidate.NodeWeight))
+}
+
+func selectRankedCandidates(candidates []targetCandidate, strategy string) []targetCandidate {
+	result := append([]targetCandidate(nil), candidates...)
+	sortCandidates(result, strategy)
+	return result
+}
+
+func stableHashUint64(value string) uint64 {
+	sum := sha256.Sum256([]byte(value))
+	return binary.BigEndian.Uint64(sum[:8])
+}
+
+func stableHashUnit(value string) float64 {
+	hash := stableHashUint64(value)
+	return (float64(hash) + 1) / (float64(^uint64(0)) + 2)
 }
 
 func allocatePoolQuotas(pools []GSLBPoolPolicy, targetCount int) map[string]int {

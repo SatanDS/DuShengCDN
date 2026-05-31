@@ -152,7 +152,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `proxy_routes.dns_zone_id_ref` | 网站配置 | 关联 `dns_zones`，用于把网站域名纳入自建权威 Zone |
 | `proxy_routes.gslb_enabled` | 网站配置 | 是否启用站点级 GSLB 多节点池调度 |
 | `proxy_routes.gslb_policy` | 网站配置 | GSLB 策略 JSON，包含节点池权重、来源 CIDR、国家代码、目标数量、TTL、来源识别接口、负载阈值和防抖参数 |
-| `gslb_scheduling_states.scope_key` | 运行时状态 | 权威 DNS 模式下按来源作用域保存防抖状态，例如 `global`、`country:HK` 或 `cidr:203.0.113.0/24` |
+| `gslb_scheduling_states.scope_key` | 运行时状态 | 权威 DNS 模式下按来源作用域保存防抖状态，例如 `global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global\|bucket:42` |
 | `gslb_scheduling_states.selected_targets` | 运行时状态 | 最近一次实际选择的 GSLB DNS 目标；权威 DNS Worker 会通过 heartbeat 批量回传运行中产生的状态 |
 | `gslb_scheduling_states.desired_targets` | 运行时状态 | 最近一次评估得到的期望 GSLB DNS 目标 |
 | `gslb_scheduling_states.last_changed_at` | 运行时状态 | 最近一次实际切换 DNS 目标的时间，用于防抖冷却 |

@@ -2111,6 +2111,22 @@ func normalizeDNSSourceScope(raw string) string {
 	if value == "" {
 		return defaultGSLBScopeKey
 	}
+	base, suffix, hasSuffix := strings.Cut(value, "|")
+	normalizedBase := normalizeDNSSourceScopeBase(base)
+	if hasSuffix {
+		if bucket := normalizeDNSSourceScopeBucket(suffix); bucket != "" {
+			return normalizedBase + "|" + bucket
+		}
+		return normalizedBase
+	}
+	return normalizedBase
+}
+
+func normalizeDNSSourceScopeBase(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return defaultGSLBScopeKey
+	}
 	prefix, scopeValue, ok := strings.Cut(value, ":")
 	if ok && strings.EqualFold(strings.TrimSpace(prefix), "country") {
 		scopeValue = strings.ToUpper(strings.TrimSpace(scopeValue))
@@ -2127,6 +2143,18 @@ func normalizeDNSSourceScope(raw string) string {
 		value = value[:64]
 	}
 	return value
+}
+
+func normalizeDNSSourceScopeBucket(raw string) string {
+	prefix, value, ok := strings.Cut(strings.TrimSpace(raw), ":")
+	if !ok || !strings.EqualFold(strings.TrimSpace(prefix), "bucket") {
+		return ""
+	}
+	bucket, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || bucket < 0 || bucket > 99 {
+		return ""
+	}
+	return fmt.Sprintf("bucket:%02d", bucket)
 }
 
 func decodeDNSTargetSummary(raw string) map[string]int64 {

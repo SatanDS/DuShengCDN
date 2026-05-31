@@ -895,7 +895,7 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SimulateAuthoritativeDNSGSLB CIDR: %v", err)
 	}
-	if cidr.SourceScope != "cidr:203.0.113.0/24" || len(cidr.Targets) != 1 || cidr.Targets[0] != "1.1.1.1" {
+	if !strings.HasPrefix(cidr.SourceScope, "cidr:203.0.113.0/24|bucket:") || len(cidr.Targets) != 1 || cidr.Targets[0] != "1.1.1.1" {
 		t.Fatalf("expected CIDR pool target to override country, got %+v", cidr)
 	}
 	assertSimulationPool(t, cidr.MatchedPools, "eu", true)
