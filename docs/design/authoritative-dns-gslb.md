@@ -218,7 +218,7 @@ TTL 规则：
 * 使用 `github.com/miekg/dns` 实现 UDP/TCP 53 监听。
 * DNS Worker 从 Server 拉取只读调度快照，写入本地缓存并在内存中构建 Zone、记录和站点索引。
 * 支持 `SOA`、`NS`、静态记录和网站 `A`/`AAAA` 动态 GSLB 回答。
-* 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、来源分流桶、节点权重、OpenResty 健康、排空、调度开关和负载阈值选点。
+* 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、来源分流桶、节点权重、OpenResty 健康、排空、调度开关、最大连接数、最大 CPU 使用率和最大内存使用率选点。
 * 支持 EDNS Client Subnet 来源识别；节点池策略可按来源 CIDR 优先命中，也可在配置本地 MaxMind Country MMDB 后按国家代码命中节点池，否则回退到 `global` 作用域。
 * 防抖状态按 `route_id + record_type + source_scope` 保存在 Worker 内存中。
 * 支持按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，避免异常递归解析器或放大流量压垮查询面。

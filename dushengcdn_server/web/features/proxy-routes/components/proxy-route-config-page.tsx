@@ -284,6 +284,8 @@ type DNSAutomationValues = {
   gslb_enabled: boolean;
   gslb_pool_rows: GSLBPoolRow[];
   gslb_max_openresty_connections: number;
+  gslb_max_cpu_percent: number;
+  gslb_max_memory_percent: number;
   gslb_cooldown_seconds: number;
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'manual' | 'auto';
@@ -864,6 +866,10 @@ export function DNSAutomationSection({
       gslb_pool_rows: buildGSLBPoolRows(route),
       gslb_max_openresty_connections:
         route.gslb_policy?.load_thresholds?.max_openresty_connections || 0,
+      gslb_max_cpu_percent:
+        route.gslb_policy?.load_thresholds?.max_cpu_percent || 0,
+      gslb_max_memory_percent:
+        route.gslb_policy?.load_thresholds?.max_memory_percent || 0,
       gslb_cooldown_seconds:
         route.gslb_policy?.debounce?.cooldown_seconds || 60,
       cloudflare_proxied: route.cloudflare_proxied,
@@ -891,6 +897,10 @@ export function DNSAutomationSection({
       gslb_pool_rows: buildGSLBPoolRows(route),
       gslb_max_openresty_connections:
         route.gslb_policy?.load_thresholds?.max_openresty_connections || 0,
+      gslb_max_cpu_percent:
+        route.gslb_policy?.load_thresholds?.max_cpu_percent || 0,
+      gslb_max_memory_percent:
+        route.gslb_policy?.load_thresholds?.max_memory_percent || 0,
       gslb_cooldown_seconds:
         route.gslb_policy?.debounce?.cooldown_seconds || 60,
       cloudflare_proxied: route.cloudflare_proxied,
@@ -967,6 +977,8 @@ export function DNSAutomationSection({
                   ...baseGSLBPolicy.load_thresholds,
                   max_openresty_connections:
                     values.gslb_max_openresty_connections,
+                  max_cpu_percent: values.gslb_max_cpu_percent,
+                  max_memory_percent: values.gslb_max_memory_percent,
                 },
                 debounce: {
                   ...baseGSLBPolicy.debounce,
@@ -1380,7 +1392,7 @@ export function DNSAutomationSection({
                   />
                 </ResourceField>
 
-                <div className="grid gap-5 md:grid-cols-2">
+                <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
                   <ResourceField
                     label="最大连接阈值"
                     hint="0 表示不按连接数剔除节点。"
@@ -1390,6 +1402,38 @@ export function DNSAutomationSection({
                       min={0}
                       disabled={!autoSyncEnabled}
                       {...form.register('gslb_max_openresty_connections', {
+                        valueAsNumber: true,
+                      })}
+                    />
+                  </ResourceField>
+
+                  <ResourceField
+                    label="最大 CPU 阈值"
+                    hint="0 表示不按 CPU 使用率剔除节点。"
+                  >
+                    <ResourceInput
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      disabled={!autoSyncEnabled}
+                      {...form.register('gslb_max_cpu_percent', {
+                        valueAsNumber: true,
+                      })}
+                    />
+                  </ResourceField>
+
+                  <ResourceField
+                    label="最大内存阈值"
+                    hint="0 表示不按内存使用率剔除节点。"
+                  >
+                    <ResourceInput
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      disabled={!autoSyncEnabled}
+                      {...form.register('gslb_max_memory_percent', {
                         valueAsNumber: true,
                       })}
                     />
