@@ -188,6 +188,7 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 				QueryCount:      42,
 				TotalDurationMs: 210,
 				MaxDurationMs:   12,
+				SourceScope:     "country:HK",
 				TargetSummary:   map[string]int64{"8.8.8.8": 42},
 			},
 		},
@@ -214,6 +215,9 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 	if rollup.TotalDurationMs != 210 || rollup.MaxDurationMs != 12 {
 		t.Fatalf("unexpected rollup duration: %+v", rollup)
+	}
+	if rollup.SourceScope != "country:HK" {
+		t.Fatalf("unexpected rollup source scope: %+v", rollup)
 	}
 }
 
@@ -272,6 +276,7 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 				QueryCount:      80,
 				TotalDurationMs: 1600,
 				MaxDurationMs:   50,
+				SourceScope:     "country:HK",
 				TargetSummary:   map[string]int64{"8.8.8.8": 64, "1.1.1.1": 16},
 			},
 			{
@@ -284,6 +289,7 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 				QueryCount:      5,
 				TotalDurationMs: 50,
 				MaxDurationMs:   15,
+				SourceScope:     "country:DE",
 			},
 			{
 				WindowStart:     windowStart,
@@ -296,6 +302,7 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 				QueryCount:      2,
 				TotalDurationMs: 70,
 				MaxDurationMs:   40,
+				SourceScope:     "",
 			},
 		},
 	})
@@ -333,6 +340,9 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	assertCounter(t, summary.WorkerBreakdown, authenticated.WorkerID, "ns1-hk", 87)
 	assertCounter(t, summary.ZoneBreakdown, "1", "example.com", 87)
 	assertCounter(t, summary.RouteBreakdown, "1", "edge-site", 82)
+	assertCounter(t, summary.SourceScopeBreakdown, "country:HK", "country:HK", 80)
+	assertCounter(t, summary.SourceScopeBreakdown, "country:DE", "country:DE", 5)
+	assertCounter(t, summary.SourceScopeBreakdown, "global", "global", 2)
 	if len(summary.TrendPoints) != 1 {
 		t.Fatalf("expected one trend point for one-hour window, got %+v", summary.TrendPoints)
 	}

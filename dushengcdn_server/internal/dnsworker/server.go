@@ -108,9 +108,10 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	zoneID, routeID := uint(0), uint(0)
 	rcodeLabel := "NOERROR"
 	targets := []string{}
+	sourceScope := "global"
 	defer func() {
 		if s.Rollups != nil {
-			s.Rollups.Record(zoneID, routeID, qname, qtype, rcodeLabel, targets, time.Since(startedAt))
+			s.Rollups.Record(zoneID, routeID, sourceScope, qname, qtype, rcodeLabel, targets, time.Since(startedAt))
 		}
 	}()
 	if question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR {
@@ -136,6 +137,7 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	if s.Resolver != nil {
 		source = s.Resolver.Resolve(request, remoteAddr)
 	}
+	sourceScope = sourceScopeKey(source)
 	fresh := s.Store.IsFresh(time.Now().UTC())
 
 	switch question.Qtype {
@@ -162,7 +164,8 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 		route := matchRoute(qname, qtype, index.routesByDomain[qname])
 		if route != nil {
 			routeID = route.ID
-			selected, ttl, _, err := s.Scheduler.Select(snapshot, route, qtype, source, fresh)
+			selected, ttl, selectedScope, err := s.Scheduler.Select(snapshot, route, qtype, source, fresh)
+			sourceScope = selectedScope
 			if err != nil {
 				response.Rcode = dns.RcodeServerFailure
 				rcodeLabel = "SERVFAIL"

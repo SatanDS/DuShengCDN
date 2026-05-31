@@ -16,6 +16,7 @@ type rollupKey struct {
 	WindowStart  time.Time
 	ZoneID       uint
 	ProxyRouteID uint
+	SourceScope  string
 	QName        string
 	QType        string
 	RCode        string
@@ -38,7 +39,7 @@ func NewRollupAggregator(window time.Duration) *RollupAggregator {
 	}
 }
 
-func (a *RollupAggregator) Record(zoneID uint, routeID uint, qname string, qtype string, rcode string, targets []string, duration time.Duration) {
+func (a *RollupAggregator) Record(zoneID uint, routeID uint, sourceScope string, qname string, qtype string, rcode string, targets []string, duration time.Duration) {
 	if a == nil {
 		return
 	}
@@ -47,6 +48,7 @@ func (a *RollupAggregator) Record(zoneID uint, routeID uint, qname string, qtype
 		WindowStart:  now.Truncate(a.window),
 		ZoneID:       zoneID,
 		ProxyRouteID: routeID,
+		SourceScope:  normalizeSourceScope(sourceScope),
 		QName:        normalizeDomain(qname),
 		QType:        strings.ToUpper(strings.TrimSpace(qtype)),
 		RCode:        normalizeRCode(rcode),
@@ -99,6 +101,7 @@ func (a *RollupAggregator) Drain() []QueryRollupPayload {
 			WindowMinutes:   int(a.window / time.Minute),
 			ZoneID:          key.ZoneID,
 			ProxyRouteID:    key.ProxyRouteID,
+			SourceScope:     key.SourceScope,
 			QName:           key.QName,
 			QType:           key.QType,
 			RCode:           key.RCode,
@@ -126,6 +129,7 @@ func (a *RollupAggregator) Restore(payloads []QueryRollupPayload) {
 			WindowStart:  payload.WindowStart,
 			ZoneID:       payload.ZoneID,
 			ProxyRouteID: payload.ProxyRouteID,
+			SourceScope:  normalizeSourceScope(payload.SourceScope),
 			QName:        normalizeDomain(payload.QName),
 			QType:        strings.ToUpper(strings.TrimSpace(payload.QType)),
 			RCode:        normalizeRCode(payload.RCode),
@@ -155,6 +159,14 @@ func (a *RollupAggregator) Restore(payloads []QueryRollupPayload) {
 			bucket.targets[target] += count
 		}
 	}
+}
+
+func normalizeSourceScope(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "global"
+	}
+	return value
 }
 
 func normalizeRCode(raw string) string {

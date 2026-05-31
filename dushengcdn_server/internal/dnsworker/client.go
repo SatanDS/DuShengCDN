@@ -38,6 +38,7 @@ type QueryRollupPayload struct {
 	WindowMinutes   int              `json:"window_minutes"`
 	ZoneID          uint             `json:"zone_id"`
 	ProxyRouteID    uint             `json:"proxy_route_id"`
+	SourceScope     string           `json:"source_scope"`
 	QName           string           `json:"qname"`
 	QType           string           `json:"qtype"`
 	RCode           string           `json:"rcode"`

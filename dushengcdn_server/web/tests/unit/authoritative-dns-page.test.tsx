@@ -129,6 +129,11 @@ describe('Authoritative DNS page', () => {
                   route_breakdown: [
                     { key: '1', label: 'edge-site', count: 100 },
                   ],
+                  source_scope_breakdown: [
+                    { key: 'country:HK', label: 'country:HK', count: 80 },
+                    { key: 'country:DE', label: 'country:DE', count: 20 },
+                    { key: 'global', label: 'global', count: 28 },
+                  ],
                   trend_points: [
                     {
                       bucket_started_at: '2026-05-31T07:00:00Z',
@@ -521,6 +526,8 @@ describe('Authoritative DNS page', () => {
     expect(await screen.findByText('DNS 查询观测')).toBeInTheDocument();
     expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
     expect(screen.getByText('edge-site')).toBeInTheDocument();
+    expect(screen.getByText('来源作用域')).toBeInTheDocument();
+    expect(screen.getByText('country:HK')).toBeInTheDocument();
     expect(await screen.findByText('查询趋势')).toBeInTheDocument();
     expect(screen.getByText('快照不一致')).toBeInTheDocument();
     expect(

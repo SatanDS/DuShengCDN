@@ -1243,6 +1243,42 @@ func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerProbeFields(t *testing.T) {
 	}
 }
 
+func TestEnsureDatabaseSchemaUpToDateAddsDNSRollupSourceScope(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "dns-rollup-source-scope.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateAll(db); err != nil {
+		t.Fatalf("auto migrate current schema: %v", err)
+	}
+	if db.Migrator().HasColumn(&DNSQueryRollup{}, "source_scope") {
+		if err := db.Migrator().DropColumn(&DNSQueryRollup{}, "source_scope"); err != nil {
+			t.Fatalf("drop dns_query_rollups.source_scope: %v", err)
+		}
+	}
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 21); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	if !db.Migrator().HasColumn(&DNSQueryRollup{}, "source_scope") {
+		t.Fatal("expected dns_query_rollups.source_scope column to exist")
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
 func TestRunDatabaseSchemaMigrationDoesNotAdvanceVersionWhenValidationFails(t *testing.T) {
 	db := openBareTestSQLiteDB(t, "failed-validation.db")
 

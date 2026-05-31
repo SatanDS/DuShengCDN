@@ -86,6 +86,7 @@ type DNSQueryRollupInput struct {
 	WindowMinutes   int              `json:"window_minutes"`
 	ZoneID          uint             `json:"zone_id"`
 	ProxyRouteID    uint             `json:"proxy_route_id"`
+	SourceScope     string           `json:"source_scope"`
 	QName           string           `json:"qname"`
 	QType           string           `json:"qtype"`
 	RCode           string           `json:"rcode"`
@@ -182,26 +183,27 @@ type DNSObservabilityCounterView struct {
 }
 
 type DNSObservabilitySummaryView struct {
-	WindowHours         int                              `json:"window_hours"`
-	WindowStart         time.Time                        `json:"window_start"`
-	WindowEnd           time.Time                        `json:"window_end"`
-	LastRollupAt        *time.Time                       `json:"last_rollup_at"`
-	TotalQueries        int64                            `json:"total_queries"`
-	SuccessfulQueries   int64                            `json:"successful_queries"`
-	NegativeQueries     int64                            `json:"negative_queries"`
-	ErrorQueries        int64                            `json:"error_queries"`
-	DynamicQueries      int64                            `json:"dynamic_queries"`
-	StaticQueries       int64                            `json:"static_queries"`
-	RCodeBreakdown      []DNSObservabilityCounterView    `json:"rcode_breakdown"`
-	QTypeBreakdown      []DNSObservabilityCounterView    `json:"qtype_breakdown"`
-	TopQNames           []DNSObservabilityCounterView    `json:"top_qnames"`
-	TopTargets          []DNSObservabilityCounterView    `json:"top_targets"`
-	WorkerBreakdown     []DNSObservabilityCounterView    `json:"worker_breakdown"`
-	ZoneBreakdown       []DNSObservabilityCounterView    `json:"zone_breakdown"`
-	RouteBreakdown      []DNSObservabilityCounterView    `json:"route_breakdown"`
-	TrendPoints         []DNSObservabilityTrendPointView `json:"trend_points"`
-	SnapshotConsistency DNSWorkerSnapshotConsistencyView `json:"snapshot_consistency"`
-	WorkerHealth        DNSWorkerHealthSummaryView       `json:"worker_health"`
+	WindowHours          int                              `json:"window_hours"`
+	WindowStart          time.Time                        `json:"window_start"`
+	WindowEnd            time.Time                        `json:"window_end"`
+	LastRollupAt         *time.Time                       `json:"last_rollup_at"`
+	TotalQueries         int64                            `json:"total_queries"`
+	SuccessfulQueries    int64                            `json:"successful_queries"`
+	NegativeQueries      int64                            `json:"negative_queries"`
+	ErrorQueries         int64                            `json:"error_queries"`
+	DynamicQueries       int64                            `json:"dynamic_queries"`
+	StaticQueries        int64                            `json:"static_queries"`
+	RCodeBreakdown       []DNSObservabilityCounterView    `json:"rcode_breakdown"`
+	QTypeBreakdown       []DNSObservabilityCounterView    `json:"qtype_breakdown"`
+	TopQNames            []DNSObservabilityCounterView    `json:"top_qnames"`
+	TopTargets           []DNSObservabilityCounterView    `json:"top_targets"`
+	WorkerBreakdown      []DNSObservabilityCounterView    `json:"worker_breakdown"`
+	ZoneBreakdown        []DNSObservabilityCounterView    `json:"zone_breakdown"`
+	RouteBreakdown       []DNSObservabilityCounterView    `json:"route_breakdown"`
+	SourceScopeBreakdown []DNSObservabilityCounterView    `json:"source_scope_breakdown"`
+	TrendPoints          []DNSObservabilityTrendPointView `json:"trend_points"`
+	SnapshotConsistency  DNSWorkerSnapshotConsistencyView `json:"snapshot_consistency"`
+	WorkerHealth         DNSWorkerHealthSummaryView       `json:"worker_health"`
 }
 
 type DNSObservabilityTrendPointView struct {
@@ -552,6 +554,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	workerCounts := map[string]int64{}
 	zoneCounts := map[uint]int64{}
 	routeCounts := map[uint]int64{}
+	sourceScopeCounts := map[string]int64{}
 	trendPoints := initDNSObservabilityTrendPoints(windowEnd, hours)
 
 	for _, rollup := range rollups {
@@ -580,6 +583,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 		} else {
 			summary.StaticQueries += count
 		}
+		sourceScopeCounts[normalizeDNSSourceScope(rollup.SourceScope)] += count
 		applyDNSObservabilityTrendPoint(trendPoints, rollup.WindowStart, rcode, rollup.ProxyRouteID > 0, count)
 		rcodeCounts[rcode] += count
 		qtypeCounts[qtype] += count
@@ -623,6 +627,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	summary.WorkerBreakdown = buildDNSObservabilityCounters(workerCounts, workerLabels, 8)
 	summary.ZoneBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(zoneCounts), zoneLabels, 8)
 	summary.RouteBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(routeCounts), routeLabels, 8)
+	summary.SourceScopeBreakdown = buildDNSObservabilityCounters(sourceScopeCounts, nil, 8)
 	summary.TrendPoints = trendPoints
 	checkedAt := time.Now().UTC()
 	summary.SnapshotConsistency = buildDNSWorkerSnapshotConsistency(checkedAt)
@@ -1174,6 +1179,7 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 			WorkerID:        workerID,
 			ZoneID:          input.ZoneID,
 			ProxyRouteID:    input.ProxyRouteID,
+			SourceScope:     normalizeDNSSourceScope(input.SourceScope),
 			QName:           normalizeDNSRecordName(input.QName),
 			QType:           normalizeAuthoritativeDNSRecordTypeOrDefault(input.QType),
 			RCode:           normalizeDNSRCode(input.RCode),
@@ -1190,6 +1196,17 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 		}
 	}
 	return nil
+}
+
+func normalizeDNSSourceScope(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return defaultGSLBScopeKey
+	}
+	if len(value) > 64 {
+		value = value[:64]
+	}
+	return value
 }
 
 func decodeDNSTargetSummary(raw string) map[string]int64 {

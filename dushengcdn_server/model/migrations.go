@@ -1678,6 +1678,32 @@ func validateDatabaseSchemaV21(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV22 adds source-scoped DNS query rollups.
+func migrateV22(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	if db.Migrator().HasColumn(&DNSQueryRollup{}, "source_scope") {
+		if err := db.Model(&DNSQueryRollup{}).
+			Where("source_scope = '' OR source_scope IS NULL").
+			Update("source_scope", "global").Error; err != nil {
+			return fmt.Errorf("backfill dns_query_rollups.source_scope failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateDatabaseSchemaV22(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV21(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasColumn(&DNSQueryRollup{}, "source_scope") {
+		return fmt.Errorf("column dns_query_rollups.source_scope is missing")
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1700,6 +1726,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 18, toVersion: 19, migrate: migrateV19, validate: validateDatabaseSchemaV19},
 		{fromVersion: 19, toVersion: 20, migrate: migrateV20, validate: validateDatabaseSchemaV20},
 		{fromVersion: 20, toVersion: 21, migrate: migrateV21, validate: validateDatabaseSchemaV21},
+		{fromVersion: 21, toVersion: 22, migrate: migrateV22, validate: validateDatabaseSchemaV22},
 	}
 }
 
@@ -1788,7 +1815,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV21(db, backend); err != nil {
+	if err := validateDatabaseSchemaV22(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

@@ -54,6 +54,7 @@ type DNSQueryRollup struct {
 	WorkerID        string    `json:"worker_id" gorm:"index;size:64;not null"`
 	ZoneID          uint      `json:"zone_id" gorm:"index"`
 	ProxyRouteID    uint      `json:"proxy_route_id" gorm:"index"`
+	SourceScope     string    `json:"source_scope" gorm:"index;size:64;not null;default:'global'"`
 	QName           string    `json:"qname" gorm:"index;size:255"`
 	QType           string    `json:"qtype" gorm:"size:16"`
 	RCode           string    `json:"rcode" gorm:"size:32"`

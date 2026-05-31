@@ -1715,6 +1715,12 @@ function DNSObservabilityPanel({
           total={summary.dynamic_queries}
           emptyText="暂无动态 GSLB 站点查询。"
         />
+        <CounterList
+          title="来源作用域"
+          items={summary.source_scope_breakdown}
+          total={summary.total_queries}
+          emptyText="暂无来源作用域分布。"
+        />
       </div>
     </AppCard>
   );

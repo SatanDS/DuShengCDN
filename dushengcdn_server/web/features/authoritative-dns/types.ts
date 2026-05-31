@@ -112,6 +112,7 @@ export interface DNSObservabilitySummary {
   worker_breakdown: DNSObservabilityCounterItem[];
   zone_breakdown: DNSObservabilityCounterItem[];
   route_breakdown: DNSObservabilityCounterItem[];
+  source_scope_breakdown: DNSObservabilityCounterItem[];
   trend_points: DNSObservabilityTrendPoint[];
   snapshot_consistency: DNSWorkerSnapshotConsistency;
   worker_health: DNSWorkerHealthSummary;
