@@ -21,6 +21,7 @@ import {
   deleteDNSRecord,
   deleteDNSWorker,
   deleteDNSZone,
+  getDNSObservability,
   getDNSWorkers,
   getDNSZoneRecords,
   getDNSZones,
@@ -28,6 +29,8 @@ import {
   updateDNSZone,
 } from '@/features/authoritative-dns/api/authoritative-dns';
 import type {
+  DNSObservabilityCounterItem,
+  DNSObservabilitySummary,
   DNSRecordItem,
   DNSRecordMutationPayload,
   DNSRecordType,
@@ -79,6 +82,8 @@ type WorkerFormValues = {
   name: string;
   public_address: string;
 };
+
+const dnsObservabilityWindowHours = 24;
 
 const dnsRecordTypes: DNSRecordType[] = [
   'A',
@@ -142,6 +147,17 @@ function getWorkerStatusVariant(status: DNSWorkerItem['status']) {
   return status === 'online' ? 'success' : 'warning';
 }
 
+function formatCount(value: number) {
+  return value.toLocaleString('zh-CN');
+}
+
+function formatPercent(numerator: number, denominator: number) {
+  if (denominator <= 0) {
+    return '0%';
+  }
+  return `${((numerator / denominator) * 100).toFixed(1)}%`;
+}
+
 async function copyToClipboard(value: string) {
   await navigator.clipboard.writeText(value);
 }
@@ -172,9 +188,18 @@ export function AuthoritativeDNSPage() {
     queryKey: ['authoritative-dns', 'workers'],
     queryFn: getDNSWorkers,
   });
+  const observabilityQuery = useQuery({
+    queryKey: [
+      'authoritative-dns',
+      'observability',
+      dnsObservabilityWindowHours,
+    ],
+    queryFn: () => getDNSObservability(dnsObservabilityWindowHours),
+  });
 
   const zones = useMemo(() => zonesQuery.data ?? [], [zonesQuery.data]);
   const workers = useMemo(() => workersQuery.data ?? [], [workersQuery.data]);
+  const observability = observabilityQuery.data ?? null;
   const selectedZone = useMemo(
     () =>
       zones.find((zone) => zone.id === selectedZoneId) ??
@@ -371,6 +396,16 @@ export function AuthoritativeDNSPage() {
             </div>
           </AppCard>
         </div>
+
+        <DNSObservabilityPanel
+          summary={observability}
+          isLoading={observabilityQuery.isLoading}
+          error={
+            observabilityQuery.isError
+              ? getErrorMessage(observabilityQuery.error)
+              : ''
+          }
+        />
 
         <div className="flex flex-wrap gap-3">
           {[
@@ -836,6 +871,139 @@ function WorkersPanel({
         </div>
       )}
     </AppCard>
+  );
+}
+
+function DNSObservabilityPanel({
+  summary,
+  isLoading,
+  error,
+}: {
+  summary: DNSObservabilitySummary | null;
+  isLoading: boolean;
+  error: string;
+}) {
+  if (isLoading) {
+    return (
+      <AppCard title="DNS 查询观测">
+        <LoadingState />
+      </AppCard>
+    );
+  }
+
+  if (error) {
+    return <ErrorState title="DNS 查询观测加载失败" description={error} />;
+  }
+
+  if (!summary || summary.total_queries <= 0) {
+    return (
+      <AppCard
+        title="DNS 查询观测"
+        description={`最近 ${dnsObservabilityWindowHours} 小时的 Worker 心跳聚合结果。`}
+      >
+        <EmptyState
+          title="暂无 DNS 查询数据"
+          description="DNS Worker 收到查询并上报心跳后，这里会展示查询量、错误码和返回目标分布。"
+        />
+      </AppCard>
+    );
+  }
+
+  return (
+    <AppCard
+      title="DNS 查询观测"
+      description={`最近 ${summary.window_hours} 小时聚合查询；最近上报 ${formatRelativeTime(summary.last_rollup_at)}。`}
+    >
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <InfoTile label="查询量" value={formatCount(summary.total_queries)} />
+        <InfoTile
+          label="成功率"
+          value={formatPercent(summary.successful_queries, summary.total_queries)}
+        />
+        <InfoTile
+          label="动态 GSLB"
+          value={formatCount(summary.dynamic_queries)}
+        />
+        <InfoTile
+          label="错误查询"
+          value={formatCount(summary.error_queries)}
+        />
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <CounterList
+          title="返回码"
+          items={summary.rcode_breakdown}
+          total={summary.total_queries}
+        />
+        <CounterList
+          title="返回目标"
+          items={summary.top_targets}
+          total={summary.dynamic_queries || summary.total_queries}
+          emptyText="暂无 A/AAAA 目标分布。"
+        />
+        <CounterList
+          title="Worker 查询"
+          items={summary.worker_breakdown}
+          total={summary.total_queries}
+        />
+        <CounterList
+          title="动态站点"
+          items={summary.route_breakdown}
+          total={summary.dynamic_queries}
+          emptyText="暂无动态 GSLB 站点查询。"
+        />
+      </div>
+    </AppCard>
+  );
+}
+
+function CounterList({
+  title,
+  items,
+  total,
+  emptyText = '暂无数据。',
+}: {
+  title: string;
+  items: DNSObservabilityCounterItem[];
+  total: number;
+  emptyText?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4">
+      <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+        {title}
+      </h3>
+      {items.length === 0 ? (
+        <p className="mt-3 text-sm text-[var(--foreground-secondary)]">
+          {emptyText}
+        </p>
+      ) : (
+        <div className="mt-3 space-y-3">
+          {items.map((item) => {
+            const percent = total > 0 ? Math.min(100, (item.count / total) * 100) : 0;
+            return (
+              <div key={`${title}-${item.key}`} className="space-y-1">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate text-[var(--foreground-primary)]">
+                    {item.label}
+                  </span>
+                  <span className="shrink-0 text-[var(--foreground-secondary)]">
+                    {formatCount(item.count)}
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-muted)]">
+                  <div
+                    className="h-full rounded-full bg-[var(--accent-primary)]"
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

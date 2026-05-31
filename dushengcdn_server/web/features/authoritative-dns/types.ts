@@ -44,6 +44,32 @@ export interface DNSWorkerItem {
   updated_at: string;
 }
 
+export interface DNSObservabilityCounterItem {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface DNSObservabilitySummary {
+  window_hours: number;
+  window_start: string;
+  window_end: string;
+  last_rollup_at?: string | null;
+  total_queries: number;
+  successful_queries: number;
+  negative_queries: number;
+  error_queries: number;
+  dynamic_queries: number;
+  static_queries: number;
+  rcode_breakdown: DNSObservabilityCounterItem[];
+  qtype_breakdown: DNSObservabilityCounterItem[];
+  top_qnames: DNSObservabilityCounterItem[];
+  top_targets: DNSObservabilityCounterItem[];
+  worker_breakdown: DNSObservabilityCounterItem[];
+  zone_breakdown: DNSObservabilityCounterItem[];
+  route_breakdown: DNSObservabilityCounterItem[];
+}
+
 export interface DNSZoneMutationPayload {
   name: string;
   soa_email: string;

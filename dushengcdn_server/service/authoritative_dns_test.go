@@ -201,3 +201,118 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 		t.Fatalf("expected one rollup, got %d", count)
 	}
 }
+
+func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1-hk"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	windowStart := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Minute)
+	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status: "online",
+		Rollups: []DNSQueryRollupInput{
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        zone.ID,
+				ProxyRouteID:  route.ID,
+				QName:         "www.example.com",
+				QType:         "A",
+				RCode:         "NOERROR",
+				QueryCount:    80,
+				TargetSummary: map[string]int64{"8.8.8.8": 64, "1.1.1.1": 16},
+			},
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        zone.ID,
+				QName:         "missing.example.com",
+				QType:         "A",
+				RCode:         "NXDOMAIN",
+				QueryCount:    5,
+			},
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        zone.ID,
+				ProxyRouteID:  route.ID,
+				QName:         "www.example.com",
+				QType:         "A",
+				RCode:         "SERVFAIL",
+				QueryCount:    2,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.TotalQueries != 87 || summary.SuccessfulQueries != 80 || summary.NegativeQueries != 5 || summary.ErrorQueries != 2 {
+		t.Fatalf("unexpected totals: %+v", summary)
+	}
+	if summary.DynamicQueries != 82 || summary.StaticQueries != 5 {
+		t.Fatalf("unexpected dynamic/static totals: %+v", summary)
+	}
+	assertCounter(t, summary.RCodeBreakdown, "NOERROR", "NOERROR", 80)
+	assertCounter(t, summary.RCodeBreakdown, "NXDOMAIN", "NXDOMAIN", 5)
+	assertCounter(t, summary.RCodeBreakdown, "SERVFAIL", "SERVFAIL", 2)
+	assertCounter(t, summary.TopTargets, "8.8.8.8", "8.8.8.8", 64)
+	assertCounter(t, summary.TopTargets, "1.1.1.1", "1.1.1.1", 16)
+	assertCounter(t, summary.WorkerBreakdown, authenticated.WorkerID, "ns1-hk", 87)
+	assertCounter(t, summary.ZoneBreakdown, "1", "example.com", 87)
+	assertCounter(t, summary.RouteBreakdown, "1", "edge-site", 82)
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	return string(raw)
+}
+
+func assertCounter(t *testing.T, counters []DNSObservabilityCounterView, key string, label string, count int64) {
+	t.Helper()
+	for _, counter := range counters {
+		if counter.Key == key {
+			if counter.Label != label || counter.Count != count {
+				t.Fatalf("unexpected counter for %s: %+v", key, counter)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing counter %s in %+v", key, counters)
+}

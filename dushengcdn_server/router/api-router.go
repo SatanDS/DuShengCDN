@@ -163,6 +163,7 @@ func SetApiRouter(router *gin.Engine) {
 		dnsWorkerAdminRoute.Use(middleware.AdminAuth())
 		{
 			dnsWorkerAdminRoute.GET("/", controller.GetDNSWorkers)
+			dnsWorkerAdminRoute.GET("/observability", controller.GetDNSObservability)
 			dnsWorkerAdminRoute.POST("/", controller.CreateDNSWorker)
 			dnsWorkerAdminRoute.POST("/:id/delete", controller.DeleteDNSWorker)
 		}

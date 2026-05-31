@@ -1,6 +1,7 @@
 import { apiRequest } from '@/lib/api/client';
 
 import type {
+  DNSObservabilitySummary,
   DNSRecordItem,
   DNSRecordMutationPayload,
   DNSWorkerItem,
@@ -69,6 +70,13 @@ export function deleteDNSRecord(id: number) {
 
 export function getDNSWorkers() {
   return apiRequest<DNSWorkerItem[]>('/dns-workers/');
+}
+
+export function getDNSObservability(hours = 24) {
+  const params = new URLSearchParams({ hours: String(hours) });
+  return apiRequest<DNSObservabilitySummary>(
+    `/dns-workers/observability?${params.toString()}`,
+  );
 }
 
 export function createDNSWorker(payload: DNSWorkerMutationPayload) {

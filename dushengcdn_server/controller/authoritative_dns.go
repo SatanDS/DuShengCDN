@@ -141,6 +141,21 @@ func GetDNSWorkers(c *gin.Context) {
 	respondSuccess(c, workers)
 }
 
+func GetDNSObservability(c *gin.Context) {
+	hours, _ := strconv.Atoi(strings.TrimSpace(c.Query("hours")))
+	zoneID, _ := strconv.ParseUint(strings.TrimSpace(c.Query("zone_id")), 10, 64)
+	summary, err := service.GetAuthoritativeDNSObservabilitySummary(service.DNSObservabilitySummaryInput{
+		Hours:    hours,
+		ZoneID:   uint(zoneID),
+		WorkerID: strings.TrimSpace(c.Query("worker_id")),
+	})
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, summary)
+}
+
 func CreateDNSWorker(c *gin.Context) {
 	var input service.DNSWorkerInput
 	if !decodeJSONRequest(c, &input) {

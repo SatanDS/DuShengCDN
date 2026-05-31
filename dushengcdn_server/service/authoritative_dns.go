@@ -112,6 +112,38 @@ type DNSWorkerView struct {
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
+type DNSObservabilitySummaryInput struct {
+	Hours    int
+	ZoneID   uint
+	WorkerID string
+}
+
+type DNSObservabilityCounterView struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Count int64  `json:"count"`
+}
+
+type DNSObservabilitySummaryView struct {
+	WindowHours       int                           `json:"window_hours"`
+	WindowStart       time.Time                     `json:"window_start"`
+	WindowEnd         time.Time                     `json:"window_end"`
+	LastRollupAt      *time.Time                    `json:"last_rollup_at"`
+	TotalQueries      int64                         `json:"total_queries"`
+	SuccessfulQueries int64                         `json:"successful_queries"`
+	NegativeQueries   int64                         `json:"negative_queries"`
+	ErrorQueries      int64                         `json:"error_queries"`
+	DynamicQueries    int64                         `json:"dynamic_queries"`
+	StaticQueries     int64                         `json:"static_queries"`
+	RCodeBreakdown    []DNSObservabilityCounterView `json:"rcode_breakdown"`
+	QTypeBreakdown    []DNSObservabilityCounterView `json:"qtype_breakdown"`
+	TopQNames         []DNSObservabilityCounterView `json:"top_qnames"`
+	TopTargets        []DNSObservabilityCounterView `json:"top_targets"`
+	WorkerBreakdown   []DNSObservabilityCounterView `json:"worker_breakdown"`
+	ZoneBreakdown     []DNSObservabilityCounterView `json:"zone_breakdown"`
+	RouteBreakdown    []DNSObservabilityCounterView `json:"route_breakdown"`
+}
+
 type AuthoritativeDNSSnapshot struct {
 	SnapshotVersion string                          `json:"snapshot_version"`
 	GeneratedAt     time.Time                       `json:"generated_at"`
@@ -328,6 +360,112 @@ func ListAuthoritativeDNSWorkers() ([]DNSWorkerView, error) {
 		views = append(views, buildDNSWorkerView(worker, false))
 	}
 	return views, nil
+}
+
+func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput) (*DNSObservabilitySummaryView, error) {
+	hours := input.Hours
+	if hours <= 0 {
+		hours = 24
+	}
+	if hours > 168 {
+		hours = 168
+	}
+	windowEnd := time.Now().UTC()
+	windowStart := windowEnd.Add(-time.Duration(hours) * time.Hour)
+	var rollups []model.DNSQueryRollup
+	query := model.DB.Where("window_start >= ? AND window_start <= ?", windowStart, windowEnd)
+	if input.ZoneID > 0 {
+		query = query.Where("zone_id = ?", input.ZoneID)
+	}
+	if strings.TrimSpace(input.WorkerID) != "" {
+		query = query.Where("worker_id = ?", strings.TrimSpace(input.WorkerID))
+	}
+	if err := query.Order("window_start asc").Find(&rollups).Error; err != nil {
+		return nil, err
+	}
+
+	summary := &DNSObservabilitySummaryView{
+		WindowHours: hours,
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
+	}
+	rcodeCounts := map[string]int64{}
+	qtypeCounts := map[string]int64{}
+	qnameCounts := map[string]int64{}
+	targetCounts := map[string]int64{}
+	workerCounts := map[string]int64{}
+	zoneCounts := map[uint]int64{}
+	routeCounts := map[uint]int64{}
+
+	for _, rollup := range rollups {
+		if rollup.QueryCount <= 0 {
+			continue
+		}
+		count := rollup.QueryCount
+		rcode := normalizeDNSRCode(rollup.RCode)
+		qtype := normalizeAuthoritativeDNSRecordTypeOrDefault(rollup.QType)
+		qname := normalizeDNSRecordName(rollup.QName)
+		if qname == "" {
+			qname = "unknown"
+		}
+		summary.TotalQueries += count
+		switch rcode {
+		case "NOERROR":
+			summary.SuccessfulQueries += count
+		case "SERVFAIL", "REFUSED":
+			summary.ErrorQueries += count
+		default:
+			summary.NegativeQueries += count
+		}
+		if rollup.ProxyRouteID > 0 {
+			summary.DynamicQueries += count
+			routeCounts[rollup.ProxyRouteID] += count
+		} else {
+			summary.StaticQueries += count
+		}
+		rcodeCounts[rcode] += count
+		qtypeCounts[qtype] += count
+		qnameCounts[qname] += count
+		if strings.TrimSpace(rollup.WorkerID) != "" {
+			workerCounts[strings.TrimSpace(rollup.WorkerID)] += count
+		}
+		if rollup.ZoneID > 0 {
+			zoneCounts[rollup.ZoneID] += count
+		}
+		for target, targetCount := range decodeDNSTargetSummary(rollup.TargetSummary) {
+			if targetCount <= 0 {
+				continue
+			}
+			targetCounts[target] += targetCount
+		}
+		rollupEnd := rollup.WindowStart.Add(time.Duration(normalizeDNSRollupWindow(rollup.WindowMinutes)) * time.Minute)
+		if summary.LastRollupAt == nil || rollupEnd.After(*summary.LastRollupAt) {
+			lastRollupAt := rollupEnd
+			summary.LastRollupAt = &lastRollupAt
+		}
+	}
+
+	workerLabels, err := dnsWorkerLabels()
+	if err != nil {
+		return nil, err
+	}
+	zoneLabels, err := dnsZoneLabels()
+	if err != nil {
+		return nil, err
+	}
+	routeLabels, err := dnsRouteLabels(routeCounts)
+	if err != nil {
+		return nil, err
+	}
+
+	summary.RCodeBreakdown = buildDNSObservabilityCounters(rcodeCounts, nil, 10)
+	summary.QTypeBreakdown = buildDNSObservabilityCounters(qtypeCounts, nil, 10)
+	summary.TopQNames = buildDNSObservabilityCounters(qnameCounts, nil, 8)
+	summary.TopTargets = buildDNSObservabilityCounters(targetCounts, nil, 8)
+	summary.WorkerBreakdown = buildDNSObservabilityCounters(workerCounts, workerLabels, 8)
+	summary.ZoneBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(zoneCounts), zoneLabels, 8)
+	summary.RouteBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(routeCounts), routeLabels, 8)
+	return summary, nil
 }
 
 func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) {
@@ -794,6 +932,126 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 		}
 	}
 	return nil
+}
+
+func decodeDNSTargetSummary(raw string) map[string]int64 {
+	var result map[string]int64
+	if strings.TrimSpace(raw) == "" {
+		return map[string]int64{}
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return map[string]int64{}
+	}
+	for target, count := range result {
+		trimmed := strings.TrimSpace(target)
+		if trimmed == "" || count <= 0 {
+			delete(result, target)
+			continue
+		}
+		if trimmed != target {
+			delete(result, target)
+			result[trimmed] += count
+		}
+	}
+	return result
+}
+
+func dnsWorkerLabels() (map[string]string, error) {
+	workers, err := model.ListDNSWorkers()
+	if err != nil {
+		return nil, err
+	}
+	labels := make(map[string]string, len(workers))
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		label := strings.TrimSpace(worker.Name)
+		if label == "" {
+			label = worker.WorkerID
+		}
+		labels[worker.WorkerID] = label
+	}
+	return labels, nil
+}
+
+func dnsZoneLabels() (map[string]string, error) {
+	zones, err := model.ListDNSZones()
+	if err != nil {
+		return nil, err
+	}
+	labels := make(map[string]string, len(zones))
+	for _, zone := range zones {
+		if zone == nil {
+			continue
+		}
+		labels[fmt.Sprint(zone.ID)] = zone.Name
+	}
+	return labels, nil
+}
+
+func dnsRouteLabels(counts map[uint]int64) (map[string]string, error) {
+	labels := make(map[string]string, len(counts))
+	for routeID := range counts {
+		if routeID == 0 {
+			continue
+		}
+		route := &model.ProxyRoute{}
+		if err := model.DB.First(route, routeID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		label := normalizeProxyRouteSiteNameInput(route, route.SiteName, route.Domain)
+		if label == "" {
+			label = fmt.Sprintf("Route %d", routeID)
+		}
+		labels[fmt.Sprint(routeID)] = label
+	}
+	return labels, nil
+}
+
+func uintCountsToStringCounts(input map[uint]int64) map[string]int64 {
+	result := make(map[string]int64, len(input))
+	for key, count := range input {
+		if key == 0 || count <= 0 {
+			continue
+		}
+		result[fmt.Sprint(key)] = count
+	}
+	return result
+}
+
+func buildDNSObservabilityCounters(counts map[string]int64, labels map[string]string, limit int) []DNSObservabilityCounterView {
+	items := make([]DNSObservabilityCounterView, 0, len(counts))
+	for key, count := range counts {
+		key = strings.TrimSpace(key)
+		if key == "" || count <= 0 {
+			continue
+		}
+		label := key
+		if labels != nil {
+			if value := strings.TrimSpace(labels[key]); value != "" {
+				label = value
+			}
+		}
+		items = append(items, DNSObservabilityCounterView{
+			Key:   key,
+			Label: label,
+			Count: count,
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Count != items[j].Count {
+			return items[i].Count > items[j].Count
+		}
+		return items[i].Key < items[j].Key
+	})
+	if limit > 0 && len(items) > limit {
+		return items[:limit]
+	}
+	return items
 }
 
 func normalizeDNSZoneName(raw string) (string, error) {

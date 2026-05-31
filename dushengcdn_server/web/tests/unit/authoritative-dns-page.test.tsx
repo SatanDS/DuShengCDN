@@ -84,6 +84,53 @@ describe('Authoritative DNS page', () => {
           );
         }
 
+        if (url.includes('/dns-workers/observability')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  window_hours: 24,
+                  window_start: '2026-05-30T08:00:00Z',
+                  window_end: '2026-05-31T08:00:00Z',
+                  last_rollup_at: '2026-05-31T08:06:00Z',
+                  total_queries: 128,
+                  successful_queries: 120,
+                  negative_queries: 5,
+                  error_queries: 3,
+                  dynamic_queries: 100,
+                  static_queries: 28,
+                  rcode_breakdown: [
+                    { key: 'NOERROR', label: 'NOERROR', count: 120 },
+                    { key: 'SERVFAIL', label: 'SERVFAIL', count: 3 },
+                  ],
+                  qtype_breakdown: [{ key: 'A', label: 'A', count: 128 }],
+                  top_qnames: [
+                    {
+                      key: 'www.example.com',
+                      label: 'www.example.com',
+                      count: 100,
+                    },
+                  ],
+                  top_targets: [
+                    { key: '203.0.113.10', label: '203.0.113.10', count: 80 },
+                  ],
+                  worker_breakdown: [
+                    { key: 'dns-worker-7', label: 'ns1-hk', count: 128 },
+                  ],
+                  zone_breakdown: [
+                    { key: '1', label: 'example.com', count: 128 },
+                  ],
+                  route_breakdown: [
+                    { key: '1', label: 'edge-site', count: 100 },
+                  ],
+                },
+              }),
+            ),
+          );
+        }
+
         if (url.includes('/dns-zones/')) {
           return Promise.resolve(
             new Response(
@@ -172,10 +219,15 @@ describe('Authoritative DNS page', () => {
     expect(await screen.findAllByText('example.com')).toHaveLength(2);
     expect(screen.getAllByText('ns1.example.net').length).toBeGreaterThan(0);
     expect(await screen.findByText('www.example.com')).toBeInTheDocument();
+    expect(await screen.findByText('DNS 查询观测')).toBeInTheDocument();
+    expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
+    expect(screen.getByText('edge-site')).toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));
-    expect(await screen.findByText('ns1-hk')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByText('ns1-hk').length).toBeGreaterThan(0);
+    });
 
     await user.click(screen.getAllByRole('button', { name: '创建 Worker' })[0]);
     const createDialog = await screen.findByRole('dialog', {

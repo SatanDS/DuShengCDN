@@ -4,7 +4,7 @@
 
 本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
 
-当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。管理端已经接入 DNS 查询聚合观测，可查看查询量、返回码、Worker/Zone/站点维度和返回目标分布。
 
 ## 目标能力
 
@@ -137,6 +137,7 @@ route_id + record_type + source_scope
 | `POST /api/dns-records/{id}/update` | 更新静态 DNS 记录 |
 | `POST /api/dns-records/{id}/delete` | 删除静态 DNS 记录 |
 | `GET /api/dns-workers/` | 查看 DNS Worker 在线状态、监听地址、版本和快照时间 |
+| `GET /api/dns-workers/observability` | 查看 DNS Worker 查询聚合、返回码、Worker/Zone/站点维度和返回目标分布 |
 | `POST /api/dns-workers/` | 创建 DNS Worker Token |
 | `POST /api/dns-workers/{id}/delete` | 删除 DNS Worker |
 | `GET /api/dns-snapshot` | DNS Worker 拉取只读调度快照，需 Worker Token |
@@ -145,14 +146,14 @@ route_id + record_type + source_scope
 已落地的前端入口：
 
 * 左侧「权威 DNS」主菜单作为独立基础设施资源入口。
-* 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳和快照时间。
+* 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、查询量、返回码、返回目标和动态站点分布。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
 * GSLB 节点池策略继续放在网站配置里，权威 DNS 只负责实时执行策略。
 
 仍待增强的前端能力：
 
 * Zone 委派检查、Glue 提示和迁移向导。
-* DNS Worker 查询量、SERVFAIL/NXDOMAIN 比例和返回目标分布。
+* DNS Worker 查询趋势图、SERVFAIL/NXDOMAIN 比例趋势和多 Worker 快照一致性告警。
 
 ## DNS 协议行为
 
@@ -215,8 +216,9 @@ TTL 规则：
 
 ### 阶段 3：观测、联调与迁移体验
 
-* DNS Worker 上报查询聚合、返回目标分布和错误码分布。
-* 管理端展示 DNS Worker 状态、Zone 委派检查和查询趋势。
+* DNS Worker 已上报查询聚合、返回目标分布和错误码分布。
+* 管理端已展示 DNS Worker 状态、查询量、返回码、Worker/Zone/站点维度和返回目标分布。
+* 管理端仍需补 Zone 委派检查、查询趋势图和多 Worker 快照一致性告警。
 * 提供从 Cloudflare 同步模式切换到自建权威 DNS 模式的向导。
 * 文档补充注册商 NS、Glue、端口、防火墙和回滚步骤。
 
