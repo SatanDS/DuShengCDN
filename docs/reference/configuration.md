@@ -27,6 +27,8 @@ Agent 支持：
 | DNS Worker 快照缓存 | `data/dns-worker-snapshot.json` | 由 DNS Worker 保存最后一次有效调度快照，文件包含 SHA-256 checksum 元数据和可恢复的 GSLB 防抖状态，并兼容旧裸快照 JSON |
 | Agent 配置文件 | `./agent.json` | 可通过 `-config` 指定 |
 | 一键安装 Agent 配置 | `/opt/dushengcdn-agent/agent.json` | 安装脚本默认生成 |
+| 一键安装 DNS Worker 环境文件 | `/opt/dushengcdn-dns-worker/dns-worker.env` | 安装脚本默认生成，包含 Server 地址、Worker Token、监听地址和快照路径 |
+| 一键安装 DNS Worker 数据目录 | `/opt/dushengcdn-dns-worker/data` | 安装脚本默认生成，用于保存快照缓存 |
 | Agent 数据目录 | 配置文件所在目录下的 `data` | 可通过 `data_dir` 修改 |
 
 ## Server 命令行参数
@@ -213,6 +215,8 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH` | 可选本地 MaxMind Country MMDB 路径，用于按国家代码匹配 GSLB 节点池 | 空 |
 
 ## DNS Worker 命令行参数
+
+一键安装脚本 `scripts/install-dns-worker.sh` 会把这些字段写入 `/opt/dushengcdn-dns-worker/dns-worker.env`，并创建 `dushengcdn-dns-worker.service`。脚本参数与运行时环境变量保持同名语义，例如 `--server-url` 写入 `DUSHENGCDN_DNS_WORKER_SERVER_URL`，`--token` 写入 `DUSHENGCDN_DNS_WORKER_TOKEN`。
 
 | 参数 | 作用 | 默认值 |
 | --- | --- | --- |

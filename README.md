@@ -260,7 +260,17 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker Token，然后打开「迁移向导」检查 Cloudflare 模式网站的 Zone、Worker 和 GSLB 准备状态，再把域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里切换到自建权威 DNS。完成注册商 NS 配置后，可以在 Zone 详情点击「检查委派」确认公网 NS 是否匹配；如果使用 `ns1.example.com` 这类 Zone 内 NS，还需要在注册商配置 Glue/主机记录。
 
-Docker 运行示例：
+推荐使用安装脚本部署 DNS Worker：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
+  --server-url https://cdn.example.com \
+  --token YOUR_DNS_WORKER_TOKEN
+```
+
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。如需本地国家代码匹配，可追加 `--geoip-database /var/lib/GeoLite2-Country.mmdb`。
+
+Docker 运行示例也可继续使用：
 
 ```bash
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
@@ -295,6 +305,12 @@ dig @YOUR_DNS_WORKER_IP www.example.com A
 生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。Worker 本地快照缓存会写入 SHA-256 checksum 元数据，启动加载时会校验完整性，并从快照中的 GSLB 防抖状态恢复最近可用选择；运行中产生的新防抖状态会随 heartbeat 批量回传 Server，同时兼容旧版本生成的裸快照 JSON。Worker 默认按来源 IP 每秒限制 `200` 次查询，并把 UDP 响应上限限制为 `1232` 字节；超大响应会设置 TC 位让递归解析器回退 TCP。如果要按国家代码匹配 GSLB 节点池，可配置本地 MaxMind Country MMDB；如果在节点池里配置来源 CIDR，则会优先按来源 IP/ECS 命中 `cidr:...` 作用域；启用 `weighted` 或 `load_aware` 时会追加 `|bucket:xx` 分流桶，未命中且无法识别国家时会回退到 `global` 作用域。
 
 Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前调度状态，便于确认实时 GSLB 是否按预期分流；「GSLB 调度状态」会列出每个站点、A/AAAA、`global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42` 等来源作用域的当前实际目标、期望目标和防抖状态；「GSLB 调度模拟」可在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照会返回的边缘 IP，并展示节点池匹配、候选节点、跳过节点和原因。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
+
+卸载 DNS Worker：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uninstall-dns-worker.sh | bash
+```
 
 ### 5. 卸载 Agent
 
@@ -388,7 +404,7 @@ docker compose -f docker-compose.agent.yaml ps
 
 如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `3010:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token；确认没有需要保留的源码修改后，再使用 `git fetch origin main && git reset --hard origin/main` 拉回新版。源码 Compose 构建时会通过 `DUSHENGCDN_VERSION` 把当前 Git 版本写入 Server 或 Agent；顶栏“版本”显示当前运行中的后端版本，节点列表显示 Agent 上报的版本。
 
-节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。没有 Release 资产时，安装脚本会从源码构建并写入当前 Git 版本。
+节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。DNS Worker 使用安装脚本部署时也可重复执行脚本升级，脚本会优先下载对应平台的 DNS Worker Release 资产并校验 `.sha256`。没有 Release 资产时，安装脚本会从源码构建并写入当前 Git 版本。
 
 ### 7. 发布 Release 与 latest
 
@@ -396,8 +412,8 @@ docker compose -f docker-compose.agent.yaml ps
 
 * 发布二进制：进入 GitHub 仓库 `Actions` -> `Release` -> `Run workflow`，填写版本号，例如 `v1.0.0` 或 `v1.0.0-beta`。工作流会构建 Server、Agent 多平台二进制并上传到 Release。
 * `v1.0.0` 这类纯数字版本会作为正式 Release；`v1.0.0-beta` 这类带后缀版本会作为 prerelease。GitHub 的 `releases/latest` 会指向最新正式 Release。
-* 发布 Docker 镜像：进入 `Actions` -> `Docker image builds` -> `Run workflow`，填写同一个版本号。工作流会推送 `ghcr.io/satands/dushengcdn:<version>`、`ghcr.io/satands/dushengcdn:latest`、`ghcr.io/satands/dushengcdn-agent:<version>` 和 `ghcr.io/satands/dushengcdn-agent:latest`。
-* 安装脚本会优先读取 `https://github.com/SatanDS/DuShengCDN/releases/latest` 中的 Agent 资产；没有匹配资产时才回退到源码构建。
+* 发布 Docker 镜像：进入 `Actions` -> `Docker image builds` -> `Run workflow`，填写同一个版本号。工作流会推送 `ghcr.io/satands/dushengcdn:<version>`、`ghcr.io/satands/dushengcdn:latest`、`ghcr.io/satands/dushengcdn-agent:<version>`、`ghcr.io/satands/dushengcdn-agent:latest`、`ghcr.io/satands/dushengcdn-dns-worker:<version>` 和 `ghcr.io/satands/dushengcdn-dns-worker:latest`。
+* 安装脚本会优先读取 `https://github.com/SatanDS/DuShengCDN/releases/latest` 中的 Agent 或 DNS Worker 资产；没有匹配资产时才回退到源码构建。
 * GitHub Actions 已切换到支持 Node.js 24 的动作版本，并显式启用 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`，用于规避 Node.js 20 弃用警告。
 
 

@@ -734,12 +734,18 @@ describe('Authoritative DNS page', () => {
       ).toBeInTheDocument();
     });
     expect(screen.getByDisplayValue('created-token')).toBeInTheDocument();
+    expect(screen.getByText(/install-dns-worker\.sh/)).toBeInTheDocument();
+    expect(screen.getAllByText(/--token created-token/).length).toBeGreaterThan(
+      0,
+    );
     expect(
       screen.getByText(/DUSHENGCDN_DNS_WORKER_TOKEN=created-token/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/--udp-response-size 1232/)).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/--udp-response-size 1232/).length,
+    ).toBeGreaterThan(0);
   });
 });

@@ -164,6 +164,14 @@ journalctl -u dushengcdn-agent -f
 如果希望域名按每次 DNS 查询来源实时调度到不同边缘节点，先在左侧「权威 DNS」创建 Zone 和 DNS Worker Token，再部署 DNS Worker：
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
+  --server-url http://your-server:3000 \
+  --token YOUR_DNS_WORKER_TOKEN
+```
+
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并保存本地快照缓存。也可以使用 Docker 方式：
+
+```bash
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp \
   -v dushengcdn-dns-worker-data:/data \
@@ -176,7 +184,7 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
 
 然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里把 `DNS 模式` 切换为 `自建权威 DNS`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。Worker 默认按来源 IP 限制查询速率，并对超大 UDP 响应设置 TC 位回退 TCP；GSLB 节点池可按来源 CIDR 或国家代码匹配不同池。Worker 上报心跳后，左侧「权威 DNS」会展示查询趋势、SERVFAIL/NXDOMAIN 趋势和快照一致性告警，便于确认实时 GSLB 与多 Worker 快照状态。
 
-## 5. 验证是否成功
+## 6. 验证是否成功
 
 在管理端确认：
 

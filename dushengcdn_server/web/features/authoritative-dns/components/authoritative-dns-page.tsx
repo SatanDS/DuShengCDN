@@ -1870,32 +1870,7 @@ function GSLBSimulationDiagnostics({
           </p>
           <div className="grid gap-2 md:grid-cols-2">
             {result.matched_pools.map((pool) => (
-              <div
-                key={pool.name}
-                className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-[var(--foreground-primary)]">
-                    {pool.name}
-                  </span>
-                  <StatusBadge
-                    label={pool.matched ? '参与' : '跳过'}
-                    variant={pool.matched ? 'success' : 'warning'}
-                  />
-                </div>
-                <p className="mt-2 text-xs text-[var(--foreground-secondary)]">
-                  权重 {pool.weight}
-                  {pool.countries.length > 0
-                    ? ` · 国家 ${pool.countries.join(', ')}`
-                    : ''}
-                  {pool.source_cidrs.length > 0
-                    ? ` · CIDR ${pool.source_cidrs.join(', ')}`
-                    : ''}
-                </p>
-                <p className="mt-1 text-xs text-[var(--foreground-muted)]">
-                  {pool.reason}
-                </p>
-              </div>
+              <GSLBSimulationPoolCard key={pool.name} pool={pool} />
             ))}
           </div>
         </div>
@@ -1978,6 +1953,37 @@ function GSLBSimulationDiagnostics({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function GSLBSimulationPoolCard({
+  pool,
+}: {
+  pool: DNSGSLBSimulationResult['matched_pools'][number];
+}) {
+  const countries = pool.countries ?? [];
+  const sourceCIDRs = pool.source_cidrs ?? [];
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-medium text-[var(--foreground-primary)]">
+          {pool.name}
+        </span>
+        <StatusBadge
+          label={pool.matched ? '参与' : '跳过'}
+          variant={pool.matched ? 'success' : 'warning'}
+        />
+      </div>
+      <p className="mt-2 text-xs text-[var(--foreground-secondary)]">
+        权重 {pool.weight}
+        {countries.length > 0 ? ` · 国家 ${countries.join(', ')}` : ''}
+        {sourceCIDRs.length > 0 ? ` · CIDR ${sourceCIDRs.join(', ')}` : ''}
+      </p>
+      <p className="mt-1 text-xs text-[var(--foreground-muted)]">
+        {pool.reason}
+      </p>
     </div>
   );
 }
@@ -3023,6 +3029,11 @@ function WorkerTokenModal({
 }) {
   const [copyMessage, setCopyMessage] = useState('');
   const token = worker.token ?? '';
+  const installCommand = `curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \\
+  --server-url ${serverUrl} \\
+  --token ${token || 'YOUR_DNS_WORKER_TOKEN'} \\
+  --query-rate-limit 200 \\
+  --udp-response-size 1232`;
   const dockerCommand = `docker run -d --name dushengcdn-dns-worker --restart unless-stopped \\
   -p 53:53/udp -p 53:53/tcp \\
   -v dushengcdn-dns-worker-data:/data \\
@@ -3072,6 +3083,24 @@ go run ./cmd/dns-worker \\
             </SecondaryButton>
           </div>
         </ResourceField>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+              安装脚本命令
+            </h3>
+            <SecondaryButton
+              type="button"
+              onClick={() =>
+                void handleCopy(installCommand, '安装脚本命令已复制。')
+              }
+            >
+              复制命令
+            </SecondaryButton>
+          </div>
+          <CodeBlock className="break-all whitespace-pre-wrap">
+            {installCommand}
+          </CodeBlock>
+        </div>
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
