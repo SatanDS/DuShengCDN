@@ -185,7 +185,7 @@ TTL 规则：
 权威 DNS 是入口能力，必须按高可用设计：
 
 * 生产至少部署两个 DNS Worker，并在注册商配置两个 NS。
-* DNS Worker 保存最后一次有效快照和快照签名；Server 暂时不可用时继续服务。
+* DNS Worker 保存最后一次有效快照，并在本地缓存文件中写入 SHA-256 checksum 完整性元数据；启动加载缓存时会先校验 checksum，Server 暂时不可用时继续使用最后一次校验通过的快照服务。
 * 快照超过 `AuthoritativeDNSSnapshotMaxAge` 后，动态 GSLB 记录返回 `SERVFAIL`，静态 SOA/NS 可继续返回。
 * 管理端会按最近心跳检测在线 Worker 的快照版本和快照年龄，并在多 Worker 版本不一致或快照过期时告警。
 * 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；最近探测会参与迁移准备状态，但这仍不是多地域探测网络。
@@ -252,7 +252,7 @@ TTL 规则：
 * `dig @worker-ip example.com A` 能按 GSLB 策略返回在线节点公网 IP。
 * HK/EU 等国家来源能命中不同节点池；无来源信息时走全局策略。
 * 节点离线、排空、OpenResty 不健康或超过负载阈值时不会被返回。
-* Server 不可用时，DNS Worker 可使用最后一次有效快照继续回答。
+* Server 不可用时，DNS Worker 可使用最后一次校验通过的有效快照继续回答。
 * 单元测试覆盖 DNS 协议响应、GSLB 调度、TTL、防抖和快照失效。
 
 第三阶段完成时：

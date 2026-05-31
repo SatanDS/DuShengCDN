@@ -1,13 +1,20 @@
 package dnsworker
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	persistedSnapshotFormat        = "dushengcdn.dns_worker.snapshot"
+	persistedSnapshotFormatVersion = 1
 )
 
 type SnapshotStore struct {
@@ -34,6 +41,14 @@ type recordKey struct {
 	Type   string
 }
 
+type persistedSnapshotEnvelope struct {
+	Format        string    `json:"format"`
+	FormatVersion int       `json:"format_version"`
+	SavedAt       time.Time `json:"saved_at"`
+	Checksum      string    `json:"checksum"`
+	Snapshot      *Snapshot `json:"snapshot"`
+}
+
 func NewSnapshotStore(path string, maxAge time.Duration) *SnapshotStore {
 	if maxAge <= 0 {
 		maxAge = DefaultSnapshotMaxAge
@@ -56,12 +71,24 @@ func (s *SnapshotStore) LoadFromDisk() error {
 		s.setLastError(err)
 		return err
 	}
+	if snapshot, ok, err := decodePersistedSnapshotEnvelope(raw); ok {
+		if err != nil {
+			s.setLastError(err)
+			return err
+		}
+		if err := s.Set(snapshot); err != nil {
+			s.setLastError(err)
+			return err
+		}
+		return nil
+	}
 	var snapshot Snapshot
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		s.setLastError(err)
 		return err
 	}
 	if err := s.Set(&snapshot); err != nil {
+		s.setLastError(err)
 		return err
 	}
 	return nil
@@ -93,7 +120,24 @@ func (s *SnapshotStore) Save(snapshot *Snapshot) error {
 		s.setLastError(err)
 		return err
 	}
-	raw, err := json.MarshalIndent(snapshot, "", "  ")
+	normalized, err := prepareSnapshotForPersistence(snapshot)
+	if err != nil {
+		s.setLastError(err)
+		return err
+	}
+	checksum, err := checksumSnapshot(normalized)
+	if err != nil {
+		s.setLastError(err)
+		return err
+	}
+	envelope := persistedSnapshotEnvelope{
+		Format:        persistedSnapshotFormat,
+		FormatVersion: persistedSnapshotFormatVersion,
+		SavedAt:       time.Now().UTC(),
+		Checksum:      checksum,
+		Snapshot:      normalized,
+	}
+	raw, err := json.MarshalIndent(envelope, "", "  ")
 	if err != nil {
 		s.setLastError(err)
 		return err
@@ -104,8 +148,14 @@ func (s *SnapshotStore) Save(snapshot *Snapshot) error {
 		return err
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
-		s.setLastError(err)
-		return err
+		if removeErr := os.Remove(s.path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			s.setLastError(err)
+			return err
+		}
+		if retryErr := os.Rename(tmp, s.path); retryErr != nil {
+			s.setLastError(retryErr)
+			return retryErr
+		}
 	}
 	return nil
 }
@@ -159,6 +209,56 @@ func (s *SnapshotStore) setLastError(err error) {
 	s.mu.Lock()
 	s.lastError = err.Error()
 	s.mu.Unlock()
+}
+
+func decodePersistedSnapshotEnvelope(raw []byte) (*Snapshot, bool, error) {
+	var envelope persistedSnapshotEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, false, nil
+	}
+	if envelope.Snapshot == nil && strings.TrimSpace(envelope.Format) == "" && strings.TrimSpace(envelope.Checksum) == "" {
+		return nil, false, nil
+	}
+	if strings.TrimSpace(envelope.Format) != "" && envelope.Format != persistedSnapshotFormat {
+		return nil, true, fmt.Errorf("unsupported snapshot cache format %q", envelope.Format)
+	}
+	if envelope.FormatVersion != 0 && envelope.FormatVersion != persistedSnapshotFormatVersion {
+		return nil, true, fmt.Errorf("unsupported snapshot cache format version %d", envelope.FormatVersion)
+	}
+	if envelope.Snapshot == nil {
+		return nil, true, errors.New("snapshot cache envelope is missing snapshot")
+	}
+	if strings.TrimSpace(envelope.Checksum) == "" {
+		return nil, true, errors.New("snapshot cache envelope is missing checksum")
+	}
+	expected, err := checksumSnapshot(envelope.Snapshot)
+	if err != nil {
+		return nil, true, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(envelope.Checksum), expected) {
+		return nil, true, fmt.Errorf("snapshot checksum mismatch: expected %s", expected)
+	}
+	return envelope.Snapshot, true, nil
+}
+
+func prepareSnapshotForPersistence(snapshot *Snapshot) (*Snapshot, error) {
+	if snapshot == nil || strings.TrimSpace(snapshot.SnapshotVersion) == "" {
+		return nil, errors.New("snapshot is invalid")
+	}
+	return normalizeSnapshot(snapshot), nil
+}
+
+func checksumSnapshot(snapshot *Snapshot) (string, error) {
+	normalized, err := prepareSnapshotForPersistence(snapshot)
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("sha256:%x", sum), nil
 }
 
 func normalizeSnapshot(input *Snapshot) *Snapshot {
