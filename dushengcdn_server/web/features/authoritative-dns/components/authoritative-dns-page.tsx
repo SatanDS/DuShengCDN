@@ -10,6 +10,7 @@ import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
+import { TrendChart } from '@/components/data/trend-chart';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { AppModal } from '@/components/ui/app-modal';
@@ -36,6 +37,8 @@ import type {
   DNSRecordMutationPayload,
   DNSRecordType,
   DNSWorkerItem,
+  DNSWorkerSnapshotConsistency,
+  DNSWorkerSnapshotConsistencyStatus,
   DNSZoneDelegationCheck,
   DNSZoneDelegationStatus,
   DNSZoneItem,
@@ -161,6 +164,49 @@ function formatPercent(numerator: number, denominator: number) {
   return `${((numerator / denominator) * 100).toFixed(1)}%`;
 }
 
+function formatTrendHour(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getSnapshotConsistencyLabel(
+  status: DNSWorkerSnapshotConsistencyStatus,
+) {
+  switch (status) {
+    case 'consistent':
+      return '快照一致';
+    case 'divergent':
+      return '快照不一致';
+    case 'stale':
+      return '快照过期';
+    case 'no_online_workers':
+      return '无在线 Worker';
+    case 'unknown':
+      return '状态未知';
+  }
+}
+
+function getSnapshotConsistencyVariant(
+  status: DNSWorkerSnapshotConsistencyStatus,
+) {
+  switch (status) {
+    case 'consistent':
+      return 'success' as const;
+    case 'divergent':
+    case 'stale':
+      return 'danger' as const;
+    case 'no_online_workers':
+    case 'unknown':
+      return 'warning' as const;
+  }
+}
+
 function getDelegationStatusLabel(status: DNSZoneDelegationStatus) {
   switch (status) {
     case 'matched':
@@ -201,10 +247,14 @@ export function AuthoritativeDNSPage() {
   const [selectedZoneId, setSelectedZoneId] = useState<number | null>(null);
   const [editingZone, setEditingZone] = useState<DNSZoneItem | null>(null);
   const [isZoneModalOpen, setIsZoneModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<DNSRecordItem | null>(null);
+  const [editingRecord, setEditingRecord] = useState<DNSRecordItem | null>(
+    null,
+  );
   const [recordZone, setRecordZone] = useState<DNSZoneItem | null>(null);
   const [isWorkerModalOpen, setIsWorkerModalOpen] = useState(false);
-  const [createdWorker, setCreatedWorker] = useState<DNSWorkerItem | null>(null);
+  const [createdWorker, setCreatedWorker] = useState<DNSWorkerItem | null>(
+    null,
+  );
   const [serverUrl, setServerUrl] = useState('https://cdn.example.com');
 
   useEffect(() => {
@@ -232,10 +282,7 @@ export function AuthoritativeDNSPage() {
   const workers = useMemo(() => workersQuery.data ?? [], [workersQuery.data]);
   const observability = observabilityQuery.data ?? null;
   const selectedZone = useMemo(
-    () =>
-      zones.find((zone) => zone.id === selectedZoneId) ??
-      zones[0] ??
-      null,
+    () => zones.find((zone) => zone.id === selectedZoneId) ?? zones[0] ?? null,
     [selectedZoneId, zones],
   );
   const selectedZoneRecordsQuery = useQuery({
@@ -779,7 +826,10 @@ function ZonesPanel({
                   {recordsLoading ? (
                     <LoadingState />
                   ) : recordsError ? (
-                    <ErrorState title="记录加载失败" description={recordsError} />
+                    <ErrorState
+                      title="记录加载失败"
+                      description={recordsError}
+                    />
                   ) : records.length === 0 ? (
                     <EmptyState
                       title="暂无静态记录"
@@ -802,11 +852,11 @@ function ZonesPanel({
                                     record.enabled ? 'success' : 'warning'
                                   }
                                 />
-                                <p className="break-all text-sm font-semibold text-[var(--foreground-primary)]">
+                                <p className="text-sm font-semibold break-all text-[var(--foreground-primary)]">
                                   {record.name}
                                 </p>
                               </div>
-                              <p className="break-all text-sm text-[var(--foreground-secondary)]">
+                              <p className="text-sm break-all text-[var(--foreground-secondary)]">
                                 {record.value}
                               </p>
                               <p className="text-xs text-[var(--foreground-muted)]">
@@ -1084,7 +1134,7 @@ function DNSObservabilityPanel({
     return <ErrorState title="DNS 查询观测加载失败" description={error} />;
   }
 
-  if (!summary || summary.total_queries <= 0) {
+  if (!summary) {
     return (
       <AppCard
         title="DNS 查询观测"
@@ -1107,19 +1157,23 @@ function DNSObservabilityPanel({
         <InfoTile label="查询量" value={formatCount(summary.total_queries)} />
         <InfoTile
           label="成功率"
-          value={formatPercent(summary.successful_queries, summary.total_queries)}
+          value={formatPercent(
+            summary.successful_queries,
+            summary.total_queries,
+          )}
         />
         <InfoTile
           label="动态 GSLB"
           value={formatCount(summary.dynamic_queries)}
         />
-        <InfoTile
-          label="错误查询"
-          value={formatCount(summary.error_queries)}
-        />
+        <InfoTile label="错误查询" value={formatCount(summary.error_queries)} />
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <DNSQueryTrendPanel summary={summary} />
+        <DNSSnapshotConsistencyPanel
+          consistency={summary.snapshot_consistency}
+        />
         <CounterList
           title="返回码"
           items={summary.rcode_breakdown}
@@ -1147,6 +1201,142 @@ function DNSObservabilityPanel({
   );
 }
 
+function DNSQueryTrendPanel({ summary }: { summary: DNSObservabilitySummary }) {
+  const labels = summary.trend_points.map((point) =>
+    formatTrendHour(point.bucket_started_at),
+  );
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4 xl:col-span-2">
+      <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+        查询趋势
+      </h3>
+      <div className="mt-4">
+        <TrendChart
+          labels={labels}
+          height={240}
+          series={[
+            {
+              label: '查询量',
+              color: '#2563eb',
+              fillColor: 'rgba(37,99,235,0.14)',
+              values: summary.trend_points.map((point) => point.query_count),
+              variant: 'area',
+              valueFormatter: formatCount,
+            },
+            {
+              label: 'SERVFAIL',
+              color: '#dc2626',
+              values: summary.trend_points.map(
+                (point) => point.servfail_queries,
+              ),
+              valueFormatter: formatCount,
+            },
+            {
+              label: 'NXDOMAIN',
+              color: '#f59e0b',
+              values: summary.trend_points.map(
+                (point) => point.nxdomain_queries,
+              ),
+              valueFormatter: formatCount,
+            },
+          ]}
+          yAxisValueFormatter={formatCount}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DNSSnapshotConsistencyPanel({
+  consistency,
+}: {
+  consistency?: DNSWorkerSnapshotConsistency;
+}) {
+  if (!consistency) {
+    return (
+      <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4">
+        <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+          快照一致性
+        </h3>
+        <p className="mt-3 text-sm text-[var(--foreground-secondary)]">
+          暂无 Worker 快照状态。
+        </p>
+      </div>
+    );
+  }
+
+  const isRisk =
+    consistency.status === 'divergent' || consistency.status === 'stale';
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+          快照一致性
+        </h3>
+        <StatusBadge
+          label={getSnapshotConsistencyLabel(consistency.status)}
+          variant={getSnapshotConsistencyVariant(consistency.status)}
+        />
+      </div>
+      {isRisk ? (
+        <InlineMessage
+          className="mt-3"
+          tone="danger"
+          message={
+            consistency.status === 'stale'
+              ? '存在在线 Worker 快照超过最大有效时间，请检查 Worker 到 Server 的网络和 Token。'
+              : '在线 Worker 当前使用了不同快照版本，查询结果可能不一致。'
+          }
+        />
+      ) : null}
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <InfoTile
+          label="在线 Worker"
+          value={`${consistency.online_worker_count} / ${consistency.total_worker_count}`}
+        />
+        <InfoTile
+          label="最新快照"
+          value={consistency.latest_snapshot_version || '—'}
+        />
+        <InfoTile
+          label="过期 Worker"
+          value={formatCount(consistency.stale_worker_count)}
+        />
+        <InfoTile
+          label="最大快照年龄"
+          value={`${consistency.snapshot_max_age_seconds} 秒`}
+        />
+      </div>
+      {consistency.version_breakdown.length > 0 ? (
+        <div className="mt-4 space-y-3">
+          {consistency.version_breakdown.map((version) => (
+            <div
+              key={version.version}
+              className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                <span className="font-medium break-all text-[var(--foreground-primary)]">
+                  {version.version}
+                </span>
+                <span className="text-[var(--foreground-secondary)]">
+                  {version.worker_count} 个 Worker
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-[var(--foreground-muted)]">
+                {version.workers.join('、')}
+                {version.latest_snapshot_at
+                  ? ` · ${formatDateTime(version.latest_snapshot_at)}`
+                  : ''}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CounterList({
   title,
   items,
@@ -1170,7 +1360,8 @@ function CounterList({
       ) : (
         <div className="mt-3 space-y-3">
           {items.map((item) => {
-            const percent = total > 0 ? Math.min(100, (item.count / total) * 100) : 0;
+            const percent =
+              total > 0 ? Math.min(100, (item.count / total) * 100) : 0;
             return (
               <div key={`${title}-${item.key}`} className="space-y-1">
                 <div className="flex items-center justify-between gap-3 text-sm">
@@ -1202,7 +1393,7 @@ function InfoTile({ label, value }: { label: string; value: string | number }) {
       <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
         {label}
       </p>
-      <p className="mt-2 break-all text-sm text-[var(--foreground-primary)]">
+      <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
         {value}
       </p>
     </div>
@@ -1594,7 +1785,7 @@ go run ./cmd/dns-worker \\
               复制命令
             </SecondaryButton>
           </div>
-          <CodeBlock className="whitespace-pre-wrap break-all">
+          <CodeBlock className="break-all whitespace-pre-wrap">
             {dockerCommand}
           </CodeBlock>
         </div>
@@ -1612,7 +1803,7 @@ go run ./cmd/dns-worker \\
               复制命令
             </SecondaryButton>
           </div>
-          <CodeBlock className="whitespace-pre-wrap break-all">
+          <CodeBlock className="break-all whitespace-pre-wrap">
             {sourceCommand}
           </CodeBlock>
         </div>

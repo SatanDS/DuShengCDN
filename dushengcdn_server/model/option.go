@@ -62,6 +62,10 @@ func InitOptionMap() {
 	common.OptionMap["DatabaseAutoCleanupRetentionDays"] = strconv.Itoa(common.DatabaseAutoCleanupRetentionDays)
 	common.OptionMap["CloudflareDDoSRequestThreshold"] = strconv.FormatInt(common.CloudflareDDoSRequestThreshold, 10)
 	common.OptionMap["CloudflareDDoSErrorRateThreshold"] = strconv.FormatFloat(common.CloudflareDDoSErrorRateThreshold, 'f', -1, 64)
+	common.OptionMap["AuthoritativeDNSEnabled"] = strconv.FormatBool(common.AuthoritativeDNSEnabled)
+	common.OptionMap["AuthoritativeDNSListenAddr"] = common.AuthoritativeDNSListenAddr
+	common.OptionMap["AuthoritativeDNSDefaultTTL"] = strconv.Itoa(common.AuthoritativeDNSDefaultTTL)
+	common.OptionMap["AuthoritativeDNSSnapshotMaxAge"] = strconv.Itoa(common.AuthoritativeDNSSnapshotMaxAge)
 	common.OptionMap["OpenRestyWorkerProcesses"] = common.OpenRestyWorkerProcesses
 	common.OptionMap["OpenRestyWorkerConnections"] = strconv.Itoa(common.OpenRestyWorkerConnections)
 	common.OptionMap["OpenRestyWorkerRlimitNofile"] = strconv.Itoa(common.OpenRestyWorkerRlimitNofile)
@@ -252,6 +256,20 @@ func updateOptionMap(key string, value string) {
 	case "CloudflareDDoSErrorRateThreshold":
 		if v, err := strconv.ParseFloat(value, 64); err == nil && v > 0 {
 			common.CloudflareDDoSErrorRateThreshold = v
+		}
+	case "AuthoritativeDNSEnabled":
+		common.AuthoritativeDNSEnabled = value == "true"
+	case "AuthoritativeDNSListenAddr":
+		if strings.TrimSpace(value) != "" {
+			common.AuthoritativeDNSListenAddr = value
+		}
+	case "AuthoritativeDNSDefaultTTL":
+		if v, err := strconv.Atoi(value); err == nil && v > 0 {
+			common.AuthoritativeDNSDefaultTTL = v
+		}
+	case "AuthoritativeDNSSnapshotMaxAge":
+		if v, err := strconv.Atoi(value); err == nil && v > 0 {
+			common.AuthoritativeDNSSnapshotMaxAge = v
 		}
 	case "OpenRestyWorkerProcesses":
 		if strings.TrimSpace(value) != "" {

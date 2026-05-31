@@ -58,3 +58,31 @@ func TestValidateAgentOption(t *testing.T) {
 		t.Fatal("expected websocket upgrade option to reject non-boolean value")
 	}
 }
+
+func TestValidateAuthoritativeDNSOption(t *testing.T) {
+	testCases := []struct {
+		name    string
+		key     string
+		value   string
+		wantErr bool
+	}{
+		{name: "enabled true", key: "AuthoritativeDNSEnabled", value: "true"},
+		{name: "enabled invalid", key: "AuthoritativeDNSEnabled", value: "yes", wantErr: true},
+		{name: "listen addr", key: "AuthoritativeDNSListenAddr", value: ":53"},
+		{name: "listen addr empty", key: "AuthoritativeDNSListenAddr", value: "", wantErr: true},
+		{name: "default ttl", key: "AuthoritativeDNSDefaultTTL", value: "30"},
+		{name: "default ttl too high", key: "AuthoritativeDNSDefaultTTL", value: "86401", wantErr: true},
+		{name: "snapshot max age", key: "AuthoritativeDNSSnapshotMaxAge", value: "300"},
+		{name: "snapshot max age invalid", key: "AuthoritativeDNSSnapshotMaxAge", value: "0", wantErr: true},
+	}
+
+	for _, testCase := range testCases {
+		err := validateAuthoritativeDNSOption(testCase.key, testCase.value)
+		if testCase.wantErr && err == nil {
+			t.Fatalf("%s: expected error", testCase.name)
+		}
+		if !testCase.wantErr && err != nil {
+			t.Fatalf("%s: unexpected error: %v", testCase.name, err)
+		}
+	}
+}

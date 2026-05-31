@@ -1,4 +1,11 @@
-export type DNSRecordType = 'A' | 'AAAA' | 'CNAME' | 'TXT' | 'MX' | 'NS' | 'SOA';
+export type DNSRecordType =
+  | 'A'
+  | 'AAAA'
+  | 'CNAME'
+  | 'TXT'
+  | 'MX'
+  | 'NS'
+  | 'SOA';
 
 export interface DNSZoneItem {
   id: number;
@@ -68,6 +75,59 @@ export interface DNSObservabilitySummary {
   worker_breakdown: DNSObservabilityCounterItem[];
   zone_breakdown: DNSObservabilityCounterItem[];
   route_breakdown: DNSObservabilityCounterItem[];
+  trend_points: DNSObservabilityTrendPoint[];
+  snapshot_consistency: DNSWorkerSnapshotConsistency;
+}
+
+export interface DNSObservabilityTrendPoint {
+  bucket_started_at: string;
+  query_count: number;
+  successful_queries: number;
+  negative_queries: number;
+  error_queries: number;
+  dynamic_queries: number;
+  static_queries: number;
+  noerror_queries: number;
+  nxdomain_queries: number;
+  servfail_queries: number;
+}
+
+export type DNSWorkerSnapshotConsistencyStatus =
+  | 'consistent'
+  | 'divergent'
+  | 'stale'
+  | 'no_online_workers'
+  | 'unknown';
+
+export interface DNSWorkerSnapshotVersion {
+  version: string;
+  worker_count: number;
+  latest_snapshot_at?: string | null;
+  workers: string[];
+}
+
+export interface DNSWorkerSnapshotWorker {
+  worker_id: string;
+  name: string;
+  status: 'online' | 'offline';
+  snapshot_version: string;
+  last_snapshot_at?: string | null;
+  last_seen_at?: string | null;
+  stale: boolean;
+}
+
+export interface DNSWorkerSnapshotConsistency {
+  status: DNSWorkerSnapshotConsistencyStatus;
+  checked_at: string;
+  snapshot_max_age_seconds: number;
+  total_worker_count: number;
+  online_worker_count: number;
+  stale_worker_count: number;
+  divergent_worker_count: number;
+  latest_snapshot_version: string;
+  latest_snapshot_at?: string | null;
+  version_breakdown: DNSWorkerSnapshotVersion[];
+  workers: DNSWorkerSnapshotWorker[];
 }
 
 export type DNSZoneDelegationStatus =

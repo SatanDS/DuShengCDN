@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/sha256"
+	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip/iputil"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,15 +19,20 @@ import (
 )
 
 const (
-	dnsWorkerStatusOnline   = "online"
-	dnsWorkerStatusOffline  = "offline"
-	dnsDelegationMatched    = "matched"
-	dnsDelegationPartial    = "partial"
-	dnsDelegationMismatch   = "mismatch"
-	dnsDelegationFailed     = "failed"
-	dnsDelegationNotConfig  = "not_configured"
-	defaultAuthoritativeTTL = 30
-	defaultDNSZoneTTL       = 300
+	dnsWorkerStatusOnline    = "online"
+	dnsWorkerStatusOffline   = "offline"
+	dnsDelegationMatched     = "matched"
+	dnsDelegationPartial     = "partial"
+	dnsDelegationMismatch    = "mismatch"
+	dnsDelegationFailed      = "failed"
+	dnsDelegationNotConfig   = "not_configured"
+	dnsSnapshotConsistent    = "consistent"
+	dnsSnapshotDivergent     = "divergent"
+	dnsSnapshotStale         = "stale"
+	dnsSnapshotNoOnline      = "no_online_workers"
+	dnsSnapshotUnknown       = "unknown"
+	defaultDNSZoneTTL        = 300
+	defaultDNSSnapshotMaxAge = 5 * time.Minute
 )
 
 var dnsLookupNS = net.LookupNS
@@ -132,23 +139,69 @@ type DNSObservabilityCounterView struct {
 }
 
 type DNSObservabilitySummaryView struct {
-	WindowHours       int                           `json:"window_hours"`
-	WindowStart       time.Time                     `json:"window_start"`
-	WindowEnd         time.Time                     `json:"window_end"`
-	LastRollupAt      *time.Time                    `json:"last_rollup_at"`
-	TotalQueries      int64                         `json:"total_queries"`
-	SuccessfulQueries int64                         `json:"successful_queries"`
-	NegativeQueries   int64                         `json:"negative_queries"`
-	ErrorQueries      int64                         `json:"error_queries"`
-	DynamicQueries    int64                         `json:"dynamic_queries"`
-	StaticQueries     int64                         `json:"static_queries"`
-	RCodeBreakdown    []DNSObservabilityCounterView `json:"rcode_breakdown"`
-	QTypeBreakdown    []DNSObservabilityCounterView `json:"qtype_breakdown"`
-	TopQNames         []DNSObservabilityCounterView `json:"top_qnames"`
-	TopTargets        []DNSObservabilityCounterView `json:"top_targets"`
-	WorkerBreakdown   []DNSObservabilityCounterView `json:"worker_breakdown"`
-	ZoneBreakdown     []DNSObservabilityCounterView `json:"zone_breakdown"`
-	RouteBreakdown    []DNSObservabilityCounterView `json:"route_breakdown"`
+	WindowHours         int                              `json:"window_hours"`
+	WindowStart         time.Time                        `json:"window_start"`
+	WindowEnd           time.Time                        `json:"window_end"`
+	LastRollupAt        *time.Time                       `json:"last_rollup_at"`
+	TotalQueries        int64                            `json:"total_queries"`
+	SuccessfulQueries   int64                            `json:"successful_queries"`
+	NegativeQueries     int64                            `json:"negative_queries"`
+	ErrorQueries        int64                            `json:"error_queries"`
+	DynamicQueries      int64                            `json:"dynamic_queries"`
+	StaticQueries       int64                            `json:"static_queries"`
+	RCodeBreakdown      []DNSObservabilityCounterView    `json:"rcode_breakdown"`
+	QTypeBreakdown      []DNSObservabilityCounterView    `json:"qtype_breakdown"`
+	TopQNames           []DNSObservabilityCounterView    `json:"top_qnames"`
+	TopTargets          []DNSObservabilityCounterView    `json:"top_targets"`
+	WorkerBreakdown     []DNSObservabilityCounterView    `json:"worker_breakdown"`
+	ZoneBreakdown       []DNSObservabilityCounterView    `json:"zone_breakdown"`
+	RouteBreakdown      []DNSObservabilityCounterView    `json:"route_breakdown"`
+	TrendPoints         []DNSObservabilityTrendPointView `json:"trend_points"`
+	SnapshotConsistency DNSWorkerSnapshotConsistencyView `json:"snapshot_consistency"`
+}
+
+type DNSObservabilityTrendPointView struct {
+	BucketStartedAt   time.Time `json:"bucket_started_at"`
+	QueryCount        int64     `json:"query_count"`
+	SuccessfulQueries int64     `json:"successful_queries"`
+	NegativeQueries   int64     `json:"negative_queries"`
+	ErrorQueries      int64     `json:"error_queries"`
+	DynamicQueries    int64     `json:"dynamic_queries"`
+	StaticQueries     int64     `json:"static_queries"`
+	NoErrorQueries    int64     `json:"noerror_queries"`
+	NXDomainQueries   int64     `json:"nxdomain_queries"`
+	ServfailQueries   int64     `json:"servfail_queries"`
+}
+
+type DNSWorkerSnapshotConsistencyView struct {
+	Status                string                         `json:"status"`
+	CheckedAt             time.Time                      `json:"checked_at"`
+	SnapshotMaxAgeSeconds int64                          `json:"snapshot_max_age_seconds"`
+	TotalWorkerCount      int                            `json:"total_worker_count"`
+	OnlineWorkerCount     int                            `json:"online_worker_count"`
+	StaleWorkerCount      int                            `json:"stale_worker_count"`
+	DivergentWorkerCount  int                            `json:"divergent_worker_count"`
+	LatestSnapshotVersion string                         `json:"latest_snapshot_version"`
+	LatestSnapshotAt      *time.Time                     `json:"latest_snapshot_at"`
+	VersionBreakdown      []DNSWorkerSnapshotVersionView `json:"version_breakdown"`
+	Workers               []DNSWorkerSnapshotWorkerView  `json:"workers"`
+}
+
+type DNSWorkerSnapshotVersionView struct {
+	Version          string     `json:"version"`
+	WorkerCount      int        `json:"worker_count"`
+	LatestSnapshotAt *time.Time `json:"latest_snapshot_at"`
+	Workers          []string   `json:"workers"`
+}
+
+type DNSWorkerSnapshotWorkerView struct {
+	WorkerID        string     `json:"worker_id"`
+	Name            string     `json:"name"`
+	Status          string     `json:"status"`
+	SnapshotVersion string     `json:"snapshot_version"`
+	LastSnapshotAt  *time.Time `json:"last_snapshot_at"`
+	LastSeenAt      *time.Time `json:"last_seen_at"`
+	Stale           bool       `json:"stale"`
 }
 
 type DNSZoneDelegationCheckView struct {
@@ -418,6 +471,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	workerCounts := map[string]int64{}
 	zoneCounts := map[uint]int64{}
 	routeCounts := map[uint]int64{}
+	trendPoints := initDNSObservabilityTrendPoints(windowEnd, hours)
 
 	for _, rollup := range rollups {
 		if rollup.QueryCount <= 0 {
@@ -445,6 +499,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 		} else {
 			summary.StaticQueries += count
 		}
+		applyDNSObservabilityTrendPoint(trendPoints, rollup.WindowStart, rcode, rollup.ProxyRouteID > 0, count)
 		rcodeCounts[rcode] += count
 		qtypeCounts[qtype] += count
 		qnameCounts[qname] += count
@@ -487,6 +542,8 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	summary.WorkerBreakdown = buildDNSObservabilityCounters(workerCounts, workerLabels, 8)
 	summary.ZoneBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(zoneCounts), zoneLabels, 8)
 	summary.RouteBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(routeCounts), routeLabels, 8)
+	summary.TrendPoints = trendPoints
+	summary.SnapshotConsistency = buildDNSWorkerSnapshotConsistency(time.Now().UTC())
 	return summary, nil
 }
 
@@ -1114,6 +1171,158 @@ func buildDNSObservabilityCounters(counts map[string]int64, labels map[string]st
 	return items
 }
 
+func initDNSObservabilityTrendPoints(windowEnd time.Time, hours int) []DNSObservabilityTrendPointView {
+	if hours <= 0 {
+		hours = 24
+	}
+	end := windowEnd.UTC().Truncate(time.Hour)
+	start := end.Add(-time.Duration(hours-1) * time.Hour)
+	points := make([]DNSObservabilityTrendPointView, 0, hours)
+	for bucket := start; !bucket.After(end); bucket = bucket.Add(time.Hour) {
+		points = append(points, DNSObservabilityTrendPointView{
+			BucketStartedAt: bucket,
+		})
+	}
+	return points
+}
+
+func applyDNSObservabilityTrendPoint(points []DNSObservabilityTrendPointView, windowStart time.Time, rcode string, dynamic bool, count int64) {
+	if count <= 0 || len(points) == 0 {
+		return
+	}
+	bucket := windowStart.UTC().Truncate(time.Hour)
+	base := points[0].BucketStartedAt.UTC()
+	index := int(bucket.Sub(base) / time.Hour)
+	if index < 0 && bucket.Equal(base.Add(-time.Hour)) {
+		index = 0
+	}
+	if index < 0 || index >= len(points) {
+		return
+	}
+	points[index].QueryCount += count
+	switch rcode {
+	case "NOERROR":
+		points[index].SuccessfulQueries += count
+		points[index].NoErrorQueries += count
+	case "SERVFAIL", "REFUSED":
+		points[index].ErrorQueries += count
+		if rcode == "SERVFAIL" {
+			points[index].ServfailQueries += count
+		}
+	default:
+		points[index].NegativeQueries += count
+		if rcode == "NXDOMAIN" {
+			points[index].NXDomainQueries += count
+		}
+	}
+	if dynamic {
+		points[index].DynamicQueries += count
+	} else {
+		points[index].StaticQueries += count
+	}
+}
+
+func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsistencyView {
+	snapshotMaxAge := authoritativeDNSSnapshotMaxAge()
+	workers, err := model.ListDNSWorkers()
+	if err != nil {
+		return DNSWorkerSnapshotConsistencyView{
+			Status:                dnsSnapshotUnknown,
+			CheckedAt:             now,
+			SnapshotMaxAgeSeconds: int64(snapshotMaxAge.Seconds()),
+		}
+	}
+	view := DNSWorkerSnapshotConsistencyView{
+		Status:                dnsSnapshotNoOnline,
+		CheckedAt:             now,
+		SnapshotMaxAgeSeconds: int64(snapshotMaxAge.Seconds()),
+		TotalWorkerCount:      len(workers),
+		Workers:               make([]DNSWorkerSnapshotWorkerView, 0, len(workers)),
+	}
+	versionGroups := map[string]*DNSWorkerSnapshotVersionView{}
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		status := normalizeDNSWorkerStatus(worker.Status)
+		snapshotVersion := strings.TrimSpace(worker.LastSnapshotVersion)
+		stale := status == dnsWorkerStatusOnline && (worker.LastSnapshotAt == nil || now.Sub(worker.LastSnapshotAt.UTC()) > snapshotMaxAge)
+		workerName := strings.TrimSpace(worker.Name)
+		if workerName == "" {
+			workerName = worker.WorkerID
+		}
+		item := DNSWorkerSnapshotWorkerView{
+			WorkerID:        worker.WorkerID,
+			Name:            workerName,
+			Status:          status,
+			SnapshotVersion: snapshotVersion,
+			LastSnapshotAt:  worker.LastSnapshotAt,
+			LastSeenAt:      worker.LastSeenAt,
+			Stale:           stale,
+		}
+		view.Workers = append(view.Workers, item)
+		if status != dnsWorkerStatusOnline {
+			continue
+		}
+		view.OnlineWorkerCount++
+		if stale {
+			view.StaleWorkerCount++
+		}
+		versionKey := snapshotVersion
+		if versionKey == "" {
+			versionKey = "(empty)"
+		}
+		group := versionGroups[versionKey]
+		if group == nil {
+			group = &DNSWorkerSnapshotVersionView{
+				Version: versionKey,
+				Workers: make([]string, 0),
+			}
+			versionGroups[versionKey] = group
+		}
+		group.WorkerCount++
+		group.Workers = append(group.Workers, workerName)
+		if worker.LastSnapshotAt != nil && (group.LatestSnapshotAt == nil || worker.LastSnapshotAt.After(*group.LatestSnapshotAt)) {
+			latest := *worker.LastSnapshotAt
+			group.LatestSnapshotAt = &latest
+		}
+		if snapshotVersion != "" && worker.LastSnapshotAt != nil && (view.LatestSnapshotAt == nil || worker.LastSnapshotAt.After(*view.LatestSnapshotAt)) {
+			latest := *worker.LastSnapshotAt
+			view.LatestSnapshotAt = &latest
+			view.LatestSnapshotVersion = snapshotVersion
+		}
+	}
+	for _, group := range versionGroups {
+		sort.Strings(group.Workers)
+		view.VersionBreakdown = append(view.VersionBreakdown, *group)
+	}
+	sort.SliceStable(view.VersionBreakdown, func(i, j int) bool {
+		if view.VersionBreakdown[i].WorkerCount != view.VersionBreakdown[j].WorkerCount {
+			return view.VersionBreakdown[i].WorkerCount > view.VersionBreakdown[j].WorkerCount
+		}
+		return view.VersionBreakdown[i].Version < view.VersionBreakdown[j].Version
+	})
+	sort.SliceStable(view.Workers, func(i, j int) bool {
+		return view.Workers[i].WorkerID < view.Workers[j].WorkerID
+	})
+	if view.OnlineWorkerCount == 0 {
+		view.Status = dnsSnapshotNoOnline
+		return view
+	}
+	if view.StaleWorkerCount > 0 {
+		view.Status = dnsSnapshotStale
+	} else if len(view.VersionBreakdown) > 1 {
+		view.Status = dnsSnapshotDivergent
+	} else {
+		view.Status = dnsSnapshotConsistent
+	}
+	if len(view.VersionBreakdown) > 1 {
+		largest := view.VersionBreakdown[0].WorkerCount
+		view.DivergentWorkerCount = view.OnlineWorkerCount - largest
+	}
+	return view
+}
+
 func normalizeDNSNameServerSet(values []string) []string {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -1251,16 +1460,57 @@ func normalizeAuthoritativeTTL(value int, fallback int) int {
 }
 
 func normalizeAuthoritativeRouteTTL(value int) int {
+	defaultTTL := authoritativeDNSDefaultTTL()
 	if value <= 1 {
-		return defaultAuthoritativeTTL
+		return defaultTTL
 	}
-	if value < defaultAuthoritativeTTL {
-		return defaultAuthoritativeTTL
+	if value < defaultTTL {
+		return defaultTTL
 	}
 	if value > 86400 {
 		return 86400
 	}
 	return value
+}
+
+func authoritativeDNSDefaultTTL() int {
+	common.OptionMapRWMutex.RLock()
+	raw := ""
+	if common.OptionMap != nil {
+		raw = strings.TrimSpace(common.OptionMap["AuthoritativeDNSDefaultTTL"])
+	}
+	common.OptionMapRWMutex.RUnlock()
+	if raw == "" {
+		return common.AuthoritativeDNSDefaultTTL
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return common.AuthoritativeDNSDefaultTTL
+	}
+	if value > 86400 {
+		return 86400
+	}
+	return value
+}
+
+func authoritativeDNSSnapshotMaxAge() time.Duration {
+	common.OptionMapRWMutex.RLock()
+	raw := ""
+	if common.OptionMap != nil {
+		raw = strings.TrimSpace(common.OptionMap["AuthoritativeDNSSnapshotMaxAge"])
+	}
+	common.OptionMapRWMutex.RUnlock()
+	if raw == "" {
+		if common.AuthoritativeDNSSnapshotMaxAge > 0 {
+			return time.Duration(common.AuthoritativeDNSSnapshotMaxAge) * time.Second
+		}
+		return defaultDNSSnapshotMaxAge
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return defaultDNSSnapshotMaxAge
+	}
+	return time.Duration(value) * time.Second
 }
 
 func normalizeAuthoritativeDNSRecordType(raw string) (string, error) {

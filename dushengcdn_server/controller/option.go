@@ -120,6 +120,36 @@ func validateAgentOption(key string, value string) error {
 	}
 }
 
+func validateAuthoritativeDNSOption(key string, value string) error {
+	trimmed := strings.TrimSpace(value)
+	switch key {
+	case "AuthoritativeDNSEnabled":
+		return validateBooleanOption(key, trimmed)
+	case "AuthoritativeDNSListenAddr":
+		if trimmed == "" {
+			return fmt.Errorf("%s 不能为空", key)
+		}
+		if strings.ContainsAny(trimmed, "\r\n\t ") {
+			return fmt.Errorf("%s 不能包含空白字符", key)
+		}
+		return nil
+	case "AuthoritativeDNSDefaultTTL":
+		intValue, err := strconv.Atoi(trimmed)
+		if err != nil || intValue <= 0 || intValue > 86400 {
+			return fmt.Errorf("%s 必须为 1 到 86400 之间的整数秒", key)
+		}
+		return nil
+	case "AuthoritativeDNSSnapshotMaxAge":
+		intValue, err := strconv.Atoi(trimmed)
+		if err != nil || intValue <= 0 {
+			return fmt.Errorf("%s 必须为大于 0 的整数秒", key)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
 func validateOpenRestyOption(key string, value string) error {
 	trimmed := strings.TrimSpace(value)
 
@@ -277,6 +307,9 @@ func validateOptionWithState(option model.Option, state map[string]string) error
 		return err
 	}
 	if err := validateAgentOption(option.Key, option.Value); err != nil {
+		return err
+	}
+	if err := validateAuthoritativeDNSOption(option.Key, option.Value); err != nil {
 		return err
 	}
 	return nil

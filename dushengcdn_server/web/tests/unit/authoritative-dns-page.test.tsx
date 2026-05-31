@@ -9,6 +9,10 @@ import { ToastProvider } from '@/components/feedback/toast-provider';
 import { ThemeProvider } from '@/components/providers/theme-provider';
 import { AuthoritativeDNSPage } from '@/features/authoritative-dns/components/authoritative-dns-page';
 
+vi.mock('echarts-for-react', () => ({
+  default: () => <div data-testid="echarts-mock" />,
+}));
+
 function stubMatchMedia() {
   vi.stubGlobal(
     'matchMedia',
@@ -125,6 +129,58 @@ describe('Authoritative DNS page', () => {
                   route_breakdown: [
                     { key: '1', label: 'edge-site', count: 100 },
                   ],
+                  trend_points: [
+                    {
+                      bucket_started_at: '2026-05-31T07:00:00Z',
+                      query_count: 40,
+                      successful_queries: 36,
+                      negative_queries: 2,
+                      error_queries: 2,
+                      dynamic_queries: 30,
+                      static_queries: 10,
+                      noerror_queries: 36,
+                      nxdomain_queries: 2,
+                      servfail_queries: 2,
+                    },
+                    {
+                      bucket_started_at: '2026-05-31T08:00:00Z',
+                      query_count: 88,
+                      successful_queries: 84,
+                      negative_queries: 3,
+                      error_queries: 1,
+                      dynamic_queries: 70,
+                      static_queries: 18,
+                      noerror_queries: 84,
+                      nxdomain_queries: 3,
+                      servfail_queries: 1,
+                    },
+                  ],
+                  snapshot_consistency: {
+                    status: 'divergent',
+                    checked_at: '2026-05-31T08:10:00Z',
+                    snapshot_max_age_seconds: 300,
+                    total_worker_count: 2,
+                    online_worker_count: 2,
+                    stale_worker_count: 0,
+                    divergent_worker_count: 1,
+                    latest_snapshot_version: 'snapshot-b',
+                    latest_snapshot_at: '2026-05-31T08:08:00Z',
+                    version_breakdown: [
+                      {
+                        version: 'snapshot-a',
+                        worker_count: 1,
+                        latest_snapshot_at: '2026-05-31T08:05:00Z',
+                        workers: ['ns1-hk'],
+                      },
+                      {
+                        version: 'snapshot-b',
+                        worker_count: 1,
+                        latest_snapshot_at: '2026-05-31T08:08:00Z',
+                        workers: ['ns2-eu'],
+                      },
+                    ],
+                    workers: [],
+                  },
                 },
               }),
             ),
@@ -140,10 +196,7 @@ describe('Authoritative DNS page', () => {
                 data: {
                   zone_id: 1,
                   zone_name: 'example.com',
-                  expected_name_servers: [
-                    'ns1.example.net',
-                    'ns2.example.net',
-                  ],
+                  expected_name_servers: ['ns1.example.net', 'ns2.example.net'],
                   actual_name_servers: ['ns1.example.net'],
                   matched_name_servers: ['ns1.example.net'],
                   missing_name_servers: ['ns2.example.net'],
@@ -249,6 +302,13 @@ describe('Authoritative DNS page', () => {
     expect(await screen.findByText('DNS 查询观测')).toBeInTheDocument();
     expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
     expect(screen.getByText('edge-site')).toBeInTheDocument();
+    expect(await screen.findByText('查询趋势')).toBeInTheDocument();
+    expect(screen.getByText('快照不一致')).toBeInTheDocument();
+    expect(
+      screen.getByText(/在线 Worker 当前使用了不同快照版本/),
+    ).toBeInTheDocument();
+    expect(screen.getByText('snapshot-a')).toBeInTheDocument();
+    expect(screen.getAllByText('snapshot-b').length).toBeGreaterThan(0);
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '检查委派' }));
@@ -266,12 +326,17 @@ describe('Authoritative DNS page', () => {
     const createDialog = await screen.findByRole('dialog', {
       name: '创建 DNS Worker',
     });
-    await user.type(within(createDialog).getByPlaceholderText('ns1-hk'), 'ns2-eu');
+    await user.type(
+      within(createDialog).getByPlaceholderText('ns1-hk'),
+      'ns2-eu',
+    );
     await user.type(
       within(createDialog).getByPlaceholderText('ns1.example.net'),
       'ns2.example.net',
     );
-    await user.click(within(createDialog).getByRole('button', { name: '创建' }));
+    await user.click(
+      within(createDialog).getByRole('button', { name: '创建' }),
+    );
 
     await waitFor(() => {
       expect(
@@ -279,6 +344,8 @@ describe('Authoritative DNS page', () => {
       ).toBeInTheDocument();
     });
     expect(screen.getByDisplayValue('created-token')).toBeInTheDocument();
-    expect(screen.getByText(/DUSHENGCDN_DNS_WORKER_TOKEN=created-token/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/DUSHENGCDN_DNS_WORKER_TOKEN=created-token/),
+    ).toBeInTheDocument();
   });
 });

@@ -121,7 +121,7 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	if snapshot.Routes[0].CurrentTargets[0] != "8.8.4.4" {
 		t.Fatalf("unexpected route targets: %+v", snapshot.Routes[0].CurrentTargets)
 	}
-	if snapshot.Routes[0].TTL != defaultAuthoritativeTTL {
+	if snapshot.Routes[0].TTL != authoritativeDNSDefaultTTL() {
 		t.Fatalf("expected authoritative auto ttl, got %d", snapshot.Routes[0].TTL)
 	}
 	if len(snapshot.Nodes) != 1 || snapshot.Nodes[0].PublicIPs[0] != "8.8.4.4" {
@@ -236,10 +236,17 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	if err := route.Insert(); err != nil {
 		t.Fatalf("insert route: %v", err)
 	}
+	peerWorker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns2-eu"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker peer: %v", err)
+	}
 
 	windowStart := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Minute)
+	snapshotAt := time.Now().UTC().Add(-time.Minute)
 	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
-		Status: "online",
+		Status:              "online",
+		LastSnapshotVersion: "snapshot-a",
+		LastSnapshotAt:      &snapshotAt,
 		Rollups: []DNSQueryRollupInput{
 			{
 				WindowStart:   windowStart,
@@ -276,6 +283,18 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
 	}
+	peerAuthenticated, err := AuthenticateDNSWorkerToken(peerWorker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken peer: %v", err)
+	}
+	_, err = RecordDNSWorkerHeartbeat(peerAuthenticated, DNSWorkerHeartbeatInput{
+		Status:              "online",
+		LastSnapshotVersion: "snapshot-b",
+		LastSnapshotAt:      &snapshotAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat peer: %v", err)
+	}
 
 	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
 	if err != nil {
@@ -295,6 +314,22 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	assertCounter(t, summary.WorkerBreakdown, authenticated.WorkerID, "ns1-hk", 87)
 	assertCounter(t, summary.ZoneBreakdown, "1", "example.com", 87)
 	assertCounter(t, summary.RouteBreakdown, "1", "edge-site", 82)
+	if len(summary.TrendPoints) != 1 {
+		t.Fatalf("expected one trend point for one-hour window, got %+v", summary.TrendPoints)
+	}
+	trend := summary.TrendPoints[0]
+	if trend.QueryCount != 87 || trend.ServfailQueries != 2 || trend.NXDomainQueries != 5 || trend.DynamicQueries != 82 {
+		t.Fatalf("unexpected trend point: %+v", trend)
+	}
+	if summary.SnapshotConsistency.Status != dnsSnapshotDivergent {
+		t.Fatalf("expected divergent snapshot status, got %+v", summary.SnapshotConsistency)
+	}
+	if summary.SnapshotConsistency.OnlineWorkerCount != 2 || summary.SnapshotConsistency.DivergentWorkerCount != 1 {
+		t.Fatalf("unexpected snapshot counts: %+v", summary.SnapshotConsistency)
+	}
+	if len(summary.SnapshotConsistency.VersionBreakdown) != 2 {
+		t.Fatalf("expected two snapshot versions, got %+v", summary.SnapshotConsistency.VersionBreakdown)
+	}
 }
 
 func TestAuthoritativeDNSZoneDelegationCheckMatchedWithGlueHint(t *testing.T) {

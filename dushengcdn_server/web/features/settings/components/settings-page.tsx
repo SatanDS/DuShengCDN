@@ -124,6 +124,8 @@ const defaultOperationFields = {
   OpenRestyCacheLockTimeout: '5s',
   OpenRestyCacheUseStale:
     'error timeout updating http_500 http_502 http_503 http_504',
+  AuthoritativeDNSDefaultTTL: '30',
+  AuthoritativeDNSSnapshotMaxAge: '300',
   GlobalApiRateLimitNum: '300',
   GlobalApiRateLimitDuration: '180',
   GlobalWebRateLimitNum: '300',
@@ -449,6 +451,9 @@ export function SettingsPage() {
       OpenRestyCacheUseStale:
         optionMap.OpenRestyCacheUseStale ??
         'error timeout updating http_500 http_502 http_503 http_504',
+      AuthoritativeDNSDefaultTTL: optionMap.AuthoritativeDNSDefaultTTL ?? '30',
+      AuthoritativeDNSSnapshotMaxAge:
+        optionMap.AuthoritativeDNSSnapshotMaxAge ?? '300',
       GlobalApiRateLimitNum: optionMap.GlobalApiRateLimitNum ?? '300',
       GlobalApiRateLimitDuration: optionMap.GlobalApiRateLimitDuration ?? '180',
       GlobalWebRateLimitNum: optionMap.GlobalWebRateLimitNum ?? '300',
@@ -988,7 +993,9 @@ export function SettingsPage() {
                             ) : (
                               <PrimaryButton
                                 type="button"
-                                onClick={() => handleBindAuthSource(source.name)}
+                                onClick={() =>
+                                  handleBindAuthSource(source.name)
+                                }
                                 disabled={
                                   busyKey === `auth-source-bind-${source.name}`
                                 }
@@ -1343,6 +1350,93 @@ export function SettingsPage() {
             </AppCard>
 
             <AppCard
+              title="权威 DNS 运行参数"
+              description="控制自建权威 DNS 的默认 TTL 和快照过期阈值。"
+              action={
+                <PrimaryButton
+                  type="button"
+                  onClick={() =>
+                    void runBusyAction(
+                      'operation-authoritative-dns',
+                      async () => {
+                        const defaultTtl = Number.parseInt(
+                          operationFields.AuthoritativeDNSDefaultTTL,
+                          10,
+                        );
+                        const snapshotMaxAge = Number.parseInt(
+                          operationFields.AuthoritativeDNSSnapshotMaxAge,
+                          10,
+                        );
+
+                        if (
+                          Number.isNaN(defaultTtl) ||
+                          defaultTtl <= 0 ||
+                          defaultTtl > 86400
+                        ) {
+                          throw new Error(
+                            '默认 TTL 必须为 1 到 86400 之间的整数秒。',
+                          );
+                        }
+                        if (
+                          Number.isNaN(snapshotMaxAge) ||
+                          snapshotMaxAge <= 0
+                        ) {
+                          throw new Error(
+                            '快照最大年龄必须为大于 0 的整数秒。',
+                          );
+                        }
+
+                        await saveOptionEntries(
+                          [
+                            ['AuthoritativeDNSDefaultTTL', String(defaultTtl)],
+                            [
+                              'AuthoritativeDNSSnapshotMaxAge',
+                              String(snapshotMaxAge),
+                            ],
+                          ],
+                          '权威 DNS 参数已保存。',
+                        );
+                      },
+                      '保存权威 DNS 参数',
+                    )
+                  }
+                  disabled={busyKey === 'operation-authoritative-dns'}
+                >
+                  {busyKey === 'operation-authoritative-dns'
+                    ? '保存中...'
+                    : '保存参数'}
+                </PrimaryButton>
+              }
+            >
+              <div className="grid gap-5 md:grid-cols-2">
+                <ResourceField label="默认 TTL（秒）">
+                  <ResourceInput
+                    type="number"
+                    value={operationFields.AuthoritativeDNSDefaultTTL}
+                    onChange={(event) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AuthoritativeDNSDefaultTTL: event.target.value,
+                      }))
+                    }
+                  />
+                </ResourceField>
+                <ResourceField label="快照最大年龄（秒）">
+                  <ResourceInput
+                    type="number"
+                    value={operationFields.AuthoritativeDNSSnapshotMaxAge}
+                    onChange={(event) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AuthoritativeDNSSnapshotMaxAge: event.target.value,
+                      }))
+                    }
+                  />
+                </ResourceField>
+              </div>
+            </AppCard>
+
+            <AppCard
               title="Discovery Token 与部署命令"
               description="适用于新节点首次接入。安装脚本会自动检测 Linux / macOS 环境，并尝试补齐缺少的 OpenResty 或源码构建依赖。"
               action={
@@ -1660,7 +1754,6 @@ export function SettingsPage() {
                 }
                 disabled={busyKey === 'toggle-EmailVerificationEnabled'}
               />
-
             </div>
             <div className="mt-5 text-sm text-[var(--foreground-secondary)]">
               当前已配置 {authSourcesQuery.data?.length ?? 0} 个认证源。

@@ -172,7 +172,7 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   ghcr.io/satands/dushengcdn-dns-worker:latest
 ```
 
-然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里把 `DNS 模式` 切换为 `自建权威 DNS`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。
+然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里把 `DNS 模式` 切换为 `自建权威 DNS`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。Worker 上报心跳后，左侧「权威 DNS」会展示查询趋势、SERVFAIL/NXDOMAIN 趋势和快照一致性告警，便于确认实时 GSLB 与多 Worker 快照状态。
 
 ## 5. 验证是否成功
 

@@ -60,6 +60,10 @@ var DatabaseAutoCleanupEnabled = false
 var DatabaseAutoCleanupRetentionDays = 30
 var CloudflareDDoSRequestThreshold int64 = 20000
 var CloudflareDDoSErrorRateThreshold = 30.0
+var AuthoritativeDNSEnabled = false
+var AuthoritativeDNSListenAddr = ":53"
+var AuthoritativeDNSDefaultTTL = 30
+var AuthoritativeDNSSnapshotMaxAge = 300
 
 // V5 OpenResty performance settings (hot-reloadable via Option table)
 var OpenRestyWorkerProcesses = "auto"

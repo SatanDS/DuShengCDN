@@ -52,7 +52,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 
 | 能力 | 说明 |
 | --- | --- |
-| 自建权威 DNS / 实时 GSLB 增强 | 已提供 DNS Worker MVP、管理端入口、查询观测和 Zone 委派检查；后续补迁移体验和更完整的高可用观测，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md) |
+| 自建权威 DNS / 实时 GSLB 增强 | 已提供 DNS Worker MVP、管理端入口、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警和 Zone 委派检查；后续补迁移体验和更完整的多地健康探测，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md) |
 
 ## 典型使用场景
 
