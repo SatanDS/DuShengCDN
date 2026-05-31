@@ -147,6 +147,42 @@ export interface DNSGSLBSimulationNode {
   score: number;
 }
 
+export interface DNSGSLBSchedulingStates {
+  checked_at: string;
+  total: number;
+  states: DNSGSLBSchedulingState[];
+}
+
+export type DNSGSLBSchedulingStateStatus =
+  | 'active'
+  | 'debouncing'
+  | 'inactive'
+  | 'stale'
+  | 'empty'
+  | 'orphaned';
+
+export interface DNSGSLBSchedulingState {
+  id: number;
+  proxy_route_id: number;
+  site_name: string;
+  primary_domain: string;
+  domains: string[];
+  route_enabled: boolean;
+  route_authoritative: boolean;
+  route_gslb_enabled: boolean;
+  route_record_type: string;
+  record_type: 'A' | 'AAAA';
+  scope_key: string;
+  selected_targets: string[];
+  desired_targets: string[];
+  last_reason: string;
+  last_changed_at?: string | null;
+  last_evaluated_at?: string | null;
+  status: DNSGSLBSchedulingStateStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DNSObservabilityCounterItem {
   key: string;
   label: string;

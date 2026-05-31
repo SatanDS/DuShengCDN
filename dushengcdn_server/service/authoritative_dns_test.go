@@ -336,6 +336,69 @@ func TestDNSWorkerHeartbeatPersistsSchedulingStates(t *testing.T) {
 	}
 }
 
+func TestListAuthoritativeDNSGSLBSchedulingStates(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com","api.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	changedAt := time.Now().UTC().Add(-30 * time.Second).Truncate(time.Second)
+	evaluatedAt := time.Now().UTC().Truncate(time.Second)
+	if err := model.DB.Create(&model.GSLBSchedulingState{
+		ProxyRouteID:    route.ID,
+		DNSRecordType:   "A",
+		ScopeKey:        "country:hk",
+		SelectedTargets: `["8.8.4.4"]`,
+		DesiredTargets:  `["1.1.1.1"]`,
+		LastReason:      "cooldown keeps previous target",
+		LastChangedAt:   &changedAt,
+		LastEvaluatedAt: &evaluatedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert scheduling state: %v", err)
+	}
+
+	view, err := ListAuthoritativeDNSGSLBSchedulingStates()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSGSLBSchedulingStates: %v", err)
+	}
+	if view.Total != 1 || len(view.States) != 1 {
+		t.Fatalf("expected one scheduling state, got %+v", view)
+	}
+	state := view.States[0]
+	if state.ProxyRouteID != route.ID ||
+		state.SiteName != "edge-site" ||
+		state.PrimaryDomain != "www.example.com" ||
+		state.ScopeKey != "country:HK" ||
+		state.Status != "debouncing" ||
+		state.LastReason != "cooldown keeps previous target" ||
+		len(state.Domains) != 2 ||
+		len(state.SelectedTargets) != 1 ||
+		state.SelectedTargets[0] != "8.8.4.4" ||
+		len(state.DesiredTargets) != 1 ||
+		state.DesiredTargets[0] != "1.1.1.1" {
+		t.Fatalf("unexpected scheduling state view: %+v", state)
+	}
+}
+
 func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	setupServiceTestDB(t)
 

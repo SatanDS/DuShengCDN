@@ -156,6 +156,15 @@ func GetDNSObservability(c *gin.Context) {
 	respondSuccess(c, summary)
 }
 
+func GetDNSGSLBSchedulingStates(c *gin.Context) {
+	states, err := service.ListAuthoritativeDNSGSLBSchedulingStates()
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, states)
+}
+
 func CheckDNSZoneDelegation(c *gin.Context) {
 	id, ok := parseUintParam(c, "id")
 	if !ok {

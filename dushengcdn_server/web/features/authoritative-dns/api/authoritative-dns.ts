@@ -3,6 +3,7 @@ import { apiRequest } from '@/lib/api/client';
 import type {
   DNSGSLBSimulationPayload,
   DNSGSLBSimulationResult,
+  DNSGSLBSchedulingStates,
   DNSObservabilitySummary,
   DNSRecordItem,
   DNSRecordMutationPayload,
@@ -63,10 +64,7 @@ export function createDNSZoneRecord(
   });
 }
 
-export function updateDNSRecord(
-  id: number,
-  payload: DNSRecordMutationPayload,
-) {
+export function updateDNSRecord(id: number, payload: DNSRecordMutationPayload) {
   return apiRequest<DNSRecordItem>(`/dns-records/${id}/update`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -90,6 +88,10 @@ export function getDNSObservability(hours = 24) {
   );
 }
 
+export function getDNSGSLBSchedulingStates() {
+  return apiRequest<DNSGSLBSchedulingStates>('/dns-workers/scheduling-states');
+}
+
 export function createDNSWorker(payload: DNSWorkerMutationPayload) {
   return apiRequest<DNSWorkerItem>('/dns-workers/', {
     method: 'POST',
@@ -103,7 +105,10 @@ export function deleteDNSWorker(id: number) {
   });
 }
 
-export function probeDNSWorker(id: number, payload: DNSWorkerProbePayload = {}) {
+export function probeDNSWorker(
+  id: number,
+  payload: DNSWorkerProbePayload = {},
+) {
   return apiRequest<DNSWorkerProbe>(`/dns-workers/${id}/probe`, {
     method: 'POST',
     body: JSON.stringify(payload),

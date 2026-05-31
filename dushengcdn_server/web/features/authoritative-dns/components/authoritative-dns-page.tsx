@@ -23,6 +23,7 @@ import {
   deleteDNSRecord,
   deleteDNSWorker,
   deleteDNSZone,
+  getDNSGSLBSchedulingStates,
   getDNSObservability,
   getDNSWorkers,
   getDNSZoneRecords,
@@ -35,6 +36,9 @@ import {
 import type {
   DNSGSLBSimulationPayload,
   DNSGSLBSimulationResult,
+  DNSGSLBSchedulingState,
+  DNSGSLBSchedulingStateStatus,
+  DNSGSLBSchedulingStates,
   DNSObservabilityCounterItem,
   DNSObservabilitySummary,
   DNSRecordItem,
@@ -189,7 +193,9 @@ function getDefaultSimulationQName(route?: ProxyRouteItem | null) {
   if (!route) {
     return '';
   }
-  return getRouteDomains(route)[0] ?? route.primary_domain ?? route.domain ?? '';
+  return (
+    getRouteDomains(route)[0] ?? route.primary_domain ?? route.domain ?? ''
+  );
 }
 
 function getRouteRecordType(route?: ProxyRouteItem | null): 'A' | 'AAAA' {
@@ -367,6 +373,38 @@ function getSnapshotConsistencyVariant(
   }
 }
 
+function getSchedulingStateStatusLabel(status: DNSGSLBSchedulingStateStatus) {
+  switch (status) {
+    case 'active':
+      return '已生效';
+    case 'debouncing':
+      return '冷却中';
+    case 'inactive':
+      return '站点停用';
+    case 'stale':
+      return '记录过期';
+    case 'empty':
+      return '无目标';
+    case 'orphaned':
+      return '站点已删除';
+  }
+}
+
+function getSchedulingStateStatusVariant(status: DNSGSLBSchedulingStateStatus) {
+  switch (status) {
+    case 'active':
+      return 'success' as const;
+    case 'debouncing':
+      return 'info' as const;
+    case 'inactive':
+    case 'stale':
+    case 'empty':
+      return 'warning' as const;
+    case 'orphaned':
+      return 'danger' as const;
+  }
+}
+
 function getDelegationStatusLabel(status: DNSZoneDelegationStatus) {
   switch (status) {
     case 'matched':
@@ -444,6 +482,10 @@ export function AuthoritativeDNSPage() {
     ],
     queryFn: () => getDNSObservability(dnsObservabilityWindowHours),
   });
+  const schedulingStatesQuery = useQuery({
+    queryKey: ['authoritative-dns', 'scheduling-states'],
+    queryFn: getDNSGSLBSchedulingStates,
+  });
 
   const zones = useMemo(() => zonesQuery.data ?? [], [zonesQuery.data]);
   const workers = useMemo(() => workersQuery.data ?? [], [workersQuery.data]);
@@ -452,6 +494,7 @@ export function AuthoritativeDNSPage() {
     [proxyRoutesQuery.data],
   );
   const observability = observabilityQuery.data ?? null;
+  const schedulingStates = schedulingStatesQuery.data ?? null;
   const authoritativeRoutes = useMemo(
     () =>
       proxyRoutes
@@ -707,11 +750,23 @@ export function AuthoritativeDNSPage() {
           }
         />
 
+        <GSLBSchedulingStatesPanel
+          states={schedulingStates}
+          isLoading={schedulingStatesQuery.isLoading}
+          error={
+            schedulingStatesQuery.isError
+              ? getErrorMessage(schedulingStatesQuery.error)
+              : ''
+          }
+        />
+
         <GSLBSimulationPanel
           routes={authoritativeRoutes}
           routesLoading={proxyRoutesQuery.isLoading}
           routesError={
-            proxyRoutesQuery.isError ? getErrorMessage(proxyRoutesQuery.error) : ''
+            proxyRoutesQuery.isError
+              ? getErrorMessage(proxyRoutesQuery.error)
+              : ''
           }
           result={simulateGSLBMutation.data ?? null}
           error={
@@ -1372,7 +1427,9 @@ function WorkersPanel({
                     </p>
                   ) : null}
                   <DNSWorkerProbeResultPanel
-                    probe={probeResults[worker.id] ?? workerProbeToPanelData(worker)}
+                    probe={
+                      probeResults[worker.id] ?? workerProbeToPanelData(worker)
+                    }
                   />
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">
@@ -1451,6 +1508,132 @@ function DNSWorkerProbeResultPanel({ probe }: { probe?: DNSWorkerProbe }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function GSLBSchedulingStatesPanel({
+  states,
+  isLoading,
+  error,
+}: {
+  states: DNSGSLBSchedulingStates | null;
+  isLoading: boolean;
+  error: string;
+}) {
+  if (isLoading) {
+    return (
+      <AppCard title="GSLB 调度状态">
+        <LoadingState />
+      </AppCard>
+    );
+  }
+
+  if (error) {
+    return <ErrorState title="GSLB 调度状态加载失败" description={error} />;
+  }
+
+  const rows = states?.states ?? [];
+  const debouncingCount = rows.filter(
+    (item) => item.status === 'debouncing',
+  ).length;
+  const activeCount = rows.filter((item) => item.status === 'active').length;
+
+  return (
+    <AppCard
+      title="GSLB 调度状态"
+      description="展示 Worker 回传和 Server 记录的当前实际目标、期望目标与逐来源防抖状态。"
+    >
+      {rows.length === 0 ? (
+        <EmptyState
+          title="暂无调度状态"
+          description="权威 DNS 站点收到 A/AAAA 查询，或 Cloudflare 模式触发 GSLB 重算后，这里会显示当前选中的边缘 IP。"
+        />
+      ) : (
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <InfoTile
+              label="状态条目"
+              value={formatCount(states?.total ?? rows.length)}
+            />
+            <InfoTile label="已生效" value={formatCount(activeCount)} />
+            <InfoTile label="冷却中" value={formatCount(debouncingCount)} />
+          </div>
+          <div className="grid gap-3 xl:grid-cols-2">
+            {rows.map((state) => (
+              <GSLBSchedulingStateCard key={state.id} state={state} />
+            ))}
+          </div>
+          {states?.checked_at ? (
+            <p className="text-xs text-[var(--foreground-muted)]">
+              检查时间：{formatDateTime(states.checked_at)}
+            </p>
+          ) : null}
+        </div>
+      )}
+    </AppCard>
+  );
+}
+
+function GSLBSchedulingStateCard({ state }: { state: DNSGSLBSchedulingState }) {
+  const selectedText = state.selected_targets.join(', ') || '—';
+  const desiredText = state.desired_targets.join(', ') || selectedText;
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold break-all text-[var(--foreground-primary)]">
+              {state.site_name ||
+                state.primary_domain ||
+                `Route ${state.proxy_route_id}`}
+            </h3>
+            <StatusBadge label={state.record_type} variant="info" />
+            <StatusBadge
+              label={getSchedulingStateStatusLabel(state.status)}
+              variant={getSchedulingStateStatusVariant(state.status)}
+            />
+          </div>
+          <p className="mt-1 text-xs break-all text-[var(--foreground-secondary)]">
+            {state.primary_domain || state.domains.join('、') || '站点已删除'}
+          </p>
+        </div>
+        {state.proxy_route_id > 0 ? (
+          <a
+            href={`${proxyRouteDetailPath}?id=${state.proxy_route_id}`}
+            className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-3 py-2 text-xs font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
+          >
+            网站详情
+          </a>
+        ) : null}
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <InfoTile label="来源作用域" value={state.scope_key} />
+        <InfoTile
+          label="最近评估"
+          value={formatRelativeTime(state.last_evaluated_at)}
+        />
+        <InfoTile label="当前目标" value={selectedText} />
+        <InfoTile label="期望目标" value={desiredText} />
+      </div>
+
+      {state.status === 'debouncing' ? (
+        <InlineMessage
+          className="mt-3"
+          tone="info"
+          message="期望目标已变化，但当前目标仍处于防抖冷却或旧目标仍健康，所以暂未切换。"
+        />
+      ) : null}
+      {state.last_reason ? (
+        <p className="mt-3 text-xs leading-5 break-all text-[var(--foreground-secondary)]">
+          {state.last_reason}
+        </p>
+      ) : null}
+      <p className="mt-3 text-xs text-[var(--foreground-muted)]">
+        最近切换：{formatRelativeTime(state.last_changed_at)}
+      </p>
     </div>
   );
 }
@@ -1625,7 +1808,10 @@ function GSLBSimulationPanel({
                   <InfoTile label="TTL" value={`${result.ttl} 秒`} />
                   <InfoTile
                     label="策略"
-                    value={result.strategy || (result.gslb_enabled ? 'GSLB' : '节点池')}
+                    value={
+                      result.strategy ||
+                      (result.gslb_enabled ? 'GSLB' : '节点池')
+                    }
                   />
                 </div>
                 {result.targets.length > 0 ? (
@@ -1659,7 +1845,8 @@ function GSLBSimulationPanel({
               </div>
             ) : (
               <p className="mt-3 text-sm leading-6 text-[var(--foreground-secondary)]">
-                选择站点和来源后点击模拟，可看到 DNS Worker 当前会返回的 A/AAAA 目标。
+                选择站点和来源后点击模拟，可看到 DNS Worker 当前会返回的 A/AAAA
+                目标。
               </p>
             )}
           </div>
@@ -1734,7 +1921,11 @@ function GSLBSimulationDiagnostics({
                   <div className="flex flex-wrap justify-end gap-2">
                     <StatusBadge
                       label={
-                        node.selected ? '已选中' : node.eligible ? '候选' : '跳过'
+                        node.selected
+                          ? '已选中'
+                          : node.eligible
+                            ? '候选'
+                            : '跳过'
                       }
                       variant={
                         node.selected
@@ -1808,7 +1999,9 @@ function DNSMigrationGuidePanel({
   );
   const candidates = routes
     .filter((route) => route.dns_provider_mode !== 'authoritative')
-    .filter((route) => route.enabled || route.dns_auto_sync || route.gslb_enabled)
+    .filter(
+      (route) => route.enabled || route.dns_auto_sync || route.gslb_enabled,
+    )
     .map((route) => {
       const matchingZone = findMatchingZone(route, zones);
       const blockers = [
@@ -1826,7 +2019,9 @@ function DNSMigrationGuidePanel({
         onlineWorkers.length > publicReachableWorkers.length
           ? '部分在线 Worker 未通过最新公网探测，迁移前建议逐个点击「探测」'
           : '',
-        route.dns_auto_sync ? '' : '当前未启用 Cloudflare 自动 DNS，请确认是否仍需要迁移',
+        route.dns_auto_sync
+          ? ''
+          : '当前未启用 Cloudflare 自动 DNS，请确认是否仍需要迁移',
       ].filter(Boolean);
 
       return {
@@ -1941,7 +2136,11 @@ function DNSMigrationGuidePanel({
                         />
                       </div>
                       {blockers.length > 0 ? (
-                        <CheckList title="阻断项" items={blockers} tone="danger" />
+                        <CheckList
+                          title="阻断项"
+                          items={blockers}
+                          tone="danger"
+                        />
                       ) : (
                         <InlineMessage
                           tone="success"
@@ -1949,7 +2148,11 @@ function DNSMigrationGuidePanel({
                         />
                       )}
                       {warnings.length > 0 ? (
-                        <CheckList title="建议项" items={warnings} tone="info" />
+                        <CheckList
+                          title="建议项"
+                          items={warnings}
+                          tone="info"
+                        />
                       ) : null}
                     </div>
                     <a
@@ -1972,9 +2175,17 @@ function DNSMigrationGuidePanel({
             </h3>
             <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--foreground-secondary)]">
               <li>1. 创建覆盖网站域名的 Zone，并填写注册商要使用的 NS。</li>
-              <li>2. 部署至少两个 DNS Worker，确认 Worker 在线、能拉取快照，并通过公网 UDP/TCP 53 探测。</li>
-              <li>3. 在网站详情的「自动 DNS」里切换为自建权威 DNS 并选择 Zone。</li>
-              <li>4. 到注册商把域名 NS 委派到 DNS Worker，再回到 Zone 详情检查委派。</li>
+              <li>
+                2. 部署至少两个 DNS Worker，确认 Worker
+                在线、能拉取快照，并通过公网 UDP/TCP 53 探测。
+              </li>
+              <li>
+                3. 在网站详情的「自动 DNS」里切换为自建权威 DNS 并选择 Zone。
+              </li>
+              <li>
+                4. 到注册商把域名 NS 委派到 DNS Worker，再回到 Zone
+                详情检查委派。
+              </li>
             </ol>
           </div>
           <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
@@ -1982,7 +2193,8 @@ function DNSMigrationGuidePanel({
               回滚路径
             </h3>
             <p className="mt-3 text-sm leading-6 text-[var(--foreground-secondary)]">
-              如需回退，在网站详情把 DNS 模式改回 Cloudflare 同步，并在注册商把 NS 改回原 DNS 服务商；DNS TTL 到期后解析会逐步回到原模式。
+              如需回退，在网站详情把 DNS 模式改回 Cloudflare 同步，并在注册商把
+              NS 改回原 DNS 服务商；DNS TTL 到期后解析会逐步回到原模式。
             </p>
           </div>
         </div>
@@ -2119,7 +2331,11 @@ function DNSObservabilityPanel({
   );
 }
 
-function DNSWorkerHealthPanel({ summary }: { summary: DNSObservabilitySummary }) {
+function DNSWorkerHealthPanel({
+  summary,
+}: {
+  summary: DNSObservabilitySummary;
+}) {
   const health = summary.worker_health;
 
   if (!health) {
@@ -2143,7 +2359,9 @@ function DNSWorkerHealthPanel({ summary }: { summary: DNSObservabilitySummary })
             Worker 可用性
           </h3>
           <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
-            这里统计 DNS Worker 本地处理查询的耗时、错误率和快照新鲜度，不代表用户到各地 NS 的网络 RTT。
+            这里统计 DNS Worker
+            本地处理查询的耗时、错误率和快照新鲜度，不代表用户到各地 NS 的网络
+            RTT。
           </p>
         </div>
         <StatusBadge

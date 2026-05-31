@@ -237,6 +237,34 @@ type DNSObservabilitySummaryInput struct {
 	WorkerID string
 }
 
+type DNSGSLBSchedulingStatesView struct {
+	CheckedAt time.Time                    `json:"checked_at"`
+	Total     int                          `json:"total"`
+	States    []DNSGSLBSchedulingStateView `json:"states"`
+}
+
+type DNSGSLBSchedulingStateView struct {
+	ID                 uint       `json:"id"`
+	ProxyRouteID       uint       `json:"proxy_route_id"`
+	SiteName           string     `json:"site_name"`
+	PrimaryDomain      string     `json:"primary_domain"`
+	Domains            []string   `json:"domains"`
+	RouteEnabled       bool       `json:"route_enabled"`
+	RouteAuthoritative bool       `json:"route_authoritative"`
+	RouteGSLBEnabled   bool       `json:"route_gslb_enabled"`
+	RouteRecordType    string     `json:"route_record_type"`
+	RecordType         string     `json:"record_type"`
+	ScopeKey           string     `json:"scope_key"`
+	SelectedTargets    []string   `json:"selected_targets"`
+	DesiredTargets     []string   `json:"desired_targets"`
+	LastReason         string     `json:"last_reason"`
+	LastChangedAt      *time.Time `json:"last_changed_at"`
+	LastEvaluatedAt    *time.Time `json:"last_evaluated_at"`
+	Status             string     `json:"status"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
 type DNSObservabilityCounterView struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
@@ -589,6 +617,55 @@ func ListAuthoritativeDNSWorkers() ([]DNSWorkerView, error) {
 		views = append(views, buildDNSWorkerView(worker, false))
 	}
 	return views, nil
+}
+
+func ListAuthoritativeDNSGSLBSchedulingStates() (*DNSGSLBSchedulingStatesView, error) {
+	var states []*model.GSLBSchedulingState
+	if err := model.DB.
+		Order("proxy_route_id asc, dns_record_type asc, scope_key asc").
+		Find(&states).Error; err != nil {
+		return nil, err
+	}
+
+	routeIDs := make([]uint, 0, len(states))
+	seenRoutes := make(map[uint]struct{}, len(states))
+	for _, state := range states {
+		if state == nil || state.ProxyRouteID == 0 {
+			continue
+		}
+		if _, ok := seenRoutes[state.ProxyRouteID]; ok {
+			continue
+		}
+		seenRoutes[state.ProxyRouteID] = struct{}{}
+		routeIDs = append(routeIDs, state.ProxyRouteID)
+	}
+
+	routesByID := make(map[uint]*model.ProxyRoute, len(routeIDs))
+	if len(routeIDs) > 0 {
+		var routes []*model.ProxyRoute
+		if err := model.DB.Where("id IN ?", routeIDs).Find(&routes).Error; err != nil {
+			return nil, err
+		}
+		for _, route := range routes {
+			if route == nil || route.ID == 0 {
+				continue
+			}
+			routesByID[route.ID] = route
+		}
+	}
+
+	view := &DNSGSLBSchedulingStatesView{
+		CheckedAt: time.Now().UTC(),
+		States:    make([]DNSGSLBSchedulingStateView, 0, len(states)),
+	}
+	for _, state := range states {
+		if state == nil || state.ProxyRouteID == 0 {
+			continue
+		}
+		view.States = append(view.States, buildDNSGSLBSchedulingStateView(state, routesByID[state.ProxyRouteID]))
+	}
+	view.Total = len(view.States)
+	return view, nil
 }
 
 func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput) (*DNSObservabilitySummaryView, error) {
@@ -1465,6 +1542,63 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		view.Token = worker.Token
 	}
 	return view
+}
+
+func buildDNSGSLBSchedulingStateView(state *model.GSLBSchedulingState, route *model.ProxyRoute) DNSGSLBSchedulingStateView {
+	if state == nil {
+		return DNSGSLBSchedulingStateView{}
+	}
+	recordType := normalizeDNSRecordType(state.DNSRecordType)
+	view := DNSGSLBSchedulingStateView{
+		ID:              state.ID,
+		ProxyRouteID:    state.ProxyRouteID,
+		RecordType:      recordType,
+		ScopeKey:        normalizeDNSSourceScope(state.ScopeKey),
+		SelectedTargets: decodeGSLBTargetList(state.SelectedTargets),
+		DesiredTargets:  decodeGSLBTargetList(state.DesiredTargets),
+		LastReason:      state.LastReason,
+		LastChangedAt:   state.LastChangedAt,
+		LastEvaluatedAt: state.LastEvaluatedAt,
+		CreatedAt:       state.CreatedAt,
+		UpdatedAt:       state.UpdatedAt,
+	}
+	if route == nil {
+		view.Status = "orphaned"
+		return view
+	}
+	domains, err := decodeStoredDomains(route.Domains, route.Domain)
+	if err != nil {
+		domains = normalizeStringList([]string{route.Domain})
+	}
+	view.Domains = domains
+	if len(domains) > 0 {
+		view.PrimaryDomain = domains[0]
+	} else {
+		view.PrimaryDomain = normalizeDNSRecordName(route.Domain)
+	}
+	view.SiteName = normalizeProxyRouteSiteNameInput(route, route.SiteName, view.PrimaryDomain)
+	view.RouteEnabled = route.Enabled
+	view.RouteAuthoritative = route.DNSProviderMode == DNSProviderModeAuthoritative
+	view.RouteGSLBEnabled = route.GSLBEnabled
+	view.RouteRecordType = normalizeDNSRecordType(route.DNSRecordType)
+	view.Status = evaluateDNSGSLBSchedulingStateStatus(view)
+	return view
+}
+
+func evaluateDNSGSLBSchedulingStateStatus(view DNSGSLBSchedulingStateView) string {
+	if !view.RouteEnabled || !view.RouteGSLBEnabled {
+		return "inactive"
+	}
+	if view.RouteRecordType != "" && view.RouteRecordType != view.RecordType {
+		return "stale"
+	}
+	if len(view.SelectedTargets) == 0 {
+		return "empty"
+	}
+	if len(view.DesiredTargets) > 0 && !sameStringSet(view.SelectedTargets, view.DesiredTargets) {
+		return "debouncing"
+	}
+	return "active"
 }
 
 func snapshotDNSZones() ([]AuthoritativeDNSSnapshotZone, error) {
