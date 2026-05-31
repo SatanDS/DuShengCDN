@@ -88,6 +88,33 @@ export interface DNSWorkerProbePayload {
   zone_id?: number;
 }
 
+export interface DNSGSLBSimulationPayload {
+  proxy_route_id: number;
+  qname: string;
+  record_type: 'A' | 'AAAA';
+  country?: string;
+  source_ip?: string;
+  fresh?: boolean;
+}
+
+export interface DNSGSLBSimulationResult {
+  proxy_route_id: number;
+  site_name: string;
+  qname: string;
+  record_type: 'A' | 'AAAA';
+  country: string;
+  source_ip: string;
+  source_scope: string;
+  ttl: number;
+  targets: string[];
+  target_count: number;
+  strategy: string;
+  gslb_enabled: boolean;
+  snapshot_version: string;
+  snapshot_at: string;
+  message: string;
+}
+
 export interface DNSObservabilityCounterItem {
   key: string;
   label: string;

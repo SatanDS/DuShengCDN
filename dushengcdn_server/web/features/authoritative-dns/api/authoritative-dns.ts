@@ -1,6 +1,8 @@
 import { apiRequest } from '@/lib/api/client';
 
 import type {
+  DNSGSLBSimulationPayload,
+  DNSGSLBSimulationResult,
   DNSObservabilitySummary,
   DNSRecordItem,
   DNSRecordMutationPayload,
@@ -103,6 +105,13 @@ export function deleteDNSWorker(id: number) {
 
 export function probeDNSWorker(id: number, payload: DNSWorkerProbePayload = {}) {
   return apiRequest<DNSWorkerProbe>(`/dns-workers/${id}/probe`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function simulateDNSGSLB(payload: DNSGSLBSimulationPayload) {
+  return apiRequest<DNSGSLBSimulationResult>('/dns-workers/simulate', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

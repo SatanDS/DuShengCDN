@@ -28,10 +28,13 @@ import {
   getDNSZoneRecords,
   getDNSZones,
   probeDNSWorker,
+  simulateDNSGSLB,
   updateDNSRecord,
   updateDNSZone,
 } from '@/features/authoritative-dns/api/authoritative-dns';
 import type {
+  DNSGSLBSimulationPayload,
+  DNSGSLBSimulationResult,
   DNSObservabilityCounterItem,
   DNSObservabilitySummary,
   DNSRecordItem,
@@ -94,6 +97,14 @@ type RecordFormValues = {
 type WorkerFormValues = {
   name: string;
   public_address: string;
+};
+
+type GSLBSimulationFormValues = {
+  proxy_route_id: string;
+  qname: string;
+  record_type: 'A' | 'AAAA';
+  country: string;
+  source_ip: string;
 };
 
 const dnsObservabilityWindowHours = 24;
@@ -168,6 +179,21 @@ function getGSLBDescription(route: ProxyRouteItem) {
   return enabledPools
     .map((pool) => `${pool.name || '未命名'}:${pool.weight}`)
     .join(' / ');
+}
+
+function getRouteDisplayName(route: ProxyRouteItem) {
+  return route.site_name || route.primary_domain || route.domain;
+}
+
+function getDefaultSimulationQName(route?: ProxyRouteItem | null) {
+  if (!route) {
+    return '';
+  }
+  return getRouteDomains(route)[0] ?? route.primary_domain ?? route.domain ?? '';
+}
+
+function getRouteRecordType(route?: ProxyRouteItem | null): 'A' | 'AAAA' {
+  return route?.dns_record_type === 'AAAA' ? 'AAAA' : 'A';
 }
 
 function zoneToFormValues(zone?: DNSZoneItem | null): ZoneFormValues {
@@ -426,6 +452,13 @@ export function AuthoritativeDNSPage() {
     [proxyRoutesQuery.data],
   );
   const observability = observabilityQuery.data ?? null;
+  const authoritativeRoutes = useMemo(
+    () =>
+      proxyRoutes
+        .filter((route) => route.dns_provider_mode === 'authoritative')
+        .filter((route) => route.enabled || route.gslb_enabled),
+    [proxyRoutes],
+  );
   const selectedZone = useMemo(
     () => zones.find((zone) => zone.id === selectedZoneId) ?? zones[0] ?? null,
     [selectedZoneId, zones],
@@ -509,6 +542,12 @@ export function AuthoritativeDNSPage() {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
     },
   });
+  const simulateGSLBMutation = useMutation({
+    mutationFn: simulateDNSGSLB,
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
 
   const openCreateZone = () => {
     setEditingZone(null);
@@ -569,6 +608,11 @@ export function AuthoritativeDNSPage() {
   const handleProbeWorker = (worker: DNSWorkerItem) => {
     setFeedback(null);
     probeWorkerMutation.mutate(worker);
+  };
+
+  const handleSimulateGSLB = (payload: DNSGSLBSimulationPayload) => {
+    setFeedback(null);
+    simulateGSLBMutation.mutate(payload);
   };
 
   if (zonesQuery.isLoading || workersQuery.isLoading) {
@@ -661,6 +705,22 @@ export function AuthoritativeDNSPage() {
               ? getErrorMessage(observabilityQuery.error)
               : ''
           }
+        />
+
+        <GSLBSimulationPanel
+          routes={authoritativeRoutes}
+          routesLoading={proxyRoutesQuery.isLoading}
+          routesError={
+            proxyRoutesQuery.isError ? getErrorMessage(proxyRoutesQuery.error) : ''
+          }
+          result={simulateGSLBMutation.data ?? null}
+          error={
+            simulateGSLBMutation.isError
+              ? getErrorMessage(simulateGSLBMutation.error)
+              : ''
+          }
+          isPending={simulateGSLBMutation.isPending}
+          onSimulate={handleSimulateGSLB}
         />
 
         <div className="flex flex-wrap gap-3">
@@ -1392,6 +1452,219 @@ function DNSWorkerProbeResultPanel({ probe }: { probe?: DNSWorkerProbe }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function GSLBSimulationPanel({
+  routes,
+  routesLoading,
+  routesError,
+  result,
+  error,
+  isPending,
+  onSimulate,
+}: {
+  routes: ProxyRouteItem[];
+  routesLoading: boolean;
+  routesError: string;
+  result: DNSGSLBSimulationResult | null;
+  error: string;
+  isPending: boolean;
+  onSimulate: (payload: DNSGSLBSimulationPayload) => void;
+}) {
+  const defaultRoute = routes[0] ?? null;
+  const form = useForm<GSLBSimulationFormValues>({
+    defaultValues: {
+      proxy_route_id: defaultRoute ? String(defaultRoute.id) : '',
+      qname: getDefaultSimulationQName(defaultRoute),
+      record_type: getRouteRecordType(defaultRoute),
+      country: '',
+      source_ip: '',
+    },
+  });
+  const selectedRouteId = Number(form.watch('proxy_route_id'));
+  const selectedRoute =
+    routes.find((route) => route.id === selectedRouteId) ?? defaultRoute;
+
+  useEffect(() => {
+    if (!selectedRoute) {
+      form.reset({
+        proxy_route_id: '',
+        qname: '',
+        record_type: 'A',
+        country: '',
+        source_ip: '',
+      });
+      return;
+    }
+    const currentRouteID = form.getValues('proxy_route_id');
+    if (currentRouteID) {
+      return;
+    }
+    form.reset({
+      proxy_route_id: String(selectedRoute.id),
+      qname: getDefaultSimulationQName(selectedRoute),
+      record_type: getRouteRecordType(selectedRoute),
+      country: '',
+      source_ip: '',
+    });
+  }, [form, selectedRoute]);
+
+  const handleRouteChange = (routeId: string) => {
+    const nextRoute = routes.find((route) => String(route.id) === routeId);
+    form.setValue('proxy_route_id', routeId, { shouldDirty: true });
+    if (nextRoute) {
+      form.setValue('qname', getDefaultSimulationQName(nextRoute), {
+        shouldDirty: true,
+      });
+      form.setValue('record_type', getRouteRecordType(nextRoute), {
+        shouldDirty: true,
+      });
+    }
+  };
+
+  return (
+    <AppCard
+      title="GSLB 调度模拟"
+      description="按站点、记录类型和来源国家预演当前权威 DNS 快照会返回的边缘 IP。"
+    >
+      {routesLoading ? (
+        <LoadingState />
+      ) : routesError ? (
+        <ErrorState title="调度模拟加载失败" description={routesError} />
+      ) : routes.length === 0 ? (
+        <EmptyState
+          title="暂无权威 DNS 站点"
+          description="把网站配置的自动 DNS 模式切换为自建权威 DNS 后，可在这里模拟实时 GSLB 选点。"
+        />
+      ) : (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
+          <form
+            className="space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] p-4"
+            onSubmit={form.handleSubmit((values) => {
+              onSimulate({
+                proxy_route_id: Number(values.proxy_route_id),
+                qname: values.qname.trim(),
+                record_type: values.record_type,
+                country: values.country.trim().toUpperCase(),
+                source_ip: values.source_ip.trim(),
+                fresh: true,
+              });
+            })}
+          >
+            <ResourceField label="网站配置">
+              <ResourceSelect
+                value={form.watch('proxy_route_id')}
+                onChange={(event) => handleRouteChange(event.target.value)}
+              >
+                {routes.map((route) => (
+                  <option key={route.id} value={route.id}>
+                    {getRouteDisplayName(route)}
+                  </option>
+                ))}
+              </ResourceSelect>
+            </ResourceField>
+            <ResourceField label="查询域名">
+              <ResourceInput
+                placeholder="www.example.com"
+                {...form.register('qname', { required: true })}
+              />
+            </ResourceField>
+            <div className="grid gap-4 md:grid-cols-2">
+              <ResourceField label="记录类型">
+                <ResourceSelect {...form.register('record_type')}>
+                  <option value="A">A</option>
+                  <option value="AAAA">AAAA</option>
+                </ResourceSelect>
+              </ResourceField>
+              <ResourceField
+                label="来源国家"
+                hint="例如 HK、DE；留空使用 global。"
+              >
+                <ResourceInput
+                  maxLength={2}
+                  placeholder="HK"
+                  {...form.register('country')}
+                />
+              </ResourceField>
+            </div>
+            <ResourceField label="来源 IP" hint="可选，仅用于记录模拟输入。">
+              <ResourceInput
+                placeholder="203.0.113.10"
+                {...form.register('source_ip')}
+              />
+            </ResourceField>
+            {selectedRoute ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <InfoTile
+                  label="GSLB"
+                  value={selectedRoute.gslb_enabled ? '已启用' : '未启用'}
+                />
+                <InfoTile
+                  label="节点池"
+                  value={getGSLBDescription(selectedRoute)}
+                />
+              </div>
+            ) : null}
+            <PrimaryButton type="submit" disabled={isPending}>
+              {isPending ? '模拟中...' : '模拟调度'}
+            </PrimaryButton>
+          </form>
+
+          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] p-4">
+            <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+              模拟结果
+            </h3>
+            {error ? (
+              <InlineMessage className="mt-3" tone="danger" message={error} />
+            ) : result ? (
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <InfoTile label="站点" value={result.site_name || '—'} />
+                  <InfoTile label="作用域" value={result.source_scope} />
+                  <InfoTile label="TTL" value={`${result.ttl} 秒`} />
+                  <InfoTile
+                    label="策略"
+                    value={result.strategy || (result.gslb_enabled ? 'GSLB' : '节点池')}
+                  />
+                </div>
+                {result.targets.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+                      返回目标
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {result.targets.map((target) => (
+                        <span
+                          key={target}
+                          className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-xs text-[var(--foreground-primary)]"
+                        >
+                          {target}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <InlineMessage tone="danger" message="当前没有可返回目标。" />
+                )}
+                <p className="text-xs leading-5 text-[var(--foreground-secondary)]">
+                  {result.qname} {result.record_type} · 快照{' '}
+                  {result.snapshot_version || '—'} ·{' '}
+                  {formatDateTime(result.snapshot_at)}
+                </p>
+                {result.message ? (
+                  <InlineMessage tone="info" message={result.message} />
+                ) : null}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm leading-6 text-[var(--foreground-secondary)]">
+                选择站点和来源后点击模拟，可看到 DNS Worker 当前会返回的 A/AAAA 目标。
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </AppCard>
   );
 }
 

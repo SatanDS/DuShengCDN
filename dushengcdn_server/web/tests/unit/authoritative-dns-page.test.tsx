@@ -350,6 +350,35 @@ describe('Authoritative DNS page', () => {
           );
         }
 
+        if (url.includes('/dns-workers/simulate') && method === 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  proxy_route_id: 92,
+                  site_name: 'authoritative-site',
+                  qname: 'api.example.com',
+                  record_type: 'A',
+                  country: 'HK',
+                  source_ip: '',
+                  source_scope: 'country:HK',
+                  ttl: 30,
+                  targets: ['8.8.4.4'],
+                  target_count: 1,
+                  strategy: 'weighted',
+                  gslb_enabled: true,
+                  snapshot_version: 'snapshot-c',
+                  snapshot_at: '2026-05-31T08:20:00Z',
+                  message:
+                    '模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。',
+                },
+              }),
+            ),
+          );
+        }
+
         if (url.includes('/dns-workers/') && method === 'POST') {
           return Promise.resolve(
             new Response(
@@ -504,7 +533,42 @@ describe('Authoritative DNS page', () => {
                     dns_record_type: 'A',
                     dns_provider_mode: 'authoritative',
                     dns_zone_id_ref: 1,
-                    gslb_enabled: false,
+                    gslb_enabled: true,
+                    gslb_policy: {
+                      mode: 'cloudflare_dns',
+                      strategy: 'weighted',
+                      pools: [
+                        {
+                          name: 'hk',
+                          weight: 80,
+                          countries: ['HK'],
+                          enabled: true,
+                        },
+                        {
+                          name: 'eu',
+                          weight: 20,
+                          countries: ['DE'],
+                          enabled: true,
+                        },
+                      ],
+                      target_count: 1,
+                      ttl: 30,
+                      source_ip: {
+                        provider: 'none',
+                        api_url: '',
+                        api_token: '',
+                      },
+                      load_thresholds: {
+                        max_openresty_connections: 0,
+                        max_cpu_percent: 0,
+                        max_memory_percent: 0,
+                      },
+                      debounce: {
+                        cooldown_seconds: 60,
+                        unhealthy_threshold: 1,
+                        recovery_threshold: 1,
+                      },
+                    },
                     created_at: '2026-05-31T08:00:00Z',
                     updated_at: '2026-05-31T08:00:00Z',
                   },
@@ -540,6 +604,16 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('最大延迟').length).toBeGreaterThan(0);
     expect(screen.getAllByText('12.5 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('48 ms').length).toBeGreaterThan(0);
+    expect(screen.getByText('GSLB 调度模拟')).toBeInTheDocument();
+    await userEvent
+      .setup()
+      .type(screen.getByPlaceholderText('HK'), 'HK');
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: '模拟调度' }));
+    expect(await screen.findByText('8.8.4.4')).toBeInTheDocument();
+    expect(screen.getAllByText('country:HK').length).toBeGreaterThan(0);
+    expect(screen.getByText(/snapshot-c/)).toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '检查委派' }));

@@ -4,7 +4,7 @@
 
 本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
 
-当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、来源作用域分布、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、`country:HK` / `country:DE` / `global` 等来源作用域、注册商 NS 匹配状态、Glue 提示以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态。
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、来源作用域分布、GSLB 调度模拟、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、`country:HK` / `country:DE` / `global` 等来源作用域、注册商 NS 匹配状态、Glue 提示、当前快照按来源模拟返回目标以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态。
 
 ## 目标能力
 
@@ -139,6 +139,7 @@ route_id + record_type + source_scope
 | `POST /api/dns-records/{id}/delete` | 删除静态 DNS 记录 |
 | `GET /api/dns-workers/` | 查看 DNS Worker 在线状态、监听地址、版本和快照时间 |
 | `GET /api/dns-workers/observability` | 查看 DNS Worker 查询聚合、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、Worker/Zone/站点维度和返回目标分布 |
+| `POST /api/dns-workers/simulate` | 按网站、记录类型、来源国家代码和来源 IP 预演当前权威 DNS 快照的 GSLB 返回目标，不写入真实防抖状态 |
 | `POST /api/dns-workers/` | 创建 DNS Worker Token |
 | `POST /api/dns-workers/{id}/probe` | 管理端按需从 Server 探测 DNS Worker 公网 UDP/TCP 53 可达性、RTT、RCODE 和应答数量，并保存最近一次探测结果 |
 | `POST /api/dns-workers/{id}/delete` | 删除 DNS Worker |
@@ -151,6 +152,7 @@ route_id + record_type + source_scope
 * 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 查询延迟、可用率、错误率、返回码、返回目标、来源作用域和动态站点分布。
 * DNS Worker 列表支持按需探测单个 Worker 的公网 UDP/TCP 53，返回 RTT、RCODE、应答数量和错误信息，并在刷新后继续展示最近一次结果，用于验证 Server 到该 NS 的解析可达性。
 * Worker 可用性面板会把最近一次公网探测归类为 `healthy`、`partial`、`failed`、`stale` 或 `unknown`，迁移向导会要求至少一个在线 Worker 通过最新 UDP/TCP 53 探测后再标记站点为可切换。
+* 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，不改变真实调度状态。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
 * 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否已启用站点 GSLB，并跳转到对应网站详情执行切换。

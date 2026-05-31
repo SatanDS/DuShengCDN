@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"dushengcdn/common"
+	"dushengcdn/internal/dnsworker"
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip/iputil"
 	"encoding/hex"
@@ -149,6 +150,33 @@ type DNSWorkerView struct {
 
 type DNSWorkerProbeInput struct {
 	ZoneID uint `json:"zone_id"`
+}
+
+type DNSGSLBSimulationInput struct {
+	ProxyRouteID uint   `json:"proxy_route_id"`
+	QName        string `json:"qname"`
+	RecordType   string `json:"record_type"`
+	Country      string `json:"country"`
+	SourceIP     string `json:"source_ip"`
+	Fresh        *bool  `json:"fresh"`
+}
+
+type DNSGSLBSimulationView struct {
+	ProxyRouteID    uint      `json:"proxy_route_id"`
+	SiteName        string    `json:"site_name"`
+	QName           string    `json:"qname"`
+	RecordType      string    `json:"record_type"`
+	Country         string    `json:"country"`
+	SourceIP        string    `json:"source_ip"`
+	SourceScope     string    `json:"source_scope"`
+	TTL             int       `json:"ttl"`
+	Targets         []string  `json:"targets"`
+	TargetCount     int       `json:"target_count"`
+	Strategy        string    `json:"strategy"`
+	GSLBEnabled     bool      `json:"gslb_enabled"`
+	SnapshotVersion string    `json:"snapshot_version"`
+	SnapshotAt      time.Time `json:"snapshot_at"`
+	Message         string    `json:"message"`
 }
 
 type DNSWorkerProbeView struct {
@@ -810,6 +838,124 @@ func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnap
 	return snapshot, nil
 }
 
+func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulationView, error) {
+	if input.ProxyRouteID == 0 {
+		return nil, errors.New("proxy_route_id is required")
+	}
+	recordType := strings.ToUpper(strings.TrimSpace(input.RecordType))
+	if recordType == "" {
+		recordType = "A"
+	}
+	if recordType != "A" && recordType != "AAAA" {
+		return nil, errors.New("record_type only supports A/AAAA")
+	}
+	sourceIP := strings.TrimSpace(input.SourceIP)
+	if sourceIP != "" && net.ParseIP(sourceIP) == nil {
+		return nil, errors.New("source_ip format is invalid")
+	}
+	country := strings.ToUpper(strings.TrimSpace(input.Country))
+	if country != "" && !proxyRouteRegionCountryPattern.MatchString(country) {
+		return nil, errors.New("country must be a two-letter country code")
+	}
+
+	routeModel, err := model.GetProxyRouteByID(input.ProxyRouteID)
+	if err != nil {
+		return nil, err
+	}
+	if routeModel == nil || !routeModel.Enabled {
+		return nil, errors.New("selected proxy route is not enabled")
+	}
+	if routeModel.DNSProviderMode != DNSProviderModeAuthoritative {
+		return nil, errors.New("selected proxy route is not using authoritative DNS")
+	}
+
+	snapshot, err := GetAuthoritativeDNSSnapshot(nil)
+	if err != nil {
+		return nil, err
+	}
+	workerSnapshot := convertAuthoritativeSnapshotToWorker(snapshot)
+	var workerRoute *dnsworker.SnapshotRoute
+	for index := range workerSnapshot.Routes {
+		if workerSnapshot.Routes[index].ID == input.ProxyRouteID {
+			workerRoute = &workerSnapshot.Routes[index]
+			break
+		}
+	}
+	if workerRoute == nil {
+		return nil, errors.New("selected proxy route is not present in authoritative DNS snapshot")
+	}
+
+	qname := normalizeDNSRecordName(input.QName)
+	if qname == "" {
+		domains, err := decodeStoredDomains(routeModel.Domains, routeModel.Domain)
+		if err != nil {
+			return nil, err
+		}
+		if len(domains) > 0 {
+			qname = normalizeDNSRecordName(domains[0])
+		}
+	}
+	if qname == "" {
+		return nil, errors.New("qname is required")
+	}
+	if !authoritativeRouteHasDomain(workerRoute, qname) {
+		return nil, errors.New("qname does not belong to selected proxy route")
+	}
+
+	fresh := true
+	if input.Fresh != nil {
+		fresh = *input.Fresh
+	}
+	source := dnsworker.SourceContext{
+		IP:      sourceIP,
+		Country: country,
+	}
+	targets, ttl, sourceScope, err := dnsworker.NewScheduler().Select(workerSnapshot, workerRoute, recordType, source, fresh)
+	if err != nil {
+		return nil, err
+	}
+
+	policy := workerRoute.GSLBPolicy
+	if !workerRoute.GSLBEnabled {
+		policy.Strategy = workerRoute.ScheduleMode
+		policy.TargetCount = workerRoute.TargetCount
+	}
+	message := "模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。"
+	if sourceScope == defaultGSLBScopeKey && country == "" {
+		message += " 未指定国家代码时使用 global 作用域。"
+	}
+	return &DNSGSLBSimulationView{
+		ProxyRouteID:    workerRoute.ID,
+		SiteName:        workerRoute.SiteName,
+		QName:           qname,
+		RecordType:      recordType,
+		Country:         country,
+		SourceIP:        sourceIP,
+		SourceScope:     sourceScope,
+		TTL:             ttl,
+		Targets:         targets,
+		TargetCount:     len(targets),
+		Strategy:        strings.TrimSpace(policy.Strategy),
+		GSLBEnabled:     workerRoute.GSLBEnabled,
+		SnapshotVersion: snapshot.SnapshotVersion,
+		SnapshotAt:      snapshot.GeneratedAt,
+		Message:         message,
+	}, nil
+}
+
+func authoritativeRouteHasDomain(route *dnsworker.SnapshotRoute, qname string) bool {
+	if route == nil {
+		return false
+	}
+	name := normalizeDNSRecordName(qname)
+	for _, domain := range route.Domains {
+		if normalizeDNSRecordName(domain) == name {
+			return true
+		}
+	}
+	return false
+}
+
 func buildDNSZone(zone *model.DNSZone, input DNSZoneInput) (*model.DNSZone, error) {
 	name, err := normalizeDNSZoneName(input.Name)
 	if err != nil {
@@ -1113,6 +1259,112 @@ func snapshotNodes() ([]AuthoritativeDNSSnapshotNode, error) {
 		return result[i].NodeID < result[j].NodeID
 	})
 	return result, nil
+}
+
+func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *dnsworker.Snapshot {
+	if snapshot == nil {
+		return nil
+	}
+	result := &dnsworker.Snapshot{
+		SnapshotVersion: snapshot.SnapshotVersion,
+		GeneratedAt:     snapshot.GeneratedAt,
+		Zones:           make([]dnsworker.SnapshotZone, 0, len(snapshot.Zones)),
+		Routes:          make([]dnsworker.SnapshotRoute, 0, len(snapshot.Routes)),
+		Nodes:           make([]dnsworker.SnapshotNode, 0, len(snapshot.Nodes)),
+	}
+	for _, zone := range snapshot.Zones {
+		item := dnsworker.SnapshotZone{
+			ID:          zone.ID,
+			Name:        zone.Name,
+			SOAEmail:    zone.SOAEmail,
+			PrimaryNS:   zone.PrimaryNS,
+			NameServers: append([]string(nil), zone.NameServers...),
+			DefaultTTL:  zone.DefaultTTL,
+			Serial:      zone.Serial,
+			Records:     make([]dnsworker.SnapshotRecord, 0, len(zone.Records)),
+		}
+		for _, record := range zone.Records {
+			item.Records = append(item.Records, dnsworker.SnapshotRecord{
+				ID:       record.ID,
+				Name:     record.Name,
+				Type:     record.Type,
+				Value:    record.Value,
+				TTL:      record.TTL,
+				Priority: record.Priority,
+			})
+		}
+		result.Zones = append(result.Zones, item)
+	}
+	for _, route := range snapshot.Routes {
+		result.Routes = append(result.Routes, dnsworker.SnapshotRoute{
+			ID:             route.ID,
+			SiteName:       route.SiteName,
+			Domains:        append([]string(nil), route.Domains...),
+			ZoneID:         route.ZoneID,
+			NodePool:       route.NodePool,
+			RecordType:     route.RecordType,
+			TargetCount:    route.TargetCount,
+			ScheduleMode:   route.ScheduleMode,
+			TTL:            route.TTL,
+			GSLBEnabled:    route.GSLBEnabled,
+			GSLBPolicy:     convertAuthoritativeGSLBPolicyToWorker(route.GSLBPolicy),
+			CurrentTargets: append([]string(nil), route.CurrentTargets...),
+			TargetError:    route.TargetError,
+		})
+	}
+	for _, node := range snapshot.Nodes {
+		result.Nodes = append(result.Nodes, dnsworker.SnapshotNode{
+			NodeID:               node.NodeID,
+			Name:                 node.Name,
+			PoolName:             node.PoolName,
+			PublicIPs:            append([]string(nil), node.PublicIPs...),
+			Weight:               node.Weight,
+			SchedulingEnabled:    node.SchedulingEnabled,
+			DrainMode:            node.DrainMode,
+			Status:               node.Status,
+			OpenrestyStatus:      node.OpenrestyStatus,
+			LastSeenAt:           node.LastSeenAt,
+			OpenrestyConnections: node.OpenrestyConnections,
+			CPUUsagePercent:      node.CPUUsagePercent,
+			MemoryUsagePercent:   node.MemoryUsagePercent,
+			MetricCapturedAt:     node.MetricCapturedAt,
+		})
+	}
+	return result
+}
+
+func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnsworker.GSLBPolicy {
+	result := dnsworker.GSLBPolicy{
+		Mode:        policy.Mode,
+		Strategy:    policy.Strategy,
+		TargetCount: policy.TargetCount,
+		TTL:         policy.TTL,
+		SourceIP: dnsworker.GSLBSourceIPProvider{
+			Provider: policy.SourceIP.Provider,
+			APIURL:   policy.SourceIP.APIURL,
+			APIToken: policy.SourceIP.APIToken,
+		},
+		LoadThresholds: dnsworker.GSLBLoadThresholds{
+			MaxOpenrestyConnections: policy.LoadThresholds.MaxOpenrestyConnections,
+			MaxCPUPercent:           policy.LoadThresholds.MaxCPUPercent,
+			MaxMemoryPercent:        policy.LoadThresholds.MaxMemoryPercent,
+		},
+		Debounce: dnsworker.GSLBDebounce{
+			CooldownSeconds:    policy.Debounce.CooldownSeconds,
+			UnhealthyThreshold: policy.Debounce.UnhealthyThreshold,
+			RecoveryThreshold:  policy.Debounce.RecoveryThreshold,
+		},
+		Pools: make([]dnsworker.GSLBPoolPolicy, 0, len(policy.Pools)),
+	}
+	for _, pool := range policy.Pools {
+		result.Pools = append(result.Pools, dnsworker.GSLBPoolPolicy{
+			Name:      pool.Name,
+			Weight:    pool.Weight,
+			Countries: append([]string(nil), pool.Countries...),
+			Enabled:   pool.Enabled,
+		})
+	}
+	return result
 }
 
 func authoritativeDNSSnapshotVersion(snapshot *AuthoritativeDNSSnapshot) (string, error) {

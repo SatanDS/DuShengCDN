@@ -572,6 +572,135 @@ func TestProbeAuthoritativeDNSWorkerChecksUDPAndTCP(t *testing.T) {
 	}
 }
 
+func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now()
+	for _, node := range []*model.Node{
+		{
+			NodeID:          "node-hk",
+			Name:            "hk",
+			IP:              "8.8.4.4",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.4.4"]`,
+			Weight:          100,
+			AgentToken:      "token-hk",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-eu",
+			Name:            "eu",
+			IP:              "1.1.1.1",
+			PoolName:        "eu",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          100,
+			AgentToken:      "token-eu",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-time.Second),
+		},
+		{
+			NodeID:          "node-hot",
+			Name:            "hot",
+			IP:              "9.9.9.9",
+			PoolName:        "hk",
+			PublicIPs:       `["9.9.9.9"]`,
+			Weight:          100,
+			AgentToken:      "token-hot",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-2 * time.Second),
+		},
+	} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node %s: %v", node.NodeID, err)
+		}
+	}
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:               "node-hot",
+		CapturedAt:           now,
+		CPUUsagePercent:      20,
+		MemoryUsedBytes:      20,
+		MemoryTotalBytes:     100,
+		OpenrestyConnections: 99,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hot node metric: %v", err)
+	}
+
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 30)
+	policy.TargetCount = 2
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 80, Countries: []string{"HK"}, Enabled: true},
+		{Name: "eu", Weight: 20, Countries: []string{"DE"}, Enabled: true},
+	}
+	policy.LoadThresholds.MaxOpenrestyConnections = 50
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  2,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	hk, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+		Country:      "hk",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB HK: %v", err)
+	}
+	if hk.SourceScope != "country:HK" || hk.TTL != 30 || hk.Strategy != "weighted" {
+		t.Fatalf("unexpected HK simulation metadata: %+v", hk)
+	}
+	if len(hk.Targets) != 1 || hk.Targets[0] != "8.8.4.4" {
+		t.Fatalf("expected HK pool target without overloaded node, got %+v", hk.Targets)
+	}
+
+	de, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+		Country:      "DE",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB DE: %v", err)
+	}
+	if de.SourceScope != "country:DE" || len(de.Targets) != 1 || de.Targets[0] != "1.1.1.1" {
+		t.Fatalf("expected DE pool target, got %+v", de)
+	}
+}
+
 func TestDNSWorkerProbeStateClassifiesFailedPartialAndStale(t *testing.T) {
 	now := time.Date(2026, 5, 31, 8, 0, 0, 0, time.UTC)
 

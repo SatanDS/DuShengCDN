@@ -212,6 +212,19 @@ func ProbeDNSWorker(c *gin.Context) {
 	respondSuccess(c, view)
 }
 
+func SimulateDNSGSLB(c *gin.Context) {
+	var input service.DNSGSLBSimulationInput
+	if !decodeJSONRequest(c, &input) {
+		return
+	}
+	view, err := service.SimulateAuthoritativeDNSGSLB(input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
 func GetDNSSnapshot(c *gin.Context) {
 	worker, ok := authenticateDNSWorker(c)
 	if !ok {
