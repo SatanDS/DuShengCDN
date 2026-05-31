@@ -1393,6 +1393,10 @@ function WorkersPanel({
                       label={worker.version || '未上报版本'}
                       variant="info"
                     />
+                    <StatusBadge
+                      label={worker.geoip_enabled ? 'GeoIP 已加载' : 'GeoIP 未加载'}
+                      variant={worker.geoip_enabled ? 'success' : 'warning'}
+                    />
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <InfoTile label="Worker ID" value={worker.worker_id} />
@@ -1418,6 +1422,21 @@ function WorkersPanel({
                   {worker.last_error ? (
                     <InlineMessage tone="danger" message={worker.last_error} />
                   ) : null}
+                  {worker.geoip_last_error ? (
+                    <InlineMessage
+                      tone="info"
+                      message={`GeoIP 国家库加载失败：${worker.geoip_last_error}`}
+                    />
+                  ) : !worker.geoip_enabled ? (
+                    <InlineMessage
+                      tone="info"
+                      message="未加载 GeoIP 国家库；国家代码节点池不会命中，仍可按来源 CIDR 或 global 调度。"
+                    />
+                  ) : (
+                    <p className="text-xs break-all text-[var(--foreground-secondary)]">
+                      GeoIP 国家库：{worker.geoip_database_path || '已加载'}
+                    </p>
+                  )}
                   {worker.probe_message ? (
                     <p className="text-xs text-[var(--foreground-secondary)]">
                       探测状态：{worker.probe_message}
@@ -2446,6 +2465,10 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           {worker.snapshot_stale ? (
             <StatusBadge label="快照过期" variant="danger" />
           ) : null}
+          <StatusBadge
+            label={worker.geoip_enabled ? 'GeoIP 已加载' : 'GeoIP 未加载'}
+            variant={worker.geoip_enabled ? 'success' : 'warning'}
+          />
         </div>
       </div>
 
@@ -2478,6 +2501,19 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           className="mt-3"
           tone="danger"
           message={worker.last_error}
+        />
+      ) : null}
+      {worker.geoip_last_error ? (
+        <InlineMessage
+          className="mt-3"
+          tone="info"
+          message={`GeoIP 国家库加载失败：${worker.geoip_last_error}`}
+        />
+      ) : !worker.geoip_enabled ? (
+        <InlineMessage
+          className="mt-3"
+          tone="info"
+          message="未加载 GeoIP 国家库；按国家代码匹配的 GSLB 节点池会回退到 global，来源 CIDR 匹配不受影响。"
         />
       ) : null}
       {worker.probe_message ? (

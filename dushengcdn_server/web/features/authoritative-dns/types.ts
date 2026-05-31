@@ -47,6 +47,9 @@ export interface DNSWorkerItem {
   last_snapshot_at?: string | null;
   last_seen_at?: string | null;
   last_error: string;
+  geoip_enabled: boolean;
+  geoip_database_path: string;
+  geoip_last_error: string;
   last_probe_at?: string | null;
   last_probe_query: string;
   last_probe_results: DNSWorkerProbeResult[];
@@ -249,6 +252,8 @@ export interface DNSWorkerSnapshotWorker {
   last_snapshot_at?: string | null;
   last_seen_at?: string | null;
   stale: boolean;
+  geoip_enabled: boolean;
+  geoip_last_error: string;
 }
 
 export interface DNSWorkerSnapshotConsistency {
@@ -293,6 +298,9 @@ export interface DNSWorkerHealthItem {
   last_snapshot_at?: string | null;
   snapshot_age_seconds: number;
   snapshot_stale: boolean;
+  geoip_enabled: boolean;
+  geoip_database_path: string;
+  geoip_last_error: string;
   last_error: string;
   last_probe_at?: string | null;
   last_probe_results: DNSWorkerProbeResult[];

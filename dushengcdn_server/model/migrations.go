@@ -1704,6 +1704,24 @@ func validateDatabaseSchemaV22(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV23 adds DNS Worker GeoIP runtime status fields.
+func migrateV23(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV23(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV22(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{"geo_ip_enabled", "geo_ip_database_path", "geo_ip_last_error"} {
+		if !db.Migrator().HasColumn(&DNSWorker{}, column) {
+			return fmt.Errorf("column dns_workers.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1727,6 +1745,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 19, toVersion: 20, migrate: migrateV20, validate: validateDatabaseSchemaV20},
 		{fromVersion: 20, toVersion: 21, migrate: migrateV21, validate: validateDatabaseSchemaV21},
 		{fromVersion: 21, toVersion: 22, migrate: migrateV22, validate: validateDatabaseSchemaV22},
+		{fromVersion: 22, toVersion: 23, migrate: migrateV23, validate: validateDatabaseSchemaV23},
 	}
 }
 

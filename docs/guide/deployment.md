@@ -166,7 +166,7 @@ go run . --port 3000 --log-dir ./logs
 
 自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。
 
-Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，可用于检查实时 GSLB 是否按来源 CIDR、国家代码、来源分流桶、节点池权重、健康状态和负载阈值返回预期边缘 IP。「GSLB 调度状态」展示当前实际目标、期望目标、最近评估时间和防抖冷却状态；「GSLB 调度模拟」还可以在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照返回目标，并解释节点池匹配、候选节点、跳过节点和原因。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
+Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，可用于检查实时 GSLB 是否按来源 CIDR、国家代码、来源分流桶、节点池权重、健康状态和负载阈值返回预期边缘 IP。「GSLB 调度状态」展示当前实际目标、期望目标、最近评估时间和防抖冷却状态；「GSLB 调度模拟」还可以在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照返回目标，并解释节点池匹配、候选节点、跳过节点和原因。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
 
 管理端操作顺序：
 
@@ -233,7 +233,7 @@ go run ./cmd/dns-worker \
 --geoip-database /var/lib/dushengcdn-dns-worker/GeoLite2-Country.mmdb
 ```
 
-未配置本地 GeoIP 库或安装脚本下载 Country MMDB 失败时，Worker 仍会优先读取 EDNS Client Subnet 的来源 IP；来源 CIDR 命中时作用域为 `cidr:...`，未命中时国家代码为空并回退为 `global`。启用 `weighted` 或 `load_aware` 后，Worker 会在来源作用域后追加 `|bucket:xx` 分流桶，用于让 80/20 这类权重在逐查询答案中稳定生效。
+未配置本地 GeoIP 库或安装脚本下载 Country MMDB 失败时，Worker 仍会优先读取 EDNS Client Subnet 的来源 IP；来源 CIDR 命中时作用域为 `cidr:...`，未命中时国家代码为空并回退为 `global`。启用 `weighted` 或 `load_aware` 后，Worker 会在来源作用域后追加 `|bucket:xx` 分流桶，用于让 80/20 这类权重在逐查询答案中稳定生效。Worker 会在心跳里上报 GeoIP 是否加载、数据库路径和最近加载错误；如果面板显示「GeoIP 未加载」，国家代码节点池不会命中，但来源 CIDR 与 global 调度仍可继续工作。
 
 生产部署原则：
 

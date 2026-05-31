@@ -160,7 +160,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `gslb_scheduling_states.last_changed_at` | 运行时状态 | 最近一次实际切换 DNS 目标的时间，用于防抖冷却 |
 | `dns_zones` | 权威 DNS | 托管 Zone、SOA、NS、默认 TTL、启用状态和序列号 |
 | `dns_records` | 权威 DNS | Zone 内静态记录，至少支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA` |
-| `dns_workers` | 权威 DNS | DNS Worker 身份、Token、公网地址、版本、心跳、快照状态和最近一次 UDP/TCP 探测结果 |
+| `dns_workers` | 权威 DNS | DNS Worker 身份、Token、公网地址、版本、心跳、快照状态、GeoIP 国家库加载状态和最近一次 UDP/TCP 探测结果 |
 | `dns_query_rollups` | 权威 DNS | DNS 查询聚合指标，按时间窗口、Zone、站点、来源作用域、qtype、rcode 和 Worker 统计 |
 
 自建权威 DNS 的完整设计见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
@@ -213,6 +213,8 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT` | DNS Worker 按来源 IP 的每秒查询上限；`0` 表示关闭限速 | `200` |
 | `DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE` | DNS Worker UDP 响应最大字节数，超过时设置 TC 位让递归解析器回退 TCP | `1232` |
 | `DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH` | 可选本地 MaxMind Country MMDB 路径，用于按国家代码匹配 GSLB 节点池 | 空 |
+
+DNS Worker 心跳会把本地 GeoIP 国家库状态同步到 Server，包括 `geoip_enabled`、`geoip_database_path` 和 `geoip_last_error`。管理端会据此展示国家代码节点池是否具备命中条件；GeoIP 未加载时，来源 CIDR 与 `global` 调度仍可继续工作。
 
 ## DNS Worker 命令行参数
 

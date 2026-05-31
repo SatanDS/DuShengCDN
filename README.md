@@ -31,7 +31,7 @@
 
 * 节点支持节点池、公网 IP 池、标签、权重、调度开关和排空模式。
 * Cloudflare 自动 DNS 支持同一域名同步多个 A/AAAA 目标，并可按节点池、健康状态、权重和 GSLB 负载感知策略选择在线节点。
-* 自建权威 DNS 与实时 GSLB 已落地 Server 控制面和 DNS Worker MVP，包含 Zone、DNS Worker Token、心跳/聚合、只读调度快照 API、UDP/TCP 53 查询回答、逐查询 GSLB 选点、来源 CIDR/国家代码匹配、稳定权重分流桶、按来源 IP 查询限速、UDP 响应大小保护、管理端 DNS 查询趋势、SERVFAIL/NXDOMAIN 观测、来源作用域分布、当前调度状态、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测与健康状态、Worker 快照一致性告警、Zone 委派检查、Glue 提示和 Cloudflare 到权威 DNS 的迁移向导。
+* 自建权威 DNS 与实时 GSLB 已落地 Server 控制面和 DNS Worker MVP，包含 Zone、DNS Worker Token、心跳/聚合、只读调度快照 API、UDP/TCP 53 查询回答、逐查询 GSLB 选点、来源 CIDR/国家代码匹配、稳定权重分流桶、按来源 IP 查询限速、UDP 响应大小保护、管理端 DNS 查询趋势、SERVFAIL/NXDOMAIN 观测、来源作用域分布、当前调度状态、Worker 查询延迟/可用性看板、GeoIP 国家库加载状态、Server 侧按需 Worker UDP/TCP 探测与健康状态、Worker 快照一致性告警、Zone 委派检查、Glue 提示和 Cloudflare 到权威 DNS 的迁移向导。
 * 网站缓存页支持向目标节点池下发全量缓存清理和首页预热。
 * 观测计量合并访问日志与计量统计，支持站点/节点流量、缓存命中率、回源流量、状态码分布、TOP URL/IP/地区、带宽 P95 和节点可用率。
 * OpenResty 回源失败保护增强，默认对常见 5xx/超时错误尝试切换下一源站。
@@ -49,7 +49,7 @@
 * TLS 证书、域名资产、节点凭证与版本状态管理
 * 节点池、公网 IP 池、权重调度、排空模式与 Cloudflare 多目标自动 DNS / GSLB 多节点池调度
 * Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换、GSLB 防抖状态与 DDoS 自动切换橙云
-* 自建权威 DNS 控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、查询限速、UDP 响应截断保护、NS 委派检查、Glue 提示、Cloudflare 迁移向导、逐查询实时 GSLB、来源 CIDR/国家代码匹配、稳定权重分流桶、当前调度状态、查询趋势、来源作用域分布、Worker 查询延迟/可用性、按需 Worker 探测健康状态和快照一致性观测
+* 自建权威 DNS 控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、查询限速、UDP 响应截断保护、NS 委派检查、Glue 提示、Cloudflare 迁移向导、逐查询实时 GSLB、来源 CIDR/国家代码匹配、稳定权重分流桶、当前调度状态、查询趋势、来源作用域分布、Worker GeoIP 状态、Worker 查询延迟/可用性、按需 Worker 探测健康状态和快照一致性观测
 * 站点级缓存策略、缓存清理、首页预热、缓存命中与回源健康统计
 * Agent 安装环境检测、Release 二进制下载、自动更新与删除节点联动卸载
 * 节点真实 IP 识别、节点详情静默刷新、全局操作提示与主题化确认弹窗
@@ -304,7 +304,7 @@ dig @YOUR_DNS_WORKER_IP www.example.com A
 
 生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。Worker 本地快照缓存会写入 SHA-256 checksum 元数据，启动加载时会校验完整性，并从快照中的 GSLB 防抖状态恢复最近可用选择；运行中产生的新防抖状态会随 heartbeat 批量回传 Server，同时兼容旧版本生成的裸快照 JSON。Worker 默认按来源 IP 每秒限制 `200` 次查询，并把 UDP 响应上限限制为 `1232` 字节；超大响应会设置 TC 位让递归解析器回退 TCP。安装脚本会默认准备本地 Country MMDB；如果使用 Docker 或源码方式部署且要按国家代码匹配 GSLB 节点池，需要自行配置本地 MaxMind Country MMDB。如果在节点池里配置来源 CIDR，则会优先按来源 IP/ECS 命中 `cidr:...` 作用域；启用 `weighted` 或 `load_aware` 时会追加 `|bucket:xx` 分流桶，未命中且无法识别国家时会回退到 `global` 作用域。
 
-Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前调度状态，便于确认实时 GSLB 是否按预期分流；「GSLB 调度状态」会列出每个站点、A/AAAA、`global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42` 等来源作用域的当前实际目标、期望目标和防抖状态；「GSLB 调度模拟」可在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照会返回的边缘 IP，并展示节点池匹配、候选节点、跳过节点和原因。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
+Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前调度状态，便于确认实时 GSLB 是否按预期分流；「GSLB 调度状态」会列出每个站点、A/AAAA、`global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42` 等来源作用域的当前实际目标、期望目标和防抖状态；「GSLB 调度模拟」可在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照会返回的边缘 IP，并展示节点池匹配、候选节点、跳过节点和原因。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
 
 卸载 DNS Worker：
 

@@ -9,11 +9,19 @@ import (
 )
 
 type SourceResolver struct {
-	reader *maxminddb.Reader
+	reader       *maxminddb.Reader
+	databasePath string
+	lastError    string
 }
 
 type SourceLookup interface {
 	Resolve(request *dns.Msg, remoteAddr net.Addr) SourceContext
+}
+
+type SourceResolverStatus struct {
+	Enabled      bool
+	DatabasePath string
+	LastError    string
 }
 
 type geoRecord struct {
@@ -23,13 +31,16 @@ type geoRecord struct {
 }
 
 func NewSourceResolver(mmdbPath string) (*SourceResolver, error) {
-	resolver := &SourceResolver{}
-	if strings.TrimSpace(mmdbPath) == "" {
+	resolver := &SourceResolver{
+		databasePath: strings.TrimSpace(mmdbPath),
+	}
+	if resolver.databasePath == "" {
 		return resolver, nil
 	}
-	reader, err := maxminddb.Open(mmdbPath)
+	reader, err := maxminddb.Open(resolver.databasePath)
 	if err != nil {
-		return nil, err
+		resolver.lastError = err.Error()
+		return resolver, err
 	}
 	resolver.reader = reader
 	return resolver, nil
@@ -40,6 +51,17 @@ func (r *SourceResolver) Close() error {
 		return nil
 	}
 	return r.reader.Close()
+}
+
+func (r *SourceResolver) Status() SourceResolverStatus {
+	if r == nil {
+		return SourceResolverStatus{}
+	}
+	return SourceResolverStatus{
+		Enabled:      r.reader != nil,
+		DatabasePath: r.databasePath,
+		LastError:    r.lastError,
+	}
 }
 
 func (r *SourceResolver) Resolve(request *dns.Msg, remoteAddr net.Addr) SourceContext {

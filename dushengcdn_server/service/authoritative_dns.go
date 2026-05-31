@@ -79,6 +79,9 @@ type DNSWorkerHeartbeatInput struct {
 	LastSnapshotVersion string                                    `json:"last_snapshot_version"`
 	LastSnapshotAt      *time.Time                                `json:"last_snapshot_at"`
 	LastError           string                                    `json:"last_error"`
+	GeoIPEnabled        bool                                      `json:"geoip_enabled"`
+	GeoIPDatabasePath   string                                    `json:"geoip_database_path"`
+	GeoIPLastError      string                                    `json:"geoip_last_error"`
 	Rollups             []DNSQueryRollupInput                     `json:"rollups"`
 	SchedulingStates    []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
@@ -138,6 +141,9 @@ type DNSWorkerView struct {
 	LastSnapshotAt      *time.Time                 `json:"last_snapshot_at"`
 	LastSeenAt          *time.Time                 `json:"last_seen_at"`
 	LastError           string                     `json:"last_error"`
+	GeoIPEnabled        bool                       `json:"geoip_enabled"`
+	GeoIPDatabasePath   string                     `json:"geoip_database_path"`
+	GeoIPLastError      string                     `json:"geoip_last_error"`
 	LastProbeAt         *time.Time                 `json:"last_probe_at"`
 	LastProbeQuery      string                     `json:"last_probe_query"`
 	LastProbeResults    []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -338,6 +344,8 @@ type DNSWorkerSnapshotWorkerView struct {
 	LastSnapshotAt  *time.Time `json:"last_snapshot_at"`
 	LastSeenAt      *time.Time `json:"last_seen_at"`
 	Stale           bool       `json:"stale"`
+	GeoIPEnabled    bool       `json:"geoip_enabled"`
+	GeoIPLastError  string     `json:"geoip_last_error"`
 }
 
 type DNSWorkerHealthSummaryView struct {
@@ -368,6 +376,9 @@ type DNSWorkerHealthItemView struct {
 	LastSnapshotAt     *time.Time                 `json:"last_snapshot_at"`
 	SnapshotAgeSeconds int64                      `json:"snapshot_age_seconds"`
 	SnapshotStale      bool                       `json:"snapshot_stale"`
+	GeoIPEnabled       bool                       `json:"geoip_enabled"`
+	GeoIPDatabasePath  string                     `json:"geoip_database_path"`
+	GeoIPLastError     string                     `json:"geoip_last_error"`
 	LastError          string                     `json:"last_error"`
 	LastProbeAt        *time.Time                 `json:"last_probe_at"`
 	LastProbeResults   []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -920,6 +931,9 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	worker.LastSnapshotAt = input.LastSnapshotAt
 	worker.LastSeenAt = &now
 	worker.LastError = truncateForDatabase(strings.TrimSpace(input.LastError), 16000)
+	worker.GeoIPEnabled = input.GeoIPEnabled
+	worker.GeoIPDatabasePath = truncateForDatabase(strings.TrimSpace(input.GeoIPDatabasePath), 512)
+	worker.GeoIPLastError = truncateForDatabase(strings.TrimSpace(input.GeoIPLastError), 16000)
 	if err := worker.Update(); err != nil {
 		return nil, err
 	}
@@ -1542,6 +1556,9 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		LastSnapshotAt:      worker.LastSnapshotAt,
 		LastSeenAt:          worker.LastSeenAt,
 		LastError:           worker.LastError,
+		GeoIPEnabled:        worker.GeoIPEnabled,
+		GeoIPDatabasePath:   worker.GeoIPDatabasePath,
+		GeoIPLastError:      worker.GeoIPLastError,
 		LastProbeAt:         worker.LastProbeAt,
 		LastProbeQuery:      worker.LastProbeQuery,
 		LastProbeResults:    probeResults,
@@ -2556,6 +2573,8 @@ func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsisten
 			LastSnapshotAt:  worker.LastSnapshotAt,
 			LastSeenAt:      worker.LastSeenAt,
 			Stale:           stale,
+			GeoIPEnabled:    worker.GeoIPEnabled,
+			GeoIPLastError:  worker.GeoIPLastError,
 		}
 		view.Workers = append(view.Workers, item)
 		if status != dnsWorkerStatusOnline {
@@ -2723,6 +2742,9 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			LastSnapshotAt:     worker.LastSnapshotAt,
 			SnapshotAgeSeconds: snapshotAgeSeconds,
 			SnapshotStale:      snapshotStale,
+			GeoIPEnabled:       worker.GeoIPEnabled,
+			GeoIPDatabasePath:  worker.GeoIPDatabasePath,
+			GeoIPLastError:     worker.GeoIPLastError,
 			LastError:          worker.LastError,
 			LastProbeAt:        worker.LastProbeAt,
 			LastProbeResults:   probeResults,

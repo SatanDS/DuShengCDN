@@ -7,11 +7,12 @@ import (
 )
 
 type Runner struct {
-	Config    *Config
-	Client    *APIClient
-	Store     *SnapshotStore
-	DNSServer *DNSServer
-	Rollups   *RollupAggregator
+	Config         *Config
+	Client         *APIClient
+	Store          *SnapshotStore
+	DNSServer      *DNSServer
+	Rollups        *RollupAggregator
+	SourceResolver *SourceResolver
 }
 
 func NewRunner(cfg *Config) (*Runner, error) {
@@ -26,17 +27,17 @@ func NewRunner(cfg *Config) (*Runner, error) {
 	sourceResolver, err := NewSourceResolver(cfg.GeoIPDatabasePath)
 	if err != nil {
 		slog.Warn("open dns worker geoip database failed", "path", cfg.GeoIPDatabasePath, "error", err)
-		sourceResolver = &SourceResolver{}
 	}
 	rollups := NewRollupAggregator(time.Minute)
 	client := NewAPIClient(cfg.ServerURL, cfg.Token, cfg.RequestTimeout)
 	server := NewDNSServerWithLimits(store, scheduler, rollups, sourceResolver, cfg.ListenAddr, cfg.QueryRateLimit, cfg.UDPResponseSize)
 	return &Runner{
-		Config:    cfg,
-		Client:    client,
-		Store:     store,
-		DNSServer: server,
-		Rollups:   rollups,
+		Config:         cfg,
+		Client:         client,
+		Store:          store,
+		DNSServer:      server,
+		Rollups:        rollups,
+		SourceResolver: sourceResolver,
 	}, nil
 }
 
@@ -107,12 +108,19 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 			schedulingStates = r.DNSServer.Scheduler.SnapshotStates(snapshot)
 		}
 	}
+	sourceStatus := SourceResolverStatus{}
+	if r.SourceResolver != nil {
+		sourceStatus = r.SourceResolver.Status()
+	}
 	err := r.Client.SendHeartbeat(ctx, HeartbeatInput{
 		Version:             r.Config.Version,
 		Status:              status,
 		LastSnapshotVersion: r.Store.Version(),
 		LastSnapshotAt:      r.Store.LoadedAt(),
 		LastError:           r.Store.LastError(),
+		GeoIPEnabled:        sourceStatus.Enabled,
+		GeoIPDatabasePath:   sourceStatus.DatabasePath,
+		GeoIPLastError:      sourceStatus.LastError,
 		Rollups:             rollups,
 		SchedulingStates:    schedulingStates,
 	})

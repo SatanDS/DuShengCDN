@@ -209,6 +209,8 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 		Status:              "online",
 		LastSnapshotVersion: "abc123",
 		LastSnapshotAt:      &heartbeatAt,
+		GeoIPEnabled:        true,
+		GeoIPDatabasePath:   "/opt/dushengcdn-dns-worker/data/geoip/GeoLite2-Country.mmdb",
 		Rollups: []DNSQueryRollupInput{
 			{
 				WindowStart:     heartbeatAt,
@@ -232,6 +234,9 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 	if view.Status != dnsWorkerStatusOnline || view.Version != "v1.0.0" {
 		t.Fatalf("unexpected heartbeat view: %+v", view)
+	}
+	if !view.GeoIPEnabled || view.GeoIPDatabasePath == "" {
+		t.Fatalf("expected heartbeat view to include geoip status: %+v", view)
 	}
 	var count int64
 	if err := model.DB.Model(&model.DNSQueryRollup{}).Where("worker_id = ?", authenticated.WorkerID).Count(&count).Error; err != nil {
