@@ -239,7 +239,7 @@ cd /opt/dushengcdn
 git fetch origin main
 git pull --ff-only origin main
 cd dushengcdn_server
-docker compose up -d --build
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
 docker compose ps
 ```
 
@@ -250,9 +250,11 @@ cd /opt/dushengcdn
 git fetch origin main
 git reset --hard origin/main
 cd dushengcdn_server
-docker compose up -d --build
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
 docker compose ps
 ```
+
+For source Compose builds, `DUSHENGCDN_VERSION` is passed into the Dockerfile and embedded into the Server binary. The top-bar version reads the currently running Server version from `/api/status`.
 
 Agent:
 

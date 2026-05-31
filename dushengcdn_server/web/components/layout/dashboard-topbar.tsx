@@ -22,7 +22,6 @@ import type {
   UpgradeStreamSnapshot,
   UploadedServerBinaryInfo,
 } from '@/features/update/types';
-import { publicEnv } from '@/lib/env/public-env';
 import { useAppShellStore } from '@/store/app-shell';
 
 export function DashboardTopbar() {
@@ -310,9 +309,13 @@ export function DashboardTopbar() {
       : stableReleaseQuery.isError;
   const hasUpdate = Boolean(isRoot && stableReleaseQuery.data?.has_update);
   const currentVersion = publicStatusQuery.data?.version || 'unknown';
+  const displayedVersion =
+    currentVersion === 'unknown'
+      ? (stableReleaseQuery.data?.current_version ?? currentVersion)
+      : currentVersion;
   const versionLabel = hasUpdate
-    ? `版本 ${publicEnv.appVersion} · 可升级`
-    : `版本 ${publicEnv.appVersion}`;
+    ? `版本 ${displayedVersion} · 可升级`
+    : `版本 ${displayedVersion}`;
   const versionButtonClassName = hasUpdate
     ? 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning-foreground)]'
     : 'border-[var(--border-default)]';

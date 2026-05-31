@@ -148,8 +148,16 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | 环境变量 | 作用 | 默认值 |
 | --- | --- | --- |
 | `NEXT_PUBLIC_API_BASE_URL` | 前端请求 API 的基础路径 | `/api` |
-| `NEXT_PUBLIC_APP_VERSION` | 前端展示版本号 | `dev` |
+| `NEXT_PUBLIC_APP_VERSION` | 前端静态构建版本号；管理端顶栏优先显示 Server `/api/status` 返回的运行版本 | `dev` |
 | `NEXT_DEV_BACKEND_URL` | 本地开发服务器代理的后端地址 | `http://127.0.0.1:3000` |
+
+## Docker Compose 构建变量
+
+| 变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `DUSHENGCDN_VERSION` | 源码 Compose 构建 Server 镜像时传给 Dockerfile，并写入 Server 二进制版本 | `dev` |
+
+源码 Compose 更新时建议使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build`，让顶栏“版本”显示当前运行中的 Git 版本。
 
 ## Agent 环境变量
 

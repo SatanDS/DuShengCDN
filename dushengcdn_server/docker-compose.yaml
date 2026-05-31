@@ -17,6 +17,8 @@ services:
   dushengcdn:
     build:
       dockerfile: Dockerfile
+      args:
+        VERSION: ${DUSHENGCDN_VERSION:-dev}
     restart: unless-stopped
     depends_on:
       postgres:

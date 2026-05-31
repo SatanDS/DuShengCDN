@@ -17,7 +17,7 @@ cd /opt/dushengcdn
 git fetch origin main
 git pull --ff-only origin main
 cd dushengcdn_server
-docker compose up -d --build
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
 docker compose ps
 ```
 
@@ -28,11 +28,12 @@ cd /opt/dushengcdn
 git fetch origin main
 git reset --hard origin/main
 cd dushengcdn_server
-docker compose up -d --build
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
 docker compose ps
 ```
 
 为了减少后续冲突，建议把本地端口映射、数据库密码、`SESSION_SECRET` 和 DSN 保存到独立部署记录或 Compose override 中，而不是长期直接改仓库模板。
+源码 Compose 构建时，`DUSHENGCDN_VERSION` 会写入 Server 二进制；管理端顶栏“版本”显示的是当前运行中的 Server 版本。
 
 升级后确认：
 

@@ -271,7 +271,7 @@ cd /opt/dushengcdn
 git fetch origin main
 git pull --ff-only origin main
 cd dushengcdn_server
-docker compose up -d --build
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
 docker compose ps
 ```
 
@@ -282,11 +282,12 @@ cd /opt/dushengcdn
 git fetch origin main
 git reset --hard origin/main
 cd dushengcdn_server
-docker compose up -d --build
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
 docker compose ps
 ```
 
 执行 `git reset --hard` 前请确认仓库内没有需要保留的源码修改。
+源码 Compose 构建时，`DUSHENGCDN_VERSION` 会传给 Dockerfile 并写入 Server 二进制；管理端顶栏“版本”读取的是当前运行中 Server 的 `/api/status` 版本值。
 
 Agent：
 

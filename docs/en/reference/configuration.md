@@ -32,8 +32,16 @@ When `DSN` and `SQL_DSN` both exist, `DSN` wins. PostgreSQL is preferred when co
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `NEXT_PUBLIC_API_BASE_URL` | Frontend API base path | `/api` |
-| `NEXT_PUBLIC_APP_VERSION` | Displayed frontend version | `dev` |
+| `NEXT_PUBLIC_APP_VERSION` | Static frontend build version; the dashboard top bar prefers the running Server version returned by `/api/status` | `dev` |
 | `NEXT_DEV_BACKEND_URL` | Local dev backend proxy target | `http://127.0.0.1:3000` |
+
+## Docker Compose Build Variables
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `DUSHENGCDN_VERSION` | Passed into the Dockerfile for source Compose Server builds and embedded into the Server binary | `dev` |
+
+For source Compose updates, use `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build` so the top-bar version reflects the running Git build.
 
 ## Runtime Options
 
