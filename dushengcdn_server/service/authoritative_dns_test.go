@@ -2,6 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -293,6 +295,130 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	assertCounter(t, summary.WorkerBreakdown, authenticated.WorkerID, "ns1-hk", 87)
 	assertCounter(t, summary.ZoneBreakdown, "1", "example.com", 87)
 	assertCounter(t, summary.RouteBreakdown, "1", "edge-site", 82)
+}
+
+func TestAuthoritativeDNSZoneDelegationCheckMatchedWithGlueHint(t *testing.T) {
+	setupServiceTestDB(t)
+	restoreDNSLookupNS(t, func(name string) ([]*net.NS, error) {
+		if name != "example.com" {
+			t.Fatalf("unexpected lookup name: %s", name)
+		}
+		return []*net.NS{
+			{Host: "ns2.example.com."},
+			{Host: "ns1.example.com."},
+		}, nil
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{
+		Name:        "example.com",
+		NameServers: []string{"ns1.example.com", "ns2.example.com"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+
+	check, err := CheckAuthoritativeDNSZoneDelegation(zone.ID)
+	if err != nil {
+		t.Fatalf("CheckAuthoritativeDNSZoneDelegation: %v", err)
+	}
+	if check.Status != dnsDelegationMatched {
+		t.Fatalf("expected matched status, got %+v", check)
+	}
+	if len(check.MissingNameServers) != 0 || len(check.ExtraNameServers) != 0 {
+		t.Fatalf("expected no missing/extra NS, got %+v", check)
+	}
+	if !check.GlueRequired || len(check.GlueNameServers) != 2 {
+		t.Fatalf("expected glue hint for in-zone NS, got %+v", check)
+	}
+}
+
+func TestAuthoritativeDNSZoneDelegationCheckPartial(t *testing.T) {
+	setupServiceTestDB(t)
+	restoreDNSLookupNS(t, func(name string) ([]*net.NS, error) {
+		return []*net.NS{
+			{Host: "ns1.example.net."},
+			{Host: "ns3.example.net."},
+		}, nil
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{
+		Name:        "example.com",
+		NameServers: []string{"ns1.example.net", "ns2.example.net"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+
+	check, err := CheckAuthoritativeDNSZoneDelegation(zone.ID)
+	if err != nil {
+		t.Fatalf("CheckAuthoritativeDNSZoneDelegation: %v", err)
+	}
+	if check.Status != dnsDelegationPartial {
+		t.Fatalf("expected partial status, got %+v", check)
+	}
+	if len(check.MatchedNameServers) != 1 || check.MatchedNameServers[0] != "ns1.example.net" {
+		t.Fatalf("unexpected matched NS: %+v", check.MatchedNameServers)
+	}
+	if len(check.MissingNameServers) != 1 || check.MissingNameServers[0] != "ns2.example.net" {
+		t.Fatalf("unexpected missing NS: %+v", check.MissingNameServers)
+	}
+	if len(check.ExtraNameServers) != 1 || check.ExtraNameServers[0] != "ns3.example.net" {
+		t.Fatalf("unexpected extra NS: %+v", check.ExtraNameServers)
+	}
+	if check.GlueRequired {
+		t.Fatalf("did not expect glue hint for out-of-zone NS: %+v", check)
+	}
+}
+
+func TestAuthoritativeDNSZoneDelegationCheckLookupFailureAndNotConfigured(t *testing.T) {
+	setupServiceTestDB(t)
+	lookupCalls := 0
+	restoreDNSLookupNS(t, func(name string) ([]*net.NS, error) {
+		lookupCalls++
+		return nil, errors.New("lookup failed")
+	})
+
+	emptyZone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "empty.example"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone empty: %v", err)
+	}
+	notConfigured, err := CheckAuthoritativeDNSZoneDelegation(emptyZone.ID)
+	if err != nil {
+		t.Fatalf("CheckAuthoritativeDNSZoneDelegation empty: %v", err)
+	}
+	if notConfigured.Status != dnsDelegationNotConfig {
+		t.Fatalf("expected not_configured, got %+v", notConfigured)
+	}
+	if lookupCalls != 0 {
+		t.Fatalf("expected no lookup for zone without expected NS")
+	}
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{
+		Name:        "example.com",
+		NameServers: []string{"ns1.example.net"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	failed, err := CheckAuthoritativeDNSZoneDelegation(zone.ID)
+	if err != nil {
+		t.Fatalf("CheckAuthoritativeDNSZoneDelegation failed: %v", err)
+	}
+	if failed.Status != dnsDelegationFailed || failed.Error == "" {
+		t.Fatalf("expected failed status with error, got %+v", failed)
+	}
+	if lookupCalls != 1 {
+		t.Fatalf("expected one lookup, got %d", lookupCalls)
+	}
+}
+
+func restoreDNSLookupNS(t *testing.T, lookup func(string) ([]*net.NS, error)) {
+	t.Helper()
+	original := dnsLookupNS
+	dnsLookupNS = lookup
+	t.Cleanup(func() {
+		dnsLookupNS = original
+	})
 }
 
 func mustJSON(t *testing.T, value any) string {

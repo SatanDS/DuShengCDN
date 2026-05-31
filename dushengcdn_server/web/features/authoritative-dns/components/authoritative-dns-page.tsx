@@ -15,6 +15,7 @@ import { AppCard } from '@/components/ui/app-card';
 import { AppModal } from '@/components/ui/app-modal';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
+  checkDNSZoneDelegation,
   createDNSWorker,
   createDNSZone,
   createDNSZoneRecord,
@@ -35,6 +36,8 @@ import type {
   DNSRecordMutationPayload,
   DNSRecordType,
   DNSWorkerItem,
+  DNSZoneDelegationCheck,
+  DNSZoneDelegationStatus,
   DNSZoneItem,
   DNSZoneMutationPayload,
 } from '@/features/authoritative-dns/types';
@@ -158,6 +161,34 @@ function formatPercent(numerator: number, denominator: number) {
   return `${((numerator / denominator) * 100).toFixed(1)}%`;
 }
 
+function getDelegationStatusLabel(status: DNSZoneDelegationStatus) {
+  switch (status) {
+    case 'matched':
+      return '已匹配';
+    case 'partial':
+      return '部分匹配';
+    case 'mismatch':
+      return '不匹配';
+    case 'failed':
+      return '检查失败';
+    case 'not_configured':
+      return '未配置';
+  }
+}
+
+function getDelegationStatusVariant(status: DNSZoneDelegationStatus) {
+  switch (status) {
+    case 'matched':
+      return 'success' as const;
+    case 'partial':
+    case 'not_configured':
+      return 'warning' as const;
+    case 'mismatch':
+    case 'failed':
+      return 'danger' as const;
+  }
+}
+
 async function copyToClipboard(value: string) {
   await navigator.clipboard.writeText(value);
 }
@@ -211,6 +242,11 @@ export function AuthoritativeDNSPage() {
     queryKey: ['authoritative-dns', 'zone-records', selectedZone?.id],
     queryFn: () => getDNSZoneRecords(selectedZone?.id ?? 0),
     enabled: Boolean(selectedZone?.id),
+  });
+  const delegationCheckQuery = useQuery({
+    queryKey: ['authoritative-dns', 'delegation-check', selectedZone?.id],
+    queryFn: () => checkDNSZoneDelegation(selectedZone?.id ?? 0),
+    enabled: false,
   });
   const records = useMemo(
     () => selectedZoneRecordsQuery.data ?? [],
@@ -450,6 +486,17 @@ export function AuthoritativeDNSPage() {
                 ? getErrorMessage(selectedZoneRecordsQuery.error)
                 : ''
             }
+            delegationCheck={delegationCheckQuery.data ?? null}
+            delegationLoading={delegationCheckQuery.isFetching}
+            delegationError={
+              delegationCheckQuery.isError
+                ? getErrorMessage(delegationCheckQuery.error)
+                : ''
+            }
+            onCheckDelegation={() => {
+              setFeedback(null);
+              void delegationCheckQuery.refetch();
+            }}
             onSelectZone={(zone) => setSelectedZoneId(zone.id)}
             onCreateZone={openCreateZone}
             onEditZone={openEditZone}
@@ -550,11 +597,15 @@ function ZonesPanel({
   records,
   recordsLoading,
   recordsError,
+  delegationCheck,
+  delegationLoading,
+  delegationError,
   busy,
   onSelectZone,
   onCreateZone,
   onEditZone,
   onDeleteZone,
+  onCheckDelegation,
   onCreateRecord,
   onEditRecord,
   onDeleteRecord,
@@ -564,11 +615,15 @@ function ZonesPanel({
   records: DNSRecordItem[];
   recordsLoading: boolean;
   recordsError: string;
+  delegationCheck: DNSZoneDelegationCheck | null;
+  delegationLoading: boolean;
+  delegationError: string;
   busy: boolean;
   onSelectZone: (zone: DNSZoneItem) => void;
   onCreateZone: () => void;
   onEditZone: (zone: DNSZoneItem) => void;
   onDeleteZone: (zone: DNSZoneItem) => void;
+  onCheckDelegation: () => void;
   onCreateRecord: (zone: DNSZoneItem) => void;
   onEditRecord: (zone: DNSZoneItem, record: DNSRecordItem) => void;
   onDeleteRecord: (record: DNSRecordItem) => void;
@@ -694,6 +749,14 @@ function ZonesPanel({
                 </div>
               </div>
 
+              <DelegationCheckPanel
+                zone={selectedZone}
+                check={delegationCheck}
+                isLoading={delegationLoading}
+                error={delegationError}
+                onCheck={onCheckDelegation}
+              />
+
               <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
@@ -782,6 +845,132 @@ function ZonesPanel({
         </div>
       )}
     </AppCard>
+  );
+}
+
+function DelegationCheckPanel({
+  zone,
+  check,
+  isLoading,
+  error,
+  onCheck,
+}: {
+  zone: DNSZoneItem;
+  check: DNSZoneDelegationCheck | null;
+  isLoading: boolean;
+  error: string;
+  onCheck: () => void;
+}) {
+  const visibleCheck = check?.zone_id === zone.id ? check : null;
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-base font-semibold text-[var(--foreground-primary)]">
+              委派检查
+            </h3>
+            {visibleCheck ? (
+              <StatusBadge
+                label={getDelegationStatusLabel(visibleCheck.status)}
+                variant={getDelegationStatusVariant(visibleCheck.status)}
+              />
+            ) : null}
+          </div>
+          <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
+            对比当前公网 NS 与 Zone 配置的注册商 NS。
+          </p>
+        </div>
+        <SecondaryButton type="button" disabled={isLoading} onClick={onCheck}>
+          {isLoading ? '检查中...' : '检查委派'}
+        </SecondaryButton>
+      </div>
+
+      <div className="mt-4">
+        {error ? (
+          <InlineMessage tone="danger" message={error} />
+        ) : visibleCheck ? (
+          <div className="space-y-4">
+            {visibleCheck.error ? (
+              <InlineMessage tone="danger" message={visibleCheck.error} />
+            ) : null}
+            {visibleCheck.glue_required ? (
+              <InlineMessage
+                tone="info"
+                message={`Glue 提示：${visibleCheck.glue_name_servers.join('、')} 位于 ${zone.name} 内，需要在注册商配置主机记录/Glue。`}
+              />
+            ) : null}
+            <div className="grid gap-3 md:grid-cols-2">
+              <NameServerList
+                title="期望 NS"
+                items={visibleCheck.expected_name_servers}
+              />
+              <NameServerList
+                title="公网 NS"
+                items={visibleCheck.actual_name_servers}
+                emptyText={
+                  visibleCheck.status === 'failed'
+                    ? '查询失败。'
+                    : '未查询到公网 NS。'
+                }
+              />
+              <NameServerList
+                title="缺失 NS"
+                items={visibleCheck.missing_name_servers}
+                emptyText="无缺失。"
+              />
+              <NameServerList
+                title="额外 NS"
+                items={visibleCheck.extra_name_servers}
+                emptyText="无额外。"
+              />
+            </div>
+            <p className="text-xs text-[var(--foreground-muted)]">
+              检查时间：{formatDateTime(visibleCheck.checked_at)}
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-[var(--foreground-secondary)]">
+            点击后检查注册商是否已经把 {zone.name} 委派到当前 NS。
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NameServerList({
+  title,
+  items,
+  emptyText = '暂无。',
+}: {
+  title: string;
+  items: string[];
+  emptyText?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+      <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+        {title}
+      </p>
+      {items.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {items.map((item) => (
+            <span
+              key={`${title}-${item}`}
+              className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-xs text-[var(--foreground-primary)]"
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-sm text-[var(--foreground-secondary)]">
+          {emptyText}
+        </p>
+      )}
+    </div>
   );
 }
 

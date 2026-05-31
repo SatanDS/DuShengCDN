@@ -156,6 +156,19 @@ func GetDNSObservability(c *gin.Context) {
 	respondSuccess(c, summary)
 }
 
+func CheckDNSZoneDelegation(c *gin.Context) {
+	id, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	check, err := service.CheckAuthoritativeDNSZoneDelegation(id)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, check)
+}
+
 func CreateDNSWorker(c *gin.Context) {
 	var input service.DNSWorkerInput
 	if !decodeJSONRequest(c, &input) {

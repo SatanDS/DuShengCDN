@@ -19,9 +19,16 @@ import (
 const (
 	dnsWorkerStatusOnline   = "online"
 	dnsWorkerStatusOffline  = "offline"
+	dnsDelegationMatched    = "matched"
+	dnsDelegationPartial    = "partial"
+	dnsDelegationMismatch   = "mismatch"
+	dnsDelegationFailed     = "failed"
+	dnsDelegationNotConfig  = "not_configured"
 	defaultAuthoritativeTTL = 30
 	defaultDNSZoneTTL       = 300
 )
+
+var dnsLookupNS = net.LookupNS
 
 type DNSZoneInput struct {
 	Name        string   `json:"name"`
@@ -142,6 +149,21 @@ type DNSObservabilitySummaryView struct {
 	WorkerBreakdown   []DNSObservabilityCounterView `json:"worker_breakdown"`
 	ZoneBreakdown     []DNSObservabilityCounterView `json:"zone_breakdown"`
 	RouteBreakdown    []DNSObservabilityCounterView `json:"route_breakdown"`
+}
+
+type DNSZoneDelegationCheckView struct {
+	ZoneID              uint      `json:"zone_id"`
+	ZoneName            string    `json:"zone_name"`
+	ExpectedNameServers []string  `json:"expected_name_servers"`
+	ActualNameServers   []string  `json:"actual_name_servers"`
+	MatchedNameServers  []string  `json:"matched_name_servers"`
+	MissingNameServers  []string  `json:"missing_name_servers"`
+	ExtraNameServers    []string  `json:"extra_name_servers"`
+	GlueRequired        bool      `json:"glue_required"`
+	GlueNameServers     []string  `json:"glue_name_servers"`
+	Status              string    `json:"status"`
+	CheckedAt           time.Time `json:"checked_at"`
+	Error               string    `json:"error,omitempty"`
 }
 
 type AuthoritativeDNSSnapshot struct {
@@ -466,6 +488,44 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	summary.ZoneBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(zoneCounts), zoneLabels, 8)
 	summary.RouteBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(routeCounts), routeLabels, 8)
 	return summary, nil
+}
+
+func CheckAuthoritativeDNSZoneDelegation(id uint) (*DNSZoneDelegationCheckView, error) {
+	zone, err := model.GetDNSZoneByID(id)
+	if err != nil {
+		return nil, err
+	}
+	expected := normalizeDNSNameServerSet(decodeStoredStringList(zone.NameServers))
+	view := &DNSZoneDelegationCheckView{
+		ZoneID:              zone.ID,
+		ZoneName:            zone.Name,
+		ExpectedNameServers: expected,
+		GlueNameServers:     glueNameServersForZone(zone.Name, expected),
+		CheckedAt:           time.Now().UTC(),
+	}
+	view.GlueRequired = len(view.GlueNameServers) > 0
+	if len(expected) == 0 {
+		view.Status = dnsDelegationNotConfig
+		return view, nil
+	}
+
+	records, err := dnsLookupNS(zone.Name)
+	if err != nil {
+		view.Status = dnsDelegationFailed
+		view.Error = err.Error()
+		return view, nil
+	}
+	actual := make([]string, 0, len(records))
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		actual = append(actual, record.Host)
+	}
+	view.ActualNameServers = normalizeDNSNameServerSet(actual)
+	view.MatchedNameServers, view.MissingNameServers, view.ExtraNameServers = compareNameServerSets(expected, view.ActualNameServers)
+	view.Status = dnsDelegationStatus(expected, view.ActualNameServers, view.MatchedNameServers, view.MissingNameServers, view.ExtraNameServers)
+	return view, nil
 }
 
 func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) {
@@ -1052,6 +1112,80 @@ func buildDNSObservabilityCounters(counts map[string]int64, labels map[string]st
 		return items[:limit]
 	}
 	return items
+}
+
+func normalizeDNSNameServerSet(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		ns := normalizeDNSRecordName(value)
+		if ns == "" {
+			continue
+		}
+		if _, ok := seen[ns]; ok {
+			continue
+		}
+		seen[ns] = struct{}{}
+		result = append(result, ns)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func compareNameServerSets(expected []string, actual []string) ([]string, []string, []string) {
+	expected = normalizeDNSNameServerSet(expected)
+	actual = normalizeDNSNameServerSet(actual)
+	actualSet := make(map[string]struct{}, len(actual))
+	for _, ns := range actual {
+		actualSet[ns] = struct{}{}
+	}
+	expectedSet := make(map[string]struct{}, len(expected))
+	for _, ns := range expected {
+		expectedSet[ns] = struct{}{}
+	}
+	matched := make([]string, 0)
+	missing := make([]string, 0)
+	extra := make([]string, 0)
+	for _, ns := range expected {
+		if _, ok := actualSet[ns]; ok {
+			matched = append(matched, ns)
+		} else {
+			missing = append(missing, ns)
+		}
+	}
+	for _, ns := range actual {
+		if _, ok := expectedSet[ns]; !ok {
+			extra = append(extra, ns)
+		}
+	}
+	return matched, missing, extra
+}
+
+func dnsDelegationStatus(expected []string, actual []string, matched []string, missing []string, extra []string) string {
+	if len(expected) == 0 {
+		return dnsDelegationNotConfig
+	}
+	if len(actual) == 0 {
+		return dnsDelegationMismatch
+	}
+	if len(missing) == 0 && len(extra) == 0 {
+		return dnsDelegationMatched
+	}
+	if len(matched) > 0 {
+		return dnsDelegationPartial
+	}
+	return dnsDelegationMismatch
+}
+
+func glueNameServersForZone(zoneName string, nameServers []string) []string {
+	zoneName = normalizeDNSRecordName(zoneName)
+	result := make([]string, 0, len(nameServers))
+	for _, nameServer := range normalizeDNSNameServerSet(nameServers) {
+		if domainBelongsToZone(nameServer, zoneName) {
+			result = append(result, nameServer)
+		}
+	}
+	return result
 }
 
 func normalizeDNSZoneName(raw string) (string, error) {

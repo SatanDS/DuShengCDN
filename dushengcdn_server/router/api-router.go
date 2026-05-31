@@ -150,6 +150,7 @@ func SetApiRouter(router *gin.Engine) {
 			dnsZoneRoute.POST("/", controller.CreateDNSZone)
 			dnsZoneRoute.POST("/:id/update", controller.UpdateDNSZone)
 			dnsZoneRoute.POST("/:id/delete", controller.DeleteDNSZone)
+			dnsZoneRoute.GET("/:id/delegation-check", controller.CheckDNSZoneDelegation)
 			dnsZoneRoute.GET("/:id/records", controller.GetDNSZoneRecords)
 			dnsZoneRoute.POST("/:id/records", controller.CreateDNSZoneRecord)
 		}

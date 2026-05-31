@@ -70,6 +70,28 @@ export interface DNSObservabilitySummary {
   route_breakdown: DNSObservabilityCounterItem[];
 }
 
+export type DNSZoneDelegationStatus =
+  | 'matched'
+  | 'partial'
+  | 'mismatch'
+  | 'failed'
+  | 'not_configured';
+
+export interface DNSZoneDelegationCheck {
+  zone_id: number;
+  zone_name: string;
+  expected_name_servers: string[];
+  actual_name_servers: string[];
+  matched_name_servers: string[];
+  missing_name_servers: string[];
+  extra_name_servers: string[];
+  glue_required: boolean;
+  glue_name_servers: string[];
+  status: DNSZoneDelegationStatus;
+  checked_at: string;
+  error?: string;
+}
+
 export interface DNSZoneMutationPayload {
   name: string;
   soa_email: string;

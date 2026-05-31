@@ -131,6 +131,33 @@ describe('Authoritative DNS page', () => {
           );
         }
 
+        if (url.includes('/dns-zones/1/delegation-check')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  zone_id: 1,
+                  zone_name: 'example.com',
+                  expected_name_servers: [
+                    'ns1.example.net',
+                    'ns2.example.net',
+                  ],
+                  actual_name_servers: ['ns1.example.net'],
+                  matched_name_servers: ['ns1.example.net'],
+                  missing_name_servers: ['ns2.example.net'],
+                  extra_name_servers: [],
+                  glue_required: true,
+                  glue_name_servers: ['ns1.example.net'],
+                  status: 'partial',
+                  checked_at: '2026-05-31T08:10:00Z',
+                },
+              }),
+            ),
+          );
+        }
+
         if (url.includes('/dns-zones/')) {
           return Promise.resolve(
             new Response(
@@ -224,6 +251,12 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('edge-site')).toBeInTheDocument();
 
     const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '检查委派' }));
+    expect(await screen.findByText('部分匹配')).toBeInTheDocument();
+    expect(await screen.findByText('缺失 NS')).toBeInTheDocument();
+    expect(screen.getAllByText('ns2.example.net').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Glue 提示/)).toBeInTheDocument();
+
     await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));
     await waitFor(() => {
       expect(screen.getAllByText('ns1-hk').length).toBeGreaterThan(0);

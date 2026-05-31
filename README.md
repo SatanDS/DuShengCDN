@@ -31,7 +31,7 @@
 
 * 节点支持节点池、公网 IP 池、标签、权重、调度开关和排空模式。
 * Cloudflare 自动 DNS 支持同一域名同步多个 A/AAAA 目标，并可按节点池、健康状态、权重和 GSLB 负载感知策略选择在线节点。
-* 自建权威 DNS 与实时 GSLB 已落地 Server 控制面和 DNS Worker MVP，包含 Zone、DNS Worker Token、心跳/聚合、只读调度快照 API、UDP/TCP 53 查询回答、逐查询 GSLB 选点和管理端 DNS 查询观测。
+* 自建权威 DNS 与实时 GSLB 已落地 Server 控制面和 DNS Worker MVP，包含 Zone、DNS Worker Token、心跳/聚合、只读调度快照 API、UDP/TCP 53 查询回答、逐查询 GSLB 选点、管理端 DNS 查询观测、Zone 委派检查和 Glue 提示。
 * 网站缓存页支持向目标节点池下发全量缓存清理和首页预热。
 * 观测计量合并访问日志与计量统计，支持站点/节点流量、缓存命中率、回源流量、状态码分布、TOP URL/IP/地区、带宽 P95 和节点可用率。
 * OpenResty 回源失败保护增强，默认对常见 5xx/超时错误尝试切换下一源站。
@@ -49,7 +49,7 @@
 * TLS 证书、域名资产、节点凭证与版本状态管理
 * 节点池、公网 IP 池、权重调度、排空模式与 Cloudflare 多目标自动 DNS / GSLB 多节点池调度
 * Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换、GSLB 防抖状态与 DDoS 自动切换橙云
-* 自建权威 DNS 控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、NS 委派、逐查询实时 GSLB 和查询聚合观测
+* 自建权威 DNS 控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、NS 委派检查、Glue 提示、逐查询实时 GSLB 和查询聚合观测
 * 站点级缓存策略、缓存清理、首页预热、缓存命中与回源健康统计
 * Agent 安装环境检测、Release 二进制下载、自动更新与删除节点联动卸载
 * 节点真实 IP 识别、节点详情静默刷新、全局操作提示与主题化确认弹窗
@@ -183,7 +183,7 @@ proxy_set_header Connection "upgrade";
 * GSLB 模式可绑定多个节点池，按池权重、节点权重、OpenResty 连接数、CPU、内存和负载阈值选择 DNS 目标。
 * GSLB 会记录最近一次实际目标和期望目标，旧目标仍健康且冷却时间未到时不会反复切换。
 * Cloudflare DNS 模式不是逐请求实时调度，而是后台巡检重算并同步记录；实际流量还会受到 DNS TTL 与递归解析缓存影响。
-* 自建权威 DNS 模式需要把域名 NS 委派到 DuShengCDN DNS Worker；Worker 会在查询时实时执行 GSLB 调度。未配置本地 GeoIP 库时，国家代码匹配会回退到 `global` 作用域，详见 `docs/design/authoritative-dns-gslb.md`。
+* 自建权威 DNS 模式需要把域名 NS 委派到 DuShengCDN DNS Worker；Worker 会在查询时实时执行 GSLB 调度。左侧「权威 DNS」的 Zone 详情可检查公网 NS 是否匹配，并在 Zone 内 NS 需要 Glue/主机记录时提示。未配置本地 GeoIP 库时，国家代码匹配会回退到 `global` 作用域，详见 `docs/design/authoritative-dns-gslb.md`。
 * 手动填写的 DNS 记录内容不会被后台覆盖；A/AAAA 可用逗号、空格或换行填写多个目标。
 * 多域名规则默认会同步规则里的所有域名；单域名规则可在详情页手动指定记录名称。
 * 删除规则时，如果该规则曾由 DuShengCDN 创建 DNS 记录，会尝试同步删除对应 Cloudflare DNS 记录。
@@ -257,7 +257,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 ### 4. 可选：部署自建权威 DNS Worker
 
-如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker Token，然后把域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里切换到自建权威 DNS。
+如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker Token，然后把域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里切换到自建权威 DNS。完成注册商 NS 配置后，可以在 Zone 详情点击「检查委派」确认公网 NS 是否匹配；如果使用 `ns1.example.com` 这类 Zone 内 NS，还需要在注册商配置 Glue/主机记录。
 
 Docker 运行示例：
 
@@ -289,7 +289,7 @@ dig @YOUR_DNS_WORKER_IP www.example.com A
 
 生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。如果要按国家代码匹配 GSLB 节点池，可配置本地 MaxMind Country MMDB；未配置时会回退到 `global` 作用域。
 
-Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、返回码、Worker/Zone/站点维度和返回目标分布，便于确认实时 GSLB 是否按预期分流。
+Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、返回码、Worker/Zone/站点维度和返回目标分布，便于确认实时 GSLB 是否按预期分流；Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
 
 ### 5. 卸载 Agent
 

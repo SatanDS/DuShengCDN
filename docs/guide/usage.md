@@ -83,6 +83,8 @@ Cloudflare 自动 DNS 支持：
 * 网站详情的「自动 DNS」里可把 `DNS 模式` 从 `Cloudflare 同步` 切换为 `自建权威 DNS`，再绑定已启用的 DNS Zone。
 * 网站域名必须属于所选 Zone；切换后 Cloudflare 账号、橙云和 DDoS 自动橙云设置不再参与该网站 DNS 回答。
 * 域名需要在注册商处把 NS 委派到 DuShengCDN DNS Worker。
+* Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS，并列出缺失或额外的 NS。
+* 如果 NS 名称位于当前 Zone 内，例如 `ns1.example.com` 服务 `example.com`，需要在注册商配置 Glue/主机记录；面板会在检查结果中提示。
 * DNS Worker 会在每次 A/AAAA 查询时根据来源、国家代码、节点池权重、节点健康和负载评分返回边缘 IP。
 * DNS Worker 会从 Server 拉取只读调度快照，本地缓存最后一次有效快照；Server 短暂不可用时仍可继续回答静态记录。
 * 左侧「权威 DNS」会展示最近 24 小时的查询量、返回码、Worker/Zone/站点维度和返回目标分布，适合确认 GSLB 是否按预期把查询分配到 HK、EU 等节点池。

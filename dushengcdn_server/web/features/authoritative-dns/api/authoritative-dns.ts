@@ -6,6 +6,7 @@ import type {
   DNSRecordMutationPayload,
   DNSWorkerItem,
   DNSWorkerMutationPayload,
+  DNSZoneDelegationCheck,
   DNSZoneItem,
   DNSZoneMutationPayload,
 } from '@/features/authoritative-dns/types';
@@ -36,6 +37,12 @@ export function deleteDNSZone(id: number) {
   return apiRequest<void>(`/dns-zones/${id}/delete`, {
     method: 'POST',
   });
+}
+
+export function checkDNSZoneDelegation(id: number) {
+  return apiRequest<DNSZoneDelegationCheck>(
+    `/dns-zones/${id}/delegation-check`,
+  );
 }
 
 export function getDNSZoneRecords(zoneId: number) {
