@@ -9,6 +9,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | `dushengcdn_server` | Gin + GORM + SQLite/PostgreSQL 单体控制面 |
+| `dushengcdn_server/cmd/dns-worker` | 自建权威 DNS Worker 运行入口 |
 | `dushengcdn_server/web` | Next.js 管理端前端，静态导出后由 Go Server 托管 |
 | `dushengcdn_agent` | Go 单体 Agent，运行在节点侧 |
 | `scripts` | Agent 安装与卸载脚本 |
@@ -109,6 +110,29 @@ go run ./cmd/agent -config ./agent.json
 
 未配置 `openresty_path` 时，Agent 默认调用 `openresty`。调试时可显式配置 `openresty_path`、`main_config_path`、`route_config_path`、`access_log_path`、`cert_dir`、`lua_dir` 和 `runtime_config_dir`。
 
+## 启动 DNS Worker
+
+DNS Worker 从 Server 拉取只读调度快照，并监听 UDP/TCP DNS 查询。普通本地开发可先监听高位端口，避免占用系统 `53`：
+
+```bash
+cd dushengcdn_server
+export LOG_LEVEL='debug'
+go run ./cmd/dns-worker \
+  --server-url http://127.0.0.1:3000 \
+  --token replace-with-dns-worker-token \
+  --listen 127.0.0.1:1053 \
+  --snapshot-path ./data/dns-worker-snapshot.json
+```
+
+验证：
+
+```bash
+dig @127.0.0.1 -p 1053 example.com SOA
+dig @127.0.0.1 -p 1053 www.example.com A
+```
+
+如果要测试按国家代码匹配 GSLB 节点池，可追加 `--geoip-database /path/to/GeoLite2-Country.mmdb`。未配置本地 GeoIP 库时，Worker 不调用外部 HTTP GeoIP API，来源作用域会回退为 `global`。
+
 ## 测试
 
 Server：
@@ -116,6 +140,13 @@ Server：
 ```bash
 cd dushengcdn_server
 GOCACHE=/tmp/dushengcdn-go-cache go test ./...
+```
+
+DNS Worker 单包：
+
+```bash
+cd dushengcdn_server
+GOCACHE=/tmp/dushengcdn-go-cache go test ./internal/dnsworker
 ```
 
 Agent：
@@ -165,12 +196,20 @@ cd dushengcdn_agent
 go build -o dushengcdn-agent ./cmd/agent
 ```
 
+DNS Worker 二进制：
+
+```bash
+cd dushengcdn_server
+go build -o dushengcdn-dns-worker ./cmd/dns-worker
+```
+
 ## 调试入口
 
 | 场景 | 命令或位置 |
 | --- | --- |
 | Server 日志 | `LOG_LEVEL=debug go run .` |
 | Agent 日志 | `LOG_LEVEL=debug go run ./cmd/agent -config ./agent.json` |
+| DNS Worker 日志 | `LOG_LEVEL=debug go run ./cmd/dns-worker --listen 127.0.0.1:1053 ...` |
 | Swagger | `http://localhost:3000/swagger/index.html` |
 | 前端 API 代理 | `NEXT_DEV_BACKEND_URL=http://127.0.0.1:3000 pnpm dev` |
 | OpenResty 配置校验 | `openresty -t -c ./data/etc/nginx/nginx.conf` |

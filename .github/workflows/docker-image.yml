@@ -345,3 +345,166 @@ jobs:
 
       - name: Inspect image
         run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+
+  build-dns-worker:
+    name: Build DNS Worker (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set image metadata
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          POINTED_TAG="$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n1)"
+          INPUT_VERSION="${INPUT_VERSION//[[:space:]]/}"
+
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-dns-worker" >> "$GITHUB_ENV"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          elif [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="$INPUT_VERSION"
+          elif [[ -n "$POINTED_TAG" ]]; then
+            VERSION="$POINTED_TAG"
+          else
+            echo "workflow_dispatch requires an explicit version input when HEAD is not tagged" >&2
+            exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log into registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ./dushengcdn_server
+          file: ./dushengcdn_server/Dockerfile.dns-worker
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          cache-from: type=gha,scope=docker-dns-worker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-dns-worker-${{ matrix.arch }}
+
+      - name: Export digest
+        shell: bash
+        run: |
+          mkdir -p /tmp/dns-worker-digests
+          touch "/tmp/dns-worker-digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: dns-worker-digests-${{ matrix.arch }}
+          path: /tmp/dns-worker-digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  merge-dns-worker:
+    name: Merge DNS Worker multi-arch manifest
+    runs-on: ubuntu-24.04
+    needs: build-dns-worker
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set image metadata
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          POINTED_TAG="$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n1)"
+          INPUT_VERSION="${INPUT_VERSION//[[:space:]]/}"
+
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-dns-worker" >> "$GITHUB_ENV"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          elif [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="$INPUT_VERSION"
+          elif [[ -n "$POINTED_TAG" ]]; then
+            VERSION="$POINTED_TAG"
+          else
+            echo "workflow_dispatch requires an explicit version input when HEAD is not tagged" >&2
+            exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/dns-worker-digests
+          pattern: dns-worker-digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log into registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest list
+        working-directory: /tmp/dns-worker-digests
+        shell: bash
+        run: |
+          shopt -s nullglob
+          references=()
+          for digest in *; do
+            references+=("${IMAGE}@sha256:${digest}")
+          done
+
+          if [ ${#references[@]} -eq 0 ]; then
+            echo "No digests found in /tmp/dns-worker-digests" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create \
+            -t "${IMAGE}:${VERSION}" \
+            -t "${IMAGE}:latest" \
+            "${references[@]}"
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"

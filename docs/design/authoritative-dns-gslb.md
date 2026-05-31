@@ -1,10 +1,10 @@
 # 自建权威 DNS 与 GSLB 调度规划
 
-你会学到：为什么需要自建权威 DNS、它与现有 Cloudflare 自动 DNS 的区别、权威 DNS 服务如何复用 GSLB 策略，以及下一阶段应该按什么顺序实现。
+你会学到：为什么需要自建权威 DNS、它与现有 Cloudflare 自动 DNS 的区别、权威 DNS 服务如何复用 GSLB 策略，以及后续应如何继续增强。
 
 本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
 
-当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。真正监听 UDP/TCP `53` 并按 DNS 协议实时回答查询的 DNS Worker 查询面仍属于下一阶段。
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。
 
 ## 目标能力
 
@@ -160,7 +160,7 @@ route_id + record_type + source_scope
 * EDNS Client Subnet 可选开启，默认优先使用 ECS，未提供时使用递归解析器 IP。
 * `AXFR` 默认拒绝，后续如需支持必须配置来源 IP 白名单和 TSIG。
 
-以上 DNS 协议行为将在 DNS Worker 查询面实现；当前阶段先保证 Server 能生成 Worker 可消费的只读快照。
+以上 DNS 协议行为已在 DNS Worker MVP 中落地。当前实现默认拒绝 `AXFR`/`IXFR`，支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA`，并通过心跳批量上报聚合查询指标。
 
 TTL 规则：
 
@@ -198,14 +198,16 @@ TTL 规则：
 * 已提供 Zone、Worker、静态记录、Worker 心跳/聚合上报和只读快照 API。
 * 待补：前端新增「权威 DNS」入口和网站自动 DNS 模式选择。
 
-### 阶段 2：权威 DNS Worker MVP
+### 阶段 2：权威 DNS Worker MVP（已落地）
 
 * 使用 `github.com/miekg/dns` 实现 UDP/TCP 53 监听。
-* DNS Worker 从 Server 拉取签名快照并在本地内存加载。
+* DNS Worker 从 Server 拉取只读调度快照，写入本地缓存并在内存中构建 Zone、记录和站点索引。
 * 支持 `SOA`、`NS`、静态记录和网站 `A`/`AAAA` 动态 GSLB 回答。
-* 复用现有 GSLB 候选筛选、权重评分和负载阈值逻辑。
-* 支持 ECS、GeoIP 国家匹配和按国家作用域防抖。
-* 增加单元测试覆盖 DNS 响应、NXDOMAIN、NODATA、GSLB 选点和快照降级。
+* 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、节点权重、OpenResty 健康、排空、调度开关和负载阈值选点。
+* 支持 EDNS Client Subnet 来源识别；配置本地 MaxMind Country MMDB 后可按国家代码命中节点池，否则回退到 `global` 作用域。
+* 防抖状态按 `route_id + record_type + source_scope` 保存在 Worker 内存中。
+* 聚合查询指标按窗口批量 heartbeat 上报；上报失败时保留在内存中等待下次重试。
+* 已增加单元测试覆盖 DNS 响应、NXDOMAIN、NODATA、GSLB 选点、ECS 作用域、TTL、快照降级、AXFR 拒绝和聚合上报。
 
 ### 阶段 3：观测、联调与迁移体验
 

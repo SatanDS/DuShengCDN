@@ -2,7 +2,7 @@
 
 你会学到：DuShengCDN 的整体架构、Server、Agent、OpenResty 与管理端前端的职责边界，以及一次配置发布从管理端到节点生效的请求流。
 
-DuShengCDN 由 Server、Agent、节点本地 OpenResty 和管理端前端组成。Server 是控制面，Agent 是节点侧唯一受控落地入口，OpenResty 是实际数据面。下一阶段的自建权威 DNS 会新增 DNS Worker 运行角色，用于逐次 DNS 查询实时执行 GSLB 调度；它不替代 Agent/OpenResty 数据面。
+DuShengCDN 由 Server、Agent、节点本地 OpenResty、DNS Worker 和管理端前端组成。Server 是控制面，Agent 是节点侧唯一受控落地入口，OpenResty 是实际数据面。自建权威 DNS 使用独立 DNS Worker 运行角色，用于逐次 DNS 查询实时执行 GSLB 调度；它不替代 Agent/OpenResty 数据面。
 
 ```text
 Browser
@@ -50,7 +50,7 @@ Agent + OpenResty edge nodes
 | Agent | 注册、心跳、同步、写入文件、校验、reload、失败回滚、自更新与轻量采集 |
 | OpenResty | 接收真实流量，按 DuShengCDN 渲染的配置执行反向代理 |
 | Frontend | 管理网站配置、源站、证书、节点、版本、用户、设置与观测页面 |
-| DNS Worker | 权威 DNS 查询服务运行角色；Server 侧已提供只读调度快照和 Worker 心跳 API，后续 Worker 查询面会加载快照并按来源、地区、节点健康和负载实时返回 A/AAAA 答案 |
+| DNS Worker | 权威 DNS 查询服务运行角色；从 Server 拉取只读调度快照，监听 UDP/TCP `53`，并按来源、地区、节点健康和负载实时返回 A/AAAA 答案 |
 
 ## Server
 

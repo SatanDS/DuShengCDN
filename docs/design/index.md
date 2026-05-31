@@ -48,11 +48,11 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 * Server 保存配置与状态，不直接 SSH 管理节点。
 * Agent 是节点侧唯一受控落地入口。
 
-## 下一阶段规划
+## 后续增强规划
 
 | 能力 | 说明 |
 | --- | --- |
-| 自建权威 DNS / 实时 GSLB | 由 DuShengCDN DNS Worker 按逐次 DNS 查询来源、地区、节点健康和负载实时返回边缘 IP，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md) |
+| 自建权威 DNS / 实时 GSLB 增强 | 已提供 DNS Worker MVP；后续补管理端入口、迁移体验、委派检查和更完整的高可用观测，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md) |
 
 ## 典型使用场景
 
@@ -64,7 +64,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 | 快速回滚 | 重新激活旧版本，让 Agent 拉取并应用 |
 | 证书托管 | 为不同域名绑定 TLS 证书 |
 | 智能 DNS 切换 | 节点离线、OpenResty 异常或超过 GSLB 负载阈值时，自动 DNS 可切换到其它在线公网 IP；启用 GSLB 时可跨多个节点池调度 |
-| 实时入口调度 | 自建权威 DNS 阶段可让域名 NS 委派到 DuShengCDN DNS Worker，由查询时来源、地区和节点负载决定返回的边缘 IP |
+| 实时入口调度 | 自建权威 DNS 可让域名 NS 委派到 DuShengCDN DNS Worker，由查询时来源、地区和节点负载决定返回的边缘 IP |
 | 缓存闭环 | 配置缓存策略后，可在管理端清理缓存、预热首页并查看缓存命中与回源指标 |
 | 基础观测 | 查看节点状态、请求聚合、缓存命中、回源错误、访问分析和健康事件 |
 
@@ -151,7 +151,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 * `proxy_routes.node_pool` 记录网站绑定的目标节点池；该字段不改变全局单激活版本模型，只影响 DNS 目标选择和运行时缓存指令的下发范围。
 * `proxy_routes.gslb_policy` 是站点级 DNS 调度策略，允许记录多个节点池、池权重、DNS TTL、负载阈值、来源识别接口和防抖参数；它只影响运行时 DNS 目标选择，不拆分配置版本。
 * `gslb_scheduling_states` 保存最近一次 GSLB 评估的目标、期望目标和切换时间，用于避免 DNS 记录在短时间内频繁抖动。
-* 当前 Cloudflare DNS 同步模式是周期性重算 A/AAAA 记录，受 DNS TTL 与递归解析缓存影响；逐查询按来源实时返回不同 IP 的目标纳入 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)，由独立 DNS Worker 实时回答权威 DNS 查询。
+* 当前 Cloudflare DNS 同步模式是周期性重算 A/AAAA 记录，受 DNS TTL 与递归解析缓存影响；逐查询按来源实时返回不同 IP 的能力由独立 DNS Worker 实时回答权威 DNS 查询，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)。
 * 自建权威 DNS 只影响 DNS 答案和调度状态，不改变 OpenResty 配置版本模型，不让 `proxy_routes.gslb_policy` 演变成按节点池拆分的配置版本。
 * 指标、趋势和访问分析优先使用服务端聚合结果，而不是前端临时统计。
 * 访问明细只保留受控时间窗口，不演变成通用日志平台。

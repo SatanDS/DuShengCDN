@@ -24,7 +24,7 @@ Agent 支持：
 | --- | --- | --- |
 | Server SQLite | `dushengcdn.db` | 可通过 `SQLITE_PATH` 修改 |
 | Server 上传目录 | `upload` | 可通过 `UPLOAD_PATH` 修改 |
-| DNS Worker 快照缓存（规划） | `data/dns-worker-snapshot.json` | 由 DNS Worker 保存最后一次有效调度快照 |
+| DNS Worker 快照缓存 | `data/dns-worker-snapshot.json` | 由 DNS Worker 保存最后一次有效调度快照 |
 | Agent 配置文件 | `./agent.json` | 可通过 `-config` 指定 |
 | 一键安装 Agent 配置 | `/opt/dushengcdn-agent/agent.json` | 安装脚本默认生成 |
 | Agent 数据目录 | 配置文件所在目录下的 `data` | 可通过 `data_dir` 修改 |
@@ -85,10 +85,10 @@ go run . --port 3000 --log-dir ./logs
 | `UploadRateLimitNum` / `UploadRateLimitDuration` | 上传接口限流次数 / 时间窗口 | `50` / `60` |
 | `DownloadRateLimitNum` / `DownloadRateLimitDuration` | 下载接口限流次数 / 时间窗口 | `50` / `60` |
 | `CriticalRateLimitNum` / `CriticalRateLimitDuration` | 敏感接口限流次数 / 时间窗口 | `100` / `1200` |
-| `AuthoritativeDNSEnabled`（规划） | 是否启用内置权威 DNS 服务 | `false` |
-| `AuthoritativeDNSListenAddr`（规划） | 内置权威 DNS 监听地址，需同时监听 UDP/TCP | `:53` |
-| `AuthoritativeDNSDefaultTTL`（规划） | 权威 DNS 模式下 `0/1` TTL 映射值 | `30` |
-| `AuthoritativeDNSSnapshotMaxAge`（规划） | DNS Worker 最后有效快照最大使用时间 | `300` |
+| `AuthoritativeDNSEnabled`（保留） | 是否启用内置权威 DNS 服务；当前查询面使用独立 DNS Worker | `false` |
+| `AuthoritativeDNSListenAddr`（保留） | 内置权威 DNS 监听地址；当前查询面使用独立 DNS Worker | `:53` |
+| `AuthoritativeDNSDefaultTTL` | 权威 DNS 模式下 `0/1` TTL 映射值 | `30` |
+| `AuthoritativeDNSSnapshotMaxAge` | DNS Worker 最后有效快照最大使用时间 | `300` |
 
 说明：
 
@@ -201,11 +201,14 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `DUSHENGCDN_HEARTBEAT_INTERVAL` | 心跳间隔，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_REQUEST_TIMEOUT` | 请求超时，可覆盖 `agent.json` | 空 |
 | `DUSHENGCDN_OPENRESTY_OBSERVABILITY_PORT` | 本地观测端口，可覆盖 `agent.json` | 空 |
-| `DUSHENGCDN_DNS_WORKER_SERVER_URL`（规划） | DNS Worker 连接 Server 的地址 | 空 |
-| `DUSHENGCDN_DNS_WORKER_TOKEN`（规划） | DNS Worker 专属认证 Token | 空 |
-| `DUSHENGCDN_DNS_WORKER_LISTEN_ADDR`（规划） | DNS Worker UDP/TCP 监听地址 | `:53` |
-| `DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH`（规划） | DNS Worker 本地快照缓存路径 | `data/dns-worker-snapshot.json` |
-| `DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL`（规划） | DNS Worker 心跳和快照检查间隔 | `10000` 毫秒 |
+| `DUSHENGCDN_DNS_WORKER_SERVER_URL` | DNS Worker 连接 Server 的地址 | 空 |
+| `DUSHENGCDN_DNS_WORKER_TOKEN` | DNS Worker 专属认证 Token | 空 |
+| `DUSHENGCDN_DNS_WORKER_LISTEN_ADDR` | DNS Worker UDP/TCP 监听地址 | `:53` |
+| `DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH` | DNS Worker 本地快照缓存路径 | `data/dns-worker-snapshot.json` |
+| `DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL` | DNS Worker 心跳、快照拉取和聚合上报间隔，支持毫秒整数或 Go duration | `10s` |
+| `DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT` | DNS Worker 请求 Server 的超时时间，支持毫秒整数或 Go duration | `10s` |
+| `DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE` | DNS Worker 动态 GSLB 回答允许使用的最大快照年龄，支持毫秒整数或 Go duration | `5m` |
+| `DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH` | 可选本地 MaxMind Country MMDB 路径，用于按国家代码匹配 GSLB 节点池 | 空 |
 
 ## Agent 命令行参数
 

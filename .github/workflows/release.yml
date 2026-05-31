@@ -214,11 +214,71 @@ jobs:
             dist/${{ matrix.asset_name }}.sha256
           retention-days: 1
 
+  build-dns-worker-binaries:
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset_name: dushengcdn-dns-worker-linux-amd64
+          - goos: linux
+            goarch: arm64
+            asset_name: dushengcdn-dns-worker-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            asset_name: dushengcdn-dns-worker-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            asset_name: dushengcdn-dns-worker-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            asset_name: dushengcdn-dns-worker-windows-amd64.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: dushengcdn_server/go.mod
+          cache-dependency-path: dushengcdn_server/go.sum
+
+      - name: Build DNS Worker
+        working-directory: dushengcdn_server
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          ASSET_NAME: ${{ matrix.asset_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          go mod download
+          mkdir -p ../dist
+          go build -trimpath -ldflags "-s -w -X 'main.version=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/dns-worker
+          (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
+
+      - name: Upload DNS Worker Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: dns-worker-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/${{ matrix.asset_name }}
+            dist/${{ matrix.asset_name }}.sha256
+          retention-days: 1
+
   release:
     needs:
       - prepare
       - build-binaries
       - build-agent-binaries
+      - build-dns-worker-binaries
     if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -233,6 +293,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           pattern: "agent-*"
+          path: dist
+          merge-multiple: true
+
+      - name: Download DNS Worker Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: "dns-worker-*"
           path: dist
           merge-multiple: true
 

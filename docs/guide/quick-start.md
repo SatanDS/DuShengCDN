@@ -9,6 +9,7 @@ DuShengCDN 的最小运行单元包含：
 | Server | 管理端 UI、管理 API、Agent API、配置渲染、版本发布与状态存储 |
 | Agent | 运行在代理节点上，拉取配置、写入 OpenResty、执行校验与 reload |
 | OpenResty | 实际接收流量并反向代理到源站 |
+| DNS Worker（可选） | 自建权威 DNS 查询面，按实时 GSLB 策略回答 A/AAAA 查询 |
 
 Agent 统一通过 OpenResty 二进制控制运行时。本地部署需要节点上已有 `openresty` 可执行文件；Docker 部署可直接运行内置 OpenResty 的 Agent 镜像。
 
@@ -157,6 +158,21 @@ journalctl -u dushengcdn-agent -f
 6. 等待 Agent 在后续 heartbeat 或 WebSocket 通知中发现版本并应用。
 
 版本号格式为 `YYYYMMDD-NNN`。历史版本不可变，回滚通过重新激活旧版本完成。
+
+## 5. 可选：启用自建权威 DNS
+
+如果希望域名按每次 DNS 查询来源实时调度到不同边缘节点，需要部署 DNS Worker：
+
+```bash
+docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
+  -p 53:53/udp -p 53:53/tcp \
+  -v dushengcdn-dns-worker-data:/data \
+  -e DUSHENGCDN_DNS_WORKER_SERVER_URL=http://your-server:3000 \
+  -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
+  ghcr.io/satands/dushengcdn-dns-worker:latest
+```
+
+然后在注册商处把需要托管的域名 NS 委派到 DNS Worker。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。
 
 ## 5. 验证是否成功
 

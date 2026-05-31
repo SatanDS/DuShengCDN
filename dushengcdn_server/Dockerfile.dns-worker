@@ -1,0 +1,30 @@
+ARG VERSION=dev
+
+FROM golang:1.25-alpine AS builder
+
+ARG VERSION
+ARG TARGETOS=linux
+ARG TARGETARCH
+
+ENV CGO_ENABLED=0 \
+    GOOS=${TARGETOS} \
+    GOARCH=${TARGETARCH}
+
+WORKDIR /build
+COPY . .
+RUN go mod download
+RUN go build -trimpath -ldflags "-s -w -X 'main.version=$VERSION'" -o /build/dushengcdn-dns-worker ./cmd/dns-worker
+
+FROM alpine
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && mkdir -p /data
+
+ENV DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=:53 \
+    DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=/data/dns-worker-snapshot.json
+
+COPY --from=builder /build/dushengcdn-dns-worker /usr/local/bin/dushengcdn-dns-worker
+
+EXPOSE 53/udp 53/tcp
+WORKDIR /data
+ENTRYPOINT ["/usr/local/bin/dushengcdn-dns-worker"]

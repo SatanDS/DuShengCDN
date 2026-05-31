@@ -44,7 +44,7 @@ Agent：
 | Docker | 仅 Docker 部署 Agent 镜像时需要 |
 | 网络 | Agent 节点必须能访问 Server 地址 |
 
-DNS Worker（规划中的自建权威 DNS 运行角色）：
+DNS Worker（自建权威 DNS 运行角色）：
 
 | 项目 | 要求 |
 | --- | --- |
@@ -163,7 +163,37 @@ go run . --port 3000 --log-dir ./logs
 
 ## 自建权威 DNS 部署规划
 
-自建权威 DNS 会新增 DNS Worker 运行角色。Server 控制面目前已经能管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。监听 UDP/TCP `53` 并按 DNS 协议实时回答查询的 Worker 查询面仍在下一阶段，设计细节见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
+自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。
+
+Docker 运行示例：
+
+```bash
+docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
+  -p 53:53/udp -p 53:53/tcp \
+  -v dushengcdn-dns-worker-data:/data \
+  -e DUSHENGCDN_DNS_WORKER_SERVER_URL=https://cdn.example.com \
+  -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
+  ghcr.io/satands/dushengcdn-dns-worker:latest
+```
+
+源码运行示例：
+
+```bash
+cd dushengcdn_server
+go run ./cmd/dns-worker \
+  --server-url https://cdn.example.com \
+  --token YOUR_DNS_WORKER_TOKEN \
+  --listen :53 \
+  --snapshot-path /var/lib/dushengcdn-dns-worker/snapshot.json
+```
+
+本地 Compose 示例见仓库根目录 `docker-compose.dns-worker.yaml`。如果需要按国家代码匹配 GSLB 节点池，可给 Worker 配置本地 MaxMind Country MMDB：
+
+```bash
+--geoip-database /var/lib/dushengcdn-dns-worker/GeoLite2-Country.mmdb
+```
+
+未配置本地 GeoIP 库时，Worker 仍会优先读取 EDNS Client Subnet 的来源 IP，但国家代码为空，调度作用域会回退为 `global`。
 
 生产部署原则：
 
