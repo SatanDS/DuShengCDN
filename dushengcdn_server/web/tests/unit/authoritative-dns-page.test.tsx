@@ -773,9 +773,19 @@ describe('Authoritative DNS page', () => {
     await user.click(within(switchDialog).getByRole('button', { name: '切换' }));
     await waitFor(() => {
       expect(
-        screen.getByText(/已切换“edge-site”到自建权威 DNS/),
+        screen.getByText(/“edge-site”切换后复测完成/),
       ).toBeInTheDocument();
     });
+    expect(screen.getByText('切换后复测')).toBeInTheDocument();
+    expect(screen.getByText('网站 DNS 模式')).toBeInTheDocument();
+    expect(screen.getByText('Zone 委派检查')).toBeInTheDocument();
+    expect(screen.getByText('Worker 公网探测')).toBeInTheDocument();
+    expect(screen.getByText('GSLB 模拟复测')).toBeInTheDocument();
+    expect(screen.getByText('需要确认')).toBeInTheDocument();
+    expect(screen.getByText(/当前委派状态：部分匹配/)).toBeInTheDocument();
+    expect(screen.getByText(/1 \/ 1 个在线 Worker UDP\/TCP 53 可达/)).toBeInTheDocument();
+    expect(screen.getByText(/已完成 3 组模拟/)).toBeInTheDocument();
+    expect(screen.getByText('global')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));
     await waitFor(() => {

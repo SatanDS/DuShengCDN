@@ -114,7 +114,52 @@ type GSLBSimulationFormValues = {
   source_ip: string;
 };
 
+type MigrationRecheckStepStatus =
+  | 'pending'
+  | 'running'
+  | 'success'
+  | 'warning'
+  | 'danger';
+
+type MigrationRecheckStatus = 'running' | 'success' | 'warning' | 'danger';
+
+type MigrationRecheckStepKey =
+  | 'mode'
+  | 'delegation'
+  | 'worker_probe'
+  | 'simulation';
+
+type MigrationRecheckStep = {
+  key: MigrationRecheckStepKey;
+  label: string;
+  status: MigrationRecheckStepStatus;
+  message: string;
+};
+
+type MigrationRecheckResult = {
+  routeId: number;
+  routeName: string;
+  zoneId: number;
+  zoneName: string;
+  checkedAt: string;
+  status: MigrationRecheckStatus;
+  steps: MigrationRecheckStep[];
+  delegationCheck: DNSZoneDelegationCheck | null;
+  workerProbes: DNSWorkerProbe[];
+  simulations: DNSGSLBSimulationResult[];
+};
+
 const dnsObservabilityWindowHours = 24;
+
+const migrationRecheckStepTemplates: Array<{
+  key: MigrationRecheckStepKey;
+  label: string;
+}> = [
+  { key: 'mode', label: '网站 DNS 模式' },
+  { key: 'delegation', label: 'Zone 委派检查' },
+  { key: 'worker_probe', label: 'Worker 公网探测' },
+  { key: 'simulation', label: 'GSLB 模拟复测' },
+];
 
 const dnsRecordTypes: DNSRecordType[] = [
   'A',
@@ -203,6 +248,131 @@ function getDefaultSimulationQName(route?: ProxyRouteItem | null) {
 
 function getRouteRecordType(route?: ProxyRouteItem | null): 'A' | 'AAAA' {
   return route?.dns_record_type === 'AAAA' ? 'AAAA' : 'A';
+}
+
+function createMigrationRecheckResult(
+  route: ProxyRouteItem,
+  zone: DNSZoneItem,
+  status: MigrationRecheckStatus = 'running',
+): MigrationRecheckResult {
+  return {
+    routeId: route.id,
+    routeName: getRouteDisplayName(route),
+    zoneId: zone.id,
+    zoneName: zone.name,
+    checkedAt: new Date().toISOString(),
+    status,
+    steps: migrationRecheckStepTemplates.map((step) => ({
+      ...step,
+      status: 'pending',
+      message: '等待复测',
+    })),
+    delegationCheck: null,
+    workerProbes: [],
+    simulations: [],
+  };
+}
+
+function updateMigrationRecheckStep(
+  result: MigrationRecheckResult,
+  key: MigrationRecheckStepKey,
+  status: MigrationRecheckStepStatus,
+  message: string,
+): MigrationRecheckResult {
+  return {
+    ...result,
+    checkedAt: new Date().toISOString(),
+    steps: result.steps.map((step) =>
+      step.key === key ? { ...step, status, message } : step,
+    ),
+  };
+}
+
+function finalizeMigrationRecheck(
+  result: MigrationRecheckResult,
+): MigrationRecheckResult {
+  const hasDanger = result.steps.some((step) => step.status === 'danger');
+  const hasWarning = result.steps.some((step) => step.status === 'warning');
+  return {
+    ...result,
+    checkedAt: new Date().toISOString(),
+    status: hasDanger ? 'danger' : hasWarning ? 'warning' : 'success',
+  };
+}
+
+function mergeUpdatedRoute(
+  routes: ProxyRouteItem[],
+  updatedRoute: ProxyRouteItem,
+) {
+  let found = false;
+  const nextRoutes = routes.map((route) => {
+    if (route.id !== updatedRoute.id) {
+      return route;
+    }
+    found = true;
+    return updatedRoute;
+  });
+  return found ? nextRoutes : [updatedRoute, ...nextRoutes];
+}
+
+function getRouteSimulationCountries(route: ProxyRouteItem) {
+  const countries = new Set<string>();
+  for (const pool of route.gslb_policy?.pools ?? []) {
+    if (!pool.enabled) {
+      continue;
+    }
+    for (const country of pool.countries ?? []) {
+      const normalized = country.trim().toUpperCase();
+      if (normalized) {
+        countries.add(normalized);
+      }
+      if (countries.size >= 2) {
+        break;
+      }
+    }
+    if (countries.size >= 2) {
+      break;
+    }
+  }
+  return ['', ...Array.from(countries)].slice(0, 3);
+}
+
+function getRecheckStepBadgeVariant(status: MigrationRecheckStepStatus) {
+  switch (status) {
+    case 'success':
+      return 'success' as const;
+    case 'warning':
+      return 'warning' as const;
+    case 'danger':
+      return 'danger' as const;
+    case 'running':
+      return 'info' as const;
+    case 'pending':
+      return 'warning' as const;
+  }
+}
+
+function getRecheckStepStatusLabel(status: MigrationRecheckStepStatus) {
+  switch (status) {
+    case 'success':
+      return '通过';
+    case 'warning':
+      return '注意';
+    case 'danger':
+      return '失败';
+    case 'running':
+      return '执行中';
+    case 'pending':
+      return '等待';
+  }
+}
+
+function getMigrationRecheckTone(status: MigrationRecheckStatus) {
+  return status === 'success'
+    ? ('success' as const)
+    : status === 'danger'
+      ? ('danger' as const)
+      : ('info' as const);
 }
 
 function zoneToFormValues(zone?: DNSZoneItem | null): ZoneFormValues {
@@ -459,6 +629,11 @@ export function AuthoritativeDNSPage() {
   const [workerProbeResults, setWorkerProbeResults] = useState<
     Record<number, DNSWorkerProbe>
   >({});
+  const [migrationRecheck, setMigrationRecheck] =
+    useState<MigrationRecheckResult | null>(null);
+  const [recheckingRouteId, setRecheckingRouteId] = useState<number | null>(
+    null,
+  );
   const [serverUrl, setServerUrl] = useState('https://cdn.example.com');
 
   useEffect(() => {
@@ -605,22 +780,265 @@ export function AuthoritativeDNSPage() {
       switchProxyRouteToAuthoritativeDNS(route.id, {
         dns_zone_id_ref: zone.id,
       }),
-    onSuccess: async (updatedRoute) => {
+    onSuccess: async (updatedRoute, variables) => {
       setFeedback({
         tone: 'success',
-        message: `已切换“${getRouteDisplayName(updatedRoute)}”到自建权威 DNS。`,
+        message: `已切换“${getRouteDisplayName(updatedRoute)}”到自建权威 DNS，正在自动复测。`,
       });
+      queryClient.setQueryData<ProxyRouteItem[]>(['proxy-routes'], (current) =>
+        mergeUpdatedRoute(current ?? proxyRoutes, updatedRoute),
+      );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
         queryClient.invalidateQueries({
           queryKey: ['authoritative-dns', 'scheduling-states'],
         }),
       ]);
+      await runMigrationRecheck(updatedRoute, variables.zone);
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
     },
   });
+
+  async function runMigrationRecheck(
+    route: ProxyRouteItem,
+    zone: DNSZoneItem,
+  ) {
+    let result = updateMigrationRecheckStep(
+      createMigrationRecheckResult(route, zone),
+      'mode',
+      'running',
+      '正在刷新网站 DNS 模式',
+    );
+    setMigrationRecheck(result);
+    setRecheckingRouteId(route.id);
+    setFeedback({
+      tone: 'info',
+      message: `正在复测“${getRouteDisplayName(route)}”的权威 DNS 切换结果。`,
+    });
+
+    try {
+      let latestRoute = route;
+      let latestRoutes = proxyRoutes;
+      try {
+        latestRoutes = await queryClient.fetchQuery({
+          queryKey: ['proxy-routes'],
+          queryFn: getProxyRoutes,
+        });
+        latestRoute =
+          latestRoutes.find((item) => item.id === route.id) ?? route;
+        if (
+          latestRoute.dns_provider_mode !== 'authoritative' &&
+          route.dns_provider_mode === 'authoritative' &&
+          route.dns_zone_id_ref === zone.id
+        ) {
+          latestRoute = route;
+        }
+        result = updateMigrationRecheckStep(
+          result,
+          'mode',
+          latestRoute.dns_provider_mode === 'authoritative' &&
+            latestRoute.dns_zone_id_ref === zone.id
+            ? 'success'
+            : 'danger',
+          latestRoute.dns_provider_mode === 'authoritative'
+            ? `已绑定 Zone ${zone.name}`
+            : '网站尚未切换到自建权威 DNS',
+        );
+      } catch (error) {
+        result = updateMigrationRecheckStep(
+          result,
+          'mode',
+          'danger',
+          getErrorMessage(error),
+        );
+      }
+      setMigrationRecheck(result);
+
+      result = updateMigrationRecheckStep(
+        result,
+        'delegation',
+        'running',
+        '正在检查注册商 NS 委派',
+      );
+      setMigrationRecheck(result);
+      try {
+        const delegationCheck = await checkDNSZoneDelegation(zone.id);
+        result = {
+          ...result,
+          delegationCheck,
+        };
+        const delegationStatus =
+          delegationCheck.status === 'matched'
+            ? 'success'
+            : delegationCheck.status === 'failed' ||
+                delegationCheck.status === 'mismatch'
+              ? 'danger'
+              : 'warning';
+        result = updateMigrationRecheckStep(
+          result,
+          'delegation',
+          delegationStatus,
+          delegationCheck.status === 'matched'
+            ? '公网 NS 已与 Zone 配置匹配'
+            : `当前委派状态：${getDelegationStatusLabel(delegationCheck.status)}`,
+        );
+      } catch (error) {
+        result = updateMigrationRecheckStep(
+          result,
+          'delegation',
+          'danger',
+          getErrorMessage(error),
+        );
+      }
+      setMigrationRecheck(result);
+
+      result = updateMigrationRecheckStep(
+        result,
+        'worker_probe',
+        'running',
+        '正在探测在线 DNS Worker 的 UDP/TCP 53',
+      );
+      setMigrationRecheck(result);
+      try {
+        let latestWorkers =
+          (await queryClient.fetchQuery({
+            queryKey: ['authoritative-dns', 'workers'],
+            queryFn: getDNSWorkers,
+          })) ?? workers;
+        if (latestWorkers.length === 0 && workers.length > 0) {
+          latestWorkers = workers;
+        }
+        const onlineWorkersForProbe = latestWorkers.filter(
+          (worker) => worker.status === 'online',
+        );
+        const workerProbePairs = await Promise.allSettled(
+          onlineWorkersForProbe.map(async (worker) => ({
+            worker,
+            probe: await probeDNSWorker(worker.id, { zone_id: zone.id }),
+          })),
+        );
+        const successfulWorkerProbes: DNSWorkerProbe[] = [];
+        const nextWorkerProbeResults: Record<number, DNSWorkerProbe> = {};
+        for (const item of workerProbePairs) {
+          if (item.status === 'fulfilled') {
+            successfulWorkerProbes.push(item.value.probe);
+            nextWorkerProbeResults[item.value.worker.id] = item.value.probe;
+          }
+        }
+        if (Object.keys(nextWorkerProbeResults).length > 0) {
+          setWorkerProbeResults((current) => ({
+            ...current,
+            ...nextWorkerProbeResults,
+          }));
+        }
+        const healthyProbeCount = successfulWorkerProbes.filter((probe) =>
+          probe.results.length > 0 &&
+          probe.results.every((probeResult) => probeResult.reachable),
+        ).length;
+        result = {
+          ...result,
+          workerProbes: successfulWorkerProbes,
+        };
+        result = updateMigrationRecheckStep(
+          result,
+          'worker_probe',
+          healthyProbeCount > 0
+            ? healthyProbeCount === onlineWorkersForProbe.length
+              ? 'success'
+              : 'warning'
+            : 'danger',
+          onlineWorkersForProbe.length === 0
+            ? '没有在线 DNS Worker'
+            : `${healthyProbeCount} / ${onlineWorkersForProbe.length} 个在线 Worker UDP/TCP 53 可达`,
+        );
+      } catch (error) {
+        result = updateMigrationRecheckStep(
+          result,
+          'worker_probe',
+          'danger',
+          getErrorMessage(error),
+        );
+      }
+      setMigrationRecheck(result);
+      await queryClient.invalidateQueries({
+        queryKey: ['authoritative-dns', 'workers'],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['authoritative-dns', 'observability'],
+      });
+
+      result = updateMigrationRecheckStep(
+        result,
+        'simulation',
+        'running',
+        '正在按当前快照模拟 global 和来源国家调度',
+      );
+      setMigrationRecheck(result);
+      try {
+        const routeForSimulation = {
+          ...latestRoute,
+          dns_provider_mode: 'authoritative' as const,
+          dns_zone_id_ref: zone.id,
+        };
+        const routeListForSimulation = mergeUpdatedRoute(
+          latestRoutes,
+          routeForSimulation,
+        );
+        queryClient.setQueryData(['proxy-routes'], routeListForSimulation);
+        const simulationCountries =
+          getRouteSimulationCountries(routeForSimulation);
+        const simulationResults = await Promise.all(
+          simulationCountries.map((country) =>
+            simulateDNSGSLB({
+              proxy_route_id: routeForSimulation.id,
+              qname: getDefaultSimulationQName(routeForSimulation),
+              record_type: getRouteRecordType(routeForSimulation),
+              country,
+              source_ip: '',
+              fresh: true,
+            }),
+          ),
+        );
+        result = {
+          ...result,
+          simulations: simulationResults,
+        };
+        const returnedTargetCount = simulationResults.reduce(
+          (count, simulation) => count + simulation.targets.length,
+          0,
+        );
+        result = updateMigrationRecheckStep(
+          result,
+          'simulation',
+          returnedTargetCount > 0 ? 'success' : 'danger',
+          returnedTargetCount > 0
+            ? `已完成 ${simulationResults.length} 组模拟，返回 ${returnedTargetCount} 个目标`
+            : '当前快照没有返回可用目标',
+        );
+      } catch (error) {
+        result = updateMigrationRecheckStep(
+          result,
+          'simulation',
+          'danger',
+          getErrorMessage(error),
+        );
+      }
+
+      result = finalizeMigrationRecheck(result);
+      setMigrationRecheck(result);
+      setFeedback({
+        tone: getMigrationRecheckTone(result.status),
+        message:
+          result.status === 'success'
+            ? `“${result.routeName}”切换后复测通过。`
+            : `“${result.routeName}”切换后复测完成，请查看迁移向导右侧结果。`,
+      });
+    } finally {
+      setRecheckingRouteId(null);
+    }
+  }
 
   const openCreateZone = () => {
     setEditingZone(null);
@@ -923,6 +1341,8 @@ export function AuthoritativeDNSPage() {
                 ? switchAuthoritativeMutation.variables.route.id
                 : null
             }
+            recheckingRouteId={recheckingRouteId}
+            recheckResult={migrationRecheck}
             onSwitchAuthoritative={handleSwitchAuthoritative}
           />
         )}
@@ -2065,6 +2485,8 @@ function DNSMigrationGuidePanel({
   routesLoading,
   routesError,
   switchingRouteId,
+  recheckingRouteId,
+  recheckResult,
   onSwitchAuthoritative,
 }: {
   routes: ProxyRouteItem[];
@@ -2073,6 +2495,8 @@ function DNSMigrationGuidePanel({
   routesLoading: boolean;
   routesError: string;
   switchingRouteId: number | null;
+  recheckingRouteId: number | null;
+  recheckResult: MigrationRecheckResult | null;
   onSwitchAuthoritative: (route: ProxyRouteItem, zone: DNSZoneItem) => void;
 }) {
   const enabledZones = zones.filter((zone) => zone.enabled);
@@ -2242,10 +2666,18 @@ function DNSMigrationGuidePanel({
                       {matchingZone ? (
                         <PrimaryButton
                           type="button"
-                          disabled={!ready || switchingRouteId === route.id}
+                          disabled={
+                            !ready ||
+                            switchingRouteId === route.id ||
+                            recheckingRouteId === route.id
+                          }
                           onClick={() => onSwitchAuthoritative(route, matchingZone)}
                         >
-                          {switchingRouteId === route.id ? '切换中...' : '一键切换'}
+                          {switchingRouteId === route.id
+                            ? '切换中...'
+                            : recheckingRouteId === route.id
+                              ? '复测中...'
+                              : '一键切换'}
                         </PrimaryButton>
                       ) : null}
                       <a
@@ -2263,6 +2695,9 @@ function DNSMigrationGuidePanel({
         </div>
 
         <div className="space-y-4">
+          {recheckResult ? (
+            <MigrationRecheckPanel result={recheckResult} />
+          ) : null}
           <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
             <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
               切换顺序
@@ -2294,6 +2729,156 @@ function DNSMigrationGuidePanel({
         </div>
       </div>
     </AppCard>
+  );
+}
+
+function MigrationRecheckPanel({
+  result,
+}: {
+  result: MigrationRecheckResult;
+}) {
+  const healthyProbeCount = result.workerProbes.filter(
+    (probe) =>
+      probe.results.length > 0 &&
+      probe.results.every((probeResult) => probeResult.reachable),
+  ).length;
+  const targetCount = result.simulations.reduce(
+    (count, simulation) => count + simulation.targets.length,
+    0,
+  );
+  const statusLabel =
+    result.status === 'running'
+      ? '复测中'
+      : result.status === 'success'
+        ? '复测通过'
+        : result.status === 'warning'
+          ? '需要确认'
+          : '复测异常';
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+            切换后复测
+          </h3>
+          <p className="mt-1 text-xs break-all text-[var(--foreground-secondary)]">
+            {result.routeName} · Zone {result.zoneName}
+          </p>
+        </div>
+        <StatusBadge
+          label={statusLabel}
+          variant={
+            result.status === 'success'
+              ? 'success'
+              : result.status === 'danger'
+                ? 'danger'
+                : result.status === 'running'
+                  ? 'info'
+                  : 'warning'
+          }
+        />
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {result.steps.map((step) => (
+          <div
+            key={step.key}
+            className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-3 py-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium text-[var(--foreground-primary)]">
+                {step.label}
+              </span>
+              <StatusBadge
+                label={getRecheckStepStatusLabel(step.status)}
+                variant={getRecheckStepBadgeVariant(step.status)}
+              />
+            </div>
+            <p className="mt-2 text-xs leading-5 text-[var(--foreground-secondary)]">
+              {step.message}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <InfoTile
+          label="委派状态"
+          value={
+            result.delegationCheck
+              ? getDelegationStatusLabel(result.delegationCheck.status)
+              : '—'
+          }
+        />
+        <InfoTile
+          label="Worker 探测"
+          value={`${healthyProbeCount} / ${result.workerProbes.length}`}
+        />
+        <InfoTile
+          label="模拟组数"
+          value={formatCount(result.simulations.length)}
+        />
+        <InfoTile label="返回目标" value={formatCount(targetCount)} />
+      </div>
+
+      {result.delegationCheck?.missing_name_servers.length ? (
+        <div className="mt-4">
+          <CheckList
+            title="缺失 NS"
+            items={result.delegationCheck.missing_name_servers}
+            tone="info"
+          />
+        </div>
+      ) : null}
+
+      {result.simulations.length > 0 ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+            模拟结果
+          </p>
+          <div className="space-y-2">
+            {result.simulations.map((simulation, index) => (
+              <div
+                key={`${simulation.proxy_route_id}-${simulation.source_scope}-${simulation.record_type}-${index}`}
+                className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-3 py-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-[var(--foreground-primary)]">
+                    {simulation.source_scope}
+                  </span>
+                  <StatusBadge
+                    label={
+                      simulation.targets.length > 0 ? '有目标' : '无目标'
+                    }
+                    variant={
+                      simulation.targets.length > 0 ? 'success' : 'danger'
+                    }
+                  />
+                </div>
+                <p className="mt-2 text-xs break-all text-[var(--foreground-secondary)]">
+                  {simulation.qname} {simulation.record_type} ·{' '}
+                  {simulation.targets.join(', ') || '—'}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <InlineMessage
+        className="mt-4"
+        tone={getMigrationRecheckTone(result.status)}
+        message={
+          result.status === 'success'
+            ? '切换、委派、Worker 探测和 GSLB 模拟都已通过。'
+            : '复测会帮助确认切换状态；委派不匹配时仍需要到注册商调整 NS 或 Glue。'
+        }
+      />
+      <p className="mt-3 text-xs text-[var(--foreground-muted)]">
+        最近复测：{formatDateTime(result.checkedAt)}
+      </p>
+    </div>
   );
 }
 

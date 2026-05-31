@@ -16,6 +16,7 @@
 | OpenResty 应用失败 | 应用记录、Agent 日志、证书、源站地址、端口占用 |
 | 访问分析无数据 | OpenResty 容器状态、观测端口、Agent 补报日志 |
 | 自动 DNS 不切换 | 节点池、公网 IP 池、调度开关、排空状态、Cloudflare Token 权限 |
+| 权威 DNS 迁移后解析异常 | 迁移向导切换后复测、Zone 委派检查、Worker 公网 UDP/TCP 53 探测、GSLB 模拟结果 |
 | 缓存操作失败 | Agent WebSocket 连接、网站节点池、OpenResty 缓存目录配置 |
 
 ## Server 无法启动
@@ -247,6 +248,17 @@ curl -Iv https://your-domain
 4. 目标节点池内是否有在线节点，且 OpenResty 状态不是 unhealthy。
 5. 节点公网 IP 池是否包含对应记录类型的公网地址；A 记录需要 IPv4，AAAA 记录需要 IPv6。
 6. 节点是否被关闭调度或开启排空模式。
+
+## 权威 DNS 迁移后解析异常
+
+如果从 Cloudflare 同步切到自建权威 DNS 后解析不符合预期，先打开左侧「权威 DNS」的「迁移向导」查看「切换后复测」：
+
+1. 「网站 DNS 模式」应显示已绑定目标 Zone；若失败，回到网站详情的「自动 DNS」确认 DNS 模式和 Zone。
+2. 「Zone 委派检查」应为已匹配；若部分匹配、不匹配或提示 Glue，登录注册商补齐 NS 或 Glue/主机记录。
+3. 「Worker 公网探测」至少应有一个在线 Worker UDP/TCP `53` 可达；若失败，检查 Worker 公网地址、防火墙、端口映射和安全组。
+4. 「GSLB 模拟复测」应返回目标 IP；若无目标，检查节点是否在线、OpenResty 是否健康、公网 IP 池、节点池、排空模式、GSLB 权重和负载阈值。
+
+迁移向导不会直接修改注册商 NS。注册商侧 NS 生效还受上级 DNS 缓存和 TTL 影响，调整后可再次执行 Zone 委派检查。
 
 ## 缓存清理或预热失败
 

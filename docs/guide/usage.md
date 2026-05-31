@@ -81,12 +81,13 @@ Cloudflare 自动 DNS 支持：
 自建权威 DNS 的实时 GSLB 模式：
 
 * 左侧「权威 DNS」用于创建 Zone、维护 NS/SOA 和静态记录，并创建 DNS Worker Token。
-* 左侧「权威 DNS」的「迁移向导」会列出 Cloudflare 模式网站候选，检查是否已有匹配 Zone、在线 Worker、公网 UDP/TCP 53 探测和 GSLB 配置；满足条件时可直接点击「一键切换」，也可以跳转到网站详情手动调整。
+* 左侧「权威 DNS」的「迁移向导」会列出 Cloudflare 模式网站候选，检查是否已有匹配 Zone、在线 Worker、公网 UDP/TCP 53 探测和 GSLB 配置；满足条件时可直接点击「一键切换」，也可以跳转到网站详情手动调整。一键切换成功后，向导会自动刷新网站 DNS 模式、执行 Zone 委派检查、探测在线 Worker，并按当前快照执行 global 与来源国家 GSLB 模拟复测。
 * 网站详情的「自动 DNS」里仍可把 `DNS 模式` 从 `Cloudflare 同步` 切换为 `自建权威 DNS`，再绑定已启用的 DNS Zone。
 * 网站域名必须属于所选 Zone；切换后 Cloudflare 账号、橙云和 DDoS 自动橙云设置不再参与该网站 DNS 回答。
 * 域名需要在注册商处把 NS 委派到 DuShengCDN DNS Worker。
 * Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS，并列出缺失或额外的 NS。
 * 如果 NS 名称位于当前 Zone 内，例如 `ns1.example.com` 服务 `example.com`，需要在注册商配置 Glue/主机记录；面板会在检查结果中提示。
+* 迁移向导的「切换后复测」只会检查和提示，不会修改注册商 NS；如果复测显示委派部分匹配、不匹配或需要 Glue，仍需到注册商完成调整后再次检查。
 * DNS Worker 会在每次 A/AAAA 查询时根据来源 IP/ECS、来源 CIDR、国家代码、来源分流桶、节点池权重、节点健康和负载评分返回边缘 IP。
 * DNS Worker 会从 Server 拉取只读调度快照，本地缓存最后一次有效快照，并从快照恢复最近可用的 GSLB 防抖状态；Server 短暂不可用时仍可继续回答静态记录。
 * 左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，适合确认 GSLB 是否按预期把 `cidr:203.0.113.0/24`、`country:HK`、`country:DE`、`global|bucket:42` 等来源分配到 HK、EU 等节点池，并发现多 Worker 快照版本不一致或快照过期问题。
