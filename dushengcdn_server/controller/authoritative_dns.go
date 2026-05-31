@@ -194,6 +194,24 @@ func DeleteDNSWorker(c *gin.Context) {
 	respondSuccess(c, nil)
 }
 
+func ProbeDNSWorker(c *gin.Context) {
+	id, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	var input service.DNSWorkerProbeInput
+	if err := decodeOptionalJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "invalid parameter")
+		return
+	}
+	view, err := service.ProbeAuthoritativeDNSWorker(id, input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
 func GetDNSSnapshot(c *gin.Context) {
 	worker, ok := authenticateDNSWorker(c)
 	if !ok {

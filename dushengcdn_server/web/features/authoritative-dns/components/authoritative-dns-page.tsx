@@ -27,6 +27,7 @@ import {
   getDNSWorkers,
   getDNSZoneRecords,
   getDNSZones,
+  probeDNSWorker,
   updateDNSRecord,
   updateDNSZone,
 } from '@/features/authoritative-dns/api/authoritative-dns';
@@ -38,6 +39,8 @@ import type {
   DNSRecordType,
   DNSWorkerHealthItem,
   DNSWorkerItem,
+  DNSWorkerProbe,
+  DNSWorkerProbeResult,
   DNSWorkerSnapshotConsistency,
   DNSWorkerSnapshotConsistencyStatus,
   DNSZoneDelegationCheck,
@@ -246,6 +249,10 @@ function formatDurationSeconds(value: number) {
   return `${Math.round(value / 3600)} 小时`;
 }
 
+function getProbeResultVariant(result: DNSWorkerProbeResult) {
+  return result.reachable ? ('success' as const) : ('danger' as const);
+}
+
 function formatTrendHour(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -337,6 +344,9 @@ export function AuthoritativeDNSPage() {
   const [createdWorker, setCreatedWorker] = useState<DNSWorkerItem | null>(
     null,
   );
+  const [workerProbeResults, setWorkerProbeResults] = useState<
+    Record<number, DNSWorkerProbe>
+  >({});
   const [serverUrl, setServerUrl] = useState('https://cdn.example.com');
 
   useEffect(() => {
@@ -431,6 +441,29 @@ export function AuthoritativeDNSPage() {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
     },
   });
+  const probeWorkerMutation = useMutation({
+    mutationFn: (worker: DNSWorkerItem) =>
+      probeDNSWorker(worker.id, { zone_id: selectedZone?.id }),
+    onSuccess: (result, worker) => {
+      setWorkerProbeResults((current) => ({
+        ...current,
+        [worker.id]: result,
+      }));
+      const reachableCount = result.results.filter(
+        (item) => item.reachable,
+      ).length;
+      setFeedback({
+        tone:
+          reachableCount === result.results.length && result.results.length > 0
+            ? 'success'
+            : 'danger',
+        message: `DNS Worker 探测完成：${reachableCount} / ${result.results.length} 可达。`,
+      });
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
 
   const openCreateZone = () => {
     setEditingZone(null);
@@ -486,6 +519,11 @@ export function AuthoritativeDNSPage() {
       setFeedback(null);
       deleteWorkerMutation.mutate(worker.id);
     }
+  };
+
+  const handleProbeWorker = (worker: DNSWorkerItem) => {
+    setFeedback(null);
+    probeWorkerMutation.mutate(worker);
   };
 
   if (zonesQuery.isLoading || workersQuery.isLoading) {
@@ -655,7 +693,14 @@ export function AuthoritativeDNSPage() {
             workers={workers}
             onCreateWorker={() => setIsWorkerModalOpen(true)}
             onDeleteWorker={handleDeleteWorker}
+            onProbeWorker={handleProbeWorker}
             busy={deleteWorkerMutation.isPending}
+            probingWorkerId={
+              probeWorkerMutation.isPending
+                ? (probeWorkerMutation.variables?.id ?? null)
+                : null
+            }
+            probeResults={workerProbeResults}
           />
         ) : (
           <DNSMigrationGuidePanel
@@ -1134,13 +1179,19 @@ function NameServerList({
 function WorkersPanel({
   workers,
   busy,
+  probingWorkerId,
+  probeResults,
   onCreateWorker,
   onDeleteWorker,
+  onProbeWorker,
 }: {
   workers: DNSWorkerItem[];
   busy: boolean;
+  probingWorkerId: number | null;
+  probeResults: Record<number, DNSWorkerProbe>;
   onCreateWorker: () => void;
   onDeleteWorker: (worker: DNSWorkerItem) => void;
+  onProbeWorker: (worker: DNSWorkerItem) => void;
 }) {
   return (
     <AppCard
@@ -1203,20 +1254,85 @@ function WorkersPanel({
                   {worker.last_error ? (
                     <InlineMessage tone="danger" message={worker.last_error} />
                   ) : null}
+                  <DNSWorkerProbeResultPanel probe={probeResults[worker.id]} />
                 </div>
-                <DangerButton
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onDeleteWorker(worker)}
-                >
-                  删除
-                </DangerButton>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <SecondaryButton
+                    type="button"
+                    disabled={
+                      busy ||
+                      probingWorkerId === worker.id ||
+                      !worker.public_address
+                    }
+                    onClick={() => onProbeWorker(worker)}
+                  >
+                    {probingWorkerId === worker.id ? '探测中...' : '探测'}
+                  </SecondaryButton>
+                  <DangerButton
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onDeleteWorker(worker)}
+                  >
+                    删除
+                  </DangerButton>
+                </div>
               </div>
             </div>
           ))}
         </div>
       )}
     </AppCard>
+  );
+}
+
+function DNSWorkerProbeResultPanel({ probe }: { probe?: DNSWorkerProbe }) {
+  if (!probe) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+            最近探测
+          </p>
+          <p className="mt-1 text-xs text-[var(--foreground-muted)]">
+            {probe.query_name} {probe.query_type} ·{' '}
+            {formatDateTime(probe.checked_at)}
+          </p>
+        </div>
+        <span className="text-xs text-[var(--foreground-secondary)]">
+          {probe.public_address}
+        </span>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {probe.results.map((result) => (
+          <div
+            key={result.network}
+            className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <StatusBadge
+                label={`${result.network} ${result.reachable ? '可达' : '失败'}`}
+                variant={getProbeResultVariant(result)}
+              />
+              <span className="text-xs text-[var(--foreground-secondary)]">
+                {formatLatencyMs(result.duration_ms)}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-[var(--foreground-secondary)]">
+              RCODE：{result.rcode || '—'} · 应答 {result.answer_count}
+            </p>
+            {result.error ? (
+              <p className="mt-2 text-xs leading-5 break-all text-[var(--status-danger-foreground)]">
+                {result.error}
+              </p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

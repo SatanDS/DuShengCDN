@@ -51,6 +51,29 @@ export interface DNSWorkerItem {
   updated_at: string;
 }
 
+export interface DNSWorkerProbeResult {
+  network: string;
+  reachable: boolean;
+  duration_ms: number;
+  rcode: string;
+  answer_count: number;
+  error?: string;
+}
+
+export interface DNSWorkerProbe {
+  worker_id: string;
+  name: string;
+  public_address: string;
+  query_name: string;
+  query_type: string;
+  checked_at: string;
+  results: DNSWorkerProbeResult[];
+}
+
+export interface DNSWorkerProbePayload {
+  zone_id?: number;
+}
+
 export interface DNSObservabilityCounterItem {
   key: string;
   label: string;

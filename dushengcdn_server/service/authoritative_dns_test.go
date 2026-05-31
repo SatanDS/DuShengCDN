@@ -1,14 +1,18 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"dushengcdn/common"
 	"dushengcdn/model"
+
+	"github.com/miekg/dns"
 )
 
 func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
@@ -486,12 +490,68 @@ func TestAuthoritativeDNSZoneDelegationCheckLookupFailureAndNotConfigured(t *tes
 	}
 }
 
+func TestProbeAuthoritativeDNSWorkerChecksUDPAndTCP(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	var calls []string
+	restoreDNSWorkerProbeExchange(t, func(ctx context.Context, target string, network string, qname string, qtype uint16, timeout time.Duration) DNSWorkerProbeResultView {
+		calls = append(calls, network+"|"+target+"|"+qname)
+		if target != "ns1.example.net:53" {
+			t.Fatalf("unexpected probe target: %s", target)
+		}
+		if qname != "example.com." || qtype != dns.TypeSOA {
+			t.Fatalf("unexpected probe query: %s %d", qname, qtype)
+		}
+		return DNSWorkerProbeResultView{
+			Network:     strings.ToUpper(network),
+			Reachable:   true,
+			DurationMs:  12,
+			RCode:       "NOERROR",
+			AnswerCount: 1,
+		}
+	})
+
+	probe, err := ProbeAuthoritativeDNSWorker(worker.ID, DNSWorkerProbeInput{ZoneID: zone.ID})
+	if err != nil {
+		t.Fatalf("ProbeAuthoritativeDNSWorker: %v", err)
+	}
+	if probe.WorkerID != worker.WorkerID || probe.QueryName != "example.com." || probe.QueryType != "SOA" {
+		t.Fatalf("unexpected probe view: %+v", probe)
+	}
+	if len(probe.Results) != 2 || len(calls) != 2 {
+		t.Fatalf("expected UDP and TCP probe results, got calls=%+v results=%+v", calls, probe.Results)
+	}
+	if probe.Results[0].Network != "UDP" || probe.Results[1].Network != "TCP" {
+		t.Fatalf("unexpected probe networks: %+v", probe.Results)
+	}
+}
+
 func restoreDNSLookupNS(t *testing.T, lookup func(string) ([]*net.NS, error)) {
 	t.Helper()
 	original := dnsLookupNS
 	dnsLookupNS = lookup
 	t.Cleanup(func() {
 		dnsLookupNS = original
+	})
+}
+
+func restoreDNSWorkerProbeExchange(t *testing.T, exchange func(context.Context, string, string, string, uint16, time.Duration) DNSWorkerProbeResultView) {
+	t.Helper()
+	original := dnsWorkerProbeExchange
+	dnsWorkerProbeExchange = exchange
+	t.Cleanup(func() {
+		dnsWorkerProbeExchange = original
 	})
 }
 

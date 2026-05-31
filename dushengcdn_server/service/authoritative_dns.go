@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"dushengcdn/common"
 	"dushengcdn/model"
@@ -10,32 +11,36 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/miekg/dns"
 	"gorm.io/gorm"
 )
 
 const (
-	dnsWorkerStatusOnline    = "online"
-	dnsWorkerStatusOffline   = "offline"
-	dnsDelegationMatched     = "matched"
-	dnsDelegationPartial     = "partial"
-	dnsDelegationMismatch    = "mismatch"
-	dnsDelegationFailed      = "failed"
-	dnsDelegationNotConfig   = "not_configured"
-	dnsSnapshotConsistent    = "consistent"
-	dnsSnapshotDivergent     = "divergent"
-	dnsSnapshotStale         = "stale"
-	dnsSnapshotNoOnline      = "no_online_workers"
-	dnsSnapshotUnknown       = "unknown"
-	defaultDNSZoneTTL        = 300
-	defaultDNSSnapshotMaxAge = 5 * time.Minute
+	dnsWorkerStatusOnline        = "online"
+	dnsWorkerStatusOffline       = "offline"
+	dnsDelegationMatched         = "matched"
+	dnsDelegationPartial         = "partial"
+	dnsDelegationMismatch        = "mismatch"
+	dnsDelegationFailed          = "failed"
+	dnsDelegationNotConfig       = "not_configured"
+	dnsSnapshotConsistent        = "consistent"
+	dnsSnapshotDivergent         = "divergent"
+	dnsSnapshotStale             = "stale"
+	dnsSnapshotNoOnline          = "no_online_workers"
+	dnsSnapshotUnknown           = "unknown"
+	defaultDNSZoneTTL            = 300
+	defaultDNSSnapshotMaxAge     = 5 * time.Minute
+	defaultDNSWorkerProbeTimeout = 3 * time.Second
 )
 
 var dnsLookupNS = net.LookupNS
+var dnsWorkerProbeExchange = exchangeDNSWorkerProbe
 
 type DNSZoneInput struct {
 	Name        string   `json:"name"`
@@ -126,6 +131,29 @@ type DNSWorkerView struct {
 	LastError           string     `json:"last_error"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+type DNSWorkerProbeInput struct {
+	ZoneID uint `json:"zone_id"`
+}
+
+type DNSWorkerProbeView struct {
+	WorkerID      string                     `json:"worker_id"`
+	Name          string                     `json:"name"`
+	PublicAddress string                     `json:"public_address"`
+	QueryName     string                     `json:"query_name"`
+	QueryType     string                     `json:"query_type"`
+	CheckedAt     time.Time                  `json:"checked_at"`
+	Results       []DNSWorkerProbeResultView `json:"results"`
+}
+
+type DNSWorkerProbeResultView struct {
+	Network     string `json:"network"`
+	Reachable   bool   `json:"reachable"`
+	DurationMs  int64  `json:"duration_ms"`
+	RCode       string `json:"rcode"`
+	AnswerCount int    `json:"answer_count"`
+	Error       string `json:"error,omitempty"`
 }
 
 type DNSObservabilitySummaryInput struct {
@@ -658,6 +686,35 @@ func DeleteAuthoritativeDNSWorker(id uint) error {
 	return worker.Delete()
 }
 
+func ProbeAuthoritativeDNSWorker(id uint, input DNSWorkerProbeInput) (*DNSWorkerProbeView, error) {
+	worker, err := model.GetDNSWorkerByID(id)
+	if err != nil {
+		return nil, err
+	}
+	target, err := normalizeDNSWorkerProbeAddress(worker.PublicAddress)
+	if err != nil {
+		return nil, err
+	}
+	queryName, err := dnsWorkerProbeQueryName(input.ZoneID)
+	if err != nil {
+		return nil, err
+	}
+
+	view := &DNSWorkerProbeView{
+		WorkerID:      worker.WorkerID,
+		Name:          worker.Name,
+		PublicAddress: worker.PublicAddress,
+		QueryName:     queryName,
+		QueryType:     "SOA",
+		CheckedAt:     time.Now().UTC(),
+		Results:       make([]DNSWorkerProbeResultView, 0, 2),
+	}
+	for _, network := range []string{"udp", "tcp"} {
+		view.Results = append(view.Results, dnsWorkerProbeExchange(context.Background(), target, network, queryName, dns.TypeSOA, defaultDNSWorkerProbeTimeout))
+	}
+	return view, nil
+}
+
 func AuthenticateDNSWorkerToken(token string) (*model.DNSWorker, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -1169,6 +1226,107 @@ func dnsRouteLabels(counts map[uint]int64) (map[string]string, error) {
 		labels[fmt.Sprint(routeID)] = label
 	}
 	return labels, nil
+}
+
+func normalizeDNSWorkerProbeAddress(raw string) (string, error) {
+	address := strings.TrimSpace(raw)
+	if address == "" {
+		return "", errors.New("DNS Worker public address is empty")
+	}
+	if strings.Contains(address, "://") {
+		if parsed, err := dnsWorkerProbeURLHost(address); err == nil {
+			address = parsed
+		}
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err == nil {
+		host = strings.Trim(host, "[]")
+		if strings.TrimSpace(host) == "" {
+			return "", errors.New("DNS Worker public address host is empty")
+		}
+		if strings.TrimSpace(port) == "" {
+			port = "53"
+		}
+		return net.JoinHostPort(host, port), nil
+	}
+	if strings.Count(address, ":") > 1 {
+		if ip := net.ParseIP(strings.Trim(address, "[]")); ip != nil {
+			return net.JoinHostPort(ip.String(), "53"), nil
+		}
+		return "", errors.New("DNS Worker IPv6 address must be wrapped as [addr]:port or be a valid IPv6 literal")
+	}
+	if strings.Contains(address, ":") {
+		host, port, ok := strings.Cut(address, ":")
+		if !ok || strings.TrimSpace(host) == "" {
+			return "", errors.New("DNS Worker public address format is invalid")
+		}
+		if strings.TrimSpace(port) == "" {
+			port = "53"
+		}
+		return net.JoinHostPort(strings.TrimSpace(host), strings.TrimSpace(port)), nil
+	}
+	return net.JoinHostPort(address, "53"), nil
+}
+
+func dnsWorkerProbeURLHost(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Host != "" {
+		return parsed.Host, nil
+	}
+	return parsed.Path, nil
+}
+
+func dnsWorkerProbeQueryName(zoneID uint) (string, error) {
+	if zoneID > 0 {
+		zone, err := model.GetDNSZoneByID(zoneID)
+		if err != nil {
+			return "", err
+		}
+		return dns.Fqdn(zone.Name), nil
+	}
+	var zone model.DNSZone
+	if err := model.DB.Where("enabled = ?", true).Order("id asc").First(&zone).Error; err == nil {
+		return dns.Fqdn(zone.Name), nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", err
+	}
+	return ".", nil
+}
+
+func exchangeDNSWorkerProbe(ctx context.Context, target string, network string, qname string, qtype uint16, timeout time.Duration) DNSWorkerProbeResultView {
+	result := DNSWorkerProbeResultView{
+		Network: strings.ToUpper(network),
+	}
+	if timeout <= 0 {
+		timeout = defaultDNSWorkerProbeTimeout
+	}
+	message := new(dns.Msg)
+	message.SetQuestion(dns.Fqdn(qname), qtype)
+	client := &dns.Client{
+		Net:     network,
+		Timeout: timeout,
+	}
+	startedAt := time.Now()
+	response, _, err := client.ExchangeContext(ctx, message, target)
+	result.DurationMs = time.Since(startedAt).Milliseconds()
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	if response == nil {
+		result.Error = "empty DNS response"
+		return result
+	}
+	result.Reachable = true
+	result.RCode = dns.RcodeToString[response.Rcode]
+	if result.RCode == "" {
+		result.RCode = fmt.Sprintf("RCODE%d", response.Rcode)
+	}
+	result.AnswerCount = len(response.Answer)
+	return result
 }
 
 func uintCountsToStringCounts(input map[uint]int64) map[string]int64 {

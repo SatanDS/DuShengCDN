@@ -6,6 +6,8 @@ import type {
   DNSRecordMutationPayload,
   DNSWorkerItem,
   DNSWorkerMutationPayload,
+  DNSWorkerProbe,
+  DNSWorkerProbePayload,
   DNSZoneDelegationCheck,
   DNSZoneItem,
   DNSZoneMutationPayload,
@@ -96,5 +98,12 @@ export function createDNSWorker(payload: DNSWorkerMutationPayload) {
 export function deleteDNSWorker(id: number) {
   return apiRequest<void>(`/dns-workers/${id}/delete`, {
     method: 'POST',
+  });
+}
+
+export function probeDNSWorker(id: number, payload: DNSWorkerProbePayload = {}) {
+  return apiRequest<DNSWorkerProbe>(`/dns-workers/${id}/probe`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }

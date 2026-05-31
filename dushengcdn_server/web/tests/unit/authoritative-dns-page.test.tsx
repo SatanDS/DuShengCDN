@@ -280,6 +280,41 @@ describe('Authoritative DNS page', () => {
           );
         }
 
+        if (url.includes('/dns-workers/7/probe') && method === 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  worker_id: 'dns-worker-7',
+                  name: 'ns1-hk',
+                  public_address: 'ns1.example.net',
+                  query_name: 'example.com.',
+                  query_type: 'SOA',
+                  checked_at: '2026-05-31T08:12:00Z',
+                  results: [
+                    {
+                      network: 'UDP',
+                      reachable: true,
+                      duration_ms: 18,
+                      rcode: 'NOERROR',
+                      answer_count: 1,
+                    },
+                    {
+                      network: 'TCP',
+                      reachable: true,
+                      duration_ms: 24,
+                      rcode: 'NOERROR',
+                      answer_count: 1,
+                    },
+                  ],
+                },
+              }),
+            ),
+          );
+        }
+
         if (url.includes('/dns-workers/') && method === 'POST') {
           return Promise.resolve(
             new Response(
@@ -462,6 +497,11 @@ describe('Authoritative DNS page', () => {
     await waitFor(() => {
       expect(screen.getAllByText('ns1-hk').length).toBeGreaterThan(0);
     });
+    await user.click(screen.getByRole('button', { name: '探测' }));
+    expect(await screen.findByText('最近探测')).toBeInTheDocument();
+    expect(await screen.findByText('UDP 可达')).toBeInTheDocument();
+    expect(await screen.findByText('TCP 可达')).toBeInTheDocument();
+    expect(screen.getByText('18 ms')).toBeInTheDocument();
 
     await user.click(screen.getAllByRole('button', { name: '创建 Worker' })[0]);
     const createDialog = await screen.findByRole('dialog', {

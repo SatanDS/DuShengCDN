@@ -166,6 +166,7 @@ func SetApiRouter(router *gin.Engine) {
 			dnsWorkerAdminRoute.GET("/", controller.GetDNSWorkers)
 			dnsWorkerAdminRoute.GET("/observability", controller.GetDNSObservability)
 			dnsWorkerAdminRoute.POST("/", controller.CreateDNSWorker)
+			dnsWorkerAdminRoute.POST("/:id/probe", controller.ProbeDNSWorker)
 			dnsWorkerAdminRoute.POST("/:id/delete", controller.DeleteDNSWorker)
 		}
 		apiRouter.GET("/dns-snapshot", controller.GetDNSSnapshot)
