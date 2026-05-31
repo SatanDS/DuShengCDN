@@ -15,7 +15,7 @@ services:
       - ./dushengcdn_agent/data/:/data
 
     environment:
-      DUSHENGCDN_SERVER_URL: "http://host.docker.internal:3000"
+      DUSHENGCDN_SERVER_URL: "http://host.docker.internal:3010"
       DUSHENGCDN_AGENT_TOKEN: "replace-with-agent-token"
       # Optional precise IP lookup API. Local GeoIP is used first; this API is queried only when local GeoIP has no country.
       # DUSHENGCDN_GEOIP_LOOKUP_API_URL: "https://ipdb.example.com/lookup"

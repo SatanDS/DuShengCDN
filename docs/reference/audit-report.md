@@ -57,7 +57,7 @@
 | 升级文档没有解释本地 Compose 改动导致 `git pull` 冲突 | 用户实际遇到 `docker-compose.yaml` 本地修改阻塞拉取 | 补充 `pull --ff-only` 与确认后 `reset --hard` 的适用条件 |
 | 备份恢复说明不足 | 只有升级前建议备份，没有可执行命令 | 补充 PostgreSQL/SQLite 备份和恢复入口 |
 | Agent GeoIP 配置文档不全 | Agent 已支持 GeoIP 数据库和在线 API 字段，配置参考未完整列出 | 补充环境变量和 `agent.json` 字段 |
-| TLS 证书附近不应再暴露 DNS 账号入口 | DNS 账号仍是 ACME 与自动 DNS 的依赖资源，但用户要求从 TLS 证书入口移除 | 从管理端侧边栏移除 `DNS账号`，保留 `/dns-account` 深链接和功能依赖 |
+| DNS 账号入口位置需要明确 | DNS 账号仍是 ACME 与自动 DNS 的依赖资源，但不应藏在 TLS 证书体系下 | 恢复左侧主菜单 `DNS账号` 独立入口，保留 `/dns-account` 深链接和功能依赖 |
 | 审计报告和完整教程缺少文档站入口 | 新增页面存在但未挂到 VitePress sidebar 与索引 | 将 `完整使用教程` 加入指南，将 `项目审计报告` 加入参考 |
 
 ## 已验证基线

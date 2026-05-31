@@ -27,6 +27,11 @@ export const dashboardNavigation: NavigationItem[] = [
     icon: 'certificate',
   },
   {
+    href: '/dns-account',
+    label: 'DNS账号',
+    icon: 'domain',
+  },
+  {
     href: '/origin',
     label: '源站',
     icon: 'origin',

@@ -195,7 +195,7 @@ This usually means the server-side repository copy has local edits in Compose fi
 2. If there are no source changes to keep, run `git fetch origin main && git reset --hard origin/main`.
 3. Reapply local deployment parameters through an external deployment note or Compose override.
 
-Port conflicts only require changing the host-side mapping, for example `8080:3000`; the container still listens on `3000`.
+Port conflicts only require changing the host-side mapping, for example `3010:3000`; the container still listens on `3000`.
 
 ## HTTPS Does Not Work
 

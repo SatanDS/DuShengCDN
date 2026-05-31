@@ -16,7 +16,7 @@
 | 端口 | Server 默认 `3000`；Agent 节点对外使用 `80` / `443` |
 | 备份 | 升级前备份数据库和 Server 数据目录 |
 
-如果宿主机 `3000` 已被占用，只改宿主机侧端口，例如 `8080:3000`；容器内部仍监听 `3000`。
+如果宿主机 `3000` 已被占用，只改宿主机侧端口，例如 `3010:3000`；容器内部仍监听 `3000`。
 
 ## 2. 部署 Server
 
@@ -136,10 +136,10 @@ journalctl -u dushengcdn-agent -f
 如需 Cloudflare 自动 DNS：
 
 1. 在 Cloudflare 创建 API Token，权限包含 `Zone Read` 和 `DNS Edit`。
-2. 如需维护账号，可直接打开 `/dns-account` 添加 Cloudflare 账号。
+2. 进入左侧「DNS账号」添加 Cloudflare 账号。
 3. Token 可填写原始 Token、`Bearer ...` 或包含 `api_token` / `apiToken` / `token` 的 JSON。
 
-DNS 账号是独立资源，默认不在左侧栏和 TLS 证书页里单独展示入口。
+DNS 账号是独立资源，左侧主菜单会单独展示「DNS账号」，不归入 TLS 证书页。
 
 ## 7. 准备 TLS 证书
 

@@ -130,7 +130,7 @@ error: Your local changes to the following files would be overwritten by merge:
 3. 重新把本地部署参数写回，或改用 Compose override 保存本地差异。
 4. 再执行 `docker compose up -d --build`。
 
-端口冲突只需要改宿主机侧端口，例如 `8080:3000` 或 `3010:3000`；容器内仍监听 `3000`。
+端口冲突只需要改宿主机侧端口，例如 `3010:3000`；容器内仍监听 `3000`。
 
 ## Agent 无法注册或一直离线
 

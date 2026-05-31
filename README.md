@@ -164,7 +164,7 @@ proxy_set_header Connection "upgrade";
 
 在管理端操作：
 
-1. 准备 Cloudflare DNS 账号；如需维护账号，可直接打开 `/dns-account`。
+1. 在左侧「DNS账号」准备 Cloudflare DNS 账号。
 2. 在节点详情中维护节点池、公网 IP 池、权重、调度开关和排空状态。
 3. 新建网站配置时选择节点池，并开启 `创建时自动解析 DNS`；已有站点可在详情页的 `自动 DNS` 分区维护。
 4. 选择 Cloudflare DNS 账号，记录类型通常选择 `A`；IPv6 节点选择 `AAAA`。
@@ -338,7 +338,7 @@ docker compose -f docker-compose.agent.yaml up -d --build
 docker compose -f docker-compose.agent.yaml ps
 ```
 
-如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `8080:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token；确认没有需要保留的源码修改后，再使用 `git fetch origin main && git reset --hard origin/main` 拉回新版。
+如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `3010:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token；确认没有需要保留的源码修改后，再使用 `git fetch origin main && git reset --hard origin/main` 拉回新版。
 
 节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。
 
