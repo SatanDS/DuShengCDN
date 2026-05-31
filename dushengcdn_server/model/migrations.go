@@ -1579,6 +1579,69 @@ func validateDatabaseSchemaV18(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func ensureGSLBSchedulingStateScopeIndex(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&GSLBSchedulingState{}) {
+		return nil
+	}
+	if db.Migrator().HasColumn(&GSLBSchedulingState{}, "scope_key") {
+		if err := db.Model(&GSLBSchedulingState{}).
+			Where("scope_key = '' OR scope_key IS NULL").
+			Update("scope_key", "global").Error; err != nil {
+			return fmt.Errorf("backfill gslb_scheduling_states.scope_key failed: %w", err)
+		}
+	}
+	legacyIndexNames := []string{
+		"idx_gslb_scheduling_states_proxy_route_id",
+		"idx_gslb_scheduling_states_proxy_route_id_unique",
+	}
+	for _, indexName := range legacyIndexNames {
+		if db.Migrator().HasIndex(&GSLBSchedulingState{}, indexName) {
+			if err := db.Migrator().DropIndex(&GSLBSchedulingState{}, indexName); err != nil {
+				return fmt.Errorf("drop legacy gslb scheduling state index %s failed: %w", indexName, err)
+			}
+		}
+	}
+	return nil
+}
+
+// migrateV19 adds authoritative DNS control-plane tables and source-scoped GSLB state.
+func migrateV19(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return ensureGSLBSchedulingStateScopeIndex(db)
+}
+
+func validateDatabaseSchemaV19(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV18(db, backend); err != nil {
+		return err
+	}
+	for _, item := range []any{
+		&DNSZone{},
+		&DNSRecord{},
+		&DNSWorker{},
+		&DNSQueryRollup{},
+	} {
+		if !db.Migrator().HasTable(item) {
+			return fmt.Errorf("authoritative dns table is missing: %T", item)
+		}
+	}
+	routeColumns := []string{
+		"dns_provider_mode",
+		"dns_zone_id_ref",
+	}
+	for _, column := range routeColumns {
+		if !db.Migrator().HasColumn(&ProxyRoute{}, column) {
+			return fmt.Errorf("column proxy_routes.%s is missing", column)
+		}
+	}
+	if !db.Migrator().HasColumn(&GSLBSchedulingState{}, "scope_key") {
+		return fmt.Errorf("column gslb_scheduling_states.scope_key is missing")
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1598,6 +1661,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 15, toVersion: 16, migrate: migrateV16, validate: validateDatabaseSchemaV16},
 		{fromVersion: 16, toVersion: 17, migrate: migrateV17, validate: validateDatabaseSchemaV17},
 		{fromVersion: 17, toVersion: 18, migrate: migrateV18, validate: validateDatabaseSchemaV18},
+		{fromVersion: 18, toVersion: 19, migrate: migrateV19, validate: validateDatabaseSchemaV19},
 	}
 }
 
@@ -1683,7 +1747,10 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureDefaultGitHubAuthSource(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV18(db, backend); err != nil {
+	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
+		return err
+	}
+	if err := validateDatabaseSchemaV19(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

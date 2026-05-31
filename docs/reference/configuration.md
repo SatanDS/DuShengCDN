@@ -148,17 +148,18 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `proxy_routes.dns_target_count` | 网站配置 | 自动 DNS 最多同步的目标 IP 数量 |
 | `proxy_routes.dns_schedule_mode` | 网站配置 | 自动 DNS 选点模式：`healthy`、`weighted` 或 `load_aware` |
 | `proxy_routes.dns_ttl` | 网站配置 | Cloudflare DNS 记录 TTL；`0` 和 `1` 表示自动 TTL，`2-29` 会提升到 `30`，最高 `86400` |
-| `proxy_routes.dns_provider_mode`（规划） | 网站配置 | DNS 模式：`cloudflare` 后台同步，或 `authoritative` 自建权威 DNS 实时回答 |
+| `proxy_routes.dns_provider_mode` | 网站配置 | DNS 模式：`cloudflare` 后台同步，或 `authoritative` 自建权威 DNS 快照/实时回答模式 |
+| `proxy_routes.dns_zone_id_ref` | 网站配置 | 关联 `dns_zones`，用于把网站域名纳入自建权威 Zone |
 | `proxy_routes.gslb_enabled` | 网站配置 | 是否启用站点级 GSLB 多节点池调度 |
 | `proxy_routes.gslb_policy` | 网站配置 | GSLB 策略 JSON，包含节点池权重、目标数量、TTL、来源识别接口、负载阈值和防抖参数 |
-| `gslb_scheduling_states.scope_key`（规划） | 运行时状态 | 权威 DNS 模式下按来源作用域保存防抖状态，例如 `global` 或 `country:HK` |
+| `gslb_scheduling_states.scope_key` | 运行时状态 | 权威 DNS 模式下按来源作用域保存防抖状态，例如 `global` 或 `country:HK` |
 | `gslb_scheduling_states.selected_targets` | 运行时状态 | 最近一次实际选择的 GSLB DNS 目标 |
 | `gslb_scheduling_states.desired_targets` | 运行时状态 | 最近一次评估得到的期望 GSLB DNS 目标 |
 | `gslb_scheduling_states.last_changed_at` | 运行时状态 | 最近一次实际切换 DNS 目标的时间，用于防抖冷却 |
-| `dns_zones`（规划） | 权威 DNS | 托管 Zone、SOA、NS、默认 TTL、启用状态和序列号 |
-| `dns_records`（规划） | 权威 DNS | Zone 内静态记录，至少支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA` |
-| `dns_workers`（规划） | 权威 DNS | DNS Worker 身份、Token、公网地址、版本、心跳和快照状态 |
-| `dns_query_rollups`（规划） | 权威 DNS | DNS 查询聚合指标，按时间窗口、Zone、站点、qtype、rcode 和 Worker 统计 |
+| `dns_zones` | 权威 DNS | 托管 Zone、SOA、NS、默认 TTL、启用状态和序列号 |
+| `dns_records` | 权威 DNS | Zone 内静态记录，至少支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA` |
+| `dns_workers` | 权威 DNS | DNS Worker 身份、Token、公网地址、版本、心跳和快照状态 |
+| `dns_query_rollups` | 权威 DNS | DNS 查询聚合指标，按时间窗口、Zone、站点、qtype、rcode 和 Worker 统计 |
 
 自建权威 DNS 的完整设计见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
 

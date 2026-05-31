@@ -74,10 +74,10 @@ Cloudflare 自动 DNS 支持：
 * 需要跨多个节点池分流时，在网站详情的「自动 DNS」里启用 GSLB 多节点池调度，点击 `+` 逐行添加节点池、权重和可选国家代码，例如池名 `hk`、权重 `80`、国家代码 `HK,TW`。
 * GSLB 的 `负载感知` 模式会结合节点权重、池权重、OpenResty 当前连接数、CPU 和内存快照评分；超过配置阈值的节点会被跳过。
 * GSLB 会保存最近一次实际同步目标和期望目标，旧目标仍健康且处于冷却期时不会频繁切换 DNS。
-* 当前 Cloudflare 模式是后台重算并同步 DNS A/AAAA 记录，受 TTL 和递归 DNS 缓存影响；按每次用户来源实时返回不同 IP 需要后续接入自建权威 DNS。
+* 当前 Cloudflare 模式是后台重算并同步 DNS A/AAAA 记录，受 TTL 和递归 DNS 缓存影响；Server 侧已具备自建权威 DNS 的 Zone、Worker Token 和只读快照 API，但按每次用户来源实时返回不同 IP 仍需要后续 DNS Worker 查询面。
 * Cloudflare API Token 可直接填写原始 Token，也兼容 `Bearer ...` 和包含 `api_token` / `apiToken` / `token` 的 JSON。
 
-下一阶段的自建权威 DNS 会提供实时 GSLB 模式：
+自建权威 DNS 的目标实时 GSLB 模式：
 
 * 域名需要在注册商处把 NS 委派到 DuShengCDN DNS Worker。
 * DNS Worker 会在每次 A/AAAA 查询时根据来源、国家代码、节点池权重、节点健康和负载评分返回边缘 IP。

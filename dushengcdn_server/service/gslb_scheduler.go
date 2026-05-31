@@ -21,6 +21,7 @@ type proxyRouteDNSTargetSelection struct {
 	GSLB           bool
 	Reason         string
 	LastChangedAt  *time.Time
+	ScopeKey       string
 }
 
 type gslbDNSTargetCandidate struct {
@@ -39,7 +40,8 @@ type gslbDNSTargetCandidate struct {
 
 func selectProxyRouteDNSTargets(route *model.ProxyRoute, recordType string) (proxyRouteDNSTargetSelection, error) {
 	selection := proxyRouteDNSTargetSelection{
-		TTL: cloudflareDefaultRecordTTL,
+		TTL:      cloudflareDefaultRecordTTL,
+		ScopeKey: defaultGSLBScopeKey,
 	}
 	if route == nil {
 		return selection, errors.New("proxy route is nil")
@@ -54,17 +56,24 @@ func selectProxyRouteDNSTargets(route *model.ProxyRoute, recordType string) (pro
 	}
 	selection.Targets = targets
 	selection.DesiredTargets = targets
+	selection.ScopeKey = defaultGSLBScopeKey
 	return selection, nil
 }
 
 func selectGSLBDNSTargets(route *model.ProxyRoute, recordType string) (proxyRouteDNSTargetSelection, error) {
+	return selectGSLBDNSTargetsForSource(route, recordType, GSLBSourceContext{})
+}
+
+func selectGSLBDNSTargetsForSource(route *model.ProxyRoute, recordType string, source GSLBSourceContext) (proxyRouteDNSTargetSelection, error) {
 	selection := proxyRouteDNSTargetSelection{
-		TTL:  normalizeDNSTTL(route.DNSTTL),
-		GSLB: true,
+		TTL:      cloudflareDefaultRecordTTL,
+		GSLB:     true,
+		ScopeKey: gslbScopeKeyFromSource(source),
 	}
 	if route == nil {
 		return selection, errors.New("proxy route is nil")
 	}
+	selection.TTL = normalizeDNSTTL(route.DNSTTL)
 	recordType = normalizeDNSRecordType(recordType)
 	if recordType != "A" && recordType != "AAAA" {
 		return selection, errors.New("GSLB scheduling only supports A/AAAA records")
@@ -79,7 +88,7 @@ func selectGSLBDNSTargets(route *model.ProxyRoute, recordType string) (proxyRout
 	}
 	selection.TTL = normalizeDNSTTL(policy.TTL)
 
-	candidates, err := buildGSLBDNSTargetCandidates(recordType, policy, GSLBSourceContext{})
+	candidates, err := buildGSLBDNSTargetCandidates(recordType, policy, source)
 	if err != nil {
 		return selection, err
 	}
@@ -89,7 +98,7 @@ func selectGSLBDNSTargets(route *model.ProxyRoute, recordType string) (proxyRout
 	}
 
 	now := time.Now()
-	state, err := model.GetGSLBSchedulingStateByProxyRouteID(route.ID)
+	state, err := model.GetGSLBSchedulingState(route.ID, recordType, selection.ScopeKey)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return selection, err
 	}
@@ -132,6 +141,16 @@ func selectGSLBDNSTargets(route *model.ProxyRoute, recordType string) (proxyRout
 	selection.Reason = reason
 	selection.LastChangedAt = lastChangedAt
 	return selection, nil
+}
+
+const defaultGSLBScopeKey = "global"
+
+func gslbScopeKeyFromSource(source GSLBSourceContext) string {
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	if country != "" {
+		return "country:" + country
+	}
+	return defaultGSLBScopeKey
 }
 
 func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext) ([]gslbDNSTargetCandidate, error) {
@@ -471,16 +490,24 @@ func recordProxyRouteGSLBDecision(route *model.ProxyRoute, recordType string, se
 		lastChangedAt = &now
 	}
 	state := model.GSLBSchedulingState{}
-	err := model.DB.Where("proxy_route_id = ?", route.ID).First(&state).Error
+	scopeKey := strings.TrimSpace(selection.ScopeKey)
+	if scopeKey == "" {
+		scopeKey = defaultGSLBScopeKey
+	}
+	recordType = normalizeDNSRecordType(recordType)
+	err := model.DB.Where("proxy_route_id = ? AND dns_record_type = ? AND scope_key = ?", route.ID, recordType, scopeKey).First(&state).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		state = model.GSLBSchedulingState{
-			ProxyRouteID: route.ID,
-			CreatedAt:    now,
+			ProxyRouteID:  route.ID,
+			DNSRecordType: recordType,
+			ScopeKey:      scopeKey,
+			CreatedAt:     now,
 		}
 	} else if err != nil {
 		return err
 	}
-	state.DNSRecordType = normalizeDNSRecordType(recordType)
+	state.DNSRecordType = recordType
+	state.ScopeKey = scopeKey
 	state.SelectedTargets = encodeGSLBTargetList(selection.Targets)
 	state.DesiredTargets = encodeGSLBTargetList(selection.DesiredTargets)
 	state.LastReason = selection.Reason

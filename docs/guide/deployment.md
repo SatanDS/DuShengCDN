@@ -159,11 +159,11 @@ go run . --port 3000 --log-dir ./logs
 
 生产环境建议在节点详情中维护节点池、公网 IP 池、调度权重和排空状态。自动 DNS 默认会按网站绑定的节点池选择在线且 OpenResty 健康的公网 IP；启用网站 GSLB 后，可在自动 DNS 配置中绑定多个节点池，按池权重、节点负载和防抖冷却时间同步 Cloudflare A/AAAA 记录。缓存清理和预热仍下发到网站默认节点池内的在线 Agent。
 
-当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度；如需按每次 DNS 查询的来源 IP/地区返回不同节点，需要后续接入自建权威 DNS 或具备实时流量调度能力的 DNS 服务。
+当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度。Server 侧已经提供自建权威 DNS 的 Zone、Worker Token、心跳和只读快照 API；如需真正按每次 DNS 查询的来源 IP/地区返回不同节点，还需要部署后续的 DNS Worker 查询面或具备实时流量调度能力的 DNS 服务。
 
 ## 自建权威 DNS 部署规划
 
-自建权威 DNS 会新增 DNS Worker 运行角色。它负责监听 UDP/TCP `53`，加载 Server 下发的只读调度快照，并在每次 DNS 查询时执行 GSLB 选点。该能力仍在规划阶段，设计细节见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
+自建权威 DNS 会新增 DNS Worker 运行角色。Server 控制面目前已经能管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。监听 UDP/TCP `53` 并按 DNS 协议实时回答查询的 Worker 查询面仍在下一阶段，设计细节见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
 
 生产部署原则：
 

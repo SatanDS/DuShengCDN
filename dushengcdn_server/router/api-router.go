@@ -142,6 +142,32 @@ func SetApiRouter(router *gin.Engine) {
 			dnsAccountRoute.POST("/:id/update", controller.UpdateDnsAccount)
 			dnsAccountRoute.POST("/:id/delete", controller.DeleteDnsAccount)
 		}
+		dnsZoneRoute := apiRouter.Group("/dns-zones")
+		dnsZoneRoute.Use(middleware.AdminAuth())
+		{
+			dnsZoneRoute.GET("/", controller.GetDNSZones)
+			dnsZoneRoute.GET("/:id", controller.GetDNSZone)
+			dnsZoneRoute.POST("/", controller.CreateDNSZone)
+			dnsZoneRoute.POST("/:id/update", controller.UpdateDNSZone)
+			dnsZoneRoute.POST("/:id/delete", controller.DeleteDNSZone)
+			dnsZoneRoute.GET("/:id/records", controller.GetDNSZoneRecords)
+			dnsZoneRoute.POST("/:id/records", controller.CreateDNSZoneRecord)
+		}
+		dnsRecordRoute := apiRouter.Group("/dns-records")
+		dnsRecordRoute.Use(middleware.AdminAuth())
+		{
+			dnsRecordRoute.POST("/:id/update", controller.UpdateDNSRecord)
+			dnsRecordRoute.POST("/:id/delete", controller.DeleteDNSRecord)
+		}
+		dnsWorkerAdminRoute := apiRouter.Group("/dns-workers")
+		dnsWorkerAdminRoute.Use(middleware.AdminAuth())
+		{
+			dnsWorkerAdminRoute.GET("/", controller.GetDNSWorkers)
+			dnsWorkerAdminRoute.POST("/", controller.CreateDNSWorker)
+			dnsWorkerAdminRoute.POST("/:id/delete", controller.DeleteDNSWorker)
+		}
+		apiRouter.GET("/dns-snapshot", controller.GetDNSSnapshot)
+		apiRouter.POST("/dns-worker-heartbeat", controller.DNSWorkerHeartbeat)
 		configVersionRoute := apiRouter.Group("/config-versions")
 		configVersionRoute.Use(middleware.AdminAuth())
 		{

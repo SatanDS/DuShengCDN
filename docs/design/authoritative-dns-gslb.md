@@ -2,7 +2,9 @@
 
 你会学到：为什么需要自建权威 DNS、它与现有 Cloudflare 自动 DNS 的区别、权威 DNS 服务如何复用 GSLB 策略，以及下一阶段应该按什么顺序实现。
 
-本文是下一阶段设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
+本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
+
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。真正监听 UDP/TCP `53` 并按 DNS 协议实时回答查询的 DNS Worker 查询面仍属于下一阶段。
 
 ## 目标能力
 
@@ -103,30 +105,28 @@ route_id + record_type + source_scope
 
 ## 数据模型规划
 
-下一阶段需要新增或扩展以下对象。
+当前已经新增或扩展以下对象；`dns_zone_assignments` 暂不落库，先按“全部 Worker 服务全部启用 Zone”处理。
 
 | 对象 | 作用 |
 | --- | --- |
 | `dns_zones` | 托管权威 Zone，例如 `example.com`，保存 SOA、NS、默认 TTL、启用状态和序列号 |
 | `dns_records` | Zone 内静态记录，至少支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA` |
 | `dns_workers` | 权威 DNS Worker 身份、Token、公网地址、版本、心跳和最近快照状态 |
-| `dns_zone_assignments` | Zone 与 DNS Worker 的发布/授权关系，可先简化为全部 Worker 服务全部启用 Zone |
+| `dns_zone_assignments` | 暂不落库，当前简化为全部 Worker 服务全部启用 Zone |
 | `dns_query_rollups` | DNS 查询聚合指标，按时间窗口、Zone、站点、qtype、rcode 和 Worker 统计 |
 | `gslb_scheduling_states` | 扩展 `record_type` 与 `scope_key` 维度，保存按来源作用域的最近选择和防抖状态 |
 
-`proxy_routes` 需要补充 DNS 调度模式，建议字段：
+`proxy_routes` 已补充 DNS 调度模式字段：
 
 | 字段 | 作用 |
 | --- | --- |
 | `dns_provider_mode` | `cloudflare` 或 `authoritative`，决定是后台同步托管 DNS 还是自建权威 DNS 实时回答 |
 | `dns_zone_id_ref` | 关联 `dns_zones`，用于把网站域名纳入自建权威 Zone |
-| `dns_authoritative_enabled` | 迁移期布尔开关，可由 `dns_provider_mode` 替代 |
-
-最终应以 `dns_provider_mode` 为准，避免长期维护两套开关。
+最终以 `dns_provider_mode` 为准，避免长期维护两套开关。
 
 ## API 与前端规划
 
-管理端 API：
+已实现的控制面 API：
 
 | API | 作用 |
 | --- | --- |
@@ -134,12 +134,15 @@ route_id + record_type + source_scope
 | `POST /api/dns-zones/` | 创建 Zone，校验域名和 SOA 参数 |
 | `POST /api/dns-zones/{id}/update` | 更新 Zone、默认 TTL、SOA、NS 与启用状态 |
 | `POST /api/dns-zones/{id}/records` | 新增或更新静态 DNS 记录 |
+| `POST /api/dns-records/{id}/update` | 更新静态 DNS 记录 |
+| `POST /api/dns-records/{id}/delete` | 删除静态 DNS 记录 |
 | `GET /api/dns-workers/` | 查看 DNS Worker 在线状态、监听地址、版本和快照时间 |
 | `POST /api/dns-workers/` | 创建 DNS Worker Token |
+| `POST /api/dns-workers/{id}/delete` | 删除 DNS Worker |
 | `GET /api/dns-snapshot` | DNS Worker 拉取只读调度快照，需 Worker Token |
-| `POST /api/dns-workers/heartbeat` | DNS Worker 上报状态、快照版本和聚合指标 |
+| `POST /api/dns-worker-heartbeat` | DNS Worker 上报状态、快照版本和聚合指标 |
 
-前端入口建议：
+前端入口仍待补齐：
 
 * 左侧新增「权威 DNS」主菜单，作为独立基础设施资源。
 * 网站配置的「自动 DNS」分区增加 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
@@ -156,6 +159,8 @@ route_id + record_type + source_scope
 * `NOERROR`、`NXDOMAIN`、`NODATA`、`SERVFAIL`。
 * EDNS Client Subnet 可选开启，默认优先使用 ECS，未提供时使用递归解析器 IP。
 * `AXFR` 默认拒绝，后续如需支持必须配置来源 IP 白名单和 TSIG。
+
+以上 DNS 协议行为将在 DNS Worker 查询面实现；当前阶段先保证 Server 能生成 Worker 可消费的只读快照。
 
 TTL 规则：
 
@@ -185,13 +190,13 @@ TTL 规则：
 
 ## 实施阶段
 
-### 阶段 1：设计与数据基础
+### 阶段 1：设计与数据基础（已落地 Server 控制面）
 
-* 新增 `dns_zones`、`dns_records`、`dns_workers`、`dns_query_rollups` 迁移。
-* 扩展 `gslb_scheduling_states` 的 `scope_key` 维度。
-* 为 `proxy_routes` 增加 `dns_provider_mode`。
-* 提供 Zone、Worker、静态记录和只读快照 API。
-* 前端新增「权威 DNS」入口和网站自动 DNS 模式选择。
+* 已新增 `dns_zones`、`dns_records`、`dns_workers`、`dns_query_rollups` 迁移。
+* 已扩展 `gslb_scheduling_states` 的 `scope_key` 维度。
+* 已为 `proxy_routes` 增加 `dns_provider_mode` 和 `dns_zone_id_ref`。
+* 已提供 Zone、Worker、静态记录、Worker 心跳/聚合上报和只读快照 API。
+* 待补：前端新增「权威 DNS」入口和网站自动 DNS 模式选择。
 
 ### 阶段 2：权威 DNS Worker MVP
 

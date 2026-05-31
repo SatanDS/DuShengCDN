@@ -50,7 +50,7 @@ Agent + OpenResty edge nodes
 | Agent | 注册、心跳、同步、写入文件、校验、reload、失败回滚、自更新与轻量采集 |
 | OpenResty | 接收真实流量，按 DuShengCDN 渲染的配置执行反向代理 |
 | Frontend | 管理网站配置、源站、证书、节点、版本、用户、设置与观测页面 |
-| DNS Worker | 规划中的权威 DNS 查询服务，加载 Server 下发的只读调度快照，按来源、地区、节点健康和负载实时返回 A/AAAA 答案 |
+| DNS Worker | 权威 DNS 查询服务运行角色；Server 侧已提供只读调度快照和 Worker 心跳 API，后续 Worker 查询面会加载快照并按来源、地区、节点健康和负载实时返回 A/AAAA 答案 |
 
 ## Server
 
@@ -152,10 +152,10 @@ Client -> OpenResty server block -> named upstream -> Origin
 
 * `proxy_routes`
 * `gslb_scheduling_states`
-* `dns_zones`（规划）
-* `dns_records`（规划）
-* `dns_workers`（规划）
-* `dns_query_rollups`（规划）
+* `dns_zones`
+* `dns_records`
+* `dns_workers`
+* `dns_query_rollups`
 * `origins`
 * `config_versions`
 * `nodes`

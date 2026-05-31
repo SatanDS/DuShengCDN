@@ -46,6 +46,8 @@ type ProxyRoute struct {
 	DNSTargetCount             int        `json:"dns_target_count" gorm:"not null;default:1"`
 	DNSScheduleMode            string     `json:"dns_schedule_mode" gorm:"size:32;not null;default:'healthy'"`
 	DNSTTL                     int        `json:"dns_ttl" gorm:"not null;default:1"`
+	DNSProviderMode            string     `json:"dns_provider_mode" gorm:"size:32;not null;default:'cloudflare'"`
+	DNSZoneIDRef               *uint      `json:"dns_zone_id_ref" gorm:"index"`
 	GSLBEnabled                bool       `json:"gslb_enabled" gorm:"not null;default:false"`
 	GSLBPolicy                 string     `json:"gslb_policy" gorm:"type:text;not null;default:'{}'"`
 	DNSRecordIDs               string     `json:"dns_record_ids" gorm:"type:text;not null;default:'{}'"`
@@ -128,6 +130,8 @@ func (route *ProxyRoute) Update() error {
 		"dns_target_count":             route.DNSTargetCount,
 		"dns_schedule_mode":            route.DNSScheduleMode,
 		"dns_ttl":                      route.DNSTTL,
+		"dns_provider_mode":            route.DNSProviderMode,
+		"dns_zone_id_ref":              route.DNSZoneIDRef,
 		"gslb_enabled":                 route.GSLBEnabled,
 		"gslb_policy":                  route.GSLBPolicy,
 		"dns_record_ids":               route.DNSRecordIDs,

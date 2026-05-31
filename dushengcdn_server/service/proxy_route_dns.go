@@ -15,7 +15,7 @@ import (
 )
 
 func SyncProxyRouteDNS(route *model.ProxyRoute) error {
-	if route == nil || !route.DNSAutoSync {
+	if route == nil || !shouldSyncProxyRouteCloudflareDNS(route) {
 		return nil
 	}
 	account, err := proxyRouteDNSAccount(route)
@@ -143,7 +143,7 @@ func SyncProxyRouteDNS(route *model.ProxyRoute) error {
 }
 
 func DeleteProxyRouteDNSRecords(route *model.ProxyRoute) error {
-	if route == nil || !route.DNSAutoSync || route.DNSAccountID == nil {
+	if route == nil || !shouldSyncProxyRouteCloudflareDNS(route) || route.DNSAccountID == nil {
 		return nil
 	}
 	recordIDs := decodeDNSRecordIDs(route.DNSRecordIDs)
@@ -174,7 +174,7 @@ func ReconcileCloudflareDNSAutomation() error {
 		return err
 	}
 	for _, route := range routes {
-		if route == nil || !route.DNSAutoSync {
+		if route == nil || !shouldSyncProxyRouteCloudflareDNS(route) {
 			continue
 		}
 		if route.GSLBEnabled || route.DNSAutoTarget || strings.TrimSpace(route.DNSRecordContent) == "" {
