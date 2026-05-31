@@ -24,11 +24,11 @@ describe('navigation utils', () => {
     expect(getCurrentNavigationItem('/setting')?.label).toBe('设置');
   });
 
-  it('keeps legacy deep links attached to promoted main entries', () => {
+  it('keeps certificate deep links attached to domain assets', () => {
     expect(getCurrentNavigationItem('/website/certificate')?.label).toBe(
-      'TLS证书',
+      '域名资产',
     );
-    expect(getCurrentNavigationItem('/certificate')?.label).toBe('TLS证书');
+    expect(getCurrentNavigationItem('/certificate')?.label).toBe('域名资产');
     expect(getCurrentNavigationItem('/dns-account')?.label).toBe('DNS账号');
   });
 });

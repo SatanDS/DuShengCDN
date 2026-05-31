@@ -108,7 +108,7 @@ export function WebsitesPage() {
           action={
             <div className="flex flex-wrap gap-3">
               <Link
-                href="/certificate"
+                href="/website/certificate"
                 className="inline-flex min-h-[46px] items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
               >
                 TLS 证书
