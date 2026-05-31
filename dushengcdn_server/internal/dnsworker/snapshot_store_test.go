@@ -46,6 +46,12 @@ func TestSnapshotStoreSaveLoadEnvelopeWithChecksum(t *testing.T) {
 	if got := loaded.LastError(); got != "" {
 		t.Fatalf("expected no last error, got %q", got)
 	}
+	loadedSnapshot, _, _, _ := loaded.Current()
+	if loadedSnapshot == nil ||
+		len(loadedSnapshot.SchedulingStates) != 1 ||
+		loadedSnapshot.SchedulingStates[0].SelectedTargets[0] != "8.8.4.4" {
+		t.Fatalf("expected scheduling states to survive cache roundtrip, got %+v", loadedSnapshot)
+	}
 }
 
 func TestSnapshotStoreRejectsTamperedEnvelopeWithoutReplacingCurrent(t *testing.T) {
@@ -148,5 +154,19 @@ func snapshotStoreTestSnapshot(version string) *Snapshot {
 				LastSeenAt:        time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC),
 			},
 		},
+		SchedulingStates: []SnapshotSchedulingState{
+			{
+				RouteID:         1,
+				RecordType:      "A",
+				ScopeKey:        "global",
+				SelectedTargets: []string{"8.8.4.4"},
+				DesiredTargets:  []string{"8.8.4.4"},
+				LastChangedAt:   ptrTime(time.Date(2026, 1, 2, 3, 4, 1, 0, time.UTC)),
+			},
+		},
 	}
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
 }

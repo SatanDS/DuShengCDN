@@ -166,6 +166,13 @@ func normalizeSourceScope(raw string) string {
 	if value == "" {
 		return "global"
 	}
+	prefix, country, ok := strings.Cut(value, ":")
+	if ok && strings.EqualFold(strings.TrimSpace(prefix), "country") {
+		country = strings.ToUpper(strings.TrimSpace(country))
+		if len(country) == 2 {
+			return "country:" + country
+		}
+	}
 	return value
 }
 

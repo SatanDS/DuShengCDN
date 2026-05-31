@@ -363,11 +363,12 @@ type DNSZoneDelegationCheckView struct {
 }
 
 type AuthoritativeDNSSnapshot struct {
-	SnapshotVersion string                          `json:"snapshot_version"`
-	GeneratedAt     time.Time                       `json:"generated_at"`
-	Zones           []AuthoritativeDNSSnapshotZone  `json:"zones"`
-	Routes          []AuthoritativeDNSSnapshotRoute `json:"routes"`
-	Nodes           []AuthoritativeDNSSnapshotNode  `json:"nodes"`
+	SnapshotVersion  string                                    `json:"snapshot_version"`
+	GeneratedAt      time.Time                                 `json:"generated_at"`
+	Zones            []AuthoritativeDNSSnapshotZone            `json:"zones"`
+	Routes           []AuthoritativeDNSSnapshotRoute           `json:"routes"`
+	Nodes            []AuthoritativeDNSSnapshotNode            `json:"nodes"`
+	SchedulingStates []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type AuthoritativeDNSSnapshotZone struct {
@@ -421,6 +422,15 @@ type AuthoritativeDNSSnapshotNode struct {
 	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
 	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
 	MetricCapturedAt     *time.Time `json:"metric_captured_at,omitempty"`
+}
+
+type AuthoritativeDNSSnapshotSchedulingState struct {
+	RouteID         uint       `json:"route_id"`
+	RecordType      string     `json:"record_type"`
+	ScopeKey        string     `json:"scope_key"`
+	SelectedTargets []string   `json:"selected_targets"`
+	DesiredTargets  []string   `json:"desired_targets"`
+	LastChangedAt   *time.Time `json:"last_changed_at,omitempty"`
 }
 
 func ListAuthoritativeDNSZones() ([]DNSZoneView, error) {
@@ -853,11 +863,16 @@ func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnap
 	if err != nil {
 		return nil, err
 	}
+	schedulingStates, err := snapshotGSLBSchedulingStates(routes)
+	if err != nil {
+		return nil, err
+	}
 	snapshot := &AuthoritativeDNSSnapshot{
-		GeneratedAt: time.Now().UTC(),
-		Zones:       zones,
-		Routes:      routes,
-		Nodes:       nodes,
+		GeneratedAt:      time.Now().UTC(),
+		Zones:            zones,
+		Routes:           routes,
+		Nodes:            nodes,
+		SchedulingStates: schedulingStates,
 	}
 	version, err := authoritativeDNSSnapshotVersion(snapshot)
 	if err != nil {
@@ -942,7 +957,9 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 		IP:      sourceIP,
 		Country: country,
 	}
-	targets, ttl, sourceScope, err := dnsworker.NewScheduler().Select(workerSnapshot, workerRoute, recordType, source, fresh)
+	scheduler := dnsworker.NewScheduler()
+	scheduler.LoadSnapshotStates(workerSnapshot)
+	targets, ttl, sourceScope, err := scheduler.Select(workerSnapshot, workerRoute, recordType, source, fresh)
 	if err != nil {
 		return nil, err
 	}
@@ -1577,16 +1594,77 @@ func snapshotNodes() ([]AuthoritativeDNSSnapshotNode, error) {
 	return result, nil
 }
 
+func snapshotGSLBSchedulingStates(routes []AuthoritativeDNSSnapshotRoute) ([]AuthoritativeDNSSnapshotSchedulingState, error) {
+	routeIDs := make([]uint, 0, len(routes))
+	routeRecordTypes := make(map[uint]string, len(routes))
+	for _, route := range routes {
+		if route.ID == 0 {
+			continue
+		}
+		recordType := normalizeDNSRecordType(route.RecordType)
+		if recordType != "A" && recordType != "AAAA" {
+			continue
+		}
+		routeIDs = append(routeIDs, route.ID)
+		routeRecordTypes[route.ID] = recordType
+	}
+	if len(routeIDs) == 0 {
+		return []AuthoritativeDNSSnapshotSchedulingState{}, nil
+	}
+	var states []*model.GSLBSchedulingState
+	if err := model.DB.
+		Where("proxy_route_id IN ?", routeIDs).
+		Order("proxy_route_id asc, dns_record_type asc, scope_key asc").
+		Find(&states).Error; err != nil {
+		return nil, err
+	}
+	result := make([]AuthoritativeDNSSnapshotSchedulingState, 0, len(states))
+	for _, state := range states {
+		if state == nil || state.ProxyRouteID == 0 {
+			continue
+		}
+		expectedType, ok := routeRecordTypes[state.ProxyRouteID]
+		if !ok {
+			continue
+		}
+		recordType := normalizeDNSRecordType(state.DNSRecordType)
+		if recordType != expectedType {
+			continue
+		}
+		selectedTargets, err := normalizeDNSRecordContents(recordType, decodeGSLBTargetList(state.SelectedTargets))
+		if err != nil || len(selectedTargets) == 0 {
+			continue
+		}
+		desiredTargets := decodeGSLBTargetList(state.DesiredTargets)
+		if len(desiredTargets) > 0 {
+			desiredTargets, err = normalizeDNSRecordContents(recordType, desiredTargets)
+			if err != nil {
+				desiredTargets = []string{}
+			}
+		}
+		result = append(result, AuthoritativeDNSSnapshotSchedulingState{
+			RouteID:         state.ProxyRouteID,
+			RecordType:      recordType,
+			ScopeKey:        normalizeDNSSourceScope(state.ScopeKey),
+			SelectedTargets: selectedTargets,
+			DesiredTargets:  desiredTargets,
+			LastChangedAt:   state.LastChangedAt,
+		})
+	}
+	return result, nil
+}
+
 func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *dnsworker.Snapshot {
 	if snapshot == nil {
 		return nil
 	}
 	result := &dnsworker.Snapshot{
-		SnapshotVersion: snapshot.SnapshotVersion,
-		GeneratedAt:     snapshot.GeneratedAt,
-		Zones:           make([]dnsworker.SnapshotZone, 0, len(snapshot.Zones)),
-		Routes:          make([]dnsworker.SnapshotRoute, 0, len(snapshot.Routes)),
-		Nodes:           make([]dnsworker.SnapshotNode, 0, len(snapshot.Nodes)),
+		SnapshotVersion:  snapshot.SnapshotVersion,
+		GeneratedAt:      snapshot.GeneratedAt,
+		Zones:            make([]dnsworker.SnapshotZone, 0, len(snapshot.Zones)),
+		Routes:           make([]dnsworker.SnapshotRoute, 0, len(snapshot.Routes)),
+		Nodes:            make([]dnsworker.SnapshotNode, 0, len(snapshot.Nodes)),
+		SchedulingStates: make([]dnsworker.SnapshotSchedulingState, 0, len(snapshot.SchedulingStates)),
 	}
 	for _, zone := range snapshot.Zones {
 		item := dnsworker.SnapshotZone{
@@ -1646,6 +1724,16 @@ func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *d
 			MetricCapturedAt:     node.MetricCapturedAt,
 		})
 	}
+	for _, state := range snapshot.SchedulingStates {
+		result.SchedulingStates = append(result.SchedulingStates, dnsworker.SnapshotSchedulingState{
+			RouteID:         state.RouteID,
+			RecordType:      state.RecordType,
+			ScopeKey:        state.ScopeKey,
+			SelectedTargets: append([]string(nil), state.SelectedTargets...),
+			DesiredTargets:  append([]string(nil), state.DesiredTargets...),
+			LastChangedAt:   state.LastChangedAt,
+		})
+	}
 	return result
 }
 
@@ -1685,13 +1773,15 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 
 func authoritativeDNSSnapshotVersion(snapshot *AuthoritativeDNSSnapshot) (string, error) {
 	payload := struct {
-		Zones  []AuthoritativeDNSSnapshotZone  `json:"zones"`
-		Routes []AuthoritativeDNSSnapshotRoute `json:"routes"`
-		Nodes  []AuthoritativeDNSSnapshotNode  `json:"nodes"`
+		Zones            []AuthoritativeDNSSnapshotZone            `json:"zones"`
+		Routes           []AuthoritativeDNSSnapshotRoute           `json:"routes"`
+		Nodes            []AuthoritativeDNSSnapshotNode            `json:"nodes"`
+		SchedulingStates []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 	}{
-		Zones:  snapshot.Zones,
-		Routes: snapshot.Routes,
-		Nodes:  snapshot.Nodes,
+		Zones:            snapshot.Zones,
+		Routes:           snapshot.Routes,
+		Nodes:            snapshot.Nodes,
+		SchedulingStates: snapshot.SchedulingStates,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

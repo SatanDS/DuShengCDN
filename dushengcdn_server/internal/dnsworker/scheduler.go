@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,52 @@ func NewScheduler() *Scheduler {
 		states: map[string]debounceState{},
 		now:    time.Now,
 	}
+}
+
+func (s *Scheduler) LoadSnapshotStates(snapshot *Snapshot) {
+	if s == nil || snapshot == nil {
+		return
+	}
+	routeIDs := make(map[uint]struct{}, len(snapshot.Routes))
+	for _, route := range snapshot.Routes {
+		if route.ID != 0 {
+			routeIDs[route.ID] = struct{}{}
+		}
+	}
+	snapshotStates := make(map[string]debounceState, len(snapshot.SchedulingStates))
+	for _, item := range snapshot.SchedulingStates {
+		recordType := normalizeAddressRecordType(item.RecordType)
+		scopeKey := normalizeSourceScope(item.ScopeKey)
+		targets := normalizeIPList(item.SelectedTargets, recordType)
+		desired := normalizeIPList(item.DesiredTargets, recordType)
+		if item.RouteID == 0 || len(targets) == 0 || item.LastChangedAt == nil || item.LastChangedAt.IsZero() {
+			continue
+		}
+		if _, ok := routeIDs[item.RouteID]; !ok {
+			continue
+		}
+		snapshotStates[schedulerStateKey(item.RouteID, recordType, scopeKey)] = debounceState{
+			Targets:       targets,
+			Desired:       desired,
+			LastChangedAt: item.LastChangedAt.UTC(),
+		}
+	}
+	s.mu.Lock()
+	next := make(map[string]debounceState, len(s.states)+len(snapshotStates))
+	for key, state := range s.states {
+		routeID, ok := schedulerStateRouteID(key)
+		if !ok {
+			continue
+		}
+		if _, exists := routeIDs[routeID]; exists {
+			next[key] = state
+		}
+	}
+	for key, state := range snapshotStates {
+		next[key] = state
+	}
+	s.states = next
+	s.mu.Unlock()
 }
 
 func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType string, source SourceContext, fresh bool) ([]string, int, string, error) {
@@ -87,7 +134,7 @@ func (s *Scheduler) applyDebounce(routeID uint, recordType string, scopeKey stri
 	if s == nil {
 		return desired
 	}
-	key := fmt.Sprintf("%d|%s|%s", routeID, recordType, scopeKey)
+	key := schedulerStateKey(routeID, recordType, scopeKey)
 	eligible := map[string]struct{}{}
 	for _, candidate := range candidates {
 		eligible[candidate.Content] = struct{}{}
@@ -112,6 +159,22 @@ func (s *Scheduler) applyDebounce(routeID uint, recordType string, scopeKey stri
 	state.Desired = append([]string(nil), desired...)
 	s.states[key] = state
 	return selected
+}
+
+func schedulerStateKey(routeID uint, recordType string, scopeKey string) string {
+	return fmt.Sprintf("%d|%s|%s", routeID, normalizeAddressRecordType(recordType), normalizeSourceScope(scopeKey))
+}
+
+func schedulerStateRouteID(key string) (uint, bool) {
+	rawRouteID, _, ok := strings.Cut(key, "|")
+	if !ok {
+		return 0, false
+	}
+	routeID, err := strconv.ParseUint(rawRouteID, 10, 0)
+	if err != nil || routeID == 0 {
+		return 0, false
+	}
+	return uint(routeID), true
 }
 
 func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, source SourceContext) []targetCandidate {

@@ -108,6 +108,18 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	if err := route.Insert(); err != nil {
 		t.Fatalf("insert route: %v", err)
 	}
+	lastChangedAt := now.Add(-10 * time.Second).UTC()
+	if err := model.DB.Create(&model.GSLBSchedulingState{
+		ProxyRouteID:    route.ID,
+		DNSRecordType:   "A",
+		ScopeKey:        "global",
+		SelectedTargets: `["8.8.4.4"]`,
+		DesiredTargets:  `["8.8.4.4"]`,
+		LastChangedAt:   &lastChangedAt,
+		LastEvaluatedAt: &lastChangedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert gslb state: %v", err)
+	}
 
 	snapshot, err := GetAuthoritativeDNSSnapshot(authenticated)
 	if err != nil {
@@ -130,6 +142,25 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	}
 	if len(snapshot.Nodes) != 1 || snapshot.Nodes[0].PublicIPs[0] != "8.8.4.4" {
 		t.Fatalf("unexpected snapshot nodes: %+v", snapshot.Nodes)
+	}
+	if len(snapshot.SchedulingStates) != 1 {
+		t.Fatalf("expected one scheduling state in snapshot, got %+v", snapshot.SchedulingStates)
+	}
+	state := snapshot.SchedulingStates[0]
+	if state.RouteID != route.ID ||
+		state.RecordType != "A" ||
+		state.ScopeKey != "global" ||
+		len(state.SelectedTargets) != 1 ||
+		state.SelectedTargets[0] != "8.8.4.4" ||
+		state.LastChangedAt == nil ||
+		!state.LastChangedAt.Equal(lastChangedAt) {
+		t.Fatalf("unexpected snapshot scheduling state: %+v", state)
+	}
+	workerSnapshot := convertAuthoritativeSnapshotToWorker(snapshot)
+	if len(workerSnapshot.SchedulingStates) != 1 ||
+		workerSnapshot.SchedulingStates[0].RouteID != route.ID ||
+		workerSnapshot.SchedulingStates[0].SelectedTargets[0] != "8.8.4.4" {
+		t.Fatalf("unexpected worker scheduling states: %+v", workerSnapshot.SchedulingStates)
 	}
 
 	var reloadedWorker model.DNSWorker

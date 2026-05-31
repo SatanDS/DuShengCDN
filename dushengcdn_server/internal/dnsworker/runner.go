@@ -19,6 +19,10 @@ func NewRunner(cfg *Config) (*Runner, error) {
 	if err := store.LoadFromDisk(); err != nil {
 		slog.Warn("load dns worker snapshot cache failed", "error", err)
 	}
+	scheduler := NewScheduler()
+	if snapshot, _, _, _ := store.Current(); snapshot != nil {
+		scheduler.LoadSnapshotStates(snapshot)
+	}
 	sourceResolver, err := NewSourceResolver(cfg.GeoIPDatabasePath)
 	if err != nil {
 		slog.Warn("open dns worker geoip database failed", "path", cfg.GeoIPDatabasePath, "error", err)
@@ -26,7 +30,7 @@ func NewRunner(cfg *Config) (*Runner, error) {
 	}
 	rollups := NewRollupAggregator(time.Minute)
 	client := NewAPIClient(cfg.ServerURL, cfg.Token, cfg.RequestTimeout)
-	server := NewDNSServerWithLimits(store, NewScheduler(), rollups, sourceResolver, cfg.ListenAddr, cfg.QueryRateLimit, cfg.UDPResponseSize)
+	server := NewDNSServerWithLimits(store, scheduler, rollups, sourceResolver, cfg.ListenAddr, cfg.QueryRateLimit, cfg.UDPResponseSize)
 	return &Runner{
 		Config:    cfg,
 		Client:    client,
@@ -78,6 +82,11 @@ func (r *Runner) pullSnapshot(ctx context.Context) error {
 	}
 	if err := r.Store.Set(snapshot); err != nil {
 		return err
+	}
+	if r.DNSServer != nil && r.DNSServer.Scheduler != nil {
+		if loaded, _, _, _ := r.Store.Current(); loaded != nil {
+			r.DNSServer.Scheduler.LoadSnapshotStates(loaded)
+		}
 	}
 	if err := r.Store.Save(snapshot); err != nil {
 		return err

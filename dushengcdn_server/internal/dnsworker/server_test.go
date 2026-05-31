@@ -129,6 +129,111 @@ func TestResolveGSLBMatchesECSCountryPools(t *testing.T) {
 	}
 }
 
+func TestSchedulerRestoresDebounceFromSnapshotState(t *testing.T) {
+	now := time.Unix(200, 0).UTC()
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           10,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+				Debounce: GSLBDebounce{CooldownSeconds: 60},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("previous", "hk", "8.8.4.4", 100, 1),
+		testNode("desired", "hk", "1.1.1.1", 900, 1),
+	}
+	lastChangedAt := now.Add(-10 * time.Second)
+	snapshot.SchedulingStates = []SnapshotSchedulingState{
+		{
+			RouteID:         10,
+			RecordType:      "A",
+			ScopeKey:        "global",
+			SelectedTargets: []string{"8.8.4.4"},
+			DesiredTargets:  []string{"8.8.4.4"},
+			LastChangedAt:   &lastChangedAt,
+		},
+	}
+	store := NewSnapshotStore("", DefaultSnapshotMaxAge)
+	if err := store.Set(snapshot); err != nil {
+		t.Fatalf("set snapshot: %v", err)
+	}
+	loaded, _, _, _ := store.Current()
+	scheduler := NewScheduler()
+	scheduler.now = func() time.Time { return now }
+	scheduler.LoadSnapshotStates(loaded)
+
+	selected, _, _, err := scheduler.Select(loaded, &loaded.Routes[0], "A", SourceContext{}, true)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(selected) != 1 || selected[0] != "8.8.4.4" {
+		t.Fatalf("expected restored debounce state to keep previous target, got %+v", selected)
+	}
+}
+
+func TestSchedulerKeepsLocalStateForRoutesPresentInNewSnapshot(t *testing.T) {
+	now := time.Unix(300, 0).UTC()
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           11,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+				Debounce: GSLBDebounce{CooldownSeconds: 60},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("previous", "hk", "8.8.4.4", 100, 1),
+		testNode("desired", "hk", "1.1.1.1", 900, 1),
+	}
+	scheduler := NewScheduler()
+	scheduler.now = func() time.Time { return now }
+	scheduler.states[schedulerStateKey(11, "A", "global")] = debounceState{
+		Targets:       []string{"8.8.4.4"},
+		Desired:       []string{"8.8.4.4"},
+		LastChangedAt: now.Add(-10 * time.Second),
+	}
+
+	scheduler.LoadSnapshotStates(snapshot)
+	selected, _, _, err := scheduler.Select(snapshot, &snapshot.Routes[0], "A", SourceContext{}, true)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(selected) != 1 || selected[0] != "8.8.4.4" {
+		t.Fatalf("expected local state to survive snapshot refresh, got %+v", selected)
+	}
+}
+
 func TestResolveStaleSnapshotServfailForDynamicButKeepsStatic(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.GeneratedAt = time.Now().Add(-10 * time.Minute)

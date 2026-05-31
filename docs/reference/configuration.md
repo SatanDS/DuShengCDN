@@ -24,7 +24,7 @@ Agent 支持：
 | --- | --- | --- |
 | Server SQLite | `dushengcdn.db` | 可通过 `SQLITE_PATH` 修改 |
 | Server 上传目录 | `upload` | 可通过 `UPLOAD_PATH` 修改 |
-| DNS Worker 快照缓存 | `data/dns-worker-snapshot.json` | 由 DNS Worker 保存最后一次有效调度快照，文件包含 SHA-256 checksum 元数据并兼容旧裸快照 JSON |
+| DNS Worker 快照缓存 | `data/dns-worker-snapshot.json` | 由 DNS Worker 保存最后一次有效调度快照，文件包含 SHA-256 checksum 元数据和可恢复的 GSLB 防抖状态，并兼容旧裸快照 JSON |
 | Agent 配置文件 | `./agent.json` | 可通过 `-config` 指定 |
 | 一键安装 Agent 配置 | `/opt/dushengcdn-agent/agent.json` | 安装脚本默认生成 |
 | Agent 数据目录 | 配置文件所在目录下的 `data` | 可通过 `data_dir` 修改 |

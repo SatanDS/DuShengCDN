@@ -18,11 +18,12 @@ const (
 )
 
 type Snapshot struct {
-	SnapshotVersion string          `json:"snapshot_version"`
-	GeneratedAt     time.Time       `json:"generated_at"`
-	Zones           []SnapshotZone  `json:"zones"`
-	Routes          []SnapshotRoute `json:"routes"`
-	Nodes           []SnapshotNode  `json:"nodes"`
+	SnapshotVersion  string                    `json:"snapshot_version"`
+	GeneratedAt      time.Time                 `json:"generated_at"`
+	Zones            []SnapshotZone            `json:"zones"`
+	Routes           []SnapshotRoute           `json:"routes"`
+	Nodes            []SnapshotNode            `json:"nodes"`
+	SchedulingStates []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type SnapshotZone struct {
@@ -76,6 +77,15 @@ type SnapshotNode struct {
 	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
 	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
 	MetricCapturedAt     *time.Time `json:"metric_captured_at,omitempty"`
+}
+
+type SnapshotSchedulingState struct {
+	RouteID         uint       `json:"route_id"`
+	RecordType      string     `json:"record_type"`
+	ScopeKey        string     `json:"scope_key"`
+	SelectedTargets []string   `json:"selected_targets"`
+	DesiredTargets  []string   `json:"desired_targets"`
+	LastChangedAt   *time.Time `json:"last_changed_at,omitempty"`
 }
 
 type GSLBPoolPolicy struct {

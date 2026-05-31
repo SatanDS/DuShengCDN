@@ -266,6 +266,7 @@ func normalizeSnapshot(input *Snapshot) *Snapshot {
 	out.Zones = append([]SnapshotZone(nil), input.Zones...)
 	out.Routes = append([]SnapshotRoute(nil), input.Routes...)
 	out.Nodes = append([]SnapshotNode(nil), input.Nodes...)
+	out.SchedulingStates = append([]SnapshotSchedulingState(nil), input.SchedulingStates...)
 	for i := range out.Zones {
 		out.Zones[i].Name = normalizeDomain(out.Zones[i].Name)
 		out.Zones[i].PrimaryNS = normalizeDomain(out.Zones[i].PrimaryNS)
@@ -298,6 +299,18 @@ func normalizeSnapshot(input *Snapshot) *Snapshot {
 		out.Nodes[i].Status = strings.ToLower(strings.TrimSpace(out.Nodes[i].Status))
 		out.Nodes[i].OpenrestyStatus = strings.ToLower(strings.TrimSpace(out.Nodes[i].OpenrestyStatus))
 	}
+	states := make([]SnapshotSchedulingState, 0, len(out.SchedulingStates))
+	for _, state := range out.SchedulingStates {
+		state.RecordType = normalizeAddressRecordType(state.RecordType)
+		state.ScopeKey = normalizeSourceScope(state.ScopeKey)
+		state.SelectedTargets = normalizeIPList(state.SelectedTargets, state.RecordType)
+		state.DesiredTargets = normalizeIPList(state.DesiredTargets, state.RecordType)
+		if state.RouteID == 0 || len(state.SelectedTargets) == 0 {
+			continue
+		}
+		states = append(states, state)
+	}
+	out.SchedulingStates = states
 	return &out
 }
 
