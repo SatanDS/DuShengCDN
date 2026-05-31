@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Minus, Plus } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { Controller, useForm } from 'react-hook-form';
@@ -277,12 +278,29 @@ type DNSAutomationValues = {
   dns_schedule_mode: 'healthy' | 'weighted' | 'load_aware';
   dns_ttl: number;
   gslb_enabled: boolean;
-  gslb_pools_text: string;
+  gslb_pool_rows: GSLBPoolRow[];
   gslb_max_openresty_connections: number;
   gslb_cooldown_seconds: number;
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'manual' | 'auto';
 };
+
+type GSLBPoolRow = {
+  id: string;
+  name: string;
+  weight: string;
+  countries: string;
+};
+
+const dnsTTLHint =
+  '0 表示自动 TTL；1 表示 Cloudflare 自动 TTL；2-29 秒会在保存时提升到 30 秒；30 秒及以上按填写值同步，最高 86400 秒。';
+const gslbPoolActionButtonClassName = 'h-11 w-11 shrink-0 rounded-2xl px-0';
+const gslbPoolRemoveButtonClassName =
+  'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] hover:border-[var(--status-danger-border)] hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger-foreground)] disabled:border-[var(--border-default)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--foreground-muted)]';
+const gslbPoolAddButtonClassName =
+  'border-dashed border-[var(--border-default)] bg-[var(--surface-muted)] text-[var(--foreground-secondary)] hover:border-[var(--brand-primary)] hover:bg-[var(--brand-primary-soft)] hover:text-[var(--brand-primary)]';
+
+let gslbPoolRowSequence = 0;
 
 function normalizeSelectedCertificateIDs(rows: DomainListRow[]) {
   return Array.from(
@@ -304,6 +322,23 @@ function buildDomainCertificateIDs(rows: DomainListRow[]) {
         ? certificateID
         : 0;
     });
+}
+
+function createGSLBPoolRow(
+  values: Partial<Omit<GSLBPoolRow, 'id'>> = {},
+): GSLBPoolRow {
+  gslbPoolRowSequence += 1;
+  return {
+    id: `gslb-pool-row-${gslbPoolRowSequence}`,
+    name: '',
+    weight: '100',
+    countries: '',
+    ...values,
+  };
+}
+
+function ensureGSLBPoolRows(rows: GSLBPoolRow[]) {
+  return rows.length > 0 ? rows : [createGSLBPoolRow()];
 }
 
 function buildDomainRows(route: ProxyRouteItem) {
@@ -328,31 +363,32 @@ function parseRegionCountriesText(value: string) {
     .filter(Boolean);
 }
 
-function gslbPoolsToText(route: ProxyRouteItem) {
+function buildGSLBPoolRows(route: ProxyRouteItem) {
   const pools =
     route.gslb_policy?.pools?.length > 0
       ? route.gslb_policy.pools
       : buildDefaultGSLBPolicy(route.node_pool || 'default').pools;
-  return pools
-    .filter((pool) => pool.enabled !== false)
-    .map((pool) => {
-      const countries = pool.countries?.length
-        ? ` ${pool.countries.join(',')}`
-        : '';
-      return `${pool.name} ${pool.weight || 100}${countries}`.trim();
-    })
-    .join('\n');
+  return ensureGSLBPoolRows(
+    pools
+      .filter((pool) => pool.enabled !== false)
+      .map((pool) =>
+        createGSLBPoolRow({
+          name: pool.name,
+          weight: String(pool.weight || 100),
+          countries: pool.countries?.join(',') || '',
+        }),
+      ),
+  );
 }
 
-function parseGSLBPoolsText(value: string) {
-  const pools = linesFromTextarea(value).map((line) => {
-    const [name = '', rawWeight = '100', rawCountries = ''] = line.split(/\s+/, 3);
-    const weight = Number(rawWeight);
+function parseGSLBPoolRows(rows: GSLBPoolRow[]) {
+  const pools = rows.map((row) => {
+    const weight = Number(row.weight);
     return {
-      name: name.trim(),
+      name: row.name.trim(),
       weight: Number.isFinite(weight) && weight > 0 ? weight : 100,
-      countries: rawCountries
-        .split(/[,，]/)
+      countries: row.countries
+        .split(/[\s,，;；]+/)
         .map((item) => item.trim().toUpperCase())
         .filter((item) => /^[A-Z0-9]{2}$/.test(item)),
       enabled: true,
@@ -806,7 +842,7 @@ export function DNSAutomationSection({
       dns_schedule_mode: route.dns_schedule_mode || 'healthy',
       dns_ttl: route.dns_ttl || 1,
       gslb_enabled: route.gslb_enabled,
-      gslb_pools_text: gslbPoolsToText(route),
+      gslb_pool_rows: buildGSLBPoolRows(route),
       gslb_max_openresty_connections:
         route.gslb_policy?.load_thresholds?.max_openresty_connections || 0,
       gslb_cooldown_seconds:
@@ -829,7 +865,7 @@ export function DNSAutomationSection({
       dns_schedule_mode: route.dns_schedule_mode || 'healthy',
       dns_ttl: route.dns_ttl || 1,
       gslb_enabled: route.gslb_enabled,
-      gslb_pools_text: gslbPoolsToText(route),
+      gslb_pool_rows: buildGSLBPoolRows(route),
       gslb_max_openresty_connections:
         route.gslb_policy?.load_thresholds?.max_openresty_connections || 0,
       gslb_cooldown_seconds:
@@ -859,7 +895,7 @@ export function DNSAutomationSection({
           const dnsAccountID = Number(values.dns_account_id);
           const baseGSLBPolicy =
             route.gslb_policy || buildDefaultGSLBPolicy(route.node_pool);
-          const gslbPools = parseGSLBPoolsText(values.gslb_pools_text);
+          const gslbPools = parseGSLBPoolRows(values.gslb_pool_rows);
           onSave(
             buildPayloadFromRoute(route, {
               dns_auto_sync: values.dns_auto_sync,
@@ -1040,10 +1076,10 @@ export function DNSAutomationSection({
               </ResourceSelect>
             </ResourceField>
 
-            <ResourceField label="DNS TTL" hint="1 表示 Cloudflare 自动 TTL。">
+            <ResourceField label="DNS TTL" hint={dnsTTLHint}>
               <ResourceInput
                 type="number"
-                min={1}
+                min={0}
                 max={86400}
                 disabled={!autoSyncEnabled}
                 {...form.register('dns_ttl', {
@@ -1078,13 +1114,125 @@ export function DNSAutomationSection({
               <>
                 <ResourceField
                   label="节点池权重"
-                  hint="每行一个节点池：池名 权重 可选国家代码。例：hk 80 HK,TW"
+                  hint="国家代码可用逗号、空格或分号分隔，例如 HK,TW。"
+                  container="div"
                 >
-                  <ResourceTextarea
-                    className="min-h-28"
-                    disabled={!autoSyncEnabled}
-                    placeholder={'hk 80 HK,TW\neu 20 DE,FR'}
-                    {...form.register('gslb_pools_text')}
+                  <Controller
+                    control={form.control}
+                    name="gslb_pool_rows"
+                    render={({ field }) => {
+                      const rows = ensureGSLBPoolRows(field.value ?? []);
+                      const updateRows = (nextRows: GSLBPoolRow[]) => {
+                        field.onChange(ensureGSLBPoolRows(nextRows));
+                      };
+
+                      return (
+                        <div className="space-y-3">
+                          <div className="hidden gap-3 pl-[56px] text-xs font-medium text-[var(--foreground-secondary)] md:grid md:grid-cols-[minmax(0,1fr)_120px_minmax(0,1fr)]">
+                            <span>池名</span>
+                            <span>权重</span>
+                            <span>国家代码</span>
+                          </div>
+
+                          {rows.map((row, index) => (
+                            <div
+                              key={row.id}
+                              className="grid gap-3 md:grid-cols-[44px_minmax(0,1fr)_120px_minmax(0,1fr)] md:items-start"
+                            >
+                              <SecondaryButton
+                                type="button"
+                                aria-label={`删除节点池 ${index + 1}`}
+                                className={`${gslbPoolActionButtonClassName} ${gslbPoolRemoveButtonClassName}`}
+                                disabled={!autoSyncEnabled || rows.length === 1}
+                                onClick={() => {
+                                  if (rows.length === 1) {
+                                    updateRows([createGSLBPoolRow()]);
+                                    return;
+                                  }
+
+                                  updateRows(
+                                    rows.filter(
+                                      (_, rowIndex) => rowIndex !== index,
+                                    ),
+                                  );
+                                }}
+                              >
+                                <Minus
+                                  aria-hidden="true"
+                                  className="h-[14px] w-[14px]"
+                                />
+                              </SecondaryButton>
+
+                              <ResourceInput
+                                value={row.name}
+                                aria-label={`节点池名称 ${index + 1}`}
+                                placeholder={index === 0 ? 'hk' : 'eu'}
+                                disabled={!autoSyncEnabled}
+                                onChange={(event) => {
+                                  const nextRows = rows.slice();
+                                  nextRows[index] = {
+                                    ...row,
+                                    name: event.target.value,
+                                  };
+                                  updateRows(nextRows);
+                                }}
+                                className="h-11"
+                              />
+
+                              <ResourceInput
+                                type="number"
+                                min={1}
+                                max={1000}
+                                value={row.weight}
+                                aria-label={`节点池权重 ${index + 1}`}
+                                placeholder="100"
+                                disabled={!autoSyncEnabled}
+                                onChange={(event) => {
+                                  const nextRows = rows.slice();
+                                  nextRows[index] = {
+                                    ...row,
+                                    weight: event.target.value,
+                                  };
+                                  updateRows(nextRows);
+                                }}
+                                className="h-11"
+                              />
+
+                              <ResourceInput
+                                value={row.countries}
+                                aria-label={`节点池国家代码 ${index + 1}`}
+                                placeholder="HK,TW"
+                                disabled={!autoSyncEnabled}
+                                onChange={(event) => {
+                                  const nextRows = rows.slice();
+                                  nextRows[index] = {
+                                    ...row,
+                                    countries: event.target.value,
+                                  };
+                                  updateRows(nextRows);
+                                }}
+                                className="h-11"
+                              />
+                            </div>
+                          ))}
+
+                          <SecondaryButton
+                            type="button"
+                            aria-label="新增节点池"
+                            className={`${gslbPoolActionButtonClassName} ${gslbPoolAddButtonClassName}`}
+                            disabled={!autoSyncEnabled}
+                            onClick={() => {
+                              updateRows([...rows, createGSLBPoolRow()]);
+                            }}
+                          >
+                            <Plus
+                              aria-hidden="true"
+                              className="h-[14px] w-[14px]"
+                            />
+                          </SecondaryButton>
+                        </div>
+                      );
+                    }}
                   />
                 </ResourceField>
 

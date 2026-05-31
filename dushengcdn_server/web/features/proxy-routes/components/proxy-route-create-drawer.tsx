@@ -58,7 +58,7 @@ const createWebsiteSchema = z
     dns_record_content: z.string(),
     dns_target_count: z.coerce.number().int().min(1).max(20),
     dns_schedule_mode: z.enum(['healthy', 'weighted', 'load_aware']),
-    dns_ttl: z.coerce.number().int().min(1).max(86400),
+    dns_ttl: z.coerce.number().int().min(0).max(86400),
     cloudflare_proxied: z.boolean(),
     ddos_protection_mode: z.enum(['off', 'manual', 'auto']),
     enabled: z.boolean(),
@@ -140,6 +140,9 @@ const defaultValues: CreateWebsiteFormValues = {
   redirect_http: false,
   remark: '',
 };
+
+const dnsTTLHint =
+  '0 表示自动 TTL；1 表示 Cloudflare 自动 TTL；2-29 秒会在保存时提升到 30 秒；30 秒及以上按填写值同步，最高 86400 秒。';
 
 function normalizeSelectedCertificateIDs(rows: DomainListRow[]) {
   return Array.from(
@@ -482,10 +485,10 @@ export function ProxyRouteCreateDrawer({
                   </ResourceSelect>
                 </ResourceField>
 
-                <ResourceField label="DNS TTL" hint="1 表示 Cloudflare 自动 TTL。">
+                <ResourceField label="DNS TTL" hint={dnsTTLHint}>
                   <ResourceInput
                     type="number"
-                    min={1}
+                    min={0}
                     max={86400}
                     {...form.register('dns_ttl', {
                       valueAsNumber: true,

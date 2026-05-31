@@ -142,7 +142,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `proxy_routes.node_pool` | 网站配置 | 网站绑定的目标节点池 |
 | `proxy_routes.dns_target_count` | 网站配置 | 自动 DNS 最多同步的目标 IP 数量 |
 | `proxy_routes.dns_schedule_mode` | 网站配置 | 自动 DNS 选点模式：`healthy`、`weighted` 或 `load_aware` |
-| `proxy_routes.dns_ttl` | 网站配置 | Cloudflare DNS 记录 TTL；`1` 表示 Cloudflare 自动 TTL |
+| `proxy_routes.dns_ttl` | 网站配置 | Cloudflare DNS 记录 TTL；`0` 和 `1` 表示自动 TTL，`2-29` 会提升到 `30`，最高 `86400` |
 | `proxy_routes.gslb_enabled` | 网站配置 | 是否启用站点级 GSLB 多节点池调度 |
 | `proxy_routes.gslb_policy` | 网站配置 | GSLB 策略 JSON，包含节点池权重、目标数量、TTL、来源识别接口、负载阈值和防抖参数 |
 | `gslb_scheduling_states.selected_targets` | 运行时状态 | 最近一次实际同步的 GSLB DNS 目标 |

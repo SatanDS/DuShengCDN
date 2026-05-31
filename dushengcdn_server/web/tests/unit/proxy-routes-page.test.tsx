@@ -125,6 +125,37 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
     dns_auto_target: false,
     dns_target_count: 1,
     dns_schedule_mode: 'healthy',
+    dns_ttl: 1,
+    gslb_enabled: false,
+    gslb_policy: {
+      mode: 'cloudflare_dns',
+      strategy: 'load_aware',
+      pools: [
+        {
+          name: 'default',
+          weight: 100,
+          countries: [],
+          enabled: true,
+        },
+      ],
+      target_count: 2,
+      ttl: 60,
+      source_ip: {
+        provider: 'none',
+        api_url: '',
+        api_token: '',
+      },
+      load_thresholds: {
+        max_openresty_connections: 0,
+        max_cpu_percent: 0,
+        max_memory_percent: 0,
+      },
+      debounce: {
+        cooldown_seconds: 60,
+        unhealthy_threshold: 1,
+        recovery_threshold: 1,
+      },
+    },
     dns_record_ids: {},
     cloudflare_proxied: false,
     ddos_protection_mode: 'off',
@@ -783,6 +814,178 @@ describe('Proxy route website pages', () => {
       cert_ids: [1],
       domain_cert_ids: [1, 0],
       redirect_http: true,
+    });
+  });
+
+  it('saves GSLB pool rows from automatic DNS config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+    const dnsRoute = buildRoute({
+      dns_auto_sync: true,
+      dns_account_id: 7,
+      dns_record_type: 'A',
+      dns_auto_target: true,
+      dns_target_count: 2,
+      dns_schedule_mode: 'load_aware',
+      dns_ttl: 60,
+      gslb_enabled: true,
+      gslb_policy: {
+        mode: 'cloudflare_dns',
+        strategy: 'load_aware',
+        pools: [
+          {
+            name: 'default',
+            weight: 100,
+            countries: [],
+            enabled: true,
+          },
+        ],
+        target_count: 2,
+        ttl: 60,
+        source_ip: {
+          provider: 'none',
+          api_url: '',
+          api_token: '',
+        },
+        load_thresholds: {
+          max_openresty_connections: 0,
+          max_cpu_percent: 0,
+          max_memory_percent: 0,
+        },
+        debounce: {
+          cooldown_seconds: 60,
+          unhealthy_threshold: 1,
+          recovery_threshold: 1,
+        },
+      },
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  ...dnsRoute,
+                  dns_ttl: payload.dns_ttl,
+                  gslb_enabled: payload.gslb_enabled,
+                  gslb_policy: payload.gslb_policy,
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: dnsRoute,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-accounts/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [{ id: 7, name: 'cf-main', type: 'cloudflare' }],
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/nodes/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="dns" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: '自动 DNS' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/2-29 秒会在保存时提升到 30 秒/)).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText('节点池名称 1'));
+    await user.type(screen.getByLabelText('节点池名称 1'), 'hk');
+    await user.clear(screen.getByLabelText('节点池权重 1'));
+    await user.type(screen.getByLabelText('节点池权重 1'), '80');
+    await user.type(screen.getByLabelText('节点池国家代码 1'), 'HK,TW');
+
+    await user.click(screen.getByLabelText('新增节点池'));
+    await user.type(screen.getByLabelText('节点池名称 2'), 'eu');
+    await user.clear(screen.getByLabelText('节点池权重 2'));
+    await user.type(screen.getByLabelText('节点池权重 2'), '20');
+    await user.type(screen.getByLabelText('节点池国家代码 2'), 'DE FR');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-dns-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing dns save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      dns_ttl: 60,
+      gslb_enabled: true,
+      gslb_policy: {
+        pools: [
+          {
+            name: 'hk',
+            weight: 80,
+            countries: ['HK', 'TW'],
+            enabled: true,
+          },
+          {
+            name: 'eu',
+            weight: 20,
+            countries: ['DE', 'FR'],
+            enabled: true,
+          },
+        ],
+      },
     });
   });
 
