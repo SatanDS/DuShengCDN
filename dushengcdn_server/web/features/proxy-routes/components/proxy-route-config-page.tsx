@@ -17,6 +17,7 @@ import { AppCard } from '@/components/ui/app-card';
 import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import type { DnsAccountItem } from '@/features/dns-accounts/types';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
+import { getNodes } from '@/features/nodes/api/nodes';
 import {
   getProxyRoute,
   purgeProxyRouteCache,
@@ -28,6 +29,10 @@ import {
   DomainListInput,
   type DomainListRow,
 } from '@/features/proxy-routes/components/domain-list-input';
+import {
+  buildNodePoolOptions,
+  NodePoolSelect,
+} from '@/features/proxy-routes/components/node-pool-select';
 import {
   buildPayloadFromRoute,
   customHeadersToText,
@@ -597,9 +602,13 @@ function ReverseProxySection({
   route,
   saving,
   onSave,
+  nodePoolOptions,
+  nodePoolsLoading,
 }: {
   route: ProxyRouteItem;
   saving: boolean;
+  nodePoolOptions: string[];
+  nodePoolsLoading: boolean;
   onSave: SaveHandler;
 }) {
   const form = useForm<ReverseProxyValues>({
@@ -677,10 +686,21 @@ function ReverseProxySection({
           label="节点池"
           hint="自动 DNS 会从该节点池选择公网 IP，缓存运行时操作也会下发到该池在线节点。"
           error={form.formState.errors.node_pool?.message}
+          container="div"
         >
-          <ResourceInput
-            placeholder="default"
-            {...form.register('node_pool')}
+          <Controller
+            control={form.control}
+            name="node_pool"
+            render={({ field }) => (
+              <NodePoolSelect
+                name={field.name}
+                value={field.value}
+                options={nodePoolOptions}
+                disabled={nodePoolsLoading}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+              />
+            )}
           />
         </ResourceField>
 
@@ -2051,6 +2071,11 @@ export function ProxyRouteConfigPage({
     queryKey: ['dns-accounts'],
     queryFn: getDnsAccounts,
   });
+  const nodesQuery = useQuery({
+    queryKey: ['nodes'],
+    queryFn: getNodes,
+    enabled: currentSection === 'proxy',
+  });
   const managedDomainsQuery = useQuery({
     queryKey: ['managed-domains'],
     queryFn: getManagedDomains,
@@ -2101,6 +2126,10 @@ export function ProxyRouteConfigPage({
     ],
     [managedDomainsQuery.data, route?.domains],
   );
+  const nodePoolOptions = useMemo(
+    () => buildNodePoolOptions(nodesQuery.data ?? [], route?.node_pool),
+    [nodesQuery.data, route?.node_pool],
+  );
 
   if (!Number.isFinite(numericRouteID) || numericRouteID <= 0) {
     return (
@@ -2142,6 +2171,15 @@ export function ProxyRouteConfigPage({
       <ErrorState
         title="DNS 账号列表加载失败"
         description={getErrorMessage(dnsAccountsQuery.error)}
+      />
+    );
+  }
+
+  if (currentSection === 'proxy' && nodesQuery.isError) {
+    return (
+      <ErrorState
+        title="节点列表加载失败"
+        description={getErrorMessage(nodesQuery.error)}
       />
     );
   }
@@ -2239,6 +2277,8 @@ export function ProxyRouteConfigPage({
             <ReverseProxySection
               route={route}
               saving={saveMutation.isPending}
+              nodePoolOptions={nodePoolOptions}
+              nodePoolsLoading={nodesQuery.isLoading}
               onSave={(payload, context) =>
                 saveMutation.mutate({ payload, context })
               }

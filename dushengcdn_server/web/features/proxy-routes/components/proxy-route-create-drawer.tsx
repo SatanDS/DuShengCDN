@@ -9,11 +9,16 @@ import { z } from 'zod';
 import { Drawer } from '@/components/ui/drawer';
 import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
+import { getNodes } from '@/features/nodes/api/nodes';
 import { createProxyRoute } from '@/features/proxy-routes/api/proxy-routes';
 import {
   DomainListInput,
   type DomainListRow,
 } from '@/features/proxy-routes/components/domain-list-input';
+import {
+  buildNodePoolOptions,
+  NodePoolSelect,
+} from '@/features/proxy-routes/components/node-pool-select';
 import {
   buildOriginUrl,
   getErrorMessage,
@@ -185,6 +190,11 @@ export function ProxyRouteCreateDrawer({
     queryFn: getDnsAccounts,
     enabled: open,
   });
+  const nodesQuery = useQuery({
+    queryKey: ['nodes'],
+    queryFn: getNodes,
+    enabled: open,
+  });
 
   const combinedDomainSuggestions = useMemo(
     () => [
@@ -195,6 +205,11 @@ export function ProxyRouteCreateDrawer({
   );
   const selectedCertificateIDs = normalizeSelectedCertificateIDs(
     form.watch('domain_rows'),
+  );
+  const nodePoolValue = form.watch('node_pool');
+  const nodePoolOptions = useMemo(
+    () => buildNodePoolOptions(nodesQuery.data ?? [], nodePoolValue),
+    [nodePoolValue, nodesQuery.data],
   );
 
   const createMutation = useMutation({
@@ -320,10 +335,21 @@ export function ProxyRouteCreateDrawer({
           label="节点池"
           hint="自动 DNS 会从该节点池选择公网 IP，缓存清理/预热也会下发到该池在线节点。"
           error={form.formState.errors.node_pool?.message}
+          container="div"
         >
-          <ResourceInput
-            placeholder="default"
-            {...form.register('node_pool')}
+          <Controller
+            control={form.control}
+            name="node_pool"
+            render={({ field }) => (
+              <NodePoolSelect
+                name={field.name}
+                value={field.value}
+                options={nodePoolOptions}
+                disabled={nodesQuery.isLoading}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+              />
+            )}
           />
         </ResourceField>
 

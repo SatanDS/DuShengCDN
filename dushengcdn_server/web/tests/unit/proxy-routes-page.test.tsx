@@ -50,6 +50,7 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
       'https://origin-a.internal:443',
       'https://origin-b.internal:443',
     ],
+    node_pool: 'default',
     enabled: true,
     enable_https: true,
     cert_id: 1,
@@ -122,6 +123,8 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
     dns_record_name: '',
     dns_record_content: '',
     dns_auto_target: false,
+    dns_target_count: 1,
+    dns_schedule_mode: 'healthy',
     dns_record_ids: {},
     cloudflare_proxied: false,
     ddos_protection_mode: 'off',
@@ -325,6 +328,7 @@ describe('Proxy route website pages', () => {
             cert_id: payload.cert_id,
             cert_ids: payload.cert_ids ?? [],
             domain_cert_ids: payload.domain_cert_ids ?? [],
+            node_pool: payload.node_pool ?? 'default',
             redirect_http: payload.redirect_http,
             limit_conn_per_server: 0,
             limit_conn_per_ip: 0,
@@ -430,6 +434,18 @@ describe('Proxy route website pages', () => {
           );
         }
 
+        if (url.includes('/nodes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [{ id: 1, pool_name: 'edge-hk' }],
+              }),
+            ),
+          );
+        }
+
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
       }),
     );
@@ -442,6 +458,17 @@ describe('Proxy route website pages', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(
+        within(dialog).getByRole('option', { name: 'edge-hk' }),
+      ).toBeInTheDocument();
+    });
+    await user.selectOptions(
+      within(dialog).getByLabelText('节点池选择'),
+      'edge-hk',
+    );
+    expect(within(dialog).getByLabelText('节点池名称')).toHaveValue('edge-hk');
 
     await user.type(
       within(dialog).getByPlaceholderText('marketing-site'),
@@ -492,6 +519,7 @@ describe('Proxy route website pages', () => {
       );
     });
     expect(createRequests[0]).toMatchObject({
+      node_pool: 'edge-hk',
       dns_auto_sync: true,
       dns_account_id: 7,
       dns_record_type: 'A',
@@ -499,6 +527,121 @@ describe('Proxy route website pages', () => {
       dns_auto_target: true,
       cloudflare_proxied: true,
       ddos_protection_mode: 'auto',
+    });
+  });
+
+  it('saves selected node pool from reverse proxy config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  node_pool: payload.node_pool,
+                  origin_url: payload.origin_url,
+                  upstream_list: [
+                    payload.origin_url,
+                    ...(payload.upstreams as string[]),
+                  ],
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute(),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/nodes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [{ id: 1, pool_name: 'edge-hk' }],
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="proxy" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: '反向代理' }),
+    ).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('option', { name: 'edge-hk' }),
+      ).toBeInTheDocument();
+    });
+    await user.selectOptions(screen.getByLabelText('节点池选择'), 'edge-hk');
+    expect(screen.getByLabelText('节点池名称')).toHaveValue('edge-hk');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-proxy-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing proxy save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      node_pool: 'edge-hk',
+      origin_url: 'https://origin-a.internal:443',
+      upstreams: ['https://origin-b.internal:443'],
     });
   });
 
