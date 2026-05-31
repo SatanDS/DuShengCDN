@@ -101,6 +101,12 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		status = WorkerStatusOnline
 	}
 	rollups := r.Rollups.Drain()
+	var schedulingStates []SnapshotSchedulingState
+	if r.DNSServer != nil && r.DNSServer.Scheduler != nil {
+		if snapshot, _, _, _ := r.Store.Current(); snapshot != nil {
+			schedulingStates = r.DNSServer.Scheduler.SnapshotStates(snapshot)
+		}
+	}
 	err := r.Client.SendHeartbeat(ctx, HeartbeatInput{
 		Version:             r.Config.Version,
 		Status:              status,
@@ -108,6 +114,7 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		LastSnapshotAt:      r.Store.LoadedAt(),
 		LastError:           r.Store.LastError(),
 		Rollups:             rollups,
+		SchedulingStates:    schedulingStates,
 	})
 	if err != nil {
 		r.Rollups.Restore(rollups)

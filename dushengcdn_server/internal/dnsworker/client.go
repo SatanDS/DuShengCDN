@@ -25,12 +25,13 @@ type apiResponse[T any] struct {
 }
 
 type HeartbeatInput struct {
-	Version             string               `json:"version"`
-	Status              string               `json:"status"`
-	LastSnapshotVersion string               `json:"last_snapshot_version"`
-	LastSnapshotAt      *time.Time           `json:"last_snapshot_at"`
-	LastError           string               `json:"last_error"`
-	Rollups             []QueryRollupPayload `json:"rollups"`
+	Version             string                    `json:"version"`
+	Status              string                    `json:"status"`
+	LastSnapshotVersion string                    `json:"last_snapshot_version"`
+	LastSnapshotAt      *time.Time                `json:"last_snapshot_at"`
+	LastError           string                    `json:"last_error"`
+	Rollups             []QueryRollupPayload      `json:"rollups"`
+	SchedulingStates    []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type QueryRollupPayload struct {

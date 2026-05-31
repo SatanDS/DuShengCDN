@@ -234,6 +234,61 @@ func TestSchedulerKeepsLocalStateForRoutesPresentInNewSnapshot(t *testing.T) {
 	}
 }
 
+func TestSchedulerExportsSnapshotStates(t *testing.T) {
+	now := time.Unix(400, 0).UTC()
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           12,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+				Debounce: GSLBDebounce{CooldownSeconds: 60},
+			},
+		},
+	}
+	scheduler := NewScheduler()
+	scheduler.states[schedulerStateKey(12, "A", "country:hk")] = debounceState{
+		Targets:       []string{"8.8.4.4"},
+		Desired:       []string{"1.1.1.1"},
+		LastChangedAt: now,
+	}
+	scheduler.states[schedulerStateKey(404, "A", "global")] = debounceState{
+		Targets:       []string{"9.9.9.9"},
+		Desired:       []string{"9.9.9.9"},
+		LastChangedAt: now,
+	}
+
+	states := scheduler.SnapshotStates(snapshot)
+	if len(states) != 1 {
+		t.Fatalf("expected one exported scheduling state, got %+v", states)
+	}
+	state := states[0]
+	if state.RouteID != 12 ||
+		state.RecordType != "A" ||
+		state.ScopeKey != "country:HK" ||
+		len(state.SelectedTargets) != 1 ||
+		state.SelectedTargets[0] != "8.8.4.4" ||
+		len(state.DesiredTargets) != 1 ||
+		state.DesiredTargets[0] != "1.1.1.1" ||
+		state.LastChangedAt == nil ||
+		!state.LastChangedAt.Equal(now) {
+		t.Fatalf("unexpected exported scheduling state: %+v", state)
+	}
+}
+
 func TestResolveStaleSnapshotServfailForDynamicButKeepsStatic(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.GeneratedAt = time.Now().Add(-10 * time.Minute)

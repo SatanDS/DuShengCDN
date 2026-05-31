@@ -44,6 +44,55 @@ func NewScheduler() *Scheduler {
 	}
 }
 
+func (s *Scheduler) SnapshotStates(snapshot *Snapshot) []SnapshotSchedulingState {
+	if s == nil || snapshot == nil {
+		return nil
+	}
+	routeTypes := make(map[uint]string, len(snapshot.Routes))
+	for _, route := range snapshot.Routes {
+		if route.ID == 0 {
+			continue
+		}
+		recordType := normalizeAddressRecordType(route.RecordType)
+		if recordType != "A" && recordType != "AAAA" {
+			continue
+		}
+		routeTypes[route.ID] = recordType
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	states := make([]SnapshotSchedulingState, 0, len(s.states))
+	for key, state := range s.states {
+		routeID, recordType, scopeKey, ok := parseSchedulerStateKey(key)
+		if !ok {
+			continue
+		}
+		expectedType, exists := routeTypes[routeID]
+		if !exists || expectedType != recordType || len(state.Targets) == 0 || state.LastChangedAt.IsZero() {
+			continue
+		}
+		lastChangedAt := state.LastChangedAt.UTC()
+		states = append(states, SnapshotSchedulingState{
+			RouteID:         routeID,
+			RecordType:      recordType,
+			ScopeKey:        scopeKey,
+			SelectedTargets: append([]string(nil), state.Targets...),
+			DesiredTargets:  append([]string(nil), state.Desired...),
+			LastChangedAt:   &lastChangedAt,
+		})
+	}
+	sort.SliceStable(states, func(i, j int) bool {
+		if states[i].RouteID != states[j].RouteID {
+			return states[i].RouteID < states[j].RouteID
+		}
+		if states[i].RecordType != states[j].RecordType {
+			return states[i].RecordType < states[j].RecordType
+		}
+		return states[i].ScopeKey < states[j].ScopeKey
+	})
+	return states
+}
+
 func (s *Scheduler) LoadSnapshotStates(snapshot *Snapshot) {
 	if s == nil || snapshot == nil {
 		return
@@ -166,15 +215,24 @@ func schedulerStateKey(routeID uint, recordType string, scopeKey string) string 
 }
 
 func schedulerStateRouteID(key string) (uint, bool) {
-	rawRouteID, _, ok := strings.Cut(key, "|")
+	routeID, _, _, ok := parseSchedulerStateKey(key)
+	return routeID, ok
+}
+
+func parseSchedulerStateKey(key string) (uint, string, string, bool) {
+	rawRouteID, rest, ok := strings.Cut(key, "|")
 	if !ok {
-		return 0, false
+		return 0, "", "", false
+	}
+	recordType, scopeKey, ok := strings.Cut(rest, "|")
+	if !ok {
+		return 0, "", "", false
 	}
 	routeID, err := strconv.ParseUint(rawRouteID, 10, 0)
 	if err != nil || routeID == 0 {
-		return 0, false
+		return 0, "", "", false
 	}
-	return uint(routeID), true
+	return uint(routeID), normalizeAddressRecordType(recordType), normalizeSourceScope(scopeKey), true
 }
 
 func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, source SourceContext) []targetCandidate {

@@ -252,6 +252,90 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerHeartbeatPersistsSchedulingStates(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	changedAt := time.Now().UTC().Add(-20 * time.Second).Truncate(time.Second)
+	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status: "online",
+		SchedulingStates: []AuthoritativeDNSSnapshotSchedulingState{
+			{
+				RouteID:         route.ID,
+				RecordType:      "A",
+				ScopeKey:        "country:hk",
+				SelectedTargets: []string{"8.8.4.4"},
+				DesiredTargets:  []string{"1.1.1.1"},
+				LastChangedAt:   &changedAt,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+
+	var state model.GSLBSchedulingState
+	if err := model.DB.Where("proxy_route_id = ? AND dns_record_type = ? AND scope_key = ?", route.ID, "A", "country:HK").First(&state).Error; err != nil {
+		t.Fatalf("load scheduling state: %v", err)
+	}
+	if state.SelectedTargets != `["8.8.4.4"]` || state.DesiredTargets != `["1.1.1.1"]` || state.LastChangedAt == nil || !state.LastChangedAt.Equal(changedAt) {
+		t.Fatalf("unexpected scheduling state: %+v", state)
+	}
+
+	olderChangedAt := changedAt.Add(-time.Minute)
+	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status: "online",
+		SchedulingStates: []AuthoritativeDNSSnapshotSchedulingState{
+			{
+				RouteID:         route.ID,
+				RecordType:      "A",
+				ScopeKey:        "country:HK",
+				SelectedTargets: []string{"9.9.9.9"},
+				DesiredTargets:  []string{"9.9.9.9"},
+				LastChangedAt:   &olderChangedAt,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat old state: %v", err)
+	}
+	if err := model.DB.Where("proxy_route_id = ? AND dns_record_type = ? AND scope_key = ?", route.ID, "A", "country:HK").First(&state).Error; err != nil {
+		t.Fatalf("reload scheduling state: %v", err)
+	}
+	if state.SelectedTargets != `["8.8.4.4"]` {
+		t.Fatalf("expected older heartbeat not to overwrite state, got %+v", state)
+	}
+}
+
 func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	setupServiceTestDB(t)
 

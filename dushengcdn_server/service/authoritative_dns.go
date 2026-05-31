@@ -74,12 +74,13 @@ type DNSWorkerInput struct {
 }
 
 type DNSWorkerHeartbeatInput struct {
-	Version             string                `json:"version"`
-	Status              string                `json:"status"`
-	LastSnapshotVersion string                `json:"last_snapshot_version"`
-	LastSnapshotAt      *time.Time            `json:"last_snapshot_at"`
-	LastError           string                `json:"last_error"`
-	Rollups             []DNSQueryRollupInput `json:"rollups"`
+	Version             string                                    `json:"version"`
+	Status              string                                    `json:"status"`
+	LastSnapshotVersion string                                    `json:"last_snapshot_version"`
+	LastSnapshotAt      *time.Time                                `json:"last_snapshot_at"`
+	LastError           string                                    `json:"last_error"`
+	Rollups             []DNSQueryRollupInput                     `json:"rollups"`
+	SchedulingStates    []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type DNSQueryRollupInput struct {
@@ -842,6 +843,9 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	worker.LastSeenAt = &now
 	worker.LastError = truncateForDatabase(strings.TrimSpace(input.LastError), 16000)
 	if err := worker.Update(); err != nil {
+		return nil, err
+	}
+	if err := persistDNSWorkerSchedulingStates(input.SchedulingStates); err != nil {
 		return nil, err
 	}
 	if err := persistDNSQueryRollups(worker.WorkerID, input.Rollups); err != nil {
@@ -1856,10 +1860,114 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 	return nil
 }
 
+func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulingState) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	routeIDs := make([]uint, 0, len(inputs))
+	seenRoutes := map[uint]struct{}{}
+	for _, input := range inputs {
+		if input.RouteID == 0 {
+			continue
+		}
+		if _, ok := seenRoutes[input.RouteID]; ok {
+			continue
+		}
+		seenRoutes[input.RouteID] = struct{}{}
+		routeIDs = append(routeIDs, input.RouteID)
+	}
+	if len(routeIDs) == 0 {
+		return nil
+	}
+	var routes []*model.ProxyRoute
+	if err := model.DB.
+		Where("id IN ? AND enabled = ? AND dns_provider_mode = ? AND dns_zone_id_ref IS NOT NULL", routeIDs, true, DNSProviderModeAuthoritative).
+		Find(&routes).Error; err != nil {
+		return err
+	}
+	routeRecordTypes := make(map[uint]string, len(routes))
+	for _, route := range routes {
+		if route == nil || route.ID == 0 {
+			continue
+		}
+		recordType := normalizeDNSRecordType(route.DNSRecordType)
+		if recordType != "A" && recordType != "AAAA" {
+			continue
+		}
+		routeRecordTypes[route.ID] = recordType
+	}
+	now := time.Now()
+	for _, input := range inputs {
+		expectedType, ok := routeRecordTypes[input.RouteID]
+		if !ok {
+			continue
+		}
+		recordType := normalizeDNSRecordType(input.RecordType)
+		if recordType != expectedType {
+			continue
+		}
+		scopeKey := normalizeDNSSourceScope(input.ScopeKey)
+		selectedTargets, err := normalizeDNSRecordContents(recordType, input.SelectedTargets)
+		if err != nil || len(selectedTargets) == 0 {
+			continue
+		}
+		desiredTargets := input.DesiredTargets
+		if len(desiredTargets) > 0 {
+			desiredTargets, err = normalizeDNSRecordContents(recordType, desiredTargets)
+			if err != nil {
+				desiredTargets = []string{}
+			}
+		}
+		lastChangedAt := input.LastChangedAt
+		if lastChangedAt == nil || lastChangedAt.IsZero() {
+			lastChangedAt = &now
+		}
+		if err := upsertDNSWorkerSchedulingState(input.RouteID, recordType, scopeKey, selectedTargets, desiredTargets, *lastChangedAt, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func upsertDNSWorkerSchedulingState(routeID uint, recordType string, scopeKey string, selectedTargets []string, desiredTargets []string, lastChangedAt time.Time, evaluatedAt time.Time) error {
+	state := model.GSLBSchedulingState{}
+	err := model.DB.Where("proxy_route_id = ? AND dns_record_type = ? AND scope_key = ?", routeID, recordType, scopeKey).First(&state).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		state = model.GSLBSchedulingState{
+			ProxyRouteID:  routeID,
+			DNSRecordType: recordType,
+			ScopeKey:      scopeKey,
+			CreatedAt:     evaluatedAt,
+		}
+	} else if err != nil {
+		return err
+	}
+	if state.LastChangedAt != nil && state.LastChangedAt.After(lastChangedAt) {
+		return nil
+	}
+	changedAt := lastChangedAt.UTC()
+	evaluated := evaluatedAt.UTC()
+	state.DNSRecordType = recordType
+	state.ScopeKey = scopeKey
+	state.SelectedTargets = encodeGSLBTargetList(selectedTargets)
+	state.DesiredTargets = encodeGSLBTargetList(desiredTargets)
+	state.LastReason = "reported by DNS Worker heartbeat"
+	state.LastChangedAt = &changedAt
+	state.LastEvaluatedAt = &evaluated
+	return model.DB.Save(&state).Error
+}
+
 func normalizeDNSSourceScope(raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return defaultGSLBScopeKey
+	}
+	prefix, country, ok := strings.Cut(value, ":")
+	if ok && strings.EqualFold(strings.TrimSpace(prefix), "country") {
+		country = strings.ToUpper(strings.TrimSpace(country))
+		if len(country) == 2 {
+			return "country:" + country
+		}
 	}
 	if len(value) > 64 {
 		value = value[:64]

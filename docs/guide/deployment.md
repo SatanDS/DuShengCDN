@@ -215,7 +215,7 @@ go run ./cmd/dns-worker \
 * 在注册商处将需要托管的域名 NS 委派到这些 Worker，并按需配置 Glue 记录。
 * 防火墙必须同时放行 UDP `53` 和 TCP `53`。
 * Worker 到 Server 的快照拉取接口必须使用 HTTPS 和专属 Worker Token。
-* Server 短暂不可用时，Worker 使用最后一次校验通过的有效快照继续回答；快照超过最大有效期后动态 GSLB 记录应返回 `SERVFAIL`。本地快照缓存会写入 SHA-256 checksum 元数据并携带可恢复的 GSLB 防抖状态，启动加载时校验完整性并恢复最近可用选择；旧版本生成的裸快照 JSON 仍兼容读取。
+* Server 短暂不可用时，Worker 使用最后一次校验通过的有效快照继续回答；快照超过最大有效期后动态 GSLB 记录应返回 `SERVFAIL`。本地快照缓存会写入 SHA-256 checksum 元数据并携带可恢复的 GSLB 防抖状态，启动加载时校验完整性并恢复最近可用选择；Worker 运行中产生的新防抖状态会随 heartbeat 批量回传 Server；旧版本生成的裸快照 JSON 仍兼容读取。
 * Worker 默认按来源 IP 每秒最多处理 `200` 次查询，超过后返回 `REFUSED`；可通过 `--query-rate-limit` 或 `DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT` 调整，设为 `0` 表示关闭。
 * Worker 默认把 UDP 响应上限限制为 `1232` 字节；超过时设置 TC 位让递归解析器回退 TCP，可通过 `--udp-response-size` 或 `DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE` 调整。
 * DNS Worker 不替代 Agent/OpenResty。反向代理配置修改后仍需发布并激活版本，Agent 才会应用。
