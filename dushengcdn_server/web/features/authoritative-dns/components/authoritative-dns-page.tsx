@@ -44,7 +44,9 @@ import type {
   DNSZoneItem,
   DNSZoneMutationPayload,
 } from '@/features/authoritative-dns/types';
+import { getProxyRoutes } from '@/features/proxy-routes/api/proxy-routes';
 import { getErrorMessage } from '@/features/proxy-routes/helpers';
+import type { ProxyRouteItem } from '@/features/proxy-routes/types';
 import {
   CodeBlock,
   DangerButton,
@@ -64,7 +66,7 @@ type FeedbackState = {
   message: string;
 };
 
-type ActiveTab = 'zones' | 'workers';
+type ActiveTab = 'zones' | 'workers' | 'migration';
 
 type ZoneFormValues = {
   name: string;
@@ -101,11 +103,66 @@ const dnsRecordTypes: DNSRecordType[] = [
   'SOA',
 ];
 
+const proxyRouteDetailPath = '/proxy-route/detail';
+
 function linesFromText(value: string) {
   return value
     .split(/[\r\n,，;；]+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeDNSName(value: string) {
+  return value.trim().toLowerCase().replace(/\.$/, '');
+}
+
+function domainBelongsToZone(domain: string, zoneName: string) {
+  const normalizedDomain = normalizeDNSName(domain);
+  const normalizedZoneName = normalizeDNSName(zoneName);
+  return (
+    normalizedDomain === normalizedZoneName ||
+    normalizedDomain.endsWith(`.${normalizedZoneName}`)
+  );
+}
+
+function getRouteDomains(route: ProxyRouteItem) {
+  const domains = route.domains?.length ? route.domains : [route.domain];
+  return domains.map((domain) => domain.trim()).filter(Boolean);
+}
+
+function findMatchingZone(route: ProxyRouteItem, zones: DNSZoneItem[]) {
+  const domains = getRouteDomains(route);
+  if (domains.length === 0) {
+    return null;
+  }
+
+  return (
+    zones
+      .filter((zone) =>
+        domains.every((domain) => domainBelongsToZone(domain, zone.name)),
+      )
+      .sort((left, right) => right.name.length - left.name.length)[0] ?? null
+  );
+}
+
+function getRouteDetailHref(route: ProxyRouteItem) {
+  return `${proxyRouteDetailPath}?id=${route.id}`;
+}
+
+function getGSLBDescription(route: ProxyRouteItem) {
+  if (!route.gslb_enabled) {
+    return route.node_pool || 'default';
+  }
+
+  const enabledPools =
+    route.gslb_policy?.pools?.filter((pool) => pool.enabled) ?? [];
+  if (enabledPools.length === 0) {
+    return '已启用，未配置节点池';
+  }
+
+  return enabledPools
+    .map((pool) => `${pool.name || '未命名'}:${pool.weight}`)
+    .join(' / ');
 }
 
 function zoneToFormValues(zone?: DNSZoneItem | null): ZoneFormValues {
@@ -269,6 +326,10 @@ export function AuthoritativeDNSPage() {
     queryKey: ['authoritative-dns', 'workers'],
     queryFn: getDNSWorkers,
   });
+  const proxyRoutesQuery = useQuery({
+    queryKey: ['proxy-routes'],
+    queryFn: getProxyRoutes,
+  });
   const observabilityQuery = useQuery({
     queryKey: [
       'authoritative-dns',
@@ -280,6 +341,10 @@ export function AuthoritativeDNSPage() {
 
   const zones = useMemo(() => zonesQuery.data ?? [], [zonesQuery.data]);
   const workers = useMemo(() => workersQuery.data ?? [], [workersQuery.data]);
+  const proxyRoutes = useMemo(
+    () => proxyRoutesQuery.data ?? [],
+    [proxyRoutesQuery.data],
+  );
   const observability = observabilityQuery.data ?? null;
   const selectedZone = useMemo(
     () => zones.find((zone) => zone.id === selectedZoneId) ?? zones[0] ?? null,
@@ -502,6 +567,11 @@ export function AuthoritativeDNSPage() {
               label: 'DNS Worker',
               description: '管理权威 DNS 查询节点和快照状态。',
             },
+            {
+              key: 'migration' as const,
+              label: '迁移向导',
+              description: '检查 Cloudflare 站点切换到自建权威 DNS 的准备项。',
+            },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -555,12 +625,24 @@ export function AuthoritativeDNSPage() {
               deleteZoneMutation.isPending || deleteRecordMutation.isPending
             }
           />
-        ) : (
+        ) : activeTab === 'workers' ? (
           <WorkersPanel
             workers={workers}
             onCreateWorker={() => setIsWorkerModalOpen(true)}
             onDeleteWorker={handleDeleteWorker}
             busy={deleteWorkerMutation.isPending}
+          />
+        ) : (
+          <DNSMigrationGuidePanel
+            routes={proxyRoutes}
+            zones={zones}
+            workers={workers}
+            routesLoading={proxyRoutesQuery.isLoading}
+            routesError={
+              proxyRoutesQuery.isError
+                ? getErrorMessage(proxyRoutesQuery.error)
+                : ''
+            }
           />
         )}
       </div>
@@ -1110,6 +1192,225 @@ function WorkersPanel({
         </div>
       )}
     </AppCard>
+  );
+}
+
+function DNSMigrationGuidePanel({
+  routes,
+  zones,
+  workers,
+  routesLoading,
+  routesError,
+}: {
+  routes: ProxyRouteItem[];
+  zones: DNSZoneItem[];
+  workers: DNSWorkerItem[];
+  routesLoading: boolean;
+  routesError: string;
+}) {
+  const enabledZones = zones.filter((zone) => zone.enabled);
+  const onlineWorkers = workers.filter((worker) => worker.status === 'online');
+  const candidates = routes
+    .filter((route) => route.dns_provider_mode !== 'authoritative')
+    .filter((route) => route.enabled || route.dns_auto_sync || route.gslb_enabled)
+    .map((route) => {
+      const matchingZone = findMatchingZone(route, zones);
+      const blockers = [
+        getRouteDomains(route).length === 0 ? '网站未配置域名' : '',
+        !matchingZone ? '没有匹配的网站 Zone' : '',
+        matchingZone && !matchingZone.enabled ? '匹配 Zone 已停用' : '',
+        onlineWorkers.length === 0 ? '没有在线 DNS Worker' : '',
+      ].filter(Boolean);
+      const warnings = [
+        !route.gslb_enabled ? '未启用 GSLB，多节点池实时分流不会生效' : '',
+        workers.length < 2 ? '生产环境建议至少部署 2 个 DNS Worker' : '',
+        route.dns_auto_sync ? '' : '当前未启用 Cloudflare 自动 DNS，请确认是否仍需要迁移',
+      ].filter(Boolean);
+
+      return {
+        route,
+        matchingZone,
+        blockers,
+        warnings,
+      };
+    });
+  const authoritativeRoutes = routes.filter(
+    (route) => route.dns_provider_mode === 'authoritative',
+  );
+
+  if (routesLoading) {
+    return (
+      <AppCard title="迁移向导">
+        <LoadingState />
+      </AppCard>
+    );
+  }
+
+  if (routesError) {
+    return <ErrorState title="迁移向导加载失败" description={routesError} />;
+  }
+
+  return (
+    <AppCard
+      title="迁移向导"
+      description="把 Cloudflare 同步站点切换到自建权威 DNS 前，先检查 Zone、Worker、域名归属和站点 GSLB 配置。"
+    >
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <InfoTile label="待迁移站点" value={formatCount(candidates.length)} />
+        <InfoTile
+          label="已权威 DNS"
+          value={formatCount(authoritativeRoutes.length)}
+        />
+        <InfoTile
+          label="可用 Zone"
+          value={`${enabledZones.length} / ${zones.length}`}
+        />
+        <InfoTile
+          label="在线 Worker"
+          value={`${onlineWorkers.length} / ${workers.length}`}
+        />
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-4">
+          {candidates.length === 0 ? (
+            <EmptyState
+              title="暂无需要迁移的网站"
+              description="当前网站配置已经没有 Cloudflare 同步候选，或仍未创建网站配置。"
+            />
+          ) : (
+            candidates.map(({ route, matchingZone, blockers, warnings }) => {
+              const ready = blockers.length === 0;
+              const routeDomains = getRouteDomains(route);
+              return (
+                <div
+                  key={route.id}
+                  className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
+                >
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div className="min-w-0 space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-base font-semibold break-all text-[var(--foreground-primary)]">
+                          {route.site_name || route.primary_domain}
+                        </h3>
+                        <StatusBadge
+                          label={ready ? '可切换' : '需处理'}
+                          variant={ready ? 'success' : 'warning'}
+                        />
+                        <StatusBadge
+                          label={
+                            route.dns_auto_sync
+                              ? 'Cloudflare 自动 DNS'
+                              : 'Cloudflare 模式'
+                          }
+                          variant={route.dns_auto_sync ? 'info' : 'warning'}
+                        />
+                        {route.gslb_enabled ? (
+                          <StatusBadge label="GSLB 已启用" variant="success" />
+                        ) : null}
+                      </div>
+                      <p className="text-sm break-all text-[var(--foreground-secondary)]">
+                        域名：{routeDomains.join('、') || '—'}
+                      </p>
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <InfoTile
+                          label="匹配 Zone"
+                          value={
+                            matchingZone
+                              ? `匹配 Zone ${matchingZone.name}`
+                              : '未匹配'
+                          }
+                        />
+                        <InfoTile
+                          label="当前节点池"
+                          value={getGSLBDescription(route)}
+                        />
+                        <InfoTile
+                          label="记录类型"
+                          value={route.dns_record_type || 'A'}
+                        />
+                      </div>
+                      {blockers.length > 0 ? (
+                        <CheckList title="阻断项" items={blockers} tone="danger" />
+                      ) : (
+                        <InlineMessage
+                          tone="success"
+                          message="Zone、域名归属和在线 Worker 已满足切换条件。"
+                        />
+                      )}
+                      {warnings.length > 0 ? (
+                        <CheckList title="建议项" items={warnings} tone="info" />
+                      ) : null}
+                    </div>
+                    <a
+                      href={getRouteDetailHref(route)}
+                      className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
+                    >
+                      去网站详情
+                    </a>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+            <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+              切换顺序
+            </h3>
+            <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--foreground-secondary)]">
+              <li>1. 创建覆盖网站域名的 Zone，并填写注册商要使用的 NS。</li>
+              <li>2. 部署至少两个 DNS Worker，确认 Worker 在线且能拉取快照。</li>
+              <li>3. 在网站详情的「自动 DNS」里切换为自建权威 DNS 并选择 Zone。</li>
+              <li>4. 到注册商把域名 NS 委派到 DNS Worker，再回到 Zone 详情检查委派。</li>
+            </ol>
+          </div>
+          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+            <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+              回滚路径
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-[var(--foreground-secondary)]">
+              如需回退，在网站详情把 DNS 模式改回 Cloudflare 同步，并在注册商把 NS 改回原 DNS 服务商；DNS TTL 到期后解析会逐步回到原模式。
+            </p>
+          </div>
+        </div>
+      </div>
+    </AppCard>
+  );
+}
+
+function CheckList({
+  title,
+  items,
+  tone,
+}: {
+  title: string;
+  items: string[];
+  tone: 'danger' | 'info';
+}) {
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+      <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+        {title}
+      </p>
+      <ul className="mt-2 space-y-1.5 text-sm leading-6 text-[var(--foreground-secondary)]">
+        {items.map((item) => (
+          <li key={`${title}-${item}`} className="flex gap-2">
+            <span
+              className={cn(
+                'mt-2 h-1.5 w-1.5 shrink-0 rounded-full',
+                tone === 'danger'
+                  ? 'bg-[var(--status-danger-foreground)]'
+                  : 'bg-[var(--status-info-foreground)]',
+              )}
+            />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

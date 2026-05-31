@@ -290,6 +290,88 @@ describe('Authoritative DNS page', () => {
           );
         }
 
+        if (url.includes('/proxy-routes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    id: 91,
+                    site_name: 'edge-site',
+                    domain: 'www.example.com',
+                    domains: ['www.example.com'],
+                    primary_domain: 'www.example.com',
+                    domain_count: 1,
+                    enabled: true,
+                    node_pool: 'hk',
+                    dns_auto_sync: true,
+                    dns_record_type: 'A',
+                    dns_provider_mode: 'cloudflare',
+                    dns_zone_id_ref: null,
+                    gslb_enabled: true,
+                    gslb_policy: {
+                      mode: 'cloudflare_dns',
+                      strategy: 'weighted',
+                      pools: [
+                        {
+                          name: 'hk',
+                          weight: 80,
+                          countries: ['HK'],
+                          enabled: true,
+                        },
+                        {
+                          name: 'eu',
+                          weight: 20,
+                          countries: ['DE'],
+                          enabled: true,
+                        },
+                      ],
+                      target_count: 1,
+                      ttl: 30,
+                      source_ip: {
+                        provider: 'none',
+                        api_url: '',
+                        api_token: '',
+                      },
+                      load_thresholds: {
+                        max_openresty_connections: 0,
+                        max_cpu_percent: 0,
+                        max_memory_percent: 0,
+                      },
+                      debounce: {
+                        cooldown_seconds: 60,
+                        unhealthy_threshold: 1,
+                        recovery_threshold: 1,
+                      },
+                    },
+                    created_at: '2026-05-31T08:00:00Z',
+                    updated_at: '2026-05-31T08:00:00Z',
+                  },
+                  {
+                    id: 92,
+                    site_name: 'authoritative-site',
+                    domain: 'api.example.com',
+                    domains: ['api.example.com'],
+                    primary_domain: 'api.example.com',
+                    domain_count: 1,
+                    enabled: true,
+                    node_pool: 'default',
+                    dns_auto_sync: false,
+                    dns_record_type: 'A',
+                    dns_provider_mode: 'authoritative',
+                    dns_zone_id_ref: 1,
+                    gslb_enabled: false,
+                    created_at: '2026-05-31T08:00:00Z',
+                    updated_at: '2026-05-31T08:00:00Z',
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
       }),
     );
@@ -316,6 +398,17 @@ describe('Authoritative DNS page', () => {
     expect(await screen.findByText('缺失 NS')).toBeInTheDocument();
     expect(screen.getAllByText('ns2.example.net').length).toBeGreaterThan(0);
     expect(screen.getByText(/Glue 提示/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^迁移向导/ }));
+    expect(await screen.findByText('待迁移站点')).toBeInTheDocument();
+    expect(screen.getByText('已权威 DNS')).toBeInTheDocument();
+    expect(screen.getAllByText('edge-site').length).toBeGreaterThan(0);
+    expect(screen.getByText('匹配 Zone example.com')).toBeInTheDocument();
+    expect(screen.getAllByText('在线 Worker').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1 / 1').length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole('link', { name: '去网站详情' }),
+    ).toHaveAttribute('href', '/proxy-route/detail?id=91');
 
     await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));
     await waitFor(() => {

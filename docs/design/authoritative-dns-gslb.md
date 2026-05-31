@@ -4,7 +4,7 @@
 
 本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
 
-当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警和 Zone 委派检查，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、注册商 NS 匹配状态和 Glue 提示。
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、注册商 NS 匹配状态、Glue 提示以及待迁移网站的 Zone/Worker/GSLB 准备状态。
 
 ## 目标能力
 
@@ -150,11 +150,12 @@ route_id + record_type + source_scope
 * 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、返回码、返回目标和动态站点分布。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
+* 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否已启用站点 GSLB，并跳转到对应网站详情执行切换。
 * GSLB 节点池策略继续放在网站配置里，权威 DNS 只负责实时执行策略。
 
 仍待增强的迁移体验：
 
-* 从 Cloudflare 同步模式切换到自建权威 DNS 模式的迁移向导。
+* 后续可在当前迁移检查基础上补充一键切换和迁移前后自动复测；当前版本保持检查、提示和跳转，不直接改写网站配置。
 
 ## DNS 协议行为
 
@@ -220,7 +221,7 @@ TTL 规则：
 
 * DNS Worker 已上报查询聚合、返回目标分布和错误码分布。
 * 管理端已展示 DNS Worker 状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、返回码、Worker/Zone/站点维度、返回目标分布、Zone 委派检查和 Glue 提示。
-* 提供从 Cloudflare 同步模式切换到自建权威 DNS 模式的向导。
+* 已提供从 Cloudflare 同步模式切换到自建权威 DNS 模式的迁移检查向导。
 * 文档补充注册商 NS、Glue、端口、防火墙和回滚步骤。
 
 ### 阶段 4：增强能力
@@ -249,5 +250,6 @@ TTL 规则：
 第三阶段完成时：
 
 * 管理端能展示 DNS Worker 在线状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、错误码、返回目标和委派检查。
+* 管理端能在「权威 DNS」迁移向导里列出 Cloudflare 模式站点候选，并检查 Zone、Worker、GSLB 与回滚提示。
 * 文档能指导用户从 Cloudflare 模式迁移到自建权威 DNS，并说明回滚方式。
 * 生产部署建议明确要求至少两个 DNS Worker 和 UDP/TCP 53 防火墙放行。

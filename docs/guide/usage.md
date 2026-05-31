@@ -80,6 +80,7 @@ Cloudflare 自动 DNS 支持：
 自建权威 DNS 的实时 GSLB 模式：
 
 * 左侧「权威 DNS」用于创建 Zone、维护 NS/SOA 和静态记录，并创建 DNS Worker Token。
+* 左侧「权威 DNS」的「迁移向导」会列出 Cloudflare 模式网站候选，检查是否已有匹配 Zone、在线 Worker 和 GSLB 配置，并提供跳转到网站详情的入口。
 * 网站详情的「自动 DNS」里可把 `DNS 模式` 从 `Cloudflare 同步` 切换为 `自建权威 DNS`，再绑定已启用的 DNS Zone。
 * 网站域名必须属于所选 Zone；切换后 Cloudflare 账号、橙云和 DDoS 自动橙云设置不再参与该网站 DNS 回答。
 * 域名需要在注册商处把 NS 委派到 DuShengCDN DNS Worker。
