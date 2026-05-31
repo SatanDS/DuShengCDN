@@ -111,7 +111,7 @@ route_id + record_type + source_scope
 | --- | --- |
 | `dns_zones` | 托管权威 Zone，例如 `example.com`，保存 SOA、NS、默认 TTL、启用状态和序列号 |
 | `dns_records` | Zone 内静态记录，至少支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA` |
-| `dns_workers` | 权威 DNS Worker 身份、Token、公网地址、版本、心跳和最近快照状态 |
+| `dns_workers` | 权威 DNS Worker 身份、Token、公网地址、版本、心跳、最近快照状态和最近一次 UDP/TCP 探测结果 |
 | `dns_zone_assignments` | 暂不落库，当前简化为全部 Worker 服务全部启用 Zone |
 | `dns_query_rollups` | DNS 查询聚合指标，按时间窗口、Zone、站点、qtype、rcode 和 Worker 统计 |
 | `gslb_scheduling_states` | 扩展 `record_type` 与 `scope_key` 维度，保存按来源作用域的最近选择和防抖状态 |
@@ -140,7 +140,7 @@ route_id + record_type + source_scope
 | `GET /api/dns-workers/` | 查看 DNS Worker 在线状态、监听地址、版本和快照时间 |
 | `GET /api/dns-workers/observability` | 查看 DNS Worker 查询聚合、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、Worker/Zone/站点维度和返回目标分布 |
 | `POST /api/dns-workers/` | 创建 DNS Worker Token |
-| `POST /api/dns-workers/{id}/probe` | 管理端按需从 Server 探测 DNS Worker 公网 UDP/TCP 53 可达性、RTT、RCODE 和应答数量 |
+| `POST /api/dns-workers/{id}/probe` | 管理端按需从 Server 探测 DNS Worker 公网 UDP/TCP 53 可达性、RTT、RCODE 和应答数量，并保存最近一次探测结果 |
 | `POST /api/dns-workers/{id}/delete` | 删除 DNS Worker |
 | `GET /api/dns-snapshot` | DNS Worker 拉取只读调度快照，需 Worker Token |
 | `POST /api/dns-worker-heartbeat` | DNS Worker 上报状态、快照版本和聚合指标 |
@@ -149,7 +149,7 @@ route_id + record_type + source_scope
 
 * 左侧「权威 DNS」主菜单作为独立基础设施资源入口。
 * 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 查询延迟、可用率、错误率、返回码、返回目标和动态站点分布。
-* DNS Worker 列表支持按需探测单个 Worker 的公网 UDP/TCP 53，返回一次性 RTT、RCODE、应答数量和错误信息，用于验证 Server 到该 NS 的解析可达性。
+* DNS Worker 列表支持按需探测单个 Worker 的公网 UDP/TCP 53，返回 RTT、RCODE、应答数量和错误信息，并在刷新后继续展示最近一次结果，用于验证 Server 到该 NS 的解析可达性。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
 * 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否已启用站点 GSLB，并跳转到对应网站详情执行切换。

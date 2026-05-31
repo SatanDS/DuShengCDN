@@ -118,19 +118,22 @@ type DNSRecordView struct {
 }
 
 type DNSWorkerView struct {
-	ID                  uint       `json:"id"`
-	WorkerID            string     `json:"worker_id"`
-	Name                string     `json:"name"`
-	Token               string     `json:"token,omitempty"`
-	PublicAddress       string     `json:"public_address"`
-	Version             string     `json:"version"`
-	Status              string     `json:"status"`
-	LastSnapshotVersion string     `json:"last_snapshot_version"`
-	LastSnapshotAt      *time.Time `json:"last_snapshot_at"`
-	LastSeenAt          *time.Time `json:"last_seen_at"`
-	LastError           string     `json:"last_error"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                  uint                       `json:"id"`
+	WorkerID            string                     `json:"worker_id"`
+	Name                string                     `json:"name"`
+	Token               string                     `json:"token,omitempty"`
+	PublicAddress       string                     `json:"public_address"`
+	Version             string                     `json:"version"`
+	Status              string                     `json:"status"`
+	LastSnapshotVersion string                     `json:"last_snapshot_version"`
+	LastSnapshotAt      *time.Time                 `json:"last_snapshot_at"`
+	LastSeenAt          *time.Time                 `json:"last_seen_at"`
+	LastError           string                     `json:"last_error"`
+	LastProbeAt         *time.Time                 `json:"last_probe_at"`
+	LastProbeQuery      string                     `json:"last_probe_query"`
+	LastProbeResults    []DNSWorkerProbeResultView `json:"last_probe_results"`
+	CreatedAt           time.Time                  `json:"created_at"`
+	UpdatedAt           time.Time                  `json:"updated_at"`
 }
 
 type DNSWorkerProbeInput struct {
@@ -247,20 +250,22 @@ type DNSWorkerHealthSummaryView struct {
 }
 
 type DNSWorkerHealthItemView struct {
-	WorkerID           string     `json:"worker_id"`
-	Name               string     `json:"name"`
-	Status             string     `json:"status"`
-	PublicAddress      string     `json:"public_address"`
-	QueryCount         int64      `json:"query_count"`
-	ErrorQueries       int64      `json:"error_queries"`
-	ErrorRatePercent   float64    `json:"error_rate_percent"`
-	AverageLatencyMs   float64    `json:"average_latency_ms"`
-	MaxLatencyMs       int64      `json:"max_latency_ms"`
-	LastSeenAt         *time.Time `json:"last_seen_at"`
-	LastSnapshotAt     *time.Time `json:"last_snapshot_at"`
-	SnapshotAgeSeconds int64      `json:"snapshot_age_seconds"`
-	SnapshotStale      bool       `json:"snapshot_stale"`
-	LastError          string     `json:"last_error"`
+	WorkerID           string                     `json:"worker_id"`
+	Name               string                     `json:"name"`
+	Status             string                     `json:"status"`
+	PublicAddress      string                     `json:"public_address"`
+	QueryCount         int64                      `json:"query_count"`
+	ErrorQueries       int64                      `json:"error_queries"`
+	ErrorRatePercent   float64                    `json:"error_rate_percent"`
+	AverageLatencyMs   float64                    `json:"average_latency_ms"`
+	MaxLatencyMs       int64                      `json:"max_latency_ms"`
+	LastSeenAt         *time.Time                 `json:"last_seen_at"`
+	LastSnapshotAt     *time.Time                 `json:"last_snapshot_at"`
+	SnapshotAgeSeconds int64                      `json:"snapshot_age_seconds"`
+	SnapshotStale      bool                       `json:"snapshot_stale"`
+	LastError          string                     `json:"last_error"`
+	LastProbeAt        *time.Time                 `json:"last_probe_at"`
+	LastProbeResults   []DNSWorkerProbeResultView `json:"last_probe_results"`
 }
 
 type DNSZoneDelegationCheckView struct {
@@ -712,6 +717,9 @@ func ProbeAuthoritativeDNSWorker(id uint, input DNSWorkerProbeInput) (*DNSWorker
 	for _, network := range []string{"udp", "tcp"} {
 		view.Results = append(view.Results, dnsWorkerProbeExchange(context.Background(), target, network, queryName, dns.TypeSOA, defaultDNSWorkerProbeTimeout))
 	}
+	if err := persistDNSWorkerProbeResult(worker, view); err != nil {
+		return nil, err
+	}
 	return view, nil
 }
 
@@ -936,6 +944,9 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		LastSnapshotAt:      worker.LastSnapshotAt,
 		LastSeenAt:          worker.LastSeenAt,
 		LastError:           worker.LastError,
+		LastProbeAt:         worker.LastProbeAt,
+		LastProbeQuery:      worker.LastProbeQuery,
+		LastProbeResults:    decodeDNSWorkerProbeResults(worker.LastProbeResult),
 		CreatedAt:           worker.CreatedAt,
 		UpdatedAt:           worker.UpdatedAt,
 	}
@@ -1106,6 +1117,21 @@ func recordDNSWorkerSnapshotPull(worker *model.DNSWorker, version string) error 
 	return worker.Update()
 }
 
+func persistDNSWorkerProbeResult(worker *model.DNSWorker, view *DNSWorkerProbeView) error {
+	if worker == nil || view == nil {
+		return nil
+	}
+	raw, err := json.Marshal(view.Results)
+	if err != nil {
+		return err
+	}
+	checkedAt := view.CheckedAt
+	worker.LastProbeAt = &checkedAt
+	worker.LastProbeQuery = strings.TrimSpace(view.QueryName + " " + view.QueryType)
+	worker.LastProbeResult = string(raw)
+	return worker.UpdateProbeResult()
+}
+
 func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error {
 	for _, input := range inputs {
 		if input.QueryCount <= 0 {
@@ -1170,6 +1196,29 @@ func normalizeDNSDurationMs(value int64) int64 {
 		return 0
 	}
 	return value
+}
+
+func decodeDNSWorkerProbeResults(raw string) []DNSWorkerProbeResultView {
+	if strings.TrimSpace(raw) == "" {
+		return []DNSWorkerProbeResultView{}
+	}
+	var results []DNSWorkerProbeResultView
+	if err := json.Unmarshal([]byte(raw), &results); err != nil {
+		return []DNSWorkerProbeResultView{}
+	}
+	cleaned := make([]DNSWorkerProbeResultView, 0, len(results))
+	for _, result := range results {
+		result.Network = strings.ToUpper(strings.TrimSpace(result.Network))
+		if result.Network == "" {
+			continue
+		}
+		if result.DurationMs < 0 {
+			result.DurationMs = 0
+		}
+		result.RCode = strings.ToUpper(strings.TrimSpace(result.RCode))
+		cleaned = append(cleaned, result)
+	}
+	return cleaned
 }
 
 func dnsWorkerLabels() (map[string]string, error) {
@@ -1619,6 +1668,8 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			SnapshotAgeSeconds: snapshotAgeSeconds,
 			SnapshotStale:      snapshotStale,
 			LastError:          worker.LastError,
+			LastProbeAt:        worker.LastProbeAt,
+			LastProbeResults:   decodeDNSWorkerProbeResults(worker.LastProbeResult),
 		})
 	}
 	if view.TotalWorkerCount > 0 {

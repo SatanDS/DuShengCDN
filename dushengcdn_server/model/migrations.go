@@ -1660,6 +1660,24 @@ func validateDatabaseSchemaV20(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV21 adds persisted DNS Worker probe status fields.
+func migrateV21(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV21(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV20(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{"last_probe_at", "last_probe_query", "last_probe_result"} {
+		if !db.Migrator().HasColumn(&DNSWorker{}, column) {
+			return fmt.Errorf("column dns_workers.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1681,6 +1699,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 17, toVersion: 18, migrate: migrateV18, validate: validateDatabaseSchemaV18},
 		{fromVersion: 18, toVersion: 19, migrate: migrateV19, validate: validateDatabaseSchemaV19},
 		{fromVersion: 19, toVersion: 20, migrate: migrateV20, validate: validateDatabaseSchemaV20},
+		{fromVersion: 20, toVersion: 21, migrate: migrateV21, validate: validateDatabaseSchemaV21},
 	}
 }
 
@@ -1769,7 +1788,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV20(db, backend); err != nil {
+	if err := validateDatabaseSchemaV21(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

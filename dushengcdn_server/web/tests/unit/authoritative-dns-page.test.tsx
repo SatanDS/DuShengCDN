@@ -205,6 +205,23 @@ describe('Authoritative DNS page', () => {
                         snapshot_age_seconds: 300,
                         snapshot_stale: false,
                         last_error: '',
+                        last_probe_at: '2026-05-31T08:12:00Z',
+                        last_probe_results: [
+                          {
+                            network: 'UDP',
+                            reachable: true,
+                            duration_ms: 18,
+                            rcode: 'NOERROR',
+                            answer_count: 1,
+                          },
+                          {
+                            network: 'TCP',
+                            reachable: true,
+                            duration_ms: 24,
+                            rcode: 'NOERROR',
+                            answer_count: 1,
+                          },
+                        ],
                       },
                       {
                         worker_id: 'dns-worker-8',
@@ -221,6 +238,8 @@ describe('Authoritative DNS page', () => {
                         snapshot_age_seconds: 120,
                         snapshot_stale: false,
                         last_error: '',
+                        last_probe_at: null,
+                        last_probe_results: [],
                       },
                     ],
                   },
@@ -333,6 +352,9 @@ describe('Authoritative DNS page', () => {
                   last_snapshot_at: null,
                   last_seen_at: null,
                   last_error: '',
+                  last_probe_at: null,
+                  last_probe_query: '',
+                  last_probe_results: [],
                   created_at: '2026-05-31T08:00:00Z',
                   updated_at: '2026-05-31T08:00:00Z',
                 },
@@ -359,6 +381,24 @@ describe('Authoritative DNS page', () => {
                     last_snapshot_at: '2026-05-31T08:05:00Z',
                     last_seen_at: '2026-05-31T08:06:00Z',
                     last_error: '',
+                    last_probe_at: '2026-05-31T08:12:00Z',
+                    last_probe_query: 'example.com. SOA',
+                    last_probe_results: [
+                      {
+                        network: 'UDP',
+                        reachable: true,
+                        duration_ms: 18,
+                        rcode: 'NOERROR',
+                        answer_count: 1,
+                      },
+                      {
+                        network: 'TCP',
+                        reachable: true,
+                        duration_ms: 24,
+                        rcode: 'NOERROR',
+                        answer_count: 1,
+                      },
+                    ],
                     created_at: '2026-05-31T08:00:00Z',
                     updated_at: '2026-05-31T08:06:00Z',
                   },
@@ -497,11 +537,12 @@ describe('Authoritative DNS page', () => {
     await waitFor(() => {
       expect(screen.getAllByText('ns1-hk').length).toBeGreaterThan(0);
     });
-    await user.click(screen.getByRole('button', { name: '探测' }));
     expect(await screen.findByText('最近探测')).toBeInTheDocument();
-    expect(await screen.findByText('UDP 可达')).toBeInTheDocument();
-    expect(await screen.findByText('TCP 可达')).toBeInTheDocument();
-    expect(screen.getByText('18 ms')).toBeInTheDocument();
+    expect((await screen.findAllByText('UDP 可达')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('TCP 可达')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('18 ms').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: '探测' }));
+    expect(await screen.findByText(/DNS Worker 探测完成/)).toBeInTheDocument();
 
     await user.click(screen.getAllByRole('button', { name: '创建 Worker' })[0]);
     const createDialog = await screen.findByRole('dialog', {

@@ -158,7 +158,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `gslb_scheduling_states.last_changed_at` | 运行时状态 | 最近一次实际切换 DNS 目标的时间，用于防抖冷却 |
 | `dns_zones` | 权威 DNS | 托管 Zone、SOA、NS、默认 TTL、启用状态和序列号 |
 | `dns_records` | 权威 DNS | Zone 内静态记录，至少支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA` |
-| `dns_workers` | 权威 DNS | DNS Worker 身份、Token、公网地址、版本、心跳、快照状态和按需探测目标 |
+| `dns_workers` | 权威 DNS | DNS Worker 身份、Token、公网地址、版本、心跳、快照状态和最近一次 UDP/TCP 探测结果 |
 | `dns_query_rollups` | 权威 DNS | DNS 查询聚合指标，按时间窗口、Zone、站点、qtype、rcode 和 Worker 统计 |
 
 自建权威 DNS 的完整设计见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。

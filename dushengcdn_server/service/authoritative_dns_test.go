@@ -535,6 +535,25 @@ func TestProbeAuthoritativeDNSWorkerChecksUDPAndTCP(t *testing.T) {
 	if probe.Results[0].Network != "UDP" || probe.Results[1].Network != "TCP" {
 		t.Fatalf("unexpected probe networks: %+v", probe.Results)
 	}
+	workers, err := ListAuthoritativeDNSWorkers()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSWorkers: %v", err)
+	}
+	if len(workers) != 1 || workers[0].LastProbeAt == nil || workers[0].LastProbeQuery != "example.com. SOA" {
+		t.Fatalf("unexpected persisted probe worker view: %+v", workers)
+	}
+	if len(workers[0].LastProbeResults) != 2 || !workers[0].LastProbeResults[0].Reachable {
+		t.Fatalf("unexpected persisted probe results: %+v", workers[0].LastProbeResults)
+	}
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 ||
+		summary.WorkerHealth.Workers[0].LastProbeAt == nil ||
+		len(summary.WorkerHealth.Workers[0].LastProbeResults) != 2 {
+		t.Fatalf("unexpected worker health probe state: %+v", summary.WorkerHealth.Workers)
+	}
 }
 
 func restoreDNSLookupNS(t *testing.T, lookup func(string) ([]*net.NS, error)) {

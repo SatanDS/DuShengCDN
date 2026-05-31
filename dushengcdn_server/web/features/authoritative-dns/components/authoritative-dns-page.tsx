@@ -253,6 +253,22 @@ function getProbeResultVariant(result: DNSWorkerProbeResult) {
   return result.reachable ? ('success' as const) : ('danger' as const);
 }
 
+function workerProbeToPanelData(worker: DNSWorkerItem): DNSWorkerProbe | null {
+  if (!worker.last_probe_at || worker.last_probe_results.length === 0) {
+    return null;
+  }
+  const [queryName = '', queryType = ''] = worker.last_probe_query.split(/\s+/);
+  return {
+    worker_id: worker.worker_id,
+    name: worker.name,
+    public_address: worker.public_address,
+    query_name: queryName,
+    query_type: queryType,
+    checked_at: worker.last_probe_at,
+    results: worker.last_probe_results,
+  };
+}
+
 function formatTrendHour(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -1254,7 +1270,9 @@ function WorkersPanel({
                   {worker.last_error ? (
                     <InlineMessage tone="danger" message={worker.last_error} />
                   ) : null}
-                  <DNSWorkerProbeResultPanel probe={probeResults[worker.id]} />
+                  <DNSWorkerProbeResultPanel
+                    probe={probeResults[worker.id] ?? workerProbeToPanelData(worker)}
+                  />
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">
                   <SecondaryButton
@@ -1769,6 +1787,18 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           tone="danger"
           message={worker.last_error}
         />
+      ) : null}
+      {worker.last_probe_at && worker.last_probe_results.length > 0 ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--foreground-secondary)]">
+          <span>最近探测 {formatRelativeTime(worker.last_probe_at)}</span>
+          {worker.last_probe_results.map((result) => (
+            <StatusBadge
+              key={`${worker.worker_id}-${result.network}`}
+              label={`${result.network} ${result.reachable ? '可达' : '失败'}`}
+              variant={getProbeResultVariant(result)}
+            />
+          ))}
+        </div>
       ) : null}
     </div>
   );

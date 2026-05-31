@@ -47,6 +47,9 @@ export interface DNSWorkerItem {
   last_snapshot_at?: string | null;
   last_seen_at?: string | null;
   last_error: string;
+  last_probe_at?: string | null;
+  last_probe_query: string;
+  last_probe_results: DNSWorkerProbeResult[];
   created_at: string;
   updated_at: string;
 }
@@ -180,6 +183,8 @@ export interface DNSWorkerHealthItem {
   snapshot_age_seconds: number;
   snapshot_stale: boolean;
   last_error: string;
+  last_probe_at?: string | null;
+  last_probe_results: DNSWorkerProbeResult[];
 }
 
 export type DNSZoneDelegationStatus =

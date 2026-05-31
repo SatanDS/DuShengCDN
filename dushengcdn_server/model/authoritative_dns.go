@@ -40,6 +40,9 @@ type DNSWorker struct {
 	LastSnapshotAt      *time.Time `json:"last_snapshot_at"`
 	LastSeenAt          *time.Time `json:"last_seen_at"`
 	LastError           string     `json:"last_error" gorm:"type:text"`
+	LastProbeAt         *time.Time `json:"last_probe_at"`
+	LastProbeQuery      string     `json:"last_probe_query" gorm:"size:255"`
+	LastProbeResult     string     `json:"last_probe_result" gorm:"type:text;not null;default:'[]'"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
@@ -137,6 +140,10 @@ func (worker *DNSWorker) Insert() error {
 
 func (worker *DNSWorker) Update() error {
 	return DB.Save(worker).Error
+}
+
+func (worker *DNSWorker) UpdateProbeResult() error {
+	return DB.Model(worker).Select("last_probe_at", "last_probe_query", "last_probe_result").Updates(worker).Error
 }
 
 func (worker *DNSWorker) Delete() error {

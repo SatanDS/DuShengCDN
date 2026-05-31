@@ -289,7 +289,7 @@ dig @YOUR_DNS_WORKER_IP www.example.com A
 
 生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。如果要按国家代码匹配 GSLB 节点池，可配置本地 MaxMind Country MMDB；未配置时会回退到 `global` 作用域。
 
-Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、Worker/Zone/站点维度和返回目标分布，便于确认实时 GSLB 是否按预期分流；这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
+Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、Worker/Zone/站点维度和返回目标分布，便于确认实时 GSLB 是否按预期分流；这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
 
 ### 5. 卸载 Agent
 

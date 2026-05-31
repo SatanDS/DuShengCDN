@@ -89,7 +89,7 @@ Cloudflare 自动 DNS 支持：
 * DNS Worker 会在每次 A/AAAA 查询时根据来源、国家代码、节点池权重、节点健康和负载评分返回边缘 IP。
 * DNS Worker 会从 Server 拉取只读调度快照，本地缓存最后一次有效快照；Server 短暂不可用时仍可继续回答静态记录。
 * 左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、Worker/Zone/站点维度和返回目标分布，适合确认 GSLB 是否按预期把查询分配到 HK、EU 等节点池，并发现多 Worker 快照版本不一致或快照过期问题。
-* 在 DNS Worker 列表可点击「探测」，由 Server 对该 Worker 公网地址发起 UDP/TCP 53 的 SOA 查询，确认解析可达性、RTT、RCODE 和错误信息。
+* 在 DNS Worker 列表可点击「探测」，由 Server 对该 Worker 公网地址发起 UDP/TCP 53 的 SOA 查询，确认解析可达性、RTT、RCODE 和错误信息；最近一次探测结果会保存在 Worker 列表和可用性面板中。
 * Worker 延迟来自 DNS Worker 本地处理真实查询的聚合耗时，不等同于用户到各地 NS 的公网 RTT；需要跨地域 RTT 时应另接主动探测。
 * 未配置本地 GeoIP 库时，国家代码为空，调度作用域会回退到 `global`。
 * 这种模式不依赖 Cloudflare API，也不支持 Cloudflare 橙云代理；需要自行保证 DNS Worker 的公网可达和高可用。
