@@ -788,11 +788,14 @@ build_binary_from_source() {
     die "failed to fetch ${REPO}@${SOURCE_REF}. Publish release assets or pass --source-ref with a valid branch, tag, or commit."
   }
   git -C "$source_dir" checkout --detach FETCH_HEAD >/dev/null 2>&1
+  local source_version
+  source_version="$(git -C "$source_dir" describe --tags --always --dirty 2>/dev/null || git -C "$source_dir" rev-parse --short HEAD 2>/dev/null || echo dev)"
+  log "Building Agent version ${source_version}."
 
   (
     cd "$source_dir/dushengcdn_agent"
     go mod download
-    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$TMP_BINARY" ./cmd/agent
+    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X=dushengcdn-agent/internal/config.AgentVersion=${source_version}" -o "$TMP_BINARY" ./cmd/agent
   )
 
   rm -rf "$source_dir"

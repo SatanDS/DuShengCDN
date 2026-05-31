@@ -254,12 +254,13 @@ DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -
 docker compose ps
 ```
 
-For source Compose builds, `DUSHENGCDN_VERSION` is passed into the Dockerfile and embedded into the Server binary. The top-bar version reads the currently running Server version from `/api/status`.
+For source Compose builds, `DUSHENGCDN_VERSION` is passed into the Dockerfile and embedded into the Server or Agent binary. The top-bar version reads the running Server version from `/api/status`, and the node list shows the version reported by Agent.
 
 Agent:
 
 * Agents follow stable releases by default.
-* The install script can be rerun to reinstall or upgrade.
+* The install script can be rerun to reinstall or upgrade. When no matching Release asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
+* For Docker Compose Agent deployments, rebuild with `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f docker-compose.agent.yaml up -d --build`.
 * Preview upgrades require manual action.
 
 Uninstall Agent:

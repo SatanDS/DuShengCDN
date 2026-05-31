@@ -155,9 +155,9 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
-| `DUSHENGCDN_VERSION` | 源码 Compose 构建 Server 镜像时传给 Dockerfile，并写入 Server 二进制版本 | `dev` |
+| `DUSHENGCDN_VERSION` | 源码 Compose 构建 Server 或 Agent 镜像时传给 Dockerfile，并写入对应二进制版本 | `dev` |
 
-源码 Compose 更新时建议使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build`，让顶栏“版本”显示当前运行中的 Git 版本。
+源码 Compose 更新 Server 时建议使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build`，让顶栏“版本”显示当前运行中的 Git 版本；更新 Agent Compose 时同样设置该变量，节点列表会显示 Agent 上报的 Git 版本。
 
 ## Agent 环境变量
 

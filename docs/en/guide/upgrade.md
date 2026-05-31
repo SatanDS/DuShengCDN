@@ -31,6 +31,18 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --agent-token YOUR_AGENT_TOKEN
 ```
 
+The script prefers GitHub Release binaries. If no matching asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
+
+For Docker Compose Agent deployments:
+
+```bash
+cd /opt/dushengcdn
+git fetch origin main
+git pull --ff-only origin main
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f docker-compose.agent.yaml up -d --build
+docker compose -f docker-compose.agent.yaml ps
+```
+
 Note: Currently, the installation script will delete the entire installation directory during reinstallation, including the old `agent.json`, local state, cache data, and downloaded binaries. Please confirm that you still have a usable Token on hand before executing.
 
 After upgrading, confirm:

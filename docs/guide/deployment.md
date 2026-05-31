@@ -287,13 +287,14 @@ docker compose ps
 ```
 
 执行 `git reset --hard` 前请确认仓库内没有需要保留的源码修改。
-源码 Compose 构建时，`DUSHENGCDN_VERSION` 会传给 Dockerfile 并写入 Server 二进制；管理端顶栏“版本”读取的是当前运行中 Server 的 `/api/status` 版本值。
+源码 Compose 构建时，`DUSHENGCDN_VERSION` 会传给 Dockerfile 并写入 Server 或 Agent 二进制；管理端顶栏“版本”读取的是当前运行中 Server 的 `/api/status` 版本值，节点列表显示 Agent 上报的版本值。
 
 Agent：
 
 * Agent 默认只跟随正式版自动更新。
 * Agent 自更新会要求 GitHub Release 同时包含目标二进制和同名 `.sha256` 校验文件，下载后必须通过 SHA-256 校验才会替换本地可执行文件。
-* 安装脚本可重复执行，用于重装或升级 Agent。
+* 安装脚本可重复执行，用于重装或升级 Agent；没有 Release 资产时会从源码构建，并写入当前 Git 版本，避免显示为 `dev`。
+* Docker Compose 部署 Agent 时，使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f docker-compose.agent.yaml up -d --build` 重新构建。
 * preview 升级需要手动触发。
 
 卸载 Agent：

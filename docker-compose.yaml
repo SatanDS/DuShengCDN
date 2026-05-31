@@ -1,8 +1,10 @@
 services:
   dushengcdn-agent:
     build:
-        context: .
-        dockerfile: dushengcdn_agent/Dockerfile
+      context: .
+      dockerfile: dushengcdn_agent/Dockerfile
+      args:
+        VERSION: ${DUSHENGCDN_VERSION:-dev}
     container_name: dushengcdn-agent
     restart: unless-stopped
 

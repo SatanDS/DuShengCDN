@@ -278,9 +278,9 @@ DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -
 docker compose ps
 ```
 
-源码 Compose 构建时，`DUSHENGCDN_VERSION` 会写入 Server 二进制；管理端顶栏“版本”显示的是当前运行中的 Server 版本。
+源码 Compose 构建时，`DUSHENGCDN_VERSION` 会写入 Server 或 Agent 二进制；管理端顶栏“版本”显示的是当前运行中的 Server 版本，节点列表显示 Agent 上报的版本。
 
-Agent 使用安装脚本部署时，可重复执行安装命令重装或升级。注意安装脚本会删除旧安装目录，执行前确认 Token 可用。
+Agent 使用安装脚本部署时，可重复执行安装命令重装或升级。脚本没有找到 Release 资产时会从源码构建，并写入当前 Git 版本，避免节点版本显示为 `dev`。注意安装脚本会删除旧安装目录，执行前确认 Token 可用。
 
 ## 14. 备份与恢复
 

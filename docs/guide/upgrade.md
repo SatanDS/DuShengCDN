@@ -33,7 +33,7 @@ docker compose ps
 ```
 
 为了减少后续冲突，建议把本地端口映射、数据库密码、`SESSION_SECRET` 和 DSN 保存到独立部署记录或 Compose override 中，而不是长期直接改仓库模板。
-源码 Compose 构建时，`DUSHENGCDN_VERSION` 会写入 Server 二进制；管理端顶栏“版本”显示的是当前运行中的 Server 版本。
+源码 Compose 构建时，`DUSHENGCDN_VERSION` 会写入 Server 或 Agent 二进制；管理端顶栏“版本”显示的是当前运行中的 Server 版本，节点列表显示 Agent 上报的版本。
 
 升级后确认：
 
@@ -54,6 +54,18 @@ docker compose logs -n 100 dushengcdn
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
   --agent-token YOUR_AGENT_TOKEN
+```
+
+脚本会优先下载 GitHub Release 中的 Agent 二进制；没有匹配资产时会从源码构建，并写入当前 Git 版本，避免节点版本显示为 `dev`。
+
+Docker Compose 部署 Agent 时：
+
+```bash
+cd /opt/dushengcdn
+git fetch origin main
+git pull --ff-only origin main
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f docker-compose.agent.yaml up -d --build
+docker compose -f docker-compose.agent.yaml ps
 ```
 
 注意：当前安装脚本重装时会删除整个安装目录，包括旧 `agent.json`、本地状态、缓存数据和下载的二进制。执行前请确认手头仍有可用 Token。

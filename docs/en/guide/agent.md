@@ -27,6 +27,8 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --discovery-token YOUR_DISCOVERY_TOKEN
 ```
 
+The script prefers GitHub Release binaries. If no matching asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
+
 ## Configuration Example
 
 ```json

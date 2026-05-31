@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --agent-token YOUR_AGENT_TOKEN
 ```
 
-安装脚本会下载最新 Agent，默认写入 `/opt/dushengcdn-agent`，生成 `agent.json`，并在 Linux + systemd 环境创建 `dushengcdn-agent.service`。
+安装脚本会下载最新 Agent，默认写入 `/opt/dushengcdn-agent`，生成 `agent.json`，并在 Linux + systemd 环境创建 `dushengcdn-agent.service`。脚本优先下载 GitHub Release 中的二进制；没有匹配资产时会从源码构建，并写入当前 Git 版本，避免节点版本显示为 `dev`。
 
 支持参数：
 

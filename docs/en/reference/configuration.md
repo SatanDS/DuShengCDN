@@ -39,9 +39,9 @@ When `DSN` and `SQL_DSN` both exist, `DSN` wins. PostgreSQL is preferred when co
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `DUSHENGCDN_VERSION` | Passed into the Dockerfile for source Compose Server builds and embedded into the Server binary | `dev` |
+| `DUSHENGCDN_VERSION` | Passed into the Dockerfile for source Compose Server or Agent builds and embedded into the matching binary | `dev` |
 
-For source Compose updates, use `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build` so the top-bar version reflects the running Git build.
+For source Compose Server updates, use `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build` so the top-bar version reflects the running Git build. Set the same variable for Agent Compose rebuilds so the node list shows the Git version reported by Agent.
 
 ## Runtime Options
 
