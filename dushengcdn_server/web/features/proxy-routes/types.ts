@@ -42,6 +42,36 @@ export interface ProxyRouteWAFConfig {
   block_rules: ProxyRouteWAFCustomRules;
 }
 
+export interface ProxyRouteGSLBPoolPolicy {
+  name: string;
+  weight: number;
+  countries: string[];
+  enabled: boolean;
+}
+
+export interface ProxyRouteGSLBPolicy {
+  mode: 'cloudflare_dns';
+  strategy: 'healthy' | 'weighted' | 'load_aware';
+  pools: ProxyRouteGSLBPoolPolicy[];
+  target_count: number;
+  ttl: number;
+  source_ip: {
+    provider: 'none' | 'http';
+    api_url: string;
+    api_token: string;
+  };
+  load_thresholds: {
+    max_openresty_connections: number;
+    max_cpu_percent: number;
+    max_memory_percent: number;
+  };
+  debounce: {
+    cooldown_seconds: number;
+    unhealthy_threshold: number;
+    recovery_threshold: number;
+  };
+}
+
 export interface ProxyRouteItem {
   id: number;
   site_name: string;
@@ -89,7 +119,10 @@ export interface ProxyRouteItem {
   dns_record_content: string;
   dns_auto_target: boolean;
   dns_target_count: number;
-  dns_schedule_mode: 'healthy' | 'weighted';
+  dns_schedule_mode: 'healthy' | 'weighted' | 'load_aware';
+  dns_ttl: number;
+  gslb_enabled: boolean;
+  gslb_policy: ProxyRouteGSLBPolicy;
   dns_record_ids: Record<string, string>;
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'manual' | 'auto';
@@ -146,7 +179,10 @@ export interface ProxyRouteMutationPayload {
   dns_record_content?: string;
   dns_auto_target?: boolean;
   dns_target_count?: number;
-  dns_schedule_mode?: 'healthy' | 'weighted';
+  dns_schedule_mode?: 'healthy' | 'weighted' | 'load_aware';
+  dns_ttl?: number;
+  gslb_enabled?: boolean;
+  gslb_policy?: ProxyRouteGSLBPolicy;
   cloudflare_proxied?: boolean;
   ddos_protection_mode?: 'off' | 'manual' | 'auto';
   remark: string;

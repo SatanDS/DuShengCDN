@@ -20,6 +20,7 @@ import {
   NodePoolSelect,
 } from '@/features/proxy-routes/components/node-pool-select';
 import {
+  buildDefaultGSLBPolicy,
   buildOriginUrl,
   getErrorMessage,
   parseOriginUrl,
@@ -56,7 +57,8 @@ const createWebsiteSchema = z
     dns_record_type: z.enum(['A', 'AAAA', 'CNAME']),
     dns_record_content: z.string(),
     dns_target_count: z.coerce.number().int().min(1).max(20),
-    dns_schedule_mode: z.enum(['healthy', 'weighted']),
+    dns_schedule_mode: z.enum(['healthy', 'weighted', 'load_aware']),
+    dns_ttl: z.coerce.number().int().min(1).max(86400),
     cloudflare_proxied: z.boolean(),
     ddos_protection_mode: z.enum(['off', 'manual', 'auto']),
     enabled: z.boolean(),
@@ -131,6 +133,7 @@ const defaultValues: CreateWebsiteFormValues = {
   dns_record_content: '',
   dns_target_count: 1,
   dns_schedule_mode: 'healthy',
+  dns_ttl: 1,
   cloudflare_proxied: false,
   ddos_protection_mode: 'off',
   enabled: true,
@@ -222,6 +225,9 @@ export function ProxyRouteCreateDrawer({
       const { urls } = parseOriginUrls(values.origin_urls_text);
       const primaryOrigin = parseOriginUrl(urls[0]);
       const dnsAccountID = Number(values.dns_account_id);
+      const gslbPolicy = buildDefaultGSLBPolicy(
+        values.node_pool.trim() || 'default',
+      );
 
       return createProxyRoute({
         site_name: values.site_name.trim() || domains[0],
@@ -277,6 +283,14 @@ export function ProxyRouteCreateDrawer({
         dns_auto_target: values.dns_auto_sync && values.dns_record_content.trim() === '',
         dns_target_count: values.dns_target_count,
         dns_schedule_mode: values.dns_schedule_mode,
+        dns_ttl: values.dns_ttl,
+        gslb_enabled: false,
+        gslb_policy: {
+          ...gslbPolicy,
+          strategy: values.dns_schedule_mode,
+          target_count: values.dns_target_count,
+          ttl: values.dns_ttl,
+        },
         cloudflare_proxied: values.cloudflare_proxied,
         ddos_protection_mode: values.ddos_protection_mode,
         remark: values.remark.trim(),
@@ -464,7 +478,19 @@ export function ProxyRouteCreateDrawer({
                   <ResourceSelect {...form.register('dns_schedule_mode')}>
                     <option value="healthy">按健康时间</option>
                     <option value="weighted">按权重优先</option>
+                    <option value="load_aware">负载感知</option>
                   </ResourceSelect>
+                </ResourceField>
+
+                <ResourceField label="DNS TTL" hint="1 表示 Cloudflare 自动 TTL。">
+                  <ResourceInput
+                    type="number"
+                    min={1}
+                    max={86400}
+                    {...form.register('dns_ttl', {
+                      valueAsNumber: true,
+                    })}
+                  />
                 </ResourceField>
               </>
             ) : null}

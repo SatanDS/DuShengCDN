@@ -61,7 +61,13 @@ definitions:
         type: string
       remote_addr:
         type: string
+      request_bytes:
+        type: integer
+      response_bytes:
+        type: integer
       status_code:
+        type: integer
+      upstream_bytes:
         type: integer
     type: object
   service.AgentNodeHealthEvent:
@@ -174,6 +180,16 @@ definitions:
     type: object
   service.AgentNodeTrafficReport:
     properties:
+      cache_bypass_count:
+        type: integer
+      cache_expired_count:
+        type: integer
+      cache_hit_count:
+        type: integer
+      cache_miss_count:
+        type: integer
+      cache_stale_count:
+        type: integer
       error_count:
         type: integer
       request_count:
@@ -191,6 +207,10 @@ definitions:
           type: integer
         type: object
       unique_visitor_count:
+        type: integer
+      upstream_error_count:
+        type: integer
+      upstream_response_ms:
         type: integer
       window_ended_at_unix:
         type: integer
@@ -231,6 +251,8 @@ definitions:
     properties:
       auto_update_enabled:
         type: boolean
+      drain_mode:
+        type: boolean
       geo_latitude:
         type: number
       geo_longitude:
@@ -243,12 +265,87 @@ definitions:
         type: string
       name:
         type: string
+      pool_name:
+        type: string
+      public_ips:
+        items:
+          type: string
+        type: array
+      scheduling_enabled:
+        type: boolean
+      tags:
+        items:
+          type: string
+        type: array
+      weight:
+        type: integer
     type: object
   service.ProxyRouteCustomHeaderInput:
     properties:
       key:
         type: string
       value:
+        type: string
+    type: object
+  service.ProxyRouteGSLBDebounce:
+    properties:
+      cooldown_seconds:
+        type: integer
+      recovery_threshold:
+        type: integer
+      unhealthy_threshold:
+        type: integer
+    type: object
+  service.ProxyRouteGSLBLoadThresholds:
+    properties:
+      max_cpu_percent:
+        type: number
+      max_memory_percent:
+        type: number
+      max_openresty_connections:
+        type: integer
+    type: object
+  service.ProxyRouteGSLBPolicy:
+    properties:
+      debounce:
+        $ref: '#/definitions/service.ProxyRouteGSLBDebounce'
+      load_thresholds:
+        $ref: '#/definitions/service.ProxyRouteGSLBLoadThresholds'
+      mode:
+        type: string
+      pools:
+        items:
+          $ref: '#/definitions/service.ProxyRouteGSLBPoolPolicy'
+        type: array
+      source_ip:
+        $ref: '#/definitions/service.ProxyRouteGSLBSourceIPProvider'
+      strategy:
+        type: string
+      target_count:
+        type: integer
+      ttl:
+        type: integer
+    type: object
+  service.ProxyRouteGSLBPoolPolicy:
+    properties:
+      countries:
+        items:
+          type: string
+        type: array
+      enabled:
+        type: boolean
+      name:
+        type: string
+      weight:
+        type: integer
+    type: object
+  service.ProxyRouteGSLBSourceIPProvider:
+    properties:
+      api_token:
+        type: string
+      api_url:
+        type: string
+      provider:
         type: string
     type: object
   service.ProxyRouteInput:
@@ -273,10 +370,34 @@ definitions:
         items:
           type: integer
         type: array
+      cloudflare_proxied:
+        type: boolean
       custom_headers:
         items:
           $ref: '#/definitions/service.ProxyRouteCustomHeaderInput'
         type: array
+      ddos_protection_mode:
+        type: string
+      dns_account_id:
+        type: integer
+      dns_auto_sync:
+        type: boolean
+      dns_auto_target:
+        type: boolean
+      dns_record_content:
+        type: string
+      dns_record_name:
+        type: string
+      dns_record_type:
+        type: string
+      dns_schedule_mode:
+        type: string
+      dns_target_count:
+        type: integer
+      dns_ttl:
+        type: integer
+      dns_zone_id:
+        type: string
       domain:
         type: string
       domain_cert_ids:
@@ -291,11 +412,17 @@ definitions:
         type: boolean
       enabled:
         type: boolean
+      gslb_enabled:
+        type: boolean
+      gslb_policy:
+        $ref: '#/definitions/service.ProxyRouteGSLBPolicy'
       limit_conn_per_ip:
         type: integer
       limit_conn_per_server:
         type: integer
       limit_rate:
+        type: string
+      node_pool:
         type: string
       origin_address:
         type: string
@@ -317,6 +444,14 @@ definitions:
         type: boolean
       redirect_http:
         type: boolean
+      region_restriction_countries:
+        items:
+          type: string
+        type: array
+      region_restriction_enabled:
+        type: boolean
+      region_restriction_mode:
+        type: string
       remark:
         type: string
       site_name:
@@ -325,6 +460,12 @@ definitions:
         items:
           type: string
         type: array
+      waf_config:
+        type: string
+      waf_enabled:
+        type: boolean
+      waf_mode:
+        type: string
     type: object
   service.TLSApplyInput:
     properties:
@@ -568,6 +709,21 @@ paths:
       summary: Get access log IP trend
       tags:
       - AccessLogs
+  /api/access-logs/metering-overview:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get observability metering overview
+      tags:
+      - AccessLogs
   /api/acme-accounts/default:
     get:
       produces:
@@ -683,6 +839,14 @@ paths:
       security:
       - AgentTokenAuth: []
       summary: Register or discover agent node
+      tags:
+      - Agent
+  /api/agent/ws:
+    get:
+      responses: {}
+      security:
+      - AgentTokenAuth: []
+      summary: Upgrade agent connection to websocket
       tags:
       - Agent
   /api/apply-logs/:
@@ -1231,6 +1395,32 @@ paths:
       security:
       - BearerAuth: []
       summary: Delete node
+      tags:
+      - Nodes
+  /api/nodes/{id}/force-sync:
+    post:
+      parameters:
+      - description: Node ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Request force sync config on node
       tags:
       - Nodes
   /api/nodes/{id}/observability:

@@ -71,6 +71,10 @@ Cloudflare 自动 DNS 支持：
 * A/AAAA 记录自动选择一个或多个在线节点公网 IP。
 * `记录内容` 手动填写时，可用逗号、空格或换行提供多个 A/AAAA 内容。
 * 自动模式可按健康时间选择，也可按节点权重优先选择。
+* 需要跨多个节点池分流时，在网站详情的「自动 DNS」里启用 GSLB 多节点池调度，并按“节点池 权重 可选国家代码”维护策略，例如 `hk 80 HK,TW`、`eu 20 DE,FR`。
+* GSLB 的 `负载感知` 模式会结合节点权重、池权重、OpenResty 当前连接数、CPU 和内存快照评分；超过配置阈值的节点会被跳过。
+* GSLB 会保存最近一次实际同步目标和期望目标，旧目标仍健康且处于冷却期时不会频繁切换 DNS。
+* 当前 Cloudflare 模式是后台重算并同步 DNS A/AAAA 记录，受 TTL 和递归 DNS 缓存影响；按每次用户来源实时返回不同 IP 需要后续接入自建权威 DNS。
 * Cloudflare API Token 可直接填写原始 Token，也兼容 `Bearer ...` 和包含 `api_token` / `apiToken` / `token` 的 JSON。
 
 ## 缓存清理与预热

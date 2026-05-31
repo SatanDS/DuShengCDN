@@ -1002,6 +1002,78 @@ func TestEnsureDatabaseSchemaUpToDateAddsAccessLogByteFields(t *testing.T) {
 	}
 }
 
+func TestEnsureDatabaseSchemaUpToDateAddsGSLBFields(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "gslb-fields.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&DatabaseSchemaVersion{},
+		&File{},
+		&User{},
+		&AuthSource{},
+		&ExternalAccount{},
+		&Option{},
+		&Origin{},
+		&ProxyRoute{},
+		&ConfigVersion{},
+		&Node{},
+		&NodeSystemProfile{},
+		&ApplyLog{},
+		&NodeMetricSnapshot{},
+		&NodeRequestReport{},
+		&NodeAccessLog{},
+		&NodeHealthEvent{},
+		&TLSCertificate{},
+		&ManagedDomain{},
+		&AcmeAccount{},
+		&DnsAccount{},
+	); err != nil {
+		t.Fatalf("AutoMigrate legacy schema: %v", err)
+	}
+	if err := db.Migrator().DropTable(&GSLBSchedulingState{}); err != nil {
+		t.Fatalf("drop gslb state table: %v", err)
+	}
+	if db.Migrator().HasColumn(&ProxyRoute{}, "dns_ttl") {
+		if err := db.Migrator().DropColumn(&ProxyRoute{}, "dns_ttl"); err != nil {
+			t.Fatalf("drop dns_ttl: %v", err)
+		}
+	}
+	if db.Migrator().HasColumn(&ProxyRoute{}, "gslb_enabled") {
+		if err := db.Migrator().DropColumn(&ProxyRoute{}, "gslb_enabled"); err != nil {
+			t.Fatalf("drop gslb_enabled: %v", err)
+		}
+	}
+	if db.Migrator().HasColumn(&ProxyRoute{}, "gslb_policy") {
+		if err := db.Migrator().DropColumn(&ProxyRoute{}, "gslb_policy"); err != nil {
+			t.Fatalf("drop gslb_policy: %v", err)
+		}
+	}
+	if err := saveDatabaseSchemaVersion(db, 17); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	for _, column := range []string{"dns_ttl", "gslb_enabled", "gslb_policy"} {
+		if !db.Migrator().HasColumn(&ProxyRoute{}, column) {
+			t.Fatalf("expected proxy_routes.%s column to exist", column)
+		}
+	}
+	if !db.Migrator().HasTable(&GSLBSchedulingState{}) {
+		t.Fatal("expected gslb_scheduling_states table to exist")
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
 func TestRunDatabaseSchemaMigrationDoesNotAdvanceVersionWhenValidationFails(t *testing.T) {
 	db := openBareTestSQLiteDB(t, "failed-validation.db")
 

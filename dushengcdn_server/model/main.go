@@ -31,6 +31,7 @@ func registeredModels() []any {
 		&Option{},
 		&Origin{},
 		&ProxyRoute{},
+		&GSLBSchedulingState{},
 		&ConfigVersion{},
 		&Node{},
 		&NodeSystemProfile{},

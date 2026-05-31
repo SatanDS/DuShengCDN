@@ -45,6 +45,9 @@ type ProxyRoute struct {
 	DNSAutoTarget              bool       `json:"dns_auto_target" gorm:"not null;default:false"`
 	DNSTargetCount             int        `json:"dns_target_count" gorm:"not null;default:1"`
 	DNSScheduleMode            string     `json:"dns_schedule_mode" gorm:"size:32;not null;default:'healthy'"`
+	DNSTTL                     int        `json:"dns_ttl" gorm:"not null;default:1"`
+	GSLBEnabled                bool       `json:"gslb_enabled" gorm:"not null;default:false"`
+	GSLBPolicy                 string     `json:"gslb_policy" gorm:"type:text;not null;default:'{}'"`
 	DNSRecordIDs               string     `json:"dns_record_ids" gorm:"type:text;not null;default:'{}'"`
 	CloudflareProxied          bool       `json:"cloudflare_proxied" gorm:"not null;default:false"`
 	DDOSProtectionMode         string     `json:"ddos_protection_mode" gorm:"size:16;not null;default:'off'"`
@@ -124,6 +127,9 @@ func (route *ProxyRoute) Update() error {
 		"dns_auto_target":              route.DNSAutoTarget,
 		"dns_target_count":             route.DNSTargetCount,
 		"dns_schedule_mode":            route.DNSScheduleMode,
+		"dns_ttl":                      route.DNSTTL,
+		"gslb_enabled":                 route.GSLBEnabled,
+		"gslb_policy":                  route.GSLBPolicy,
 		"dns_record_ids":               route.DNSRecordIDs,
 		"cloudflare_proxied":           route.CloudflareProxied,
 		"ddos_protection_mode":         route.DDOSProtectionMode,

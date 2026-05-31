@@ -1550,6 +1550,35 @@ func validateDatabaseSchemaV17(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV18 adds GSLB policy fields, DNS TTL, and scheduler debounce state.
+func migrateV18(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDatabaseSchemaV18(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV17(db, backend); err != nil {
+		return err
+	}
+	routeColumns := []string{
+		"dns_ttl",
+		"gslb_enabled",
+		"gslb_policy",
+	}
+	for _, column := range routeColumns {
+		if !db.Migrator().HasColumn(&ProxyRoute{}, column) {
+			return fmt.Errorf("column proxy_routes.%s is missing", column)
+		}
+	}
+	if !db.Migrator().HasTable(&GSLBSchedulingState{}) {
+		return fmt.Errorf("table gslb_scheduling_states is missing")
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1568,6 +1597,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 14, toVersion: 15, migrate: migrateV15, validate: validateDatabaseSchemaV15},
 		{fromVersion: 15, toVersion: 16, migrate: migrateV16, validate: validateDatabaseSchemaV16},
 		{fromVersion: 16, toVersion: 17, migrate: migrateV17, validate: validateDatabaseSchemaV17},
+		{fromVersion: 17, toVersion: 18, migrate: migrateV18, validate: validateDatabaseSchemaV18},
 	}
 }
 
@@ -1653,7 +1683,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureDefaultGitHubAuthSource(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV17(db, backend); err != nil {
+	if err := validateDatabaseSchemaV18(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

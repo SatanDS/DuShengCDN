@@ -141,7 +141,13 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `nodes.drain_mode` | 节点 | 排空节点，自动 DNS 和缓存运行时操作都会跳过 |
 | `proxy_routes.node_pool` | 网站配置 | 网站绑定的目标节点池 |
 | `proxy_routes.dns_target_count` | 网站配置 | 自动 DNS 最多同步的目标 IP 数量 |
-| `proxy_routes.dns_schedule_mode` | 网站配置 | 自动 DNS 选点模式：`healthy` 或 `weighted` |
+| `proxy_routes.dns_schedule_mode` | 网站配置 | 自动 DNS 选点模式：`healthy`、`weighted` 或 `load_aware` |
+| `proxy_routes.dns_ttl` | 网站配置 | Cloudflare DNS 记录 TTL；`1` 表示 Cloudflare 自动 TTL |
+| `proxy_routes.gslb_enabled` | 网站配置 | 是否启用站点级 GSLB 多节点池调度 |
+| `proxy_routes.gslb_policy` | 网站配置 | GSLB 策略 JSON，包含节点池权重、目标数量、TTL、来源识别接口、负载阈值和防抖参数 |
+| `gslb_scheduling_states.selected_targets` | 运行时状态 | 最近一次实际同步的 GSLB DNS 目标 |
+| `gslb_scheduling_states.desired_targets` | 运行时状态 | 最近一次评估得到的期望 GSLB DNS 目标 |
+| `gslb_scheduling_states.last_changed_at` | 运行时状态 | 最近一次实际切换 DNS 目标的时间，用于防抖冷却 |
 
 ## 前端构建环境变量
 

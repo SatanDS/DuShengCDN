@@ -35,6 +35,7 @@ import {
 } from '@/features/proxy-routes/components/node-pool-select';
 import {
   buildPayloadFromRoute,
+  buildDefaultGSLBPolicy,
   customHeadersToText,
   getErrorMessage,
   getWebsiteConfigSection,
@@ -273,7 +274,12 @@ type DNSAutomationValues = {
   dns_record_content: string;
   dns_auto_target: boolean;
   dns_target_count: number;
-  dns_schedule_mode: 'healthy' | 'weighted';
+  dns_schedule_mode: 'healthy' | 'weighted' | 'load_aware';
+  dns_ttl: number;
+  gslb_enabled: boolean;
+  gslb_pools_text: string;
+  gslb_max_openresty_connections: number;
+  gslb_cooldown_seconds: number;
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'manual' | 'auto';
 };
@@ -320,6 +326,39 @@ function parseRegionCountriesText(value: string) {
     .split(/[\s,，;；]+/)
     .map((item) => item.trim().toUpperCase())
     .filter(Boolean);
+}
+
+function gslbPoolsToText(route: ProxyRouteItem) {
+  const pools =
+    route.gslb_policy?.pools?.length > 0
+      ? route.gslb_policy.pools
+      : buildDefaultGSLBPolicy(route.node_pool || 'default').pools;
+  return pools
+    .filter((pool) => pool.enabled !== false)
+    .map((pool) => {
+      const countries = pool.countries?.length
+        ? ` ${pool.countries.join(',')}`
+        : '';
+      return `${pool.name} ${pool.weight || 100}${countries}`.trim();
+    })
+    .join('\n');
+}
+
+function parseGSLBPoolsText(value: string) {
+  const pools = linesFromTextarea(value).map((line) => {
+    const [name = '', rawWeight = '100', rawCountries = ''] = line.split(/\s+/, 3);
+    const weight = Number(rawWeight);
+    return {
+      name: name.trim(),
+      weight: Number.isFinite(weight) && weight > 0 ? weight : 100,
+      countries: rawCountries
+        .split(/[,，]/)
+        .map((item) => item.trim().toUpperCase())
+        .filter((item) => /^[A-Z0-9]{2}$/.test(item)),
+      enabled: true,
+    };
+  });
+  return pools.filter((pool) => pool.name !== '');
 }
 
 function ConfigSectionShell({
@@ -765,6 +804,13 @@ export function DNSAutomationSection({
       dns_auto_target: route.dns_auto_target,
       dns_target_count: route.dns_target_count || 1,
       dns_schedule_mode: route.dns_schedule_mode || 'healthy',
+      dns_ttl: route.dns_ttl || 1,
+      gslb_enabled: route.gslb_enabled,
+      gslb_pools_text: gslbPoolsToText(route),
+      gslb_max_openresty_connections:
+        route.gslb_policy?.load_thresholds?.max_openresty_connections || 0,
+      gslb_cooldown_seconds:
+        route.gslb_policy?.debounce?.cooldown_seconds || 60,
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
     },
@@ -781,6 +827,13 @@ export function DNSAutomationSection({
       dns_auto_target: route.dns_auto_target,
       dns_target_count: route.dns_target_count || 1,
       dns_schedule_mode: route.dns_schedule_mode || 'healthy',
+      dns_ttl: route.dns_ttl || 1,
+      gslb_enabled: route.gslb_enabled,
+      gslb_pools_text: gslbPoolsToText(route),
+      gslb_max_openresty_connections:
+        route.gslb_policy?.load_thresholds?.max_openresty_connections || 0,
+      gslb_cooldown_seconds:
+        route.gslb_policy?.debounce?.cooldown_seconds || 60,
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
     });
@@ -789,6 +842,7 @@ export function DNSAutomationSection({
   const autoSyncEnabled = form.watch('dns_auto_sync');
   const recordType = form.watch('dns_record_type');
   const autoTarget = form.watch('dns_auto_target');
+  const gslbEnabled = form.watch('gslb_enabled');
 
   return (
     <ConfigSectionShell
@@ -803,6 +857,9 @@ export function DNSAutomationSection({
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
           const dnsAccountID = Number(values.dns_account_id);
+          const baseGSLBPolicy =
+            route.gslb_policy || buildDefaultGSLBPolicy(route.node_pool);
+          const gslbPools = parseGSLBPoolsText(values.gslb_pools_text);
           onSave(
             buildPayloadFromRoute(route, {
               dns_auto_sync: values.dns_auto_sync,
@@ -816,9 +873,33 @@ export function DNSAutomationSection({
               dns_record_type: values.dns_record_type,
               dns_record_name: values.dns_record_name.trim(),
               dns_record_content: values.dns_record_content.trim(),
-              dns_auto_target: values.dns_auto_target,
+              dns_auto_target: values.gslb_enabled
+                ? true
+                : values.dns_auto_target,
               dns_target_count: values.dns_target_count,
               dns_schedule_mode: values.dns_schedule_mode,
+              dns_ttl: values.dns_ttl,
+              gslb_enabled: values.gslb_enabled,
+              gslb_policy: {
+                ...baseGSLBPolicy,
+                mode: 'cloudflare_dns',
+                strategy: values.dns_schedule_mode,
+                target_count: values.dns_target_count,
+                ttl: values.dns_ttl,
+                pools:
+                  gslbPools.length > 0
+                    ? gslbPools
+                    : buildDefaultGSLBPolicy(route.node_pool).pools,
+                load_thresholds: {
+                  ...baseGSLBPolicy.load_thresholds,
+                  max_openresty_connections:
+                    values.gslb_max_openresty_connections,
+                },
+                debounce: {
+                  ...baseGSLBPolicy.debounce,
+                  cooldown_seconds: values.gslb_cooldown_seconds,
+                },
+              },
               cloudflare_proxied: values.cloudflare_proxied,
               ddos_protection_mode: values.ddos_protection_mode,
             }),
@@ -929,7 +1010,7 @@ export function DNSAutomationSection({
         />
 
         {recordType !== 'CNAME' ? (
-          <div className="grid gap-5 md:grid-cols-2">
+          <div className="grid gap-5 md:grid-cols-3">
             <ResourceField
               label="目标数量"
               hint="自动选择时最多同步多少个节点 IP。"
@@ -947,7 +1028,7 @@ export function DNSAutomationSection({
 
             <ResourceField
               label="调度模式"
-              hint="加权模式会优先选择节点权重更高的 IP。"
+              hint="负载感知会结合连接数、CPU 和内存指标进行评分。"
             >
               <ResourceSelect
                 disabled={!autoSyncEnabled || !autoTarget}
@@ -955,8 +1036,90 @@ export function DNSAutomationSection({
               >
                 <option value="healthy">按健康时间</option>
                 <option value="weighted">按权重优先</option>
+                <option value="load_aware">负载感知</option>
               </ResourceSelect>
             </ResourceField>
+
+            <ResourceField label="DNS TTL" hint="1 表示 Cloudflare 自动 TTL。">
+              <ResourceInput
+                type="number"
+                min={1}
+                max={86400}
+                disabled={!autoSyncEnabled}
+                {...form.register('dns_ttl', {
+                  valueAsNumber: true,
+                })}
+              />
+            </ResourceField>
+          </div>
+        ) : null}
+
+        {recordType !== 'CNAME' ? (
+          <div className="space-y-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+            <ToggleField
+              label="启用 GSLB 多节点池调度"
+              description="开启后自动 DNS 会按多个节点池、权重和负载评分选择 A/AAAA 目标。"
+              checked={gslbEnabled}
+              disabled={!autoSyncEnabled}
+              onChange={(checked) => {
+                form.setValue('gslb_enabled', checked, { shouldDirty: true });
+                if (checked) {
+                  form.setValue('dns_auto_target', true, {
+                    shouldDirty: true,
+                  });
+                  form.setValue('dns_schedule_mode', 'load_aware', {
+                    shouldDirty: true,
+                  });
+                }
+              }}
+            />
+
+            {gslbEnabled ? (
+              <>
+                <ResourceField
+                  label="节点池权重"
+                  hint="每行一个节点池：池名 权重 可选国家代码。例：hk 80 HK,TW"
+                >
+                  <ResourceTextarea
+                    className="min-h-28"
+                    disabled={!autoSyncEnabled}
+                    placeholder={'hk 80 HK,TW\neu 20 DE,FR'}
+                    {...form.register('gslb_pools_text')}
+                  />
+                </ResourceField>
+
+                <div className="grid gap-5 md:grid-cols-2">
+                  <ResourceField
+                    label="最大连接阈值"
+                    hint="0 表示不按连接数剔除节点。"
+                  >
+                    <ResourceInput
+                      type="number"
+                      min={0}
+                      disabled={!autoSyncEnabled}
+                      {...form.register('gslb_max_openresty_connections', {
+                        valueAsNumber: true,
+                      })}
+                    />
+                  </ResourceField>
+
+                  <ResourceField
+                    label="切换冷却时间"
+                    hint="旧目标仍健康时，冷却期内不反复切换。"
+                  >
+                    <ResourceInput
+                      type="number"
+                      min={1}
+                      max={3600}
+                      disabled={!autoSyncEnabled}
+                      {...form.register('gslb_cooldown_seconds', {
+                        valueAsNumber: true,
+                      })}
+                    />
+                  </ResourceField>
+                </div>
+              </>
+            ) : null}
           </div>
         ) : null}
 

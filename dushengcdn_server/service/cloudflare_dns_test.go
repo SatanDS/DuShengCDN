@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -352,5 +353,262 @@ func TestSelectHealthyNodeDNSTargetsByPoolAndWeight(t *testing.T) {
 	}
 	if len(targets) != 2 || targets[0] != "1.1.1.1" || targets[1] != "8.8.8.8" {
 		t.Fatalf("unexpected targets: %#v", targets)
+	}
+}
+
+func TestSelectGSLBDNSTargetsAcrossWeightedPools(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	now := time.Now()
+	nodes := []*model.Node{
+		{
+			NodeID:          "node-hk-a",
+			Name:            "hk-a",
+			IP:              "8.8.8.8",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.8.8"]`,
+			Weight:          100,
+			AgentToken:      "token-hk-a",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-hk-b",
+			Name:            "hk-b",
+			IP:              "1.1.1.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          90,
+			AgentToken:      "token-hk-b",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-time.Second),
+		},
+		{
+			NodeID:          "node-eu-a",
+			Name:            "eu-a",
+			IP:              "9.9.9.9",
+			PoolName:        "eu",
+			PublicIPs:       `["9.9.9.9"]`,
+			Weight:          100,
+			AgentToken:      "token-eu-a",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+
+	policy := defaultGSLBPolicy("hk", 10, "weighted", 60)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 80, Enabled: true},
+		{Name: "eu", Weight: 20, Enabled: true},
+	}
+	rawPolicy, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("marshal policy: %v", err)
+	}
+	route := &model.ProxyRoute{
+		ID:              99,
+		NodePool:        "hk",
+		DNSTargetCount:  10,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      string(rawPolicy),
+	}
+
+	selection, err := selectGSLBDNSTargets(route, "A")
+	if err != nil {
+		t.Fatalf("select gslb targets: %v", err)
+	}
+	if len(selection.Targets) != 3 {
+		t.Fatalf("expected all available targets, got %#v", selection.Targets)
+	}
+	if selection.Targets[0] != "8.8.8.8" || selection.Targets[1] != "1.1.1.1" || selection.Targets[2] != "9.9.9.9" {
+		t.Fatalf("unexpected weighted target order: %#v", selection.Targets)
+	}
+	if selection.TTL != 60 || !selection.GSLB {
+		t.Fatalf("unexpected selection metadata: %#v", selection)
+	}
+}
+
+func TestSelectGSLBDNSTargetsSkipsOverloadedNode(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	now := time.Now()
+	overloaded := &model.Node{
+		NodeID:          "node-overloaded",
+		Name:            "overloaded",
+		IP:              "8.8.8.8",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.8.8"]`,
+		Weight:          1000,
+		AgentToken:      "token-overloaded",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}
+	normal := &model.Node{
+		NodeID:          "node-normal",
+		Name:            "normal",
+		IP:              "1.1.1.1",
+		PoolName:        "hk",
+		PublicIPs:       `["1.1.1.1"]`,
+		Weight:          100,
+		AgentToken:      "token-normal",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}
+	for _, node := range []*model.Node{overloaded, normal} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:               overloaded.NodeID,
+		CapturedAt:           now,
+		OpenrestyConnections: 9,
+	}).Insert(); err != nil {
+		t.Fatalf("insert overloaded metrics: %v", err)
+	}
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:               normal.NodeID,
+		CapturedAt:           now,
+		OpenrestyConnections: 2,
+	}).Insert(); err != nil {
+		t.Fatalf("insert normal metrics: %v", err)
+	}
+
+	policy := defaultGSLBPolicy("hk", 2, "load_aware", 60)
+	policy.LoadThresholds.MaxOpenrestyConnections = 5
+	rawPolicy, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("marshal policy: %v", err)
+	}
+	route := &model.ProxyRoute{
+		ID:              100,
+		NodePool:        "hk",
+		DNSTargetCount:  2,
+		DNSScheduleMode: "load_aware",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      string(rawPolicy),
+	}
+
+	selection, err := selectGSLBDNSTargets(route, "A")
+	if err != nil {
+		t.Fatalf("select gslb targets: %v", err)
+	}
+	if len(selection.Targets) != 1 || selection.Targets[0] != "1.1.1.1" {
+		t.Fatalf("expected overloaded node to be skipped, got %#v", selection.Targets)
+	}
+}
+
+func TestSelectGSLBDNSTargetsKeepsPreviousTargetsDuringCooldown(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	now := time.Now()
+	nodes := []*model.Node{
+		{
+			NodeID:          "node-previous",
+			Name:            "previous",
+			IP:              "8.8.8.8",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.8.8"]`,
+			Weight:          100,
+			AgentToken:      "token-previous",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-desired",
+			Name:            "desired",
+			IP:              "1.1.1.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          900,
+			AgentToken:      "token-desired",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+
+	lastChanged := now.Add(-10 * time.Second)
+	state := &model.GSLBSchedulingState{
+		ProxyRouteID:    101,
+		DNSRecordType:   "A",
+		SelectedTargets: `["8.8.8.8"]`,
+		DesiredTargets:  `["8.8.8.8"]`,
+		LastChangedAt:   &lastChanged,
+		LastEvaluatedAt: &lastChanged,
+	}
+	if err := model.DB.Create(state).Error; err != nil {
+		t.Fatalf("insert state: %v", err)
+	}
+
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 60)
+	policy.Debounce.CooldownSeconds = 60
+	rawPolicy, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("marshal policy: %v", err)
+	}
+	route := &model.ProxyRoute{
+		ID:              101,
+		NodePool:        "hk",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      string(rawPolicy),
+	}
+
+	selection, err := selectGSLBDNSTargets(route, "A")
+	if err != nil {
+		t.Fatalf("select gslb targets: %v", err)
+	}
+	if len(selection.Targets) != 1 || selection.Targets[0] != "8.8.8.8" {
+		t.Fatalf("expected cooldown to keep previous target, got %#v", selection.Targets)
+	}
+	if len(selection.DesiredTargets) != 1 || selection.DesiredTargets[0] != "1.1.1.1" {
+		t.Fatalf("expected desired target to prefer higher weight node, got %#v", selection.DesiredTargets)
 	}
 }

@@ -156,7 +156,9 @@ tests/
 * `proxy_routes` 以“网站配置”作为聚合边界，必须包含唯一 `site_name` 与非空 `domains` 列表。
 * `proxy_routes.domains` 中的每个域名都必须全局唯一，列表第一项视为主域名。
 * `proxy_routes` 继续允许保存一个或多个源站地址用于负载均衡，但不引入独立 `origin_pool`。
-* `proxy_routes.node_pool` 只保存网站绑定的节点池名称，用于自动 DNS 选点和缓存运行时操作，不得演变成按节点分组的配置版本。
+* `proxy_routes.node_pool` 只保存网站绑定的默认节点池名称，用于自动 DNS 选点和缓存运行时操作，不得演变成按节点分组的配置版本。
+* `proxy_routes.gslb_policy` 只保存站点级 DNS 调度策略，可引用多个节点池用于 GSLB 选点；它不能用于生成按节点池拆分的 OpenResty 配置版本。
+* `gslb_scheduling_states` 只保存运行时 DNS 调度状态和防抖信息，不参与配置版本快照。
 * 遗留 `domain` 字段只能作为 `domains[0]` 的兼容镜像；新代码不得继续以该字段作为唯一业务输入。
 * `proxy_routes` 如关联 `origins`，必须同时保存可直接渲染的 `origin_url`。
 * 源站统一使用 named `upstream` + keepalive；单源站如带 base path 或 query，应在 `proxy_pass` 上补回 URI，多源站仅允许纯 `scheme://host[:port]`。

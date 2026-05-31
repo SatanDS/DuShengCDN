@@ -37,12 +37,18 @@ func SyncProxyRouteDNS(route *model.ProxyRoute) error {
 	recordType := normalizeDNSRecordType(route.DNSRecordType)
 	content := strings.TrimSpace(route.DNSRecordContent)
 	targets := splitDNSRecordContent(content)
-	if route.DNSAutoTarget || content == "" {
-		targets, err = selectHealthyNodeDNSTargets(recordType, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode)
+	selection := proxyRouteDNSTargetSelection{
+		Targets:        targets,
+		DesiredTargets: targets,
+		TTL:            normalizeDNSTTL(route.DNSTTL),
+	}
+	if route.GSLBEnabled || route.DNSAutoTarget || content == "" {
+		selection, err = selectProxyRouteDNSTargets(route, recordType)
 		if err != nil {
 			recordProxyRouteDNSSyncFailure(route, err)
 			return err
 		}
+		targets = selection.Targets
 	}
 	targets, err = normalizeDNSRecordContents(recordType, targets)
 	if err != nil {
@@ -76,6 +82,7 @@ func SyncProxyRouteDNS(route *model.ProxyRoute) error {
 			Name:             recordName,
 			Contents:         targets,
 			Proxied:          route.CloudflareProxied,
+			TTL:              selection.TTL,
 			ManagedRecordIDs: filterDNSRecordIDsForName(recordIDs, recordName),
 		})
 		if err != nil {
@@ -110,14 +117,19 @@ func SyncProxyRouteDNS(route *model.ProxyRoute) error {
 	route.DNSRecordType = recordType
 	route.DNSRecordContent = content
 	route.DNSRecordIDs = encodeDNSRecordIDs(nextRecordIDs)
+	route.DNSTTL = selection.TTL
 	route.DNSLastSyncStatus = DNSRecordSyncStatusSuccess
 	route.DNSLastSyncMessage = fmt.Sprintf("已同步 %d 条 Cloudflare DNS 记录到 %s", len(nextRecordIDs), content)
 	route.DNSLastSyncedAt = &now
+	if err := recordProxyRouteGSLBDecision(route, recordType, selection); err != nil {
+		slog.Warn("record gslb dns decision failed", "route_id", route.ID, "site_name", route.SiteName, "error", err)
+	}
 	if err := model.DB.Model(route).Select(
 		"dns_zone_id",
 		"dns_record_type",
 		"dns_record_content",
 		"dns_auto_target",
+		"dns_ttl",
 		"dns_record_ids",
 		"cloudflare_proxied",
 		"dns_last_sync_status",
@@ -165,13 +177,14 @@ func ReconcileCloudflareDNSAutomation() error {
 		if route == nil || !route.DNSAutoSync {
 			continue
 		}
-		if route.DNSAutoTarget || strings.TrimSpace(route.DNSRecordContent) == "" {
+		if route.GSLBEnabled || route.DNSAutoTarget || strings.TrimSpace(route.DNSRecordContent) == "" {
 			previousContent := strings.TrimSpace(route.DNSRecordContent)
-			targets, selectErr := selectHealthyNodeDNSTargets(normalizeDNSRecordType(route.DNSRecordType), route.NodePool, route.DNSTargetCount, route.DNSScheduleMode)
-			desiredContent := strings.Join(targets, ",")
+			selection, selectErr := selectProxyRouteDNSTargets(route, normalizeDNSRecordType(route.DNSRecordType))
+			desiredContent := strings.Join(selection.Targets, ",")
 			if selectErr == nil && desiredContent != "" && desiredContent != previousContent {
 				route.DNSRecordContent = desiredContent
 				route.DNSAutoTarget = true
+				route.DNSTTL = selection.TTL
 			}
 		}
 		if route.DDOSProtectionMode == DDOSProtectionModeAuto && shouldEnableCloudflareProxyForDDOS() {

@@ -326,6 +326,31 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/access-logs/metering-overview": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "AccessLogs"
+                ],
+                "summary": "Get observability metering overview",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/acme-accounts/default": {
             "get": {
                 "security": [
@@ -512,6 +537,20 @@ const docTemplate = `{
                         }
                     }
                 }
+            }
+        },
+        "/api/agent/ws": {
+            "get": {
+                "security": [
+                    {
+                        "AgentTokenAuth": []
+                    }
+                ],
+                "tags": [
+                    "Agent"
+                ],
+                "summary": "Upgrade agent connection to websocket",
+                "responses": {}
             }
         },
         "/api/apply-logs/": {
@@ -1417,6 +1456,47 @@ const docTemplate = `{
                     "Nodes"
                 ],
                 "summary": "Delete node",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Node ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/nodes/{id}/force-sync": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Request force sync config on node",
                 "parameters": [
                     {
                         "type": "integer",
@@ -2720,7 +2800,16 @@ const docTemplate = `{
                 "remote_addr": {
                     "type": "string"
                 },
+                "request_bytes": {
+                    "type": "integer"
+                },
+                "response_bytes": {
+                    "type": "integer"
+                },
                 "status_code": {
+                    "type": "integer"
+                },
+                "upstream_bytes": {
                     "type": "integer"
                 }
             }
@@ -2892,6 +2981,21 @@ const docTemplate = `{
         "service.AgentNodeTrafficReport": {
             "type": "object",
             "properties": {
+                "cache_bypass_count": {
+                    "type": "integer"
+                },
+                "cache_expired_count": {
+                    "type": "integer"
+                },
+                "cache_hit_count": {
+                    "type": "integer"
+                },
+                "cache_miss_count": {
+                    "type": "integer"
+                },
+                "cache_stale_count": {
+                    "type": "integer"
+                },
                 "error_count": {
                     "type": "integer"
                 },
@@ -2917,6 +3021,12 @@ const docTemplate = `{
                     }
                 },
                 "unique_visitor_count": {
+                    "type": "integer"
+                },
+                "upstream_error_count": {
+                    "type": "integer"
+                },
+                "upstream_response_ms": {
                     "type": "integer"
                 },
                 "window_ended_at_unix": {
@@ -2979,6 +3089,9 @@ const docTemplate = `{
                 "auto_update_enabled": {
                     "type": "boolean"
                 },
+                "drain_mode": {
+                    "type": "boolean"
+                },
                 "geo_latitude": {
                     "type": "number"
                 },
@@ -2996,6 +3109,27 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "pool_name": {
+                    "type": "string"
+                },
+                "public_ips": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "scheduling_enabled": {
+                    "type": "boolean"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "weight": {
+                    "type": "integer"
                 }
             }
         },
@@ -3006,6 +3140,100 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.ProxyRouteGSLBDebounce": {
+            "type": "object",
+            "properties": {
+                "cooldown_seconds": {
+                    "type": "integer"
+                },
+                "recovery_threshold": {
+                    "type": "integer"
+                },
+                "unhealthy_threshold": {
+                    "type": "integer"
+                }
+            }
+        },
+        "service.ProxyRouteGSLBLoadThresholds": {
+            "type": "object",
+            "properties": {
+                "max_cpu_percent": {
+                    "type": "number"
+                },
+                "max_memory_percent": {
+                    "type": "number"
+                },
+                "max_openresty_connections": {
+                    "type": "integer"
+                }
+            }
+        },
+        "service.ProxyRouteGSLBPolicy": {
+            "type": "object",
+            "properties": {
+                "debounce": {
+                    "$ref": "#/definitions/service.ProxyRouteGSLBDebounce"
+                },
+                "load_thresholds": {
+                    "$ref": "#/definitions/service.ProxyRouteGSLBLoadThresholds"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "pools": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.ProxyRouteGSLBPoolPolicy"
+                    }
+                },
+                "source_ip": {
+                    "$ref": "#/definitions/service.ProxyRouteGSLBSourceIPProvider"
+                },
+                "strategy": {
+                    "type": "string"
+                },
+                "target_count": {
+                    "type": "integer"
+                },
+                "ttl": {
+                    "type": "integer"
+                }
+            }
+        },
+        "service.ProxyRouteGSLBPoolPolicy": {
+            "type": "object",
+            "properties": {
+                "countries": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "weight": {
+                    "type": "integer"
+                }
+            }
+        },
+        "service.ProxyRouteGSLBSourceIPProvider": {
+            "type": "object",
+            "properties": {
+                "api_token": {
+                    "type": "string"
+                },
+                "api_url": {
+                    "type": "string"
+                },
+                "provider": {
                     "type": "string"
                 }
             }
@@ -3043,11 +3271,47 @@ const docTemplate = `{
                         "type": "integer"
                     }
                 },
+                "cloudflare_proxied": {
+                    "type": "boolean"
+                },
                 "custom_headers": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/service.ProxyRouteCustomHeaderInput"
                     }
+                },
+                "ddos_protection_mode": {
+                    "type": "string"
+                },
+                "dns_account_id": {
+                    "type": "integer"
+                },
+                "dns_auto_sync": {
+                    "type": "boolean"
+                },
+                "dns_auto_target": {
+                    "type": "boolean"
+                },
+                "dns_record_content": {
+                    "type": "string"
+                },
+                "dns_record_name": {
+                    "type": "string"
+                },
+                "dns_record_type": {
+                    "type": "string"
+                },
+                "dns_schedule_mode": {
+                    "type": "string"
+                },
+                "dns_target_count": {
+                    "type": "integer"
+                },
+                "dns_ttl": {
+                    "type": "integer"
+                },
+                "dns_zone_id": {
+                    "type": "string"
                 },
                 "domain": {
                     "type": "string"
@@ -3070,6 +3334,12 @@ const docTemplate = `{
                 "enabled": {
                     "type": "boolean"
                 },
+                "gslb_enabled": {
+                    "type": "boolean"
+                },
+                "gslb_policy": {
+                    "$ref": "#/definitions/service.ProxyRouteGSLBPolicy"
+                },
                 "limit_conn_per_ip": {
                     "type": "integer"
                 },
@@ -3077,6 +3347,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "limit_rate": {
+                    "type": "string"
+                },
+                "node_pool": {
                     "type": "string"
                 },
                 "origin_address": {
@@ -3109,6 +3382,18 @@ const docTemplate = `{
                 "redirect_http": {
                     "type": "boolean"
                 },
+                "region_restriction_countries": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "region_restriction_enabled": {
+                    "type": "boolean"
+                },
+                "region_restriction_mode": {
+                    "type": "string"
+                },
                 "remark": {
                     "type": "string"
                 },
@@ -3120,6 +3405,15 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "waf_config": {
+                    "type": "string"
+                },
+                "waf_enabled": {
+                    "type": "boolean"
+                },
+                "waf_mode": {
+                    "type": "string"
                 }
             }
         },

@@ -1,5 +1,6 @@
 import type {
   ProxyRouteCustomHeader,
+  ProxyRouteGSLBPolicy,
   ProxyRouteItem,
   ProxyRouteMutationPayload,
 } from '@/features/proxy-routes/types';
@@ -61,6 +62,40 @@ const originHostPattern =
   /^(?:(?:[a-z0-9-]+\.)*[a-z0-9-]+|\[[0-9a-f:.]+\]|[0-9.]+)(?::\d{1,5})?$/i;
 const headerKeyPattern = /^[A-Za-z0-9_-]+$/;
 const limitRatePattern = /^\d+(?:[kKmM])?$/;
+
+export function buildDefaultGSLBPolicy(
+  nodePool = 'default',
+): ProxyRouteGSLBPolicy {
+  return {
+    mode: 'cloudflare_dns',
+    strategy: 'load_aware',
+    pools: [
+      {
+        name: nodePool.trim() || 'default',
+        weight: 100,
+        countries: [],
+        enabled: true,
+      },
+    ],
+    target_count: 2,
+    ttl: 60,
+    source_ip: {
+      provider: 'none',
+      api_url: '',
+      api_token: '',
+    },
+    load_thresholds: {
+      max_openresty_connections: 0,
+      max_cpu_percent: 0,
+      max_memory_percent: 0,
+    },
+    debounce: {
+      cooldown_seconds: 60,
+      unhealthy_threshold: 1,
+      recovery_threshold: 1,
+    },
+  };
+}
 
 export function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
@@ -331,6 +366,10 @@ export function buildPayloadFromRoute(
     dns_auto_target: route.dns_auto_target,
     dns_target_count: route.dns_target_count || 1,
     dns_schedule_mode: route.dns_schedule_mode || 'healthy',
+    dns_ttl: route.dns_ttl || 1,
+    gslb_enabled: route.gslb_enabled,
+    gslb_policy:
+      route.gslb_policy || buildDefaultGSLBPolicy(route.node_pool || 'default'),
     cloudflare_proxied: route.cloudflare_proxied,
     ddos_protection_mode: route.ddos_protection_mode,
     ...overrides,

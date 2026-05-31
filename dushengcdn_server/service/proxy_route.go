@@ -81,6 +81,9 @@ type ProxyRouteInput struct {
 	DNSAutoTarget              bool                          `json:"dns_auto_target"`
 	DNSTargetCount             int                           `json:"dns_target_count"`
 	DNSScheduleMode            string                        `json:"dns_schedule_mode"`
+	DNSTTL                     int                           `json:"dns_ttl"`
+	GSLBEnabled                bool                          `json:"gslb_enabled"`
+	GSLBPolicy                 ProxyRouteGSLBPolicy          `json:"gslb_policy"`
 	CloudflareProxied          bool                          `json:"cloudflare_proxied"`
 	DDOSProtectionMode         string                        `json:"ddos_protection_mode"`
 	Remark                     string                        `json:"remark"`
@@ -134,6 +137,9 @@ type ProxyRouteView struct {
 	DNSAutoTarget              bool                          `json:"dns_auto_target"`
 	DNSTargetCount             int                           `json:"dns_target_count"`
 	DNSScheduleMode            string                        `json:"dns_schedule_mode"`
+	DNSTTL                     int                           `json:"dns_ttl"`
+	GSLBEnabled                bool                          `json:"gslb_enabled"`
+	GSLBPolicy                 ProxyRouteGSLBPolicy          `json:"gslb_policy"`
 	DNSRecordIDs               map[string]string             `json:"dns_record_ids"`
 	CloudflareProxied          bool                          `json:"cloudflare_proxied"`
 	DDOSProtectionMode         string                        `json:"ddos_protection_mode"`
@@ -360,7 +366,11 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		input.BasicAuthPassword = ""
 	}
 
-	dnsAccountID, dnsZoneID, dnsRecordType, dnsRecordName, dnsRecordContent, dnsAutoTarget, dnsTargetCount, dnsScheduleMode, ddosMode, err := normalizeProxyRouteDNSSettingsV2(input)
+	dnsAccountID, dnsZoneID, dnsRecordType, dnsRecordName, dnsRecordContent, dnsAutoTarget, dnsTargetCount, dnsScheduleMode, dnsTTL, gslbEnabled, gslbPolicy, ddosMode, err := normalizeProxyRouteDNSSettingsV3(input)
+	if err != nil {
+		return nil, err
+	}
+	gslbPolicyJSON, err := json.Marshal(gslbPolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -409,6 +419,9 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.DNSAutoTarget = dnsAutoTarget
 	route.DNSTargetCount = dnsTargetCount
 	route.DNSScheduleMode = dnsScheduleMode
+	route.DNSTTL = dnsTTL
+	route.GSLBEnabled = gslbEnabled
+	route.GSLBPolicy = string(gslbPolicyJSON)
 	route.CloudflareProxied = input.CloudflareProxied
 	route.DDOSProtectionMode = ddosMode
 	route.Remark = remark
@@ -456,6 +469,10 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		return nil, err
 	}
 	regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
+	if err != nil {
+		return nil, err
+	}
+	gslbPolicy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -520,6 +537,9 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		DNSAutoTarget:              route.DNSAutoTarget,
 		DNSTargetCount:             normalizeDNSTargetCount(route.DNSTargetCount),
 		DNSScheduleMode:            normalizeDNSScheduleMode(route.DNSScheduleMode),
+		DNSTTL:                     normalizeDNSTTL(route.DNSTTL),
+		GSLBEnabled:                route.GSLBEnabled,
+		GSLBPolicy:                 gslbPolicy,
 		DNSRecordIDs:               decodeDNSRecordIDs(route.DNSRecordIDs),
 		CloudflareProxied:          route.CloudflareProxied,
 		DDOSProtectionMode:         normalizeDDOSProtectionMode(route.DDOSProtectionMode),
@@ -758,6 +778,68 @@ func normalizeProxyRouteDNSSettingsV2(input ProxyRouteInput) (*uint, string, str
 		nil
 }
 
+func normalizeProxyRouteDNSSettingsV3(input ProxyRouteInput) (*uint, string, string, string, string, bool, int, string, int, bool, ProxyRouteGSLBPolicy, string, error) {
+	ddosMode := normalizeDDOSProtectionMode(input.DDOSProtectionMode)
+	dnsTargetCount := normalizeDNSTargetCount(input.DNSTargetCount)
+	dnsScheduleMode := normalizeDNSScheduleMode(input.DNSScheduleMode)
+	dnsTTL := normalizeDNSTTL(input.DNSTTL)
+	gslbPolicy, err := normalizeGSLBPolicy(input.GSLBPolicy, input.NodePool, dnsTargetCount, dnsScheduleMode, dnsTTL)
+	if err != nil {
+		return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", err
+	}
+	gslbEnabled := input.GSLBEnabled
+	if !input.DNSAutoSync {
+		return nil, "", normalizeDNSRecordType(input.DNSRecordType), "", "", false, dnsTargetCount, dnsScheduleMode, dnsTTL, false, gslbPolicy, ddosMode, nil
+	}
+	if input.DNSAccountID == nil || *input.DNSAccountID == 0 {
+		return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", errors.New("automatic DNS requires a DNS account")
+	}
+	account, err := model.GetDnsAccountByID(*input.DNSAccountID)
+	if err != nil {
+		return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", errors.New("selected DNS account does not exist")
+	}
+	if strings.ToLower(strings.TrimSpace(account.Type)) != cloudflareDNSProviderType {
+		return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", errors.New("automatic DNS currently only supports Cloudflare DNS accounts")
+	}
+	dnsRecordType := normalizeDNSRecordType(input.DNSRecordType)
+	dnsRecordName := normalizeDNSRecordName(input.DNSRecordName)
+	if dnsRecordName != "" && !isValidProxyRouteDomain(dnsRecordName) {
+		return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", errors.New("DNS record name format is invalid")
+	}
+	dnsRecordContent := strings.TrimSpace(input.DNSRecordContent)
+	if dnsRecordContent != "" {
+		contents, err := normalizeDNSRecordContents(dnsRecordType, splitDNSRecordContent(dnsRecordContent))
+		if err != nil {
+			return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", err
+		}
+		if dnsRecordType == "CNAME" && len(contents) > 1 {
+			return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", errors.New("CNAME record only supports one target")
+		}
+		dnsRecordContent = strings.Join(contents, ",")
+	}
+	dnsAutoTarget := input.DNSAutoTarget || dnsRecordContent == "" || gslbEnabled
+	if dnsRecordType == "CNAME" && dnsAutoTarget {
+		return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", errors.New("CNAME record requires manual content")
+	}
+	if gslbEnabled && dnsRecordType != "A" && dnsRecordType != "AAAA" {
+		return nil, "", "", "", "", false, 0, "", 0, false, ProxyRouteGSLBPolicy{}, "", errors.New("GSLB scheduling only supports A/AAAA records")
+	}
+	dnsAccountID := *input.DNSAccountID
+	return &dnsAccountID,
+		strings.TrimSpace(input.DNSZoneID),
+		dnsRecordType,
+		dnsRecordName,
+		dnsRecordContent,
+		dnsAutoTarget,
+		dnsTargetCount,
+		dnsScheduleMode,
+		dnsTTL,
+		gslbEnabled,
+		gslbPolicy,
+		ddosMode,
+		nil
+}
+
 func normalizeDNSTargetCount(value int) int {
 	if value <= 0 {
 		return 1
@@ -771,11 +853,29 @@ func normalizeDNSTargetCount(value int) int {
 func normalizeDNSScheduleMode(raw string) string {
 	mode := strings.ToLower(strings.TrimSpace(raw))
 	switch mode {
+	case "load_aware":
+		return "load_aware"
 	case "weighted":
 		return "weighted"
 	default:
 		return "healthy"
 	}
+}
+
+func normalizeDNSTTL(value int) int {
+	if value <= 0 {
+		return cloudflareDefaultRecordTTL
+	}
+	if value == cloudflareDefaultRecordTTL {
+		return cloudflareDefaultRecordTTL
+	}
+	if value < 30 {
+		return 30
+	}
+	if value > 86400 {
+		return 86400
+	}
+	return value
 }
 
 func normalizeDDOSProtectionMode(raw string) string {
