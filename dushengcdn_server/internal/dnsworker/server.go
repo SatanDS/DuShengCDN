@@ -86,6 +86,7 @@ func (s *DNSServer) handleDNS(w dns.ResponseWriter, request *dns.Msg) {
 }
 
 func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
+	startedAt := time.Now()
 	response := new(dns.Msg)
 	if request == nil {
 		response.SetRcode(&dns.Msg{}, dns.RcodeFormatError)
@@ -109,7 +110,7 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	targets := []string{}
 	defer func() {
 		if s.Rollups != nil {
-			s.Rollups.Record(zoneID, routeID, qname, qtype, rcodeLabel, targets)
+			s.Rollups.Record(zoneID, routeID, qname, qtype, rcodeLabel, targets, time.Since(startedAt))
 		}
 	}()
 	if question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR {

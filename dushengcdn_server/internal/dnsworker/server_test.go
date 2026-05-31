@@ -168,6 +168,9 @@ func TestRejectsZoneTransferAndRollupDrain(t *testing.T) {
 	if len(rollups) != 1 || rollups[0].RCode != "REFUSED" || rollups[0].QueryCount != 1 {
 		t.Fatalf("unexpected rollups: %+v", rollups)
 	}
+	if rollups[0].TotalDurationMs < 0 || rollups[0].MaxDurationMs < 0 {
+		t.Fatalf("unexpected negative duration rollup: %+v", rollups[0])
+	}
 }
 
 func testServer(t *testing.T, snapshot *Snapshot) *DNSServer {

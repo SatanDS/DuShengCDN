@@ -181,6 +181,49 @@ describe('Authoritative DNS page', () => {
                     ],
                     workers: [],
                   },
+                  worker_health: {
+                    checked_at: '2026-05-31T08:10:00Z',
+                    total_worker_count: 2,
+                    online_worker_count: 2,
+                    availability_percent: 100,
+                    average_latency_ms: 12.5,
+                    max_latency_ms: 48,
+                    error_rate_percent: 2.3,
+                    workers: [
+                      {
+                        worker_id: 'dns-worker-7',
+                        name: 'ns1-hk',
+                        status: 'online',
+                        public_address: 'ns1.example.net',
+                        query_count: 128,
+                        error_queries: 3,
+                        error_rate_percent: 2.3,
+                        average_latency_ms: 12.5,
+                        max_latency_ms: 48,
+                        last_seen_at: '2026-05-31T08:06:00Z',
+                        last_snapshot_at: '2026-05-31T08:05:00Z',
+                        snapshot_age_seconds: 300,
+                        snapshot_stale: false,
+                        last_error: '',
+                      },
+                      {
+                        worker_id: 'dns-worker-8',
+                        name: 'ns2-eu',
+                        status: 'online',
+                        public_address: 'ns2.example.net',
+                        query_count: 0,
+                        error_queries: 0,
+                        error_rate_percent: 0,
+                        average_latency_ms: 0,
+                        max_latency_ms: 0,
+                        last_seen_at: '2026-05-31T08:06:00Z',
+                        last_snapshot_at: '2026-05-31T08:08:00Z',
+                        snapshot_age_seconds: 120,
+                        snapshot_stale: false,
+                        last_error: '',
+                      },
+                    ],
+                  },
                 },
               }),
             ),
@@ -391,6 +434,11 @@ describe('Authoritative DNS page', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('snapshot-a')).toBeInTheDocument();
     expect(screen.getAllByText('snapshot-b').length).toBeGreaterThan(0);
+    expect(screen.getByText('Worker 可用性')).toBeInTheDocument();
+    expect(screen.getAllByText('平均延迟').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('最大延迟').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('12.5 ms').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('48 ms').length).toBeGreaterThan(0);
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '检查委派' }));

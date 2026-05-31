@@ -176,13 +176,15 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 		LastSnapshotAt:      &heartbeatAt,
 		Rollups: []DNSQueryRollupInput{
 			{
-				WindowStart:   heartbeatAt,
-				WindowMinutes: 5,
-				QName:         "www.example.com",
-				QType:         "A",
-				RCode:         "NOERROR",
-				QueryCount:    42,
-				TargetSummary: map[string]int64{"8.8.8.8": 42},
+				WindowStart:     heartbeatAt,
+				WindowMinutes:   5,
+				QName:           "www.example.com",
+				QType:           "A",
+				RCode:           "NOERROR",
+				QueryCount:      42,
+				TotalDurationMs: 210,
+				MaxDurationMs:   12,
+				TargetSummary:   map[string]int64{"8.8.8.8": 42},
 			},
 		},
 	})
@@ -201,6 +203,13 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected one rollup, got %d", count)
+	}
+	var rollup model.DNSQueryRollup
+	if err := model.DB.Where("worker_id = ?", authenticated.WorkerID).First(&rollup).Error; err != nil {
+		t.Fatalf("load rollup: %v", err)
+	}
+	if rollup.TotalDurationMs != 210 || rollup.MaxDurationMs != 12 {
+		t.Fatalf("unexpected rollup duration: %+v", rollup)
 	}
 }
 
@@ -249,34 +258,40 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 		LastSnapshotAt:      &snapshotAt,
 		Rollups: []DNSQueryRollupInput{
 			{
-				WindowStart:   windowStart,
-				WindowMinutes: 1,
-				ZoneID:        zone.ID,
-				ProxyRouteID:  route.ID,
-				QName:         "www.example.com",
-				QType:         "A",
-				RCode:         "NOERROR",
-				QueryCount:    80,
-				TargetSummary: map[string]int64{"8.8.8.8": 64, "1.1.1.1": 16},
+				WindowStart:     windowStart,
+				WindowMinutes:   1,
+				ZoneID:          zone.ID,
+				ProxyRouteID:    route.ID,
+				QName:           "www.example.com",
+				QType:           "A",
+				RCode:           "NOERROR",
+				QueryCount:      80,
+				TotalDurationMs: 1600,
+				MaxDurationMs:   50,
+				TargetSummary:   map[string]int64{"8.8.8.8": 64, "1.1.1.1": 16},
 			},
 			{
-				WindowStart:   windowStart,
-				WindowMinutes: 1,
-				ZoneID:        zone.ID,
-				QName:         "missing.example.com",
-				QType:         "A",
-				RCode:         "NXDOMAIN",
-				QueryCount:    5,
+				WindowStart:     windowStart,
+				WindowMinutes:   1,
+				ZoneID:          zone.ID,
+				QName:           "missing.example.com",
+				QType:           "A",
+				RCode:           "NXDOMAIN",
+				QueryCount:      5,
+				TotalDurationMs: 50,
+				MaxDurationMs:   15,
 			},
 			{
-				WindowStart:   windowStart,
-				WindowMinutes: 1,
-				ZoneID:        zone.ID,
-				ProxyRouteID:  route.ID,
-				QName:         "www.example.com",
-				QType:         "A",
-				RCode:         "SERVFAIL",
-				QueryCount:    2,
+				WindowStart:     windowStart,
+				WindowMinutes:   1,
+				ZoneID:          zone.ID,
+				ProxyRouteID:    route.ID,
+				QName:           "www.example.com",
+				QType:           "A",
+				RCode:           "SERVFAIL",
+				QueryCount:      2,
+				TotalDurationMs: 70,
+				MaxDurationMs:   40,
 			},
 		},
 	})
@@ -329,6 +344,30 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	}
 	if len(summary.SnapshotConsistency.VersionBreakdown) != 2 {
 		t.Fatalf("expected two snapshot versions, got %+v", summary.SnapshotConsistency.VersionBreakdown)
+	}
+	if summary.WorkerHealth.TotalWorkerCount != 2 || summary.WorkerHealth.OnlineWorkerCount != 2 {
+		t.Fatalf("unexpected worker health counts: %+v", summary.WorkerHealth)
+	}
+	if summary.WorkerHealth.AvailabilityPercent != 100 {
+		t.Fatalf("unexpected worker availability: %+v", summary.WorkerHealth)
+	}
+	if summary.WorkerHealth.MaxLatencyMs != 50 {
+		t.Fatalf("unexpected worker max latency: %+v", summary.WorkerHealth)
+	}
+	if summary.WorkerHealth.AverageLatencyMs < 19.7 || summary.WorkerHealth.AverageLatencyMs > 19.8 {
+		t.Fatalf("unexpected worker average latency: %+v", summary.WorkerHealth)
+	}
+	if summary.WorkerHealth.ErrorRatePercent < 2.29 || summary.WorkerHealth.ErrorRatePercent > 2.3 {
+		t.Fatalf("unexpected worker error rate: %+v", summary.WorkerHealth)
+	}
+	if len(summary.WorkerHealth.Workers) != 2 {
+		t.Fatalf("expected two worker health items, got %+v", summary.WorkerHealth.Workers)
+	}
+	if summary.WorkerHealth.Workers[0].WorkerID != authenticated.WorkerID ||
+		summary.WorkerHealth.Workers[0].QueryCount != 87 ||
+		summary.WorkerHealth.Workers[0].ErrorQueries != 2 ||
+		summary.WorkerHealth.Workers[0].MaxLatencyMs != 50 {
+		t.Fatalf("unexpected primary worker health: %+v", summary.WorkerHealth.Workers)
 	}
 }
 

@@ -77,6 +77,7 @@ export interface DNSObservabilitySummary {
   route_breakdown: DNSObservabilityCounterItem[];
   trend_points: DNSObservabilityTrendPoint[];
   snapshot_consistency: DNSWorkerSnapshotConsistency;
+  worker_health: DNSWorkerHealthSummary;
 }
 
 export interface DNSObservabilityTrendPoint {
@@ -128,6 +129,34 @@ export interface DNSWorkerSnapshotConsistency {
   latest_snapshot_at?: string | null;
   version_breakdown: DNSWorkerSnapshotVersion[];
   workers: DNSWorkerSnapshotWorker[];
+}
+
+export interface DNSWorkerHealthSummary {
+  checked_at: string;
+  total_worker_count: number;
+  online_worker_count: number;
+  availability_percent: number;
+  average_latency_ms: number;
+  max_latency_ms: number;
+  error_rate_percent: number;
+  workers: DNSWorkerHealthItem[];
+}
+
+export interface DNSWorkerHealthItem {
+  worker_id: string;
+  name: string;
+  status: 'online' | 'offline';
+  public_address: string;
+  query_count: number;
+  error_queries: number;
+  error_rate_percent: number;
+  average_latency_ms: number;
+  max_latency_ms: number;
+  last_seen_at?: string | null;
+  last_snapshot_at?: string | null;
+  snapshot_age_seconds: number;
+  snapshot_stale: boolean;
+  last_error: string;
 }
 
 export type DNSZoneDelegationStatus =

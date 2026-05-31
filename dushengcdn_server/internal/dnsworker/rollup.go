@@ -22,8 +22,10 @@ type rollupKey struct {
 }
 
 type rollupBucket struct {
-	count   int64
-	targets map[string]int64
+	count           int64
+	totalDurationMs int64
+	maxDurationMs   int64
+	targets         map[string]int64
 }
 
 func NewRollupAggregator(window time.Duration) *RollupAggregator {
@@ -36,7 +38,7 @@ func NewRollupAggregator(window time.Duration) *RollupAggregator {
 	}
 }
 
-func (a *RollupAggregator) Record(zoneID uint, routeID uint, qname string, qtype string, rcode string, targets []string) {
+func (a *RollupAggregator) Record(zoneID uint, routeID uint, qname string, qtype string, rcode string, targets []string, duration time.Duration) {
 	if a == nil {
 		return
 	}
@@ -60,6 +62,14 @@ func (a *RollupAggregator) Record(zoneID uint, routeID uint, qname string, qtype
 		a.buckets[key] = bucket
 	}
 	bucket.count++
+	durationMs := duration.Milliseconds()
+	if durationMs < 0 {
+		durationMs = 0
+	}
+	bucket.totalDurationMs += durationMs
+	if durationMs > bucket.maxDurationMs {
+		bucket.maxDurationMs = durationMs
+	}
 	for _, target := range targets {
 		target = strings.TrimSpace(target)
 		if target == "" {
@@ -85,15 +95,17 @@ func (a *RollupAggregator) Drain() []QueryRollupPayload {
 			targets[target] = count
 		}
 		payloads = append(payloads, QueryRollupPayload{
-			WindowStart:   key.WindowStart,
-			WindowMinutes: int(a.window / time.Minute),
-			ZoneID:        key.ZoneID,
-			ProxyRouteID:  key.ProxyRouteID,
-			QName:         key.QName,
-			QType:         key.QType,
-			RCode:         key.RCode,
-			QueryCount:    bucket.count,
-			TargetSummary: targets,
+			WindowStart:     key.WindowStart,
+			WindowMinutes:   int(a.window / time.Minute),
+			ZoneID:          key.ZoneID,
+			ProxyRouteID:    key.ProxyRouteID,
+			QName:           key.QName,
+			QType:           key.QType,
+			RCode:           key.RCode,
+			QueryCount:      bucket.count,
+			TotalDurationMs: bucket.totalDurationMs,
+			MaxDurationMs:   bucket.maxDurationMs,
+			TargetSummary:   targets,
 		})
 	}
 	a.buckets = map[rollupKey]*rollupBucket{}
@@ -130,6 +142,12 @@ func (a *RollupAggregator) Restore(payloads []QueryRollupPayload) {
 			a.buckets[key] = bucket
 		}
 		bucket.count += payload.QueryCount
+		if payload.TotalDurationMs > 0 {
+			bucket.totalDurationMs += payload.TotalDurationMs
+		}
+		if payload.MaxDurationMs > bucket.maxDurationMs {
+			bucket.maxDurationMs = payload.MaxDurationMs
+		}
 		for target, count := range payload.TargetSummary {
 			if strings.TrimSpace(target) == "" || count <= 0 {
 				continue

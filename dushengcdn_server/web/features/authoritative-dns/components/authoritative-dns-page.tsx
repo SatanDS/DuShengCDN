@@ -36,6 +36,7 @@ import type {
   DNSRecordItem,
   DNSRecordMutationPayload,
   DNSRecordType,
+  DNSWorkerHealthItem,
   DNSWorkerItem,
   DNSWorkerSnapshotConsistency,
   DNSWorkerSnapshotConsistencyStatus,
@@ -219,6 +220,30 @@ function formatPercent(numerator: number, denominator: number) {
     return '0%';
   }
   return `${((numerator / denominator) * 100).toFixed(1)}%`;
+}
+
+function formatPercentValue(value: number) {
+  return `${value.toFixed(1)}%`;
+}
+
+function formatLatencyMs(value: number) {
+  if (value <= 0) {
+    return '0 ms';
+  }
+  return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)} ms`;
+}
+
+function formatDurationSeconds(value: number) {
+  if (value <= 0) {
+    return '—';
+  }
+  if (value < 60) {
+    return `${value} 秒`;
+  }
+  if (value < 3600) {
+    return `${Math.round(value / 60)} 分钟`;
+  }
+  return `${Math.round(value / 3600)} 小时`;
 }
 
 function formatTrendHour(value: string) {
@@ -1475,6 +1500,7 @@ function DNSObservabilityPanel({
         <DNSSnapshotConsistencyPanel
           consistency={summary.snapshot_consistency}
         />
+        <DNSWorkerHealthPanel summary={summary} />
         <CounterList
           title="返回码"
           items={summary.rcode_breakdown}
@@ -1499,6 +1525,136 @@ function DNSObservabilityPanel({
         />
       </div>
     </AppCard>
+  );
+}
+
+function DNSWorkerHealthPanel({ summary }: { summary: DNSObservabilitySummary }) {
+  const health = summary.worker_health;
+
+  if (!health) {
+    return (
+      <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4 xl:col-span-2">
+        <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+          Worker 可用性
+        </h3>
+        <p className="mt-3 text-sm text-[var(--foreground-secondary)]">
+          暂无 Worker 可用性数据。
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4 xl:col-span-2">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+            Worker 可用性
+          </h3>
+          <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
+            这里统计 DNS Worker 本地处理查询的耗时、错误率和快照新鲜度，不代表用户到各地 NS 的网络 RTT。
+          </p>
+        </div>
+        <StatusBadge
+          label={`${health.online_worker_count} / ${health.total_worker_count} 在线`}
+          variant={
+            health.online_worker_count === health.total_worker_count &&
+            health.total_worker_count > 0
+              ? 'success'
+              : 'warning'
+          }
+        />
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <InfoTile
+          label="可用率"
+          value={formatPercentValue(health.availability_percent)}
+        />
+        <InfoTile
+          label="平均延迟"
+          value={formatLatencyMs(health.average_latency_ms)}
+        />
+        <InfoTile
+          label="最大延迟"
+          value={formatLatencyMs(health.max_latency_ms)}
+        />
+        <InfoTile
+          label="错误率"
+          value={formatPercentValue(health.error_rate_percent)}
+        />
+      </div>
+
+      {health.workers.length === 0 ? (
+        <p className="mt-4 text-sm text-[var(--foreground-secondary)]">
+          暂无 DNS Worker。
+        </p>
+      ) : (
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {health.workers.map((worker) => (
+            <DNSWorkerHealthCard key={worker.worker_id} worker={worker} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-[var(--foreground-primary)]">
+            {worker.name}
+          </p>
+          <p className="mt-1 text-xs break-all text-[var(--foreground-muted)]">
+            {worker.public_address || worker.worker_id}
+          </p>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          <StatusBadge
+            label={worker.status}
+            variant={getWorkerStatusVariant(worker.status)}
+          />
+          {worker.snapshot_stale ? (
+            <StatusBadge label="快照过期" variant="danger" />
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <InfoTile label="查询量" value={formatCount(worker.query_count)} />
+        <InfoTile
+          label="错误率"
+          value={formatPercentValue(worker.error_rate_percent)}
+        />
+        <InfoTile
+          label="平均延迟"
+          value={formatLatencyMs(worker.average_latency_ms)}
+        />
+        <InfoTile
+          label="最大延迟"
+          value={formatLatencyMs(worker.max_latency_ms)}
+        />
+        <InfoTile
+          label="快照年龄"
+          value={formatDurationSeconds(worker.snapshot_age_seconds)}
+        />
+        <InfoTile
+          label="最近心跳"
+          value={formatRelativeTime(worker.last_seen_at)}
+        />
+      </div>
+
+      {worker.last_error ? (
+        <InlineMessage
+          className="mt-3"
+          tone="danger"
+          message={worker.last_error}
+        />
+      ) : null}
+    </div>
   );
 }
 

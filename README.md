@@ -31,7 +31,7 @@
 
 * 节点支持节点池、公网 IP 池、标签、权重、调度开关和排空模式。
 * Cloudflare 自动 DNS 支持同一域名同步多个 A/AAAA 目标，并可按节点池、健康状态、权重和 GSLB 负载感知策略选择在线节点。
-* 自建权威 DNS 与实时 GSLB 已落地 Server 控制面和 DNS Worker MVP，包含 Zone、DNS Worker Token、心跳/聚合、只读调度快照 API、UDP/TCP 53 查询回答、逐查询 GSLB 选点、管理端 DNS 查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Zone 委派检查、Glue 提示和 Cloudflare 到权威 DNS 的迁移向导。
+* 自建权威 DNS 与实时 GSLB 已落地 Server 控制面和 DNS Worker MVP，包含 Zone、DNS Worker Token、心跳/聚合、只读调度快照 API、UDP/TCP 53 查询回答、逐查询 GSLB 选点、管理端 DNS 查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 查询延迟/可用性看板、Worker 快照一致性告警、Zone 委派检查、Glue 提示和 Cloudflare 到权威 DNS 的迁移向导。
 * 网站缓存页支持向目标节点池下发全量缓存清理和首页预热。
 * 观测计量合并访问日志与计量统计，支持站点/节点流量、缓存命中率、回源流量、状态码分布、TOP URL/IP/地区、带宽 P95 和节点可用率。
 * OpenResty 回源失败保护增强，默认对常见 5xx/超时错误尝试切换下一源站。
@@ -49,7 +49,7 @@
 * TLS 证书、域名资产、节点凭证与版本状态管理
 * 节点池、公网 IP 池、权重调度、排空模式与 Cloudflare 多目标自动 DNS / GSLB 多节点池调度
 * Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换、GSLB 防抖状态与 DDoS 自动切换橙云
-* 自建权威 DNS 控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、NS 委派检查、Glue 提示、Cloudflare 迁移向导、逐查询实时 GSLB、查询趋势和快照一致性观测
+* 自建权威 DNS 控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、NS 委派检查、Glue 提示、Cloudflare 迁移向导、逐查询实时 GSLB、查询趋势、Worker 查询延迟/可用性和快照一致性观测
 * 站点级缓存策略、缓存清理、首页预热、缓存命中与回源健康统计
 * Agent 安装环境检测、Release 二进制下载、自动更新与删除节点联动卸载
 * 节点真实 IP 识别、节点详情静默刷新、全局操作提示与主题化确认弹窗
@@ -289,7 +289,7 @@ dig @YOUR_DNS_WORKER_IP www.example.com A
 
 生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。如果要按国家代码匹配 GSLB 节点池，可配置本地 MaxMind Country MMDB；未配置时会回退到 `global` 作用域。
 
-Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker/Zone/站点维度和返回目标分布，便于确认实时 GSLB 是否按预期分流；Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
+Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、Worker/Zone/站点维度和返回目标分布，便于确认实时 GSLB 是否按预期分流；这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
 
 ### 5. 卸载 Agent
 

@@ -1163,6 +1163,46 @@ func TestEnsureDatabaseSchemaUpToDateAddsAuthoritativeDNSFields(t *testing.T) {
 	}
 }
 
+func TestEnsureDatabaseSchemaUpToDateAddsDNSRollupDurationFields(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "dns-rollup-duration-fields.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateAll(db); err != nil {
+		t.Fatalf("auto migrate current schema: %v", err)
+	}
+	for _, column := range []string{"total_duration_ms", "max_duration_ms"} {
+		if db.Migrator().HasColumn(&DNSQueryRollup{}, column) {
+			if err := db.Migrator().DropColumn(&DNSQueryRollup{}, column); err != nil {
+				t.Fatalf("drop dns_query_rollups.%s: %v", column, err)
+			}
+		}
+	}
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 19); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	for _, column := range []string{"total_duration_ms", "max_duration_ms"} {
+		if !db.Migrator().HasColumn(&DNSQueryRollup{}, column) {
+			t.Fatalf("expected dns_query_rollups.%s column to exist", column)
+		}
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
 func TestRunDatabaseSchemaMigrationDoesNotAdvanceVersionWhenValidationFails(t *testing.T) {
 	db := openBareTestSQLiteDB(t, "failed-validation.db")
 

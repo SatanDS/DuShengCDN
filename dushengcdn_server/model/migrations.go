@@ -1642,6 +1642,24 @@ func validateDatabaseSchemaV19(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV20 adds DNS Worker query duration rollup fields.
+func migrateV20(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV20(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV19(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{"total_duration_ms", "max_duration_ms"} {
+		if !db.Migrator().HasColumn(&DNSQueryRollup{}, column) {
+			return fmt.Errorf("column dns_query_rollups.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1662,6 +1680,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 16, toVersion: 17, migrate: migrateV17, validate: validateDatabaseSchemaV17},
 		{fromVersion: 17, toVersion: 18, migrate: migrateV18, validate: validateDatabaseSchemaV18},
 		{fromVersion: 18, toVersion: 19, migrate: migrateV19, validate: validateDatabaseSchemaV19},
+		{fromVersion: 19, toVersion: 20, migrate: migrateV20, validate: validateDatabaseSchemaV20},
 	}
 }
 
@@ -1750,7 +1769,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV19(db, backend); err != nil {
+	if err := validateDatabaseSchemaV20(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

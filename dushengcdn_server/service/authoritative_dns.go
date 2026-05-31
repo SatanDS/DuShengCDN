@@ -71,15 +71,17 @@ type DNSWorkerHeartbeatInput struct {
 }
 
 type DNSQueryRollupInput struct {
-	WindowStart   time.Time        `json:"window_start"`
-	WindowMinutes int              `json:"window_minutes"`
-	ZoneID        uint             `json:"zone_id"`
-	ProxyRouteID  uint             `json:"proxy_route_id"`
-	QName         string           `json:"qname"`
-	QType         string           `json:"qtype"`
-	RCode         string           `json:"rcode"`
-	QueryCount    int64            `json:"query_count"`
-	TargetSummary map[string]int64 `json:"target_summary"`
+	WindowStart     time.Time        `json:"window_start"`
+	WindowMinutes   int              `json:"window_minutes"`
+	ZoneID          uint             `json:"zone_id"`
+	ProxyRouteID    uint             `json:"proxy_route_id"`
+	QName           string           `json:"qname"`
+	QType           string           `json:"qtype"`
+	RCode           string           `json:"rcode"`
+	QueryCount      int64            `json:"query_count"`
+	TotalDurationMs int64            `json:"total_duration_ms"`
+	MaxDurationMs   int64            `json:"max_duration_ms"`
+	TargetSummary   map[string]int64 `json:"target_summary"`
 }
 
 type DNSZoneView struct {
@@ -158,6 +160,7 @@ type DNSObservabilitySummaryView struct {
 	RouteBreakdown      []DNSObservabilityCounterView    `json:"route_breakdown"`
 	TrendPoints         []DNSObservabilityTrendPointView `json:"trend_points"`
 	SnapshotConsistency DNSWorkerSnapshotConsistencyView `json:"snapshot_consistency"`
+	WorkerHealth        DNSWorkerHealthSummaryView       `json:"worker_health"`
 }
 
 type DNSObservabilityTrendPointView struct {
@@ -202,6 +205,34 @@ type DNSWorkerSnapshotWorkerView struct {
 	LastSnapshotAt  *time.Time `json:"last_snapshot_at"`
 	LastSeenAt      *time.Time `json:"last_seen_at"`
 	Stale           bool       `json:"stale"`
+}
+
+type DNSWorkerHealthSummaryView struct {
+	CheckedAt           time.Time                 `json:"checked_at"`
+	TotalWorkerCount    int                       `json:"total_worker_count"`
+	OnlineWorkerCount   int                       `json:"online_worker_count"`
+	AvailabilityPercent float64                   `json:"availability_percent"`
+	AverageLatencyMs    float64                   `json:"average_latency_ms"`
+	MaxLatencyMs        int64                     `json:"max_latency_ms"`
+	ErrorRatePercent    float64                   `json:"error_rate_percent"`
+	Workers             []DNSWorkerHealthItemView `json:"workers"`
+}
+
+type DNSWorkerHealthItemView struct {
+	WorkerID           string     `json:"worker_id"`
+	Name               string     `json:"name"`
+	Status             string     `json:"status"`
+	PublicAddress      string     `json:"public_address"`
+	QueryCount         int64      `json:"query_count"`
+	ErrorQueries       int64      `json:"error_queries"`
+	ErrorRatePercent   float64    `json:"error_rate_percent"`
+	AverageLatencyMs   float64    `json:"average_latency_ms"`
+	MaxLatencyMs       int64      `json:"max_latency_ms"`
+	LastSeenAt         *time.Time `json:"last_seen_at"`
+	LastSnapshotAt     *time.Time `json:"last_snapshot_at"`
+	SnapshotAgeSeconds int64      `json:"snapshot_age_seconds"`
+	SnapshotStale      bool       `json:"snapshot_stale"`
+	LastError          string     `json:"last_error"`
 }
 
 type DNSZoneDelegationCheckView struct {
@@ -543,7 +574,9 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	summary.ZoneBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(zoneCounts), zoneLabels, 8)
 	summary.RouteBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(routeCounts), routeLabels, 8)
 	summary.TrendPoints = trendPoints
-	summary.SnapshotConsistency = buildDNSWorkerSnapshotConsistency(time.Now().UTC())
+	checkedAt := time.Now().UTC()
+	summary.SnapshotConsistency = buildDNSWorkerSnapshotConsistency(checkedAt)
+	summary.WorkerHealth = buildDNSWorkerHealthSummary(checkedAt, rollups)
 	return summary, nil
 }
 
@@ -1030,16 +1063,18 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 			return err
 		}
 		rollup := &model.DNSQueryRollup{
-			WindowStart:   input.WindowStart,
-			WindowMinutes: normalizeDNSRollupWindow(input.WindowMinutes),
-			WorkerID:      workerID,
-			ZoneID:        input.ZoneID,
-			ProxyRouteID:  input.ProxyRouteID,
-			QName:         normalizeDNSRecordName(input.QName),
-			QType:         normalizeAuthoritativeDNSRecordTypeOrDefault(input.QType),
-			RCode:         normalizeDNSRCode(input.RCode),
-			QueryCount:    input.QueryCount,
-			TargetSummary: string(targetSummaryJSON),
+			WindowStart:     input.WindowStart,
+			WindowMinutes:   normalizeDNSRollupWindow(input.WindowMinutes),
+			WorkerID:        workerID,
+			ZoneID:          input.ZoneID,
+			ProxyRouteID:    input.ProxyRouteID,
+			QName:           normalizeDNSRecordName(input.QName),
+			QType:           normalizeAuthoritativeDNSRecordTypeOrDefault(input.QType),
+			RCode:           normalizeDNSRCode(input.RCode),
+			QueryCount:      input.QueryCount,
+			TotalDurationMs: normalizeDNSDurationMs(input.TotalDurationMs),
+			MaxDurationMs:   normalizeDNSDurationMs(input.MaxDurationMs),
+			TargetSummary:   string(targetSummaryJSON),
 		}
 		if rollup.WindowStart.IsZero() {
 			rollup.WindowStart = time.Now().UTC().Truncate(time.Minute)
@@ -1071,6 +1106,13 @@ func decodeDNSTargetSummary(raw string) map[string]int64 {
 		}
 	}
 	return result
+}
+
+func normalizeDNSDurationMs(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func dnsWorkerLabels() (map[string]string, error) {
@@ -1321,6 +1363,133 @@ func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsisten
 		view.DivergentWorkerCount = view.OnlineWorkerCount - largest
 	}
 	return view
+}
+
+type dnsWorkerHealthStats struct {
+	queryCount      int64
+	errorQueries    int64
+	totalDurationMs int64
+	maxDurationMs   int64
+}
+
+func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) DNSWorkerHealthSummaryView {
+	snapshotMaxAge := authoritativeDNSSnapshotMaxAge()
+	workers, err := model.ListDNSWorkers()
+	view := DNSWorkerHealthSummaryView{
+		CheckedAt: now,
+		Workers:   []DNSWorkerHealthItemView{},
+	}
+	if err != nil {
+		return view
+	}
+
+	statsByWorker := map[string]*dnsWorkerHealthStats{}
+	var totalQueries int64
+	var totalErrors int64
+	var totalDurationMs int64
+	var maxDurationMs int64
+	for _, rollup := range rollups {
+		workerID := strings.TrimSpace(rollup.WorkerID)
+		if workerID == "" || rollup.QueryCount <= 0 {
+			continue
+		}
+		stats := statsByWorker[workerID]
+		if stats == nil {
+			stats = &dnsWorkerHealthStats{}
+			statsByWorker[workerID] = stats
+		}
+		count := rollup.QueryCount
+		stats.queryCount += count
+		totalQueries += count
+		rcode := normalizeDNSRCode(rollup.RCode)
+		if rcode == "SERVFAIL" || rcode == "REFUSED" {
+			stats.errorQueries += count
+			totalErrors += count
+		}
+		durationMs := normalizeDNSDurationMs(rollup.TotalDurationMs)
+		stats.totalDurationMs += durationMs
+		totalDurationMs += durationMs
+		if rollup.MaxDurationMs > stats.maxDurationMs {
+			stats.maxDurationMs = normalizeDNSDurationMs(rollup.MaxDurationMs)
+		}
+		if rollup.MaxDurationMs > maxDurationMs {
+			maxDurationMs = normalizeDNSDurationMs(rollup.MaxDurationMs)
+		}
+	}
+
+	view.TotalWorkerCount = len(workers)
+	view.MaxLatencyMs = maxDurationMs
+	view.AverageLatencyMs = averageMilliseconds(totalDurationMs, totalQueries)
+	view.ErrorRatePercent = ratioPercent(totalErrors, totalQueries)
+
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		status := normalizeDNSWorkerStatus(worker.Status)
+		if status == dnsWorkerStatusOnline {
+			view.OnlineWorkerCount++
+		}
+		workerName := strings.TrimSpace(worker.Name)
+		if workerName == "" {
+			workerName = worker.WorkerID
+		}
+		stats := statsByWorker[worker.WorkerID]
+		if stats == nil {
+			stats = &dnsWorkerHealthStats{}
+		}
+		snapshotAgeSeconds := int64(0)
+		if worker.LastSnapshotAt != nil {
+			age := now.Sub(worker.LastSnapshotAt.UTC())
+			if age > 0 {
+				snapshotAgeSeconds = int64(age.Seconds())
+			}
+		}
+		snapshotStale := status == dnsWorkerStatusOnline && (worker.LastSnapshotAt == nil || now.Sub(worker.LastSnapshotAt.UTC()) > snapshotMaxAge)
+		view.Workers = append(view.Workers, DNSWorkerHealthItemView{
+			WorkerID:           worker.WorkerID,
+			Name:               workerName,
+			Status:             status,
+			PublicAddress:      worker.PublicAddress,
+			QueryCount:         stats.queryCount,
+			ErrorQueries:       stats.errorQueries,
+			ErrorRatePercent:   ratioPercent(stats.errorQueries, stats.queryCount),
+			AverageLatencyMs:   averageMilliseconds(stats.totalDurationMs, stats.queryCount),
+			MaxLatencyMs:       stats.maxDurationMs,
+			LastSeenAt:         worker.LastSeenAt,
+			LastSnapshotAt:     worker.LastSnapshotAt,
+			SnapshotAgeSeconds: snapshotAgeSeconds,
+			SnapshotStale:      snapshotStale,
+			LastError:          worker.LastError,
+		})
+	}
+	if view.TotalWorkerCount > 0 {
+		view.AvailabilityPercent = ratioPercent(int64(view.OnlineWorkerCount), int64(view.TotalWorkerCount))
+	}
+	sort.SliceStable(view.Workers, func(i, j int) bool {
+		if view.Workers[i].Status != view.Workers[j].Status {
+			return view.Workers[i].Status == dnsWorkerStatusOnline
+		}
+		if view.Workers[i].QueryCount != view.Workers[j].QueryCount {
+			return view.Workers[i].QueryCount > view.Workers[j].QueryCount
+		}
+		return view.Workers[i].WorkerID < view.Workers[j].WorkerID
+	})
+	return view
+}
+
+func averageMilliseconds(totalDurationMs int64, count int64) float64 {
+	if count <= 0 || totalDurationMs <= 0 {
+		return 0
+	}
+	return float64(totalDurationMs) / float64(count)
+}
+
+func ratioPercent(numerator int64, denominator int64) float64 {
+	if denominator <= 0 || numerator <= 0 {
+		return 0
+	}
+	return (float64(numerator) / float64(denominator)) * 100
 }
 
 func normalizeDNSNameServerSet(values []string) []string {

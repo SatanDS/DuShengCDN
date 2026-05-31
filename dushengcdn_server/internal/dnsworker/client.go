@@ -34,15 +34,17 @@ type HeartbeatInput struct {
 }
 
 type QueryRollupPayload struct {
-	WindowStart   time.Time        `json:"window_start"`
-	WindowMinutes int              `json:"window_minutes"`
-	ZoneID        uint             `json:"zone_id"`
-	ProxyRouteID  uint             `json:"proxy_route_id"`
-	QName         string           `json:"qname"`
-	QType         string           `json:"qtype"`
-	RCode         string           `json:"rcode"`
-	QueryCount    int64            `json:"query_count"`
-	TargetSummary map[string]int64 `json:"target_summary"`
+	WindowStart     time.Time        `json:"window_start"`
+	WindowMinutes   int              `json:"window_minutes"`
+	ZoneID          uint             `json:"zone_id"`
+	ProxyRouteID    uint             `json:"proxy_route_id"`
+	QName           string           `json:"qname"`
+	QType           string           `json:"qtype"`
+	RCode           string           `json:"rcode"`
+	QueryCount      int64            `json:"query_count"`
+	TotalDurationMs int64            `json:"total_duration_ms"`
+	MaxDurationMs   int64            `json:"max_duration_ms"`
+	TargetSummary   map[string]int64 `json:"target_summary"`
 }
 
 func NewAPIClient(baseURL string, token string, timeout time.Duration) *APIClient {
