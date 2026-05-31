@@ -18,11 +18,17 @@ type DNSServer struct {
 	Rollups    *RollupAggregator
 	Resolver   SourceLookup
 	ListenAddr string
+	Limiter    *QueryRateLimiter
+	UDPSize    int
 	udpServer  *dns.Server
 	tcpServer  *dns.Server
 }
 
 func NewDNSServer(store *SnapshotStore, scheduler *Scheduler, rollups *RollupAggregator, resolver SourceLookup, listenAddr string) *DNSServer {
+	return NewDNSServerWithLimits(store, scheduler, rollups, resolver, listenAddr, DefaultQueryRateLimit, DefaultUDPResponseSize)
+}
+
+func NewDNSServerWithLimits(store *SnapshotStore, scheduler *Scheduler, rollups *RollupAggregator, resolver SourceLookup, listenAddr string, queryRateLimit int, udpSize int) *DNSServer {
 	if scheduler == nil {
 		scheduler = NewScheduler()
 	}
@@ -32,16 +38,27 @@ func NewDNSServer(store *SnapshotStore, scheduler *Scheduler, rollups *RollupAgg
 	if strings.TrimSpace(listenAddr) == "" {
 		listenAddr = DefaultListenAddr
 	}
+	if udpSize <= 0 {
+		udpSize = DefaultUDPResponseSize
+	}
+	if udpSize < dns.MinMsgSize {
+		udpSize = dns.MinMsgSize
+	}
+	if udpSize > dns.MaxMsgSize {
+		udpSize = dns.MaxMsgSize
+	}
 	server := &DNSServer{
 		Store:      store,
 		Scheduler:  scheduler,
 		Rollups:    rollups,
 		Resolver:   resolver,
 		ListenAddr: listenAddr,
+		Limiter:    NewQueryRateLimiter(queryRateLimit),
+		UDPSize:    udpSize,
 	}
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", server.handleDNS)
-	server.udpServer = &dns.Server{Addr: listenAddr, Net: "udp", Handler: mux}
+	server.udpServer = &dns.Server{Addr: listenAddr, Net: "udp", Handler: mux, UDPSize: udpSize}
 	server.tcpServer = &dns.Server{Addr: listenAddr, Net: "tcp", Handler: mux}
 	return server
 }
@@ -81,7 +98,11 @@ func (s *DNSServer) shutdown() {
 }
 
 func (s *DNSServer) handleDNS(w dns.ResponseWriter, request *dns.Msg) {
-	response := s.Resolve(request, w.RemoteAddr())
+	remoteAddr := w.RemoteAddr()
+	response := s.Resolve(request, remoteAddr)
+	if isUDPResponse(w) {
+		response = s.truncateUDPResponse(request, response)
+	}
 	_ = w.WriteMsg(response)
 }
 
@@ -114,6 +135,11 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 			s.Rollups.Record(zoneID, routeID, sourceScope, qname, qtype, rcodeLabel, targets, time.Since(startedAt))
 		}
 	}()
+	if s.Limiter != nil && !s.Limiter.Allow(remoteAddr) {
+		response.Rcode = dns.RcodeRefused
+		rcodeLabel = "REFUSED"
+		return response
+	}
 	if question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR {
 		response.Rcode = dns.RcodeRefused
 		rcodeLabel = "REFUSED"
@@ -203,6 +229,54 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 		rcodeLabel = "NXDOMAIN"
 	}
 	return response
+}
+
+func (s *DNSServer) truncateUDPResponse(request *dns.Msg, response *dns.Msg) *dns.Msg {
+	if response == nil {
+		return response
+	}
+	size := s.udpResponseSize(request)
+	if response.Len() <= size {
+		return response
+	}
+	copy := response.Copy()
+	copy.Truncate(size)
+	return copy
+}
+
+func (s *DNSServer) udpResponseSize(request *dns.Msg) int {
+	size := dns.MinMsgSize
+	limit := DefaultUDPResponseSize
+	if s != nil && s.UDPSize > 0 {
+		limit = s.UDPSize
+	}
+	if request != nil {
+		if opt := request.IsEdns0(); opt != nil {
+			size = int(opt.UDPSize())
+		}
+	}
+	if size > limit {
+		size = limit
+	}
+	if size < dns.MinMsgSize {
+		return dns.MinMsgSize
+	}
+	if size > dns.MaxMsgSize {
+		return dns.MaxMsgSize
+	}
+	return size
+}
+
+func isUDPResponse(w dns.ResponseWriter) bool {
+	if w == nil {
+		return false
+	}
+	switch w.LocalAddr().(type) {
+	case *net.UDPAddr:
+		return true
+	default:
+		return false
+	}
 }
 
 func cnameFallback(zone *SnapshotZone, index snapshotIndex, qname string, qtype string) ([]dns.RR, []string) {

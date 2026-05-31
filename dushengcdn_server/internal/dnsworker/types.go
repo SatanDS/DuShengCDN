@@ -10,6 +10,8 @@ const (
 	DefaultSnapshotMaxAge    = 5 * time.Minute
 	DefaultAuthoritativeTTL  = 30
 	DefaultZoneTTL           = 300
+	DefaultQueryRateLimit    = 200
+	DefaultUDPResponseSize   = 1232
 
 	WorkerStatusOnline  = "online"
 	WorkerStatusOffline = "offline"

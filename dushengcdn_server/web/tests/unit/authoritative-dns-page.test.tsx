@@ -665,9 +665,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('12.5 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('48 ms').length).toBeGreaterThan(0);
     expect(screen.getByText('GSLB 调度模拟')).toBeInTheDocument();
-    await userEvent
-      .setup()
-      .type(screen.getByPlaceholderText('HK'), 'HK');
+    await userEvent.setup().type(screen.getByPlaceholderText('HK'), 'HK');
     await userEvent
       .setup()
       .click(screen.getByRole('button', { name: '模拟调度' }));
@@ -698,9 +696,10 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('公网可达').length).toBeGreaterThan(0);
     expect(screen.getAllByText('公网可达 Worker').length).toBeGreaterThan(0);
     expect(screen.getAllByText('1 / 1').length).toBeGreaterThan(0);
-    expect(
-      screen.getByRole('link', { name: '去网站详情' }),
-    ).toHaveAttribute('href', '/proxy-route/detail?id=91');
+    expect(screen.getByRole('link', { name: '去网站详情' })).toHaveAttribute(
+      'href',
+      '/proxy-route/detail?id=91',
+    );
 
     await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));
     await waitFor(() => {
@@ -738,5 +737,9 @@ describe('Authoritative DNS page', () => {
     expect(
       screen.getByText(/DUSHENGCDN_DNS_WORKER_TOKEN=created-token/),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/--udp-response-size 1232/)).toBeInTheDocument();
   });
 });

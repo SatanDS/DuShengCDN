@@ -26,7 +26,7 @@ func NewRunner(cfg *Config) (*Runner, error) {
 	}
 	rollups := NewRollupAggregator(time.Minute)
 	client := NewAPIClient(cfg.ServerURL, cfg.Token, cfg.RequestTimeout)
-	server := NewDNSServer(store, NewScheduler(), rollups, sourceResolver, cfg.ListenAddr)
+	server := NewDNSServerWithLimits(store, NewScheduler(), rollups, sourceResolver, cfg.ListenAddr, cfg.QueryRateLimit, cfg.UDPResponseSize)
 	return &Runner{
 		Config:    cfg,
 		Client:    client,

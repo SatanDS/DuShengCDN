@@ -2807,13 +2807,17 @@ function WorkerTokenModal({
   -v dushengcdn-dns-worker-data:/data \\
   -e DUSHENGCDN_DNS_WORKER_SERVER_URL=${serverUrl} \\
   -e DUSHENGCDN_DNS_WORKER_TOKEN=${token || 'YOUR_DNS_WORKER_TOKEN'} \\
+  -e DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \\
+  -e DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232 \\
   ghcr.io/satands/dushengcdn-dns-worker:latest`;
   const sourceCommand = `cd dushengcdn_server
 go run ./cmd/dns-worker \\
   --server-url ${serverUrl} \\
   --token ${token || 'YOUR_DNS_WORKER_TOKEN'} \\
   --listen :53 \\
-  --snapshot-path /var/lib/dushengcdn-dns-worker/snapshot.json`;
+  --snapshot-path /var/lib/dushengcdn-dns-worker/snapshot.json \\
+  --query-rate-limit 200 \\
+  --udp-response-size 1232`;
 
   const handleCopy = async (value: string, message: string) => {
     try {

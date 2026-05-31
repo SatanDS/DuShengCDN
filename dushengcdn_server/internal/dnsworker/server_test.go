@@ -173,6 +173,55 @@ func TestRejectsZoneTransferAndRollupDrain(t *testing.T) {
 	}
 }
 
+func TestRateLimitsQueriesPerSourceIP(t *testing.T) {
+	server := testServerWithLimits(t, baseSnapshot(), DefaultSnapshotMaxAge, 2, DefaultUDPResponseSize)
+	remote := &net.UDPAddr{IP: net.ParseIP("192.0.2.55"), Port: 53000}
+
+	for i := 0; i < 2; i++ {
+		response := server.Resolve(testQuery("www.example.com", dns.TypeA, ""), remote)
+		if response.Rcode != dns.RcodeSuccess {
+			t.Fatalf("expected allowed query %d, got %s", i+1, dns.RcodeToString[response.Rcode])
+		}
+	}
+	response := server.Resolve(testQuery("www.example.com", dns.TypeA, ""), remote)
+	if response.Rcode != dns.RcodeRefused {
+		t.Fatalf("expected rate limited REFUSED, got %s", dns.RcodeToString[response.Rcode])
+	}
+
+	rollups := server.Rollups.Drain()
+	var refused int64
+	for _, rollup := range rollups {
+		if rollup.RCode == "REFUSED" {
+			refused += rollup.QueryCount
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("expected one refused rollup, got %+v", rollups)
+	}
+}
+
+func TestUDPResponseTruncationUsesEDNSAndServerLimit(t *testing.T) {
+	server := testServerWithLimits(t, largeTXTRecordSnapshot(), DefaultSnapshotMaxAge, 0, 700)
+	query := testQuery("large.example.com", dns.TypeTXT, "")
+	query.SetEdns0(4096, false)
+
+	response := server.Resolve(query, &net.UDPAddr{IP: net.ParseIP("192.0.2.56"), Port: 53000})
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) < 2 {
+		t.Fatalf("expected large TXT response before truncation, rcode=%s answers=%d", dns.RcodeToString[response.Rcode], len(response.Answer))
+	}
+
+	truncated := server.truncateUDPResponse(query, response)
+	if !truncated.Truncated {
+		t.Fatal("expected UDP response to be truncated")
+	}
+	if truncated.Len() > 700 {
+		t.Fatalf("expected truncated response to fit server limit, got %d", truncated.Len())
+	}
+	if len(truncated.Answer) >= len(response.Answer) {
+		t.Fatalf("expected answer set to shrink, before=%d after=%d", len(response.Answer), len(truncated.Answer))
+	}
+}
+
 func testServer(t *testing.T, snapshot *Snapshot) *DNSServer {
 	t.Helper()
 	return testServerWithMaxAge(t, snapshot, DefaultSnapshotMaxAge)
@@ -180,11 +229,16 @@ func testServer(t *testing.T, snapshot *Snapshot) *DNSServer {
 
 func testServerWithMaxAge(t *testing.T, snapshot *Snapshot, maxAge time.Duration) *DNSServer {
 	t.Helper()
+	return testServerWithLimits(t, snapshot, maxAge, DefaultQueryRateLimit, DefaultUDPResponseSize)
+}
+
+func testServerWithLimits(t *testing.T, snapshot *Snapshot, maxAge time.Duration, queryRateLimit int, udpSize int) *DNSServer {
+	t.Helper()
 	store := NewSnapshotStore("", maxAge)
 	if err := store.Set(snapshot); err != nil {
 		t.Fatalf("set snapshot: %v", err)
 	}
-	return NewDNSServer(store, NewScheduler(), NewRollupAggregator(time.Minute), &testSourceResolver{}, ":0")
+	return NewDNSServerWithLimits(store, NewScheduler(), NewRollupAggregator(time.Minute), &testSourceResolver{}, ":0", queryRateLimit, udpSize)
 }
 
 type testSourceResolver struct {
@@ -221,6 +275,23 @@ func baseSnapshot() *Snapshot {
 			},
 		},
 	}
+}
+
+func largeTXTRecordSnapshot() *Snapshot {
+	snapshot := baseSnapshot()
+	records := make([]SnapshotRecord, 0, 20)
+	value := "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789"
+	for i := 0; i < 20; i++ {
+		records = append(records, SnapshotRecord{
+			ID:    uint(i + 10),
+			Name:  "large.example.com",
+			Type:  "TXT",
+			Value: value,
+			TTL:   120,
+		})
+	}
+	snapshot.Zones[0].Records = append(snapshot.Zones[0].Records, records...)
+	return snapshot
 }
 
 func testNode(id string, pool string, ip string, weight int, connections int64) SnapshotNode {

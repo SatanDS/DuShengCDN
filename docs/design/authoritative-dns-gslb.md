@@ -4,7 +4,7 @@
 
 本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
 
-当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、来源作用域分布、GSLB 调度模拟、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、`country:HK` / `country:DE` / `global` 等来源作用域、注册商 NS 匹配状态、Glue 提示、当前快照按来源模拟返回目标以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态。
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。DNS Worker 查询面已经提供按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，超限查询返回 `REFUSED`，超大 UDP 响应设置 TC 位让递归解析器回退 TCP。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、来源作用域分布、GSLB 调度模拟、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、`country:HK` / `country:DE` / `global` 等来源作用域、注册商 NS 匹配状态、Glue 提示、当前快照按来源模拟返回目标以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态。
 
 ## 目标能力
 
@@ -172,7 +172,7 @@ route_id + record_type + source_scope
 * EDNS Client Subnet 可选开启，默认优先使用 ECS，未提供时使用递归解析器 IP。
 * `AXFR` 默认拒绝，后续如需支持必须配置来源 IP 白名单和 TSIG。
 
-以上 DNS 协议行为已在 DNS Worker MVP 中落地。当前实现默认拒绝 `AXFR`/`IXFR`，支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA`，并通过心跳批量上报聚合查询指标。
+以上 DNS 协议行为已在 DNS Worker MVP 中落地。当前实现默认拒绝 `AXFR`/`IXFR`，支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA`，会按 EDNS UDP buffer 和 Worker 侧上限截断超大 UDP 响应并设置 TC 位，并通过心跳批量上报聚合查询指标。
 
 TTL 规则：
 
@@ -200,7 +200,7 @@ TTL 规则：
 * 快照不包含管理端敏感信息、Cloudflare Token、Session Secret 或用户密码。
 * Zone Transfer 默认禁用。
 * 查询日志默认聚合，不保存完整来源 IP；如未来提供原始日志，必须有采样、脱敏和保留天数。
-* DNS Worker 应具备基础 QPS 限制和响应大小控制，避免被放大攻击滥用。
+* DNS Worker 已具备按来源 IP 的基础 QPS 限制和 UDP 响应大小控制；超限查询返回 `REFUSED` 并进入聚合指标，超大 UDP 响应会截断并设置 TC 位，避免被放大攻击滥用。
 
 ## 实施阶段
 
@@ -220,6 +220,7 @@ TTL 规则：
 * 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、节点权重、OpenResty 健康、排空、调度开关和负载阈值选点。
 * 支持 EDNS Client Subnet 来源识别；配置本地 MaxMind Country MMDB 后可按国家代码命中节点池，否则回退到 `global` 作用域。
 * 防抖状态按 `route_id + record_type + source_scope` 保存在 Worker 内存中。
+* 支持按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，避免异常递归解析器或放大流量压垮查询面。
 * 聚合查询指标按窗口批量 heartbeat 上报；上报失败时保留在内存中等待下次重试。
 * 已增加单元测试覆盖 DNS 响应、NXDOMAIN、NODATA、GSLB 选点、ECS 作用域、TTL、快照降级、AXFR 拒绝和聚合上报。
 

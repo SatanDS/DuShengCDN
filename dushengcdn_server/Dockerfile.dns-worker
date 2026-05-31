@@ -21,7 +21,9 @@ RUN apk add --no-cache ca-certificates tzdata \
     && mkdir -p /data
 
 ENV DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=:53 \
-    DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=/data/dns-worker-snapshot.json
+    DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=/data/dns-worker-snapshot.json \
+    DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \
+    DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232
 
 COPY --from=builder /build/dushengcdn-dns-worker /usr/local/bin/dushengcdn-dns-worker
 

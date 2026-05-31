@@ -20,6 +20,8 @@ type Config struct {
 	HeartbeatInterval time.Duration
 	RequestTimeout    time.Duration
 	SnapshotMaxAge    time.Duration
+	QueryRateLimit    int
+	UDPResponseSize   int
 	Version           string
 }
 
@@ -33,6 +35,8 @@ func LoadConfig(args []string, version string) (*Config, error) {
 		HeartbeatInterval: parseDurationEnv("DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL", DefaultHeartbeatInterval),
 		RequestTimeout:    parseDurationEnv("DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT", DefaultRequestTimeout),
 		SnapshotMaxAge:    parseDurationEnv("DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE", DefaultSnapshotMaxAge),
+		QueryRateLimit:    parseIntEnv("DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT", DefaultQueryRateLimit),
+		UDPResponseSize:   parseIntEnv("DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE", DefaultUDPResponseSize),
 		Version:           version,
 	}
 	fs := flag.NewFlagSet("dns-worker", flag.ContinueOnError)
@@ -44,6 +48,8 @@ func LoadConfig(args []string, version string) (*Config, error) {
 	fs.DurationVar(&cfg.HeartbeatInterval, "heartbeat-interval", cfg.HeartbeatInterval, "heartbeat and snapshot pull interval")
 	fs.DurationVar(&cfg.RequestTimeout, "request-timeout", cfg.RequestTimeout, "Server request timeout")
 	fs.DurationVar(&cfg.SnapshotMaxAge, "snapshot-max-age", cfg.SnapshotMaxAge, "maximum age for dynamic DNS answers")
+	fs.IntVar(&cfg.QueryRateLimit, "query-rate-limit", cfg.QueryRateLimit, "maximum DNS queries per source IP per second, 0 disables rate limiting")
+	fs.IntVar(&cfg.UDPResponseSize, "udp-response-size", cfg.UDPResponseSize, "maximum UDP DNS response payload size")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -70,6 +76,12 @@ func applyConfigDefaults(cfg *Config) {
 	}
 	if cfg.SnapshotMaxAge <= 0 {
 		cfg.SnapshotMaxAge = DefaultSnapshotMaxAge
+	}
+	if cfg.QueryRateLimit < 0 {
+		cfg.QueryRateLimit = 0
+	}
+	if cfg.UDPResponseSize <= 0 {
+		cfg.UDPResponseSize = DefaultUDPResponseSize
 	}
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "dev"
@@ -99,6 +111,15 @@ func validateConfig(cfg *Config) error {
 	if cfg.SnapshotMaxAge < time.Second {
 		return errors.New("snapshot-max-age must be at least 1s")
 	}
+	if cfg.QueryRateLimit < 0 {
+		return errors.New("query-rate-limit cannot be negative")
+	}
+	if cfg.UDPResponseSize < 512 {
+		return errors.New("udp-response-size must be at least 512")
+	}
+	if cfg.UDPResponseSize > 65535 {
+		return errors.New("udp-response-size cannot exceed 65535")
+	}
 	return nil
 }
 
@@ -115,4 +136,16 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+func parseIntEnv(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

@@ -121,7 +121,9 @@ go run ./cmd/dns-worker \
   --server-url http://127.0.0.1:3000 \
   --token replace-with-dns-worker-token \
   --listen 127.0.0.1:1053 \
-  --snapshot-path ./data/dns-worker-snapshot.json
+  --snapshot-path ./data/dns-worker-snapshot.json \
+  --query-rate-limit 200 \
+  --udp-response-size 1232
 ```
 
 验证：

@@ -208,7 +208,24 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL` | DNS Worker 心跳、快照拉取和聚合上报间隔，支持毫秒整数或 Go duration | `10s` |
 | `DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT` | DNS Worker 请求 Server 的超时时间，支持毫秒整数或 Go duration | `10s` |
 | `DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE` | DNS Worker 动态 GSLB 回答允许使用的最大快照年龄，支持毫秒整数或 Go duration | `5m` |
+| `DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT` | DNS Worker 按来源 IP 的每秒查询上限；`0` 表示关闭限速 | `200` |
+| `DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE` | DNS Worker UDP 响应最大字节数，超过时设置 TC 位让递归解析器回退 TCP | `1232` |
 | `DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH` | 可选本地 MaxMind Country MMDB 路径，用于按国家代码匹配 GSLB 节点池 | 空 |
+
+## DNS Worker 命令行参数
+
+| 参数 | 作用 | 默认值 |
+| --- | --- | --- |
+| `--server-url` | DuShengCDN Server 地址 | 环境变量 |
+| `--token` | DNS Worker 专属 Token | 环境变量 |
+| `--listen` | UDP/TCP 监听地址 | `:53` |
+| `--snapshot-path` | 本地快照缓存路径 | `data/dns-worker-snapshot.json` |
+| `--heartbeat-interval` | 心跳、快照拉取和聚合上报间隔 | `10s` |
+| `--request-timeout` | 请求 Server 的超时时间 | `10s` |
+| `--snapshot-max-age` | 动态 GSLB 回答允许使用的最大快照年龄 | `5m` |
+| `--query-rate-limit` | 按来源 IP 的每秒查询上限；`0` 表示关闭限速 | `200` |
+| `--udp-response-size` | UDP 响应最大字节数，超过时设置 TC 位回退 TCP | `1232` |
+| `--geoip-database` | 可选本地 MaxMind Country MMDB 路径 | 空 |
 
 ## Agent 命令行参数
 
