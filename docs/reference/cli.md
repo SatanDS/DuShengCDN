@@ -45,7 +45,7 @@ cd /opt/dushengcdn
 bash scripts/install-server.sh --public-ip 203.0.113.10
 ```
 
-脚本默认先检查本机是否已有 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、安装目录、环境文件、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动创建和安装。只部署面板可加 `--skip-dns-worker`，确认要覆盖本机 Worker 配置时再加 `--force-dns-worker-reinstall`。
+脚本默认先检查本机是否已有 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、安装目录、环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动创建和安装。只部署面板可加 `--skip-dns-worker`，确认要覆盖本机 Worker 配置时再加 `--force-dns-worker-reinstall`。
 
 备份 Server 数据：
 
@@ -70,6 +70,39 @@ bash scripts/backup-server.sh
 | `--postgres-user` | PostgreSQL 用户名，默认读取 `.env` 或 `dushengcdn` |
 
 `auto` 模式会优先对可访问的 Compose PostgreSQL 执行 `pg_dump`，否则备份 SQLite 文件，并归档 `dushengcdn-data`。脚本会在备份目录写入 `manifest.txt`，但不会停止、恢复、覆盖或删除生产数据。
+
+恢复 Server 数据：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+cd /opt/dushengcdn
+bash scripts/restore-server.sh --backup-path dushengcdn_server/backups/20260601-120000 --yes
+cd dushengcdn_server
+docker compose up -d
+```
+
+常用可选参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--backup-path` | `backup-server.sh` 生成的备份目录，必填 |
+| `--mode auto|postgres|sqlite` | 恢复模式，默认按 `manifest.txt` 或备份文件自动判断 |
+| `--server-dir` | Server compose/source 目录，默认仓库内 `dushengcdn_server` |
+| `--compose-file` | Docker Compose 文件，默认 `SERVER_DIR/docker-compose.yaml` |
+| `--env-file` | Compose 环境文件，默认读取 `SERVER_DIR/.env` |
+| `--data-dir` | 要恢复的 Server 数据目录，默认 `SERVER_DIR/dushengcdn-data` |
+| `--sqlite-path` | SQLite 数据库目标路径，默认按目标 `.env` 或 `DATA_DIR/dushengcdn.db` 推导 |
+| `--postgres-service` | Compose PostgreSQL 服务名，默认 `postgres` |
+| `--postgres-db` | PostgreSQL 数据库名，默认读取 manifest、`.env` 或 `dushengcdn` |
+| `--postgres-user` | PostgreSQL 用户名，默认读取 manifest、`.env` 或 `dushengcdn` |
+| `--pre-restore-backup-dir` | 覆盖前安全备份目录，默认 `SERVER_DIR/backups/pre-restore` |
+| `--skip-data-dir` | 只恢复数据库，不恢复 `dushengcdn-data` 归档 |
+| `--skip-current-backup` | 覆盖前不创建当前数据安全备份，仅在已另行备份时使用 |
+| `--force` | 跳过 Server 运行态保护，仅在 Compose 状态检查不适用时使用 |
+| `--yes` | 确认覆盖当前数据，恢复必填 |
+
+恢复脚本会优先校验 `manifest.txt` 中的 SHA-256 信息，默认拒绝在 Compose `dushengcdn` 服务仍运行时恢复，并在覆盖前备份当前数据库和数据目录。
 
 测试：
 

@@ -136,7 +136,7 @@ ports:
 
 此时浏览器访问 `http://localhost:3010`，容器内部仍监听 `3000`。
 
-也可以在仓库根目录使用一体化部署脚本。脚本会在 `.env` 不存在时从 `.env.example` 创建环境文件，并自动生成 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和匹配的 `DSN`，再使用 Docker Compose 启动面板。默认还会在面板本机自动部署 DNS Worker：部署前先检查本机是否已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时会跳过自动创建和安装，避免覆盖现有 Worker。没有发现本地 Worker 时，脚本会自动探测公网 IPv4，在 Server 中创建名为 `DNS服务响应端` 的 DNS Worker，拿到 Token 后调用 `scripts/install-dns-worker.sh` 监听 `PUBLIC_IP:53`。
+也可以在仓库根目录使用一体化部署脚本。脚本会在 `.env` 不存在时从 `.env.example` 创建环境文件；全新部署会自动生成 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和匹配的 `DSN`。如果升级旧源码部署且已存在 `dushengcdn_server/postgres-data`，脚本会保留 `.env.example` 中的数据库密码和 DSN，只生成 `SESSION_SECRET`，避免旧 PostgreSQL 数据目录因密码不一致导致面板连不上数据库。默认还会在面板本机自动部署 DNS Worker：部署前先检查本机是否已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时会跳过自动创建和安装，避免覆盖现有 Worker。没有发现本地 Worker 时，脚本会自动探测公网 IPv4，在 Server 中创建名为 `DNS服务响应端` 的 DNS Worker，拿到 Token 后调用 `scripts/install-dns-worker.sh` 监听 `PUBLIC_IP:53`。
 
 ```bash
 cd /opt/dushengcdn
@@ -478,7 +478,22 @@ bash scripts/backup-server.sh \
   --mode auto
 ```
 
-脚本只创建备份文件，不会停止、恢复、覆盖或删除生产数据。手工 PostgreSQL Compose 备份示例：
+脚本只创建备份文件，不会停止、恢复、覆盖或删除生产数据。恢复时可以使用仓库内的恢复脚本。PostgreSQL Compose 部署需要先停止 `dushengcdn` 服务，但保持 `postgres` 服务可访问：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+cd /opt/dushengcdn
+bash scripts/restore-server.sh \
+  --backup-path dushengcdn_server/backups/20260601-120000 \
+  --yes
+cd dushengcdn_server
+docker compose up -d
+```
+
+`restore-server.sh` 会优先读取备份目录中的 `manifest.txt`，可用时校验 SHA-256，默认拒绝在 Compose `dushengcdn` 服务仍运行时恢复。覆盖前脚本会把当前数据库和 `dushengcdn-data` 归档到 `dushengcdn_server/backups/pre-restore/<timestamp>/`；确认不需要恢复上传目录时可加 `--skip-data-dir`，只有在明确接受风险时才使用 `--skip-current-backup` 或 `--force`。
+
+手工 PostgreSQL Compose 备份示例：
 
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
@@ -496,11 +511,12 @@ cp dushengcdn-data/dushengcdn.db backups/dushengcdn-$(date +%F-%H%M%S).db
 tar -czf backups/dushengcdn-data-$(date +%F-%H%M%S).tar.gz dushengcdn-data
 ```
 
-恢复前先停止 Server，再恢复数据库与上传目录。PostgreSQL 恢复示例：
+手工 PostgreSQL 恢复示例：
 
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
 docker compose stop dushengcdn
+docker compose exec -T postgres psql -U dushengcdn -d dushengcdn -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
 docker compose exec -T postgres psql -U dushengcdn -d dushengcdn < backups/your-backup.sql
 docker compose up -d
 ```

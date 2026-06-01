@@ -100,7 +100,7 @@ docker compose up -d
 
 访问地址：`http://localhost:3000`
 
-源码 Compose 部署时，也可以在仓库根目录使用一体化脚本启动面板并默认安装同机 DNS Worker。脚本会在首次部署时自动生成 `.env` 里的数据库密码、`SESSION_SECRET` 和 `DSN`，并先检查本机是否已部署 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动安装，避免覆盖现有配置。
+源码 Compose 部署时，也可以在仓库根目录使用一体化脚本启动面板并默认安装同机 DNS Worker。脚本会在首次部署时自动生成 `.env` 里的数据库密码、`SESSION_SECRET` 和 `DSN`；如果升级旧源码部署且检测到已有 `dushengcdn_server/postgres-data`，会保留 `.env.example` 中的数据库密码和 DSN，避免旧 PostgreSQL 数据目录因密码不一致导致面板打不开。脚本会先检查本机是否已部署 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动安装，避免覆盖现有配置。
 
 ```bash
 cd /opt/dushengcdn
@@ -409,6 +409,7 @@ git clone https://github.com/SatanDS/DuShengCDN.git /opt/dushengcdn
 
 ```bash
 cd /opt/dushengcdn
+bash scripts/backup-server.sh
 git fetch origin main
 git pull --ff-only origin main
 cd dushengcdn_server
@@ -418,6 +419,19 @@ sed -i 's/replace-with-strong-password/your-postgres-password/g' .env
 DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
 ```
+
+如需从备份恢复，先停止 Server 容器但保持 PostgreSQL 服务可访问，再使用恢复脚本：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+cd /opt/dushengcdn
+bash scripts/restore-server.sh --backup-path dushengcdn_server/backups/20260601-120000 --yes
+cd dushengcdn_server
+docker compose up -d
+```
+
+恢复脚本会校验 `manifest.txt` 中的 SHA-256 信息，在覆盖前为当前数据库和 `dushengcdn-data` 再生成一份 `backups/pre-restore/<timestamp>/` 安全备份，并且默认拒绝在 `dushengcdn` 服务仍运行时恢复。
 
 后续端口、数据库密码、`SESSION_SECRET`、DSN、旧版 `AGENT_TOKEN` 等本地部署参数都改 `.env`，不要直接改仓库里的 `dushengcdn_server/docker-compose.yaml`。这样后续 `git pull --ff-only origin main` 不会因为本地 Compose 模板改动被阻塞。
 

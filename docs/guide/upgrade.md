@@ -103,6 +103,21 @@ bash scripts/backup-server.sh
 
 脚本默认读取 `dushengcdn_server/.env`，在 `auto` 模式下优先备份可访问的 Compose PostgreSQL，否则备份 SQLite 文件，并同时归档 `dushengcdn-data` 目录。备份文件会写入 `dushengcdn_server/backups/<timestamp>/`，并生成 `manifest.txt` 记录模式、路径和校验信息。脚本只创建备份，不会停止、恢复、覆盖或删除生产数据。
 
+恢复时先停止 Server，再执行恢复脚本，最后启动 Server 并检查日志、版本页面、节点详情和应用记录。PostgreSQL Compose 部署只需要停止 `dushengcdn` 服务，保留 `postgres` 服务运行供脚本恢复数据库：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+cd /opt/dushengcdn
+bash scripts/restore-server.sh \
+  --backup-path dushengcdn_server/backups/20260601-120000 \
+  --yes
+cd dushengcdn_server
+docker compose up -d
+```
+
+恢复脚本会校验备份 manifest 中的 SHA-256 信息，并在覆盖前把当前数据库和 `dushengcdn-data` 再备份到 `dushengcdn_server/backups/pre-restore/<timestamp>/`。默认会拒绝在 `dushengcdn` 服务仍运行时恢复；只有在确认运行态检查不适用时才加 `--force`。
+
 PostgreSQL Compose 部署：
 
 ```bash
@@ -112,7 +127,7 @@ docker compose exec -T postgres pg_dump -U dushengcdn -d dushengcdn > backups/du
 tar -czf backups/dushengcdn-data-$(date +%F-%H%M%S).tar.gz dushengcdn-data
 ```
 
-SQLite 部署：
+SQLite 手工备份：
 
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
@@ -120,8 +135,6 @@ mkdir -p backups
 cp dushengcdn-data/dushengcdn.db backups/dushengcdn-$(date +%F-%H%M%S).db
 tar -czf backups/dushengcdn-data-$(date +%F-%H%M%S).tar.gz dushengcdn-data
 ```
-
-恢复时先停止 Server，再恢复数据库和上传目录，最后启动 Server 并检查日志、版本页面、节点详情和应用记录。
 
 ## 常用验证命令
 

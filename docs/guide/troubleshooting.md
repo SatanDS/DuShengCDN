@@ -53,10 +53,23 @@ ls -ld "$(dirname /path/to/dushengcdn.db)"
 | 日志或现象 | 处理 |
 | --- | --- |
 | 数据库连接失败 | 检查 `DSN` 中用户名、密码、主机、端口、库名和 `sslmode` |
+| `password authentication failed for user "dushengcdn"` | `POSTGRES_PASSWORD` / `DSN` 与已有 PostgreSQL 数据目录中的真实密码不一致。升级旧源码部署时，如果刚执行过 `bash scripts/install-server.sh` 后网页打不开，先把 `.env` 中的数据库密码和 DSN 改回旧值，再重启容器 |
 | SQLite 无法创建文件 | 检查 `SQLITE_PATH` 所在目录是否存在且可写 |
 | 端口被占用 | 修改 `PORT` 或 `--port`，或停止占用端口的进程 |
 
 Docker Compose 部署时如只想改宿主机访问端口，可把 `ports` 改成 `3010:3000`；容器内应用仍监听 `3000`。
+
+如果旧源码部署原先没有 `.env`，升级后第一次运行 `scripts/install-server.sh` 创建了随机数据库密码，旧 `postgres-data` 中的 PostgreSQL 密码不会自动变化。可先按旧默认密码恢复连接：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=replace-with-strong-password/' .env
+sed -i 's#^DSN=.*#DSN=postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable#' .env
+docker compose --env-file .env up -d --build
+docker compose --env-file .env logs --tail=100 dushengcdn
+```
+
+如果你之前手动设置过 PostgreSQL 密码，把上面命令中的 `replace-with-strong-password` 换成真实旧密码。面板恢复后，再按 PostgreSQL 标准流程有计划地轮换数据库密码。
 
 ## 管理端打不开或空白
 

@@ -295,6 +295,21 @@ bash scripts/backup-server.sh
 
 脚本默认读取 `dushengcdn_server/.env`，优先备份可访问的 Compose PostgreSQL，否则备份 SQLite 文件，并同时归档 `dushengcdn-data` 目录。输出目录为 `dushengcdn_server/backups/<timestamp>/`，其中包含 `manifest.txt`。脚本只创建备份文件，不会停止或恢复生产数据。
 
+需要恢复时，先停止 Server，再执行恢复脚本。PostgreSQL Compose 部署只停止 `dushengcdn` 服务，保持 `postgres` 服务运行：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+cd /opt/dushengcdn
+bash scripts/restore-server.sh \
+  --backup-path dushengcdn_server/backups/20260601-120000 \
+  --yes
+cd dushengcdn_server
+docker compose up -d
+```
+
+恢复脚本会校验 `manifest.txt` 中的校验信息，覆盖前把当前数据库和数据目录保存到 `dushengcdn_server/backups/pre-restore/<timestamp>/`，并默认拒绝在 Server 仍运行时恢复。
+
 PostgreSQL Compose 手工备份：
 
 ```bash

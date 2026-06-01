@@ -49,7 +49,7 @@ Options:
 
 Behavior:
   1. Creates dushengcdn_server/.env from .env.example when .env does not exist
-     and fills POSTGRES_PASSWORD, SESSION_SECRET, and DSN with generated values
+     and fills SESSION_SECRET plus first-install database secrets with generated values
   2. Starts or updates Server with Docker Compose
   3. When DNS Worker is enabled, checks whether a local Worker is already deployed
   4. If no local Worker is found, detects public IP, creates a DNS Worker Token, and runs install-dns-worker.sh
@@ -153,6 +153,12 @@ write_env_key() {
   fi
 }
 
+existing_postgres_data_dir() {
+  local dir="${SERVER_DIR}/postgres-data"
+  [[ -d "$dir" ]] || return 1
+  [[ -n "$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]
+}
+
 initialize_env_file() {
   local postgres_db postgres_user postgres_password session_secret dsn
 
@@ -164,10 +170,25 @@ initialize_env_file() {
   log "Creating ${ENV_FILE} from .env.example..."
   cp -n "${SERVER_DIR}/.env.example" "$ENV_FILE"
 
-  postgres_password="$(random_hex 18 || true)"
   session_secret="$(random_hex 32 || true)"
-  if [[ -z "$postgres_password" || -z "$session_secret" ]]; then
-    warn "could not generate random secrets; edit ${ENV_FILE} before production use."
+  if [[ -n "$session_secret" ]]; then
+    write_env_key SESSION_SECRET "$session_secret"
+  else
+    warn "could not generate SESSION_SECRET; edit ${ENV_FILE} before production use."
+  fi
+
+  if existing_postgres_data_dir; then
+    warn "existing PostgreSQL data directory detected at ${SERVER_DIR}/postgres-data."
+    warn "preserving POSTGRES_PASSWORD and DSN copied from .env.example to avoid breaking existing database authentication."
+    warn "after the panel is healthy, rotate the PostgreSQL password deliberately if needed."
+    log "Generated SESSION_SECRET in ${ENV_FILE}; preserved existing PostgreSQL credentials."
+    return
+  fi
+
+  postgres_password="$(random_hex 18 || true)"
+  if [[ -z "$postgres_password" ]]; then
+    warn "could not generate POSTGRES_PASSWORD; edit ${ENV_FILE} before production use."
+    log "Generated SESSION_SECRET in ${ENV_FILE}."
     return
   fi
 
@@ -175,7 +196,6 @@ initialize_env_file() {
   postgres_user="$(env_value POSTGRES_USER dushengcdn)"
   dsn="postgres://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}?sslmode=disable"
   write_env_key POSTGRES_PASSWORD "$postgres_password"
-  write_env_key SESSION_SECRET "$session_secret"
   write_env_key DSN "$dsn"
   log "Generated POSTGRES_PASSWORD, SESSION_SECRET, and DSN in ${ENV_FILE}."
 }
