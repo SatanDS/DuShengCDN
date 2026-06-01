@@ -439,7 +439,79 @@ describe('Authoritative DNS page', () => {
         if (url.includes('/dns-workers/simulate') && method === 'POST') {
           const payload = JSON.parse(String(init?.body ?? '{}')) as {
             country?: string;
+            source_ip?: string;
           };
+          if (payload.source_ip === '203.0.113.23') {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  message: '',
+                  data: {
+                    proxy_route_id: 92,
+                    site_name: 'authoritative-site',
+                    qname: 'api.example.com',
+                    record_type: 'A',
+                    country: '',
+                    source_ip: '203.0.113.23',
+                    source_scope: 'cidr:203.0.113.0/24|bucket:17',
+                    ttl: 30,
+                    targets: ['203.0.113.80'],
+                    target_count: 1,
+                    strategy: 'weighted',
+                    gslb_enabled: true,
+                    snapshot_version: 'snapshot-cidr',
+                    snapshot_at: '2026-05-31T08:28:00Z',
+                    message:
+                      '模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。',
+                    matched_pools: [
+                      {
+                        name: 'vip',
+                        weight: 100,
+                        countries: [],
+                        source_cidrs: ['203.0.113.0/24'],
+                        matched: true,
+                        reason: '匹配来源 CIDR 203.0.113.0/24',
+                      },
+                    ],
+                    nodes: [
+                      {
+                        node_id: 'node-cidr',
+                        name: 'cidr-edge',
+                        pool_name: 'vip',
+                        status: 'online',
+                        openresty_status: 'healthy',
+                        scheduling_enabled: true,
+                        drain_mode: false,
+                        last_seen_at: '2026-05-31T08:27:00Z',
+                        public_ips: ['203.0.113.80'],
+                        candidate_targets: ['203.0.113.80'],
+                        selected_targets: ['203.0.113.80'],
+                        eligible: true,
+                        selected: true,
+                        reasons: ['可参与当前调度'],
+                        has_metric: true,
+                        metric_captured_at: '2026-05-31T08:27:10Z',
+                        openresty_connections: 8,
+                        cpu_usage_percent: 9,
+                        memory_usage_percent: 18,
+                        score: 10000,
+                        node_probe_status: 'healthy',
+                        node_probe_message:
+                          '该节点到 DNS Worker 多点探测全部可达（1/1）',
+                        node_probe_checked_count: 1,
+                        node_probe_healthy_count: 1,
+                        node_probe_stale_count: 0,
+                        node_probe_healthy_percent: 100,
+                        node_probe_average_rtt_ms: 18,
+                        node_probe_max_rtt_ms: 20,
+                      },
+                    ],
+                  },
+                }),
+              ),
+            );
+          }
           if (payload.country === 'DE') {
             return Promise.resolve(
               new Response(
@@ -971,8 +1043,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('12.5 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('48 ms').length).toBeGreaterThan(0);
     expect(
-      screen.getAllByText(/按国家代码匹配的 GSLB 节点池会回退到全局/)
-        .length,
+      screen.getAllByText(/按国家代码匹配的 GSLB 节点池会回退到全局/).length,
     ).toBeGreaterThan(0);
     expect(screen.getByText('GSLB 调度模拟')).toBeInTheDocument();
     expect(
@@ -1019,9 +1090,31 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('国家 DE').length).toBeGreaterThan(0);
     expect(screen.getByText(/snapshot-d/)).toBeInTheDocument();
     expect(screen.getByText('eu-hot')).toBeInTheDocument();
-    expect(screen.getAllByText('节点负载超过 GSLB 阈值').length).toBeGreaterThan(
-      0,
+    expect(
+      screen.getAllByText('节点负载超过 GSLB 阈值').length,
+    ).toBeGreaterThan(0);
+    await user.clear(screen.getByPlaceholderText('HK'));
+    await user.type(
+      screen.getByPlaceholderText('203.0.113.10'),
+      '203.0.113.23',
     );
+    await user.click(screen.getByRole('button', { name: '模拟调度' }));
+    await waitFor(() => {
+      expect(screen.getAllByText('203.0.113.80').length).toBeGreaterThan(0);
+    });
+    expect(
+      screen.getByText('网段 203.0.113.0/24 / 分流桶 17'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('cidr:203.0.113.0/24|bucket:17'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/CIDR 203\.0\.113\.0\/24/).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText('匹配来源 CIDR 203.0.113.0/24'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('cidr-edge')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '检查委派' }));
     expect(await screen.findByText('部分匹配')).toBeInTheDocument();
