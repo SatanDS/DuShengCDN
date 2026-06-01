@@ -749,7 +749,7 @@ func SwitchProxyRouteToAuthoritativeDNS(id uint, input AuthoritativeDNSMigration
 	if err != nil {
 		return nil, err
 	}
-	if err := validateAuthoritativeMigrationWorkers(); err != nil {
+	if err := validateAuthoritativeDNSReadyWorkers(); err != nil {
 		return nil, err
 	}
 	recordType := normalizeDNSRecordType(route.DNSRecordType)
@@ -2151,7 +2151,7 @@ func resolveAuthoritativeMigrationZone(zoneIDRef *uint, domains []string) (*mode
 	return best, nil
 }
 
-func validateAuthoritativeMigrationWorkers() error {
+func validateAuthoritativeDNSReadyWorkers() error {
 	workers, err := model.ListDNSWorkers()
 	if err != nil {
 		return err
@@ -2170,10 +2170,10 @@ func validateAuthoritativeMigrationWorkers() error {
 		}
 	}
 	if onlineCount == 0 {
-		return errors.New("no online DNS Worker is available")
+		return errors.New("没有在线 DNS Worker")
 	}
 	if healthyProbeCount == 0 {
-		return errors.New("no online DNS Worker has passed recent public UDP/TCP 53 probe")
+		return errors.New("在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测")
 	}
 	return nil
 }

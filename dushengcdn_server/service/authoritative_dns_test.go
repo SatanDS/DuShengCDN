@@ -312,6 +312,104 @@ func TestCreateProxyRouteAuthoritativeAllowsDisabledDraftWithoutTargets(t *testi
 	}
 }
 
+func TestCreateProxyRouteAuthoritativeRequiresReadyDNSWorker(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+
+	_, err = CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err == nil || !strings.Contains(err.Error(), "DNS Worker") {
+		t.Fatalf("expected missing DNS Worker readiness error, got %v", err)
+	}
+}
+
+func TestCreateProxyRouteAuthoritativeAllowsReadyDNSWorker(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	createReadyDNSWorker(t, now)
+
+	view, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute: %v", err)
+	}
+	if !view.Enabled || view.DNSProviderMode != DNSProviderModeAuthoritative {
+		t.Fatalf("unexpected authoritative route view: %+v", view)
+	}
+}
+
 func TestUpdateProxyRouteAuthoritativeRejectsSourceSpecificNoTargets(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -1769,6 +1867,28 @@ func mustJSON(t *testing.T, value any) string {
 
 func ptrUint(value uint) *uint {
 	return &value
+}
+
+func createReadyDNSWorker(t *testing.T, checkedAt time.Time) *model.DNSWorker {
+	t.Helper()
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1", PublicAddress: "ns1.example.net"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	checkedAt = checkedAt.UTC()
+	workerModel.Status = dnsWorkerStatusOnline
+	workerModel.LastSeenAt = &checkedAt
+	workerModel.LastProbeAt = &checkedAt
+	workerModel.LastProbeQuery = "example.com. SOA"
+	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
+	if err := workerModel.Update(); err != nil {
+		t.Fatalf("update worker readiness: %v", err)
+	}
+	return workerModel
 }
 
 func containsStringWith(values []string, fragment string) bool {

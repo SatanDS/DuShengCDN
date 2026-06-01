@@ -276,6 +276,14 @@ curl -Iv https://your-domain
 5. 如果启用了 `负载感知` 或负载阈值，检查当前连接数、CPU 和内存快照是否把全部节点剔除了；可临时放宽最大连接数、最大 CPU 或最大内存阈值后再试。
 6. 到「权威 DNS」里的「GSLB 调度模拟」按同一站点、记录类型和来源再次模拟，查看每个节点的跳过原因。
 
+如果迁移向导、一键切换或网站详情保存时提示“没有在线 DNS Worker”或“在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测”：
+
+1. 先在「权威 DNS」创建 DNS Worker，并用面板生成的 Token 部署 Worker。
+2. 确认 Worker 心跳状态为在线，并且填写了可从公网访问的 DNS Worker 地址。
+3. 在 DNS Worker 列表点击「探测」，确认 UDP 和 TCP `53` 都可达；只通过其中一个协议时仍不视为可迁移/可启用。
+4. 检查 Worker 服务器防火墙、云安全组、NAT 和端口映射是否同时放行 UDP `53` 与 TCP `53`。
+5. 如果最近一次探测显示过期，重新点击「探测」后再保存网站或执行一键切换。
+
 如果「Worker 可用性」里 Server 侧公网探测正常，但「Agent 多节点探测」异常：
 
 1. 确认对应 Agent 节点可以直接访问 DNS Worker 公网地址的 UDP/TCP `53`，例如在节点上执行 `dig @ns1.example.net example.com SOA`。
