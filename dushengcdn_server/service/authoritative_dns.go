@@ -1284,7 +1284,7 @@ func buildDNSGSLBSimulationView(snapshot *AuthoritativeDNSSnapshot, workerRoute 
 			},
 		}
 	}
-	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, policy, GSLBSourceContext{IP: sourceIP, Country: country}, targets)
+	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, policy, GSLBSourceContext{IP: sourceIP, Country: country}, targets, snapshot.GSLBProbeSchedulingEnabled)
 	message := "模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。"
 	if strings.TrimSpace(messagePrefix) != "" {
 		message = strings.TrimSpace(messagePrefix) + " " + message
@@ -1331,7 +1331,7 @@ type dnsGSLBSimulationDiagnostics struct {
 	nodes []DNSGSLBSimulationNodeView
 }
 
-func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBPolicy, source GSLBSourceContext, selectedTargets []string) dnsGSLBSimulationDiagnostics {
+func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBPolicy, source GSLBSourceContext, selectedTargets []string, requireHealthyDNSProbe bool) dnsGSLBSimulationDiagnostics {
 	servicePolicy := convertWorkerGSLBPolicyToAuthoritative(policy)
 	servicePolicy, err := normalizeGSLBPolicy(servicePolicy, "default", servicePolicy.TargetCount, servicePolicy.Strategy, servicePolicy.TTL)
 	if err != nil {
@@ -1348,7 +1348,6 @@ func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBP
 	}
 	metrics := latestNodeMetricSnapshots()
 	nodeProbeStats := buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
-	requireHealthyDNSProbe := common.GSLBProbeSchedulingEnabled
 	selectedSet := make(map[string]struct{}, len(selectedTargets))
 	for _, target := range selectedTargets {
 		selectedSet[strings.TrimSpace(target)] = struct{}{}

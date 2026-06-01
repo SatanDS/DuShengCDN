@@ -2800,6 +2800,56 @@ func TestSimulateAuthoritativeDNSGSLBProbeSchedulingExplainsThresholdReasons(t *
 	}
 }
 
+func TestGSLBSimulationDiagnosticsUsesSnapshotProbeSchedulingFlag(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = true
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	now := time.Now()
+	if err := (&model.Node{
+		NodeID:          "node-unprobed",
+		Name:            "unprobed",
+		IP:              "1.1.1.1",
+		PoolName:        "hk",
+		PublicIPs:       `["1.1.1.1"]`,
+		Weight:          100,
+		AgentToken:      "token-unprobed",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	policy := dnsworker.GSLBPolicy{
+		Strategy:    "weighted",
+		TargetCount: 1,
+		TTL:         30,
+		Pools: []dnsworker.GSLBPoolPolicy{
+			{Name: "hk", Weight: 100, Enabled: true},
+		},
+	}
+	diagnostics := buildDNSGSLBSimulationDiagnostics("A", policy, GSLBSourceContext{Country: "HK"}, []string{"1.1.1.1"}, false)
+	node := findSimulationNode(diagnostics.nodes, "node-unprobed")
+	if node == nil {
+		t.Fatalf("expected node diagnostic to be present")
+	}
+	if !node.Eligible || !node.Selected {
+		t.Fatalf("expected snapshot-disabled probe scheduling to keep node eligible and selected, got %+v", node)
+	}
+	if containsString(node.Reasons, "尚未收到新鲜成功探测") {
+		t.Fatalf("expected probe threshold reason to follow snapshot flag instead of global option, got %+v", node.Reasons)
+	}
+}
+
 func TestDNSWorkerProbeStateClassifiesFailedPartialAndStale(t *testing.T) {
 	now := time.Date(2026, 5, 31, 8, 0, 0, 0, time.UTC)
 
