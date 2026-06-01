@@ -36,6 +36,8 @@ type gslbDNSTargetCandidate struct {
 	CPUUsagePercent      float64
 	MemoryUsagePercent   float64
 	HasMetric            bool
+	DNSProbeHealthy      bool
+	DNSProbeAverageRTTMs float64
 	Score                float64
 }
 
@@ -212,7 +214,8 @@ func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRout
 		if !isNodeSchedulableForDNS(node) || !isNodeOnlineAndOpenRestyHealthy(node) {
 			continue
 		}
-		if options.RequireHealthyDNSProbe && !dnsWorkerNodeProbeStatsSchedulable(probeStatsByNode[node.NodeID]) {
+		probeStats := probeStatsByNode[node.NodeID]
+		if options.RequireHealthyDNSProbe && !dnsWorkerNodeProbeStatsSchedulable(probeStats) {
 			continue
 		}
 		metric, hasMetric := metrics[node.NodeID]
@@ -244,6 +247,10 @@ func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRout
 				PoolWeight: poolPolicy.Weight,
 				LastSeenAt: node.LastSeenAt,
 				HasMetric:  hasMetric,
+			}
+			if options.RequireHealthyDNSProbe && probeStats != nil {
+				candidate.DNSProbeHealthy = dnsWorkerNodeProbeStatsSchedulable(probeStats)
+				candidate.DNSProbeAverageRTTMs = averageFloat(probeStats.totalAverageRTTMs, probeStats.averageSamples)
 			}
 			if hasMetric {
 				candidate.OpenrestyConnections = metric.OpenrestyConnections
@@ -373,6 +380,11 @@ func sortGSLBCandidates(candidates []gslbDNSTargetCandidate, strategy string) {
 		}
 		if strategy == "load_aware" && left.OpenrestyConnections != right.OpenrestyConnections {
 			return left.OpenrestyConnections < right.OpenrestyConnections
+		}
+		if left.DNSProbeHealthy && right.DNSProbeHealthy &&
+			left.DNSProbeAverageRTTMs > 0 && right.DNSProbeAverageRTTMs > 0 &&
+			left.DNSProbeAverageRTTMs != right.DNSProbeAverageRTTMs {
+			return left.DNSProbeAverageRTTMs < right.DNSProbeAverageRTTMs
 		}
 		if !left.LastSeenAt.Equal(right.LastSeenAt) {
 			return left.LastSeenAt.After(right.LastSeenAt)

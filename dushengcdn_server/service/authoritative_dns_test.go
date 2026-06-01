@@ -2381,6 +2381,137 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	assertSimulationPoolReason(t, cidr.MatchedPools, "eu", "匹配来源网段 203.0.113.0/24")
 }
 
+func TestSimulateAuthoritativeDNSGSLBProbeSchedulingPrefersLowerRTT(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = true
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	now := time.Now()
+	for _, node := range []*model.Node{
+		{
+			NodeID:          "node-slow",
+			Name:            "slow",
+			IP:              "1.1.1.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          100,
+			AgentToken:      "token-slow",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-fast",
+			Name:            "fast",
+			IP:              "8.8.4.4",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.4.4"]`,
+			Weight:          100,
+			AgentToken:      "token-fast",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-10 * time.Second),
+		},
+	} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node %s: %v", node.NodeID, err)
+		}
+	}
+	persistHeartbeatObservability("node-slow", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{
+			{
+				WorkerID:      worker.WorkerID,
+				PublicAddress: "ns1.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results: []AgentDNSProbeResult{
+					{Network: "UDP", Reachable: true, DurationMs: 70, RCode: "NOERROR", AnswerCount: 1},
+					{Network: "TCP", Reachable: true, DurationMs: 90, RCode: "NOERROR", AnswerCount: 1},
+				},
+			},
+		},
+	}, now)
+	persistHeartbeatObservability("node-fast", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{
+			{
+				WorkerID:      worker.WorkerID,
+				PublicAddress: "ns1.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results: []AgentDNSProbeResult{
+					{Network: "UDP", Reachable: true, DurationMs: 10, RCode: "NOERROR", AnswerCount: 1},
+					{Network: "TCP", Reachable: true, DurationMs: 14, RCode: "NOERROR", AnswerCount: 1},
+				},
+			},
+		},
+	}, now)
+
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 30)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 100, Enabled: true},
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	simulation, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB: %v", err)
+	}
+	if len(simulation.Targets) != 1 || simulation.Targets[0] != "8.8.4.4" {
+		t.Fatalf("expected lower Agent probe RTT target, got %+v", simulation.Targets)
+	}
+	fast := findSimulationNode(simulation.Nodes, "node-fast")
+	slow := findSimulationNode(simulation.Nodes, "node-slow")
+	if fast == nil || slow == nil || !fast.Selected || slow.Selected || fast.NodeProbeAverageRTTMs != 12 || slow.NodeProbeAverageRTTMs != 80 {
+		t.Fatalf("unexpected probe RTT diagnostics, fast=%+v slow=%+v", fast, slow)
+	}
+}
+
 func TestDNSWorkerProbeStateClassifiesFailedPartialAndStale(t *testing.T) {
 	now := time.Date(2026, 5, 31, 8, 0, 0, 0, time.UTC)
 

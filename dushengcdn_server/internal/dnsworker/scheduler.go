@@ -38,6 +38,7 @@ type targetCandidate struct {
 	MemoryUsagePercent   float64
 	HasMetric            bool
 	DNSProbeHealthy      bool
+	DNSProbeAverageRTTMs float64
 	Score                float64
 }
 
@@ -308,7 +309,10 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 				CPUUsagePercent:      node.CPUUsagePercent,
 				MemoryUsagePercent:   node.MemoryUsagePercent,
 				HasMetric:            node.MetricCapturedAt != nil,
-				DNSProbeHealthy:      node.DNSProbeHealthy,
+			}
+			if snapshot.GSLBProbeSchedulingEnabled {
+				candidate.DNSProbeHealthy = node.DNSProbeHealthy
+				candidate.DNSProbeAverageRTTMs = node.DNSProbeAverageRTTMs
 			}
 			candidate.Score = scoreCandidate(candidate, policy.Strategy)
 			candidates = append(candidates, candidate)
@@ -486,6 +490,11 @@ func sortCandidates(candidates []targetCandidate, strategy string) {
 		}
 		if strategy == "load_aware" && left.OpenrestyConnections != right.OpenrestyConnections {
 			return left.OpenrestyConnections < right.OpenrestyConnections
+		}
+		if left.DNSProbeHealthy && right.DNSProbeHealthy &&
+			left.DNSProbeAverageRTTMs > 0 && right.DNSProbeAverageRTTMs > 0 &&
+			left.DNSProbeAverageRTTMs != right.DNSProbeAverageRTTMs {
+			return left.DNSProbeAverageRTTMs < right.DNSProbeAverageRTTMs
 		}
 		if !left.LastSeenAt.Equal(right.LastSeenAt) {
 			return left.LastSeenAt.After(right.LastSeenAt)

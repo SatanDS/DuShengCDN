@@ -207,6 +207,51 @@ func TestResolveDynamicRouteProbeSchedulingDisabledKeepsExistingBehavior(t *test
 	}
 }
 
+func TestResolveDynamicRouteProbeSchedulingPrefersLowerRTT(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.GSLBProbeSchedulingEnabled = true
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           23,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	now := time.Now().UTC()
+	slowProbe := testNode("slow-probe", "hk", "1.1.1.1", 100, 1)
+	slowProbe.LastSeenAt = now
+	slowProbe.DNSProbeHealthy = true
+	slowProbe.DNSProbeAverageRTTMs = 80
+	fastProbe := testNode("fast-probe", "hk", "8.8.4.4", 100, 1)
+	fastProbe.LastSeenAt = now.Add(-10 * time.Second)
+	fastProbe.DNSProbeHealthy = true
+	fastProbe.DNSProbeAverageRTTMs = 12
+	snapshot.Nodes = []SnapshotNode{slowProbe, fastProbe}
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected lower Agent DNS probe RTT target, got %s", got)
+	}
+}
+
 func TestResolveDynamicRouteProbeSchedulingExplainsFilteredCandidates(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.GSLBProbeSchedulingEnabled = true
