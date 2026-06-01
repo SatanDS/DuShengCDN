@@ -286,6 +286,13 @@ curl -Iv https://your-domain
 4. 检查 Worker 服务器防火墙、云安全组、NAT 和端口映射是否同时放行 UDP `53` 与 TCP `53`。
 5. 如果最近一次探测显示过期，重新点击「探测」后再保存网站或执行一键切换。
 
+如果安装 DNS Worker 时提示 UDP/TCP `53` 端口已被占用，或服务日志出现 `address already in use`：
+
+1. 在 Worker 主机执行 `ss -lntu '( sport = :53 )'` 或 `lsof -nP -i :53`，确认占用 `53` 的进程。
+2. 常见占用者是 `systemd-resolved`、`named`、`dnsmasq` 或同机已有 DNS 服务；停止或改端口后再重跑安装脚本。
+3. 如果现有服务只绑定回环地址，而 DNS Worker 只需要绑定公网地址，可以使用 `--listen PUBLIC_IP:53`，不要使用默认的 `:53` 全地址监听。
+4. 仅本地开发时改用高位端口，例如 `--listen 127.0.0.1:1053`，再用 `dig @127.0.0.1 -p 1053 example.com SOA` 验证。
+
 如果迁移向导、一键切换或网站详情保存时提示“公网可达 DNS Worker 尚未拉取未过期的调度快照”、“部分公网可达 DNS Worker 尚未拉取未过期的调度快照”或“公网可达 DNS Worker 的调度快照版本不一致”：
 
 1. 先确认至少一个 Worker 在列表中为在线，并且最近一次公网 UDP/TCP `53` 探测为健康。

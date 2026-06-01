@@ -133,6 +133,105 @@ env_quote() {
   printf '"%s"' "$value"
 }
 
+listen_port_from_addr() {
+  local addr="$1"
+
+  if [[ "$addr" =~ ^\[.*\]:([0-9]+)$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "$addr" =~ :([0-9]+)$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "$addr" =~ ^([0-9]+)$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+is_wildcard_listen_addr() {
+  case "$1" in
+    :*|0.0.0.0:*|[[]::[]]:*|\*:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+listen_port_in_use() {
+  local port="$1"
+  local output
+
+  if command -v ss >/dev/null 2>&1; then
+    if output="$(ss -H -lntu "( sport = :${port} )" 2>/dev/null)" && [[ -n "$output" ]]; then
+      return 0
+    fi
+    if output="$(ss -H -lntu 2>/dev/null)" && echo "$output" | awk -v port=":${port}" '
+      {
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ port "$") {
+            found = 1
+          }
+        }
+      }
+      END { exit found ? 0 : 1 }
+    '; then
+      return 0
+    fi
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { found = 1 } END { exit found ? 0 : 1 }'; then
+      return 0
+    fi
+    if lsof -nP -iUDP:"$port" 2>/dev/null | awk 'NR > 1 { found = 1 } END { exit found ? 0 : 1 }'; then
+      return 0
+    fi
+  fi
+
+  if command -v netstat >/dev/null 2>&1; then
+    if netstat -an 2>/dev/null | awk -v port="$port" '
+      ($0 ~ /LISTEN/ || $1 ~ /^udp/i) {
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ ("[.:]" port "$")) {
+            found = 1
+          }
+        }
+      }
+      END { exit found ? 0 : 1 }
+    '; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+check_listen_port_available() {
+  local port
+
+  port="$(listen_port_from_addr "$LISTEN_ADDR" || true)"
+  if [[ -z "$port" || "$port" == "0" ]]; then
+    return
+  fi
+  if ! is_wildcard_listen_addr "$LISTEN_ADDR"; then
+    return
+  fi
+  if ! listen_port_in_use "$port"; then
+    return
+  fi
+
+  cat >&2 <<EOF
+Error: UDP/TCP port ${port} is already in use, and --listen ${LISTEN_ADDR} binds all local addresses.
+Stop or reconfigure the existing local DNS service first. Common examples are systemd-resolved, named, and dnsmasq.
+If the existing service only binds a loopback address, rerun with an explicit public address such as --listen PUBLIC_IP:${port}; for local testing, use a high port such as --listen 127.0.0.1:1053.
+Useful checks:
+  ss -lntu '( sport = :${port} )'
+  lsof -nP -i :${port}
+EOF
+  exit 1
+}
+
 validate_install_dir() {
   while [[ "$INSTALL_DIR" != "/" && "$INSTALL_DIR" == */ ]]; do
     INSTALL_DIR="${INSTALL_DIR%/}"
@@ -488,6 +587,8 @@ if [[ "$OS" == "linux" && "$SYSTEMCTL_AVAILABLE" == "true" ]] && systemctl is-ac
   log "Stopping running service before reinstall: ${SERVICE_NAME}"
   run_as_root systemctl stop "$SERVICE_NAME"
 fi
+
+check_listen_port_available
 
 log "Installing to ${INSTALL_DIR}..."
 if [[ "$NEEDS_ROOT" == "true" ]]; then

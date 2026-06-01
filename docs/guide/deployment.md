@@ -186,7 +186,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --token YOUR_DNS_WORKER_TOKEN
 ```
 
-脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，让国家代码节点池匹配开箱可用；下载失败不会阻断安装，Worker 会继续按来源 CIDR 或 `global` 作用域运行。
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，让国家代码节点池匹配开箱可用；下载失败不会阻断安装，Worker 会继续按来源 CIDR 或 `global` 作用域运行。
 
 可选参数：
 
@@ -241,6 +241,7 @@ go run ./cmd/dns-worker \
 * 至少部署两个 DNS Worker，例如 `ns1.example.net` 和 `ns2.example.net`。
 * 在注册商处将需要托管的域名 NS 委派到这些 Worker，并按需配置 Glue 记录。
 * 防火墙必须同时放行 UDP `53` 和 TCP `53`。
+* Worker 主机上不要让 `systemd-resolved`、`named`、`dnsmasq` 或其它本地 DNS 服务占用同一个监听地址的 `53` 端口；排查时可用 `ss -lntu '( sport = :53 )'` 或 `lsof -nP -i :53`。
 * Worker 到 Server 的快照拉取接口必须使用 HTTPS 和专属 Worker Token。
 * Server 短暂不可用时，Worker 使用最后一次校验通过的有效快照继续回答；快照超过最大有效期后动态 GSLB 记录应返回 `SERVFAIL`。本地快照缓存会写入 SHA-256 checksum 元数据并携带可恢复的 GSLB 防抖状态，启动加载时校验完整性并恢复最近可用选择；Worker 运行中产生的新防抖状态会随 heartbeat 批量回传 Server；旧版本生成的裸快照 JSON 仍兼容读取。
 * Worker 默认按来源 IP 每秒最多处理 `200` 次查询，超过后返回 `REFUSED`；可通过 `--query-rate-limit` 或 `DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT` 调整，设为 `0` 表示关闭。
