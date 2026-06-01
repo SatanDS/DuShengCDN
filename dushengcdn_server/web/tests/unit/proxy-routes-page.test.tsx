@@ -1146,6 +1146,148 @@ describe('Proxy route website pages', () => {
     });
   });
 
+  it('saves WAF settings from config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  waf_enabled: payload.waf_enabled,
+                  waf_mode: payload.waf_mode,
+                  waf_config: JSON.parse(String(payload.waf_config)),
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  waf_enabled: false,
+                  waf_mode: 'block',
+                  waf_config: {
+                    builtin_rules: [
+                      'sqli',
+                      'xss',
+                      'path_traversal',
+                      'sensitive_paths',
+                      'bad_bots',
+                    ],
+                    whitelist: {
+                      ips: [],
+                      ip_cidrs: [],
+                      paths: [],
+                    },
+                    block_rules: {
+                      path_contains: [],
+                      path_regexes: [],
+                      query_contains: [],
+                      header_contains: [],
+                      user_agents: [],
+                    },
+                  },
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="waf" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: 'WAF 防护' }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: /启用 WAF 防护/ }));
+    await user.selectOptions(screen.getByRole('combobox'), 'log');
+    await user.click(screen.getByRole('checkbox', { name: /恶意工具 UA/ }));
+    await user.type(screen.getByPlaceholderText('1.2.3.4'), '203.0.113.8');
+    await user.type(screen.getByPlaceholderText('10.0.0.0/8'), '10.10.0.0/16');
+    await user.type(screen.getByPlaceholderText('/api/public/*'), '/health/*');
+    await user.type(screen.getByPlaceholderText('/debug'), '/debug');
+    await user.type(screen.getByPlaceholderText('^/private/'), '^/admin/');
+    await user.type(screen.getByPlaceholderText('debug=true'), 'trace=1');
+    await user.type(screen.getByPlaceholderText('X-Scanner'), 'X-Exploit');
+    await user.type(screen.getByPlaceholderText('sqlmap'), 'curl');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-waf-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing WAF save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      waf_enabled: true,
+      waf_mode: 'log',
+    });
+    expect(JSON.parse(String(updateRequests[0].waf_config))).toEqual({
+      builtin_rules: ['sqli', 'xss', 'path_traversal', 'sensitive_paths'],
+      whitelist: {
+        ips: ['203.0.113.8'],
+        ip_cidrs: ['10.10.0.0/16'],
+        paths: ['/health/*'],
+      },
+      block_rules: {
+        path_contains: ['/debug'],
+        path_regexes: ['^/admin/'],
+        query_contains: ['trace=1'],
+        header_contains: ['X-Exploit'],
+        user_agents: ['curl'],
+      },
+    });
+  });
+
   it('saves region restriction settings from config page', async () => {
     const updateRequests: Array<Record<string, unknown>> = [];
 
