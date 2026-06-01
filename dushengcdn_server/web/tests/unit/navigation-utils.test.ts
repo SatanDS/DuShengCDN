@@ -29,6 +29,6 @@ describe('navigation utils', () => {
       '域名资产',
     );
     expect(getCurrentNavigationItem('/certificate')?.label).toBe('域名资产');
-    expect(getCurrentNavigationItem('/dns-account')?.label).toBe('DNS账号');
+    expect(getCurrentNavigationItem('/dns-account')?.label).toBe('DNS 账号');
   });
 });

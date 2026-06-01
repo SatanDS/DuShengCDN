@@ -1370,8 +1370,8 @@ export function SettingsPage() {
             </AppCard>
 
             <AppCard
-              title="权威 DNS 运行参数"
-              description="控制自建权威 DNS 的默认 TTL 和快照过期阈值。"
+              title="本地解析运行参数"
+              description="控制本地自建解析的默认缓存时间、解析配置有效期和节点数据有效期。"
               action={
                 <PrimaryButton
                   type="button"
@@ -1398,7 +1398,7 @@ export function SettingsPage() {
                           defaultTtl > 86400
                         ) {
                           throw new Error(
-                            '默认 TTL 必须为 1 到 86400 之间的整数秒。',
+                            '默认缓存时间必须为 1 到 86400 之间的整数秒。',
                           );
                         }
                         if (
@@ -1406,7 +1406,7 @@ export function SettingsPage() {
                           snapshotMaxAge <= 0
                         ) {
                           throw new Error(
-                            '快照最大年龄必须为大于 0 的整数秒。',
+                            '解析配置有效期必须为大于 0 的整数秒。',
                           );
                         }
                         if (
@@ -1414,7 +1414,7 @@ export function SettingsPage() {
                           metricFreshness <= 0
                         ) {
                           throw new Error(
-                            'GSLB 指标新鲜度必须为大于 0 的整数秒。',
+                            '节点数据有效期必须为大于 0 的整数秒。',
                           );
                         }
 
@@ -1436,10 +1436,10 @@ export function SettingsPage() {
                               ),
                             ],
                           ],
-                          '权威 DNS 参数已保存。',
+                          '本地解析参数已保存。',
                         );
                       },
-                      '保存权威 DNS 参数',
+                      '保存本地解析参数',
                     )
                   }
                   disabled={busyKey === 'operation-authoritative-dns'}
@@ -1451,7 +1451,10 @@ export function SettingsPage() {
               }
             >
               <div className="grid gap-5 md:grid-cols-3">
-                <ResourceField label="默认 TTL（秒）">
+                <ResourceField
+                  label="默认缓存时间（秒）"
+                  tooltip="DNS 结果会被递归解析器缓存一段时间。时间越短，切换 IP 越快，但查询量会更高。"
+                >
                   <ResourceInput
                     type="number"
                     value={operationFields.AuthoritativeDNSDefaultTTL}
@@ -1463,7 +1466,10 @@ export function SettingsPage() {
                     }
                   />
                 </ResourceField>
-                <ResourceField label="快照最大年龄（秒）">
+                <ResourceField
+                  label="解析配置有效期（秒）"
+                  tooltip="DNS 响应端会缓存面板下发的解析配置。超过这个时间还没有拿到新配置时，会提示配置过期。"
+                >
                   <ResourceInput
                     type="number"
                     value={operationFields.AuthoritativeDNSSnapshotMaxAge}
@@ -1475,7 +1481,10 @@ export function SettingsPage() {
                     }
                   />
                 </ResourceField>
-                <ResourceField label="GSLB 指标新鲜度（秒）">
+                <ResourceField
+                  label="节点数据有效期（秒）"
+                  tooltip="节点连接数、CPU、内存等数据超过这个时间后不再参与负载判断，避免用旧数据做调度。"
+                >
                   <ResourceInput
                     type="number"
                     value={operationFields.GSLBMetricFreshnessSeconds}
@@ -1491,7 +1500,8 @@ export function SettingsPage() {
               <div className="mt-5">
                 <ToggleField
                   label="启用 Agent 探测调度门槛"
-                  description="开启后，自建权威 DNS 的 GSLB 选点只会使用仍有新鲜成功 DNS Worker 探测结果的边缘节点。"
+                  description="开启后，本地自建解析只会使用仍有新鲜成功探测结果的边缘节点。"
+                  tooltip="Agent 会从边缘节点主动探测 DNS 响应端。如果开启这个门槛，探测失败或探测过期的节点不会被选为解析返回 IP。"
                   checked={operationFields.GSLBProbeSchedulingEnabled}
                   onChange={(checked) =>
                     setOperationFields((previous) => ({

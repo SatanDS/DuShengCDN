@@ -1774,6 +1774,24 @@ func validateDatabaseSchemaV25(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV26 adds ACME certificate DNS provider selection fields.
+func migrateV26(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV26(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV25(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{"dns_provider_mode", "dns_zone_id_ref"} {
+		if !db.Migrator().HasColumn(&TLSCertificate{}, column) {
+			return fmt.Errorf("column tls_certificates.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1800,6 +1818,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 22, toVersion: 23, migrate: migrateV23, validate: validateDatabaseSchemaV23},
 		{fromVersion: 23, toVersion: 24, migrate: migrateV24, validate: validateDatabaseSchemaV24},
 		{fromVersion: 24, toVersion: 25, migrate: migrateV25, validate: validateDatabaseSchemaV25},
+		{fromVersion: 25, toVersion: 26, migrate: migrateV26, validate: validateDatabaseSchemaV26},
 	}
 }
 
@@ -1888,7 +1907,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV25(db, backend); err != nil {
+	if err := validateDatabaseSchemaV26(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

@@ -6,6 +6,8 @@ export interface TlsCertificateItem {
   provider: string;
   acme_account_id: number;
   dns_account_id: number;
+  dns_provider_mode: 'cloudflare' | 'authoritative';
+  dns_zone_id_ref: number | null;
   key_algorithm: string;
   auto_renew: boolean;
   primary_domain: string;
@@ -45,6 +47,8 @@ export interface TlsCertificateApplyPayload {
   remark: string;
   acme_account_id: number;
   dns_account_id: number;
+  dns_provider_mode: 'cloudflare' | 'authoritative';
+  dns_zone_id_ref: number | null;
   key_algorithm: string;
   auto_renew: boolean;
   primary_domain: string;

@@ -21,10 +21,15 @@ interface ResourceFieldProps {
 function FieldTooltip({ content }: { content: string }) {
   return (
     <span className="group/tooltip relative inline-flex">
-      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[11px] font-semibold text-[var(--foreground-secondary)] transition group-hover/tooltip:border-[var(--border-strong)] group-hover/tooltip:text-[var(--foreground-primary)]">
-        ?
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label="查看说明"
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[11px] font-semibold text-[var(--foreground-secondary)] transition hover:border-[var(--border-strong)] hover:text-[var(--foreground-primary)] focus-visible:border-[var(--border-strong)] focus-visible:text-[var(--foreground-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-soft)]"
+      >
+        !
       </span>
-      <span className="pointer-events-none absolute top-full left-1/2 z-20 mt-2 w-64 -translate-x-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-3 py-2 text-xs leading-5 text-[var(--foreground-secondary)] opacity-0 shadow-[var(--shadow-soft)] transition-opacity delay-700 duration-200 group-hover/tooltip:opacity-100">
+      <span className="pointer-events-none absolute top-full left-1/2 z-20 mt-2 w-72 -translate-x-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-3 py-2 text-xs leading-5 text-[var(--foreground-secondary)] opacity-0 shadow-[var(--shadow-soft)] transition-opacity delay-150 duration-200 group-focus-within/tooltip:opacity-100 group-hover/tooltip:opacity-100">
         {content}
       </span>
     </span>

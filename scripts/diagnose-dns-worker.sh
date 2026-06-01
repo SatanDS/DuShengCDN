@@ -312,7 +312,7 @@ diagnose_logs() {
   local logs="$1"
 
   if printf '%s\n' "$logs" | grep -Eiq 'Token authentication failed|invalid token|unauthorized|forbidden'; then
-    warn "Logs look like DNS Worker Token authentication failed. Use the DNS Worker Token from 权威 DNS, not an Agent Token or login password."
+    warn "Logs look like DNS Worker Token authentication failed. Use the DNS Worker Token from 本地自建解析, not an Agent Token or login password."
   fi
   if printf '%s\n' "$logs" | grep -Eiq 'request to Server URL|connection refused|no such host|certificate|tls|timeout'; then
     warn "Logs include Server URL/connectivity/TLS failures. Check DUSHENGCDN_DNS_WORKER_SERVER_URL, DNS, firewall, and certificate trust."
@@ -321,7 +321,7 @@ diagnose_logs() {
     warn "Logs include a port binding conflict. Check the configured listen address and port ${DNS_PORT:-53}."
   fi
   if printf '%s\n' "$logs" | grep -Eiq 'snapshot|routes=0'; then
-    warn "Logs mention snapshots/routes. If SOA/NS work but A/AAAA targets are empty, confirm the site is switched to authoritative DNS and the Worker pulled a fresh snapshot."
+    warn "Logs mention snapshots/routes. If SOA/NS work but A/AAAA targets are empty, confirm the site is switched to 本地自建解析 and the Worker pulled a fresh snapshot."
   fi
 }
 

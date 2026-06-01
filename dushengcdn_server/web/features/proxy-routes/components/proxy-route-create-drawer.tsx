@@ -7,6 +7,7 @@ import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { Drawer } from '@/components/ui/drawer';
+import { getDNSZones } from '@/features/authoritative-dns/api/authoritative-dns';
 import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
 import { getNodes } from '@/features/nodes/api/nodes';
@@ -53,7 +54,9 @@ const createWebsiteSchema = z
     domain_rows: z.array(domainRowSchema).min(1),
     origin_urls_text: z.string().trim().min(1, '请至少填写一个源站地址'),
     dns_auto_sync: z.boolean(),
+    dns_provider_mode: z.enum(['cloudflare', 'authoritative']),
     dns_account_id: z.string(),
+    dns_zone_id_ref: z.string(),
     dns_record_type: z.enum(['A', 'AAAA', 'CNAME']),
     dns_record_content: z.string(),
     dns_target_count: z.coerce.number().int().min(1).max(20),
@@ -102,15 +105,42 @@ const createWebsiteSchema = z
       });
     }
 
-    if (value.dns_auto_sync && !value.dns_account_id) {
+    if (
+      value.dns_auto_sync &&
+      value.dns_provider_mode === 'cloudflare' &&
+      !value.dns_account_id
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['dns_account_id'],
-        message: '启用自动 DNS 时请选择 DNS 账号',
+        message: '请选择 Cloudflare 账号',
       });
     }
     if (
       value.dns_auto_sync &&
+      value.dns_provider_mode === 'authoritative' &&
+      !value.dns_zone_id_ref
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dns_zone_id_ref'],
+        message: '请选择托管域名',
+      });
+    }
+    if (
+      value.dns_auto_sync &&
+      value.dns_provider_mode === 'authoritative' &&
+      value.dns_record_type === 'CNAME'
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dns_record_type'],
+        message: '本地自建解析自动选 IP 只支持 A 或 AAAA',
+      });
+    }
+    if (
+      value.dns_auto_sync &&
+      value.dns_provider_mode === 'cloudflare' &&
       value.dns_record_type === 'CNAME' &&
       value.dns_record_content.trim() === ''
     ) {
@@ -142,7 +172,9 @@ const defaultValues: CreateWebsiteFormValues = {
   domain_rows: [{ domain: '', certificateId: '' }],
   origin_urls_text: '',
   dns_auto_sync: false,
+  dns_provider_mode: 'cloudflare',
   dns_account_id: '',
+  dns_zone_id_ref: '',
   dns_record_type: 'A',
   dns_record_content: '',
   dns_target_count: 1,
@@ -167,7 +199,7 @@ const dnsScheduleModeHints: Record<
     '健康优先只看节点是否在线、OpenResty 是否健康、是否允许调度和最近心跳时间；旧目标仍健康且处于冷却期时会保持不动。',
   weighted: '权重优先会先过滤健康候选，再按节点权重排序。',
   load_aware:
-    '负载感知会在健康候选中使用新鲜连接数、CPU、内存指标评分。',
+    '按压力优先会在健康候选中参考最新连接数、CPU、内存，尽量避开压力高的节点。',
 };
 
 function normalizeSelectedCertificateIDs(rows: DomainListRow[]) {
@@ -208,11 +240,14 @@ export function ProxyRouteCreateDrawer({
     defaultValues,
   });
   const dnsAutoSync = form.watch('dns_auto_sync');
+  const dnsProviderMode = form.watch('dns_provider_mode');
+  const isAuthoritativeMode = dnsAutoSync && dnsProviderMode === 'authoritative';
   const dnsRecordType = form.watch('dns_record_type');
   const dnsScheduleMode = form.watch('dns_schedule_mode');
   const ddosProtectionMode = form.watch('ddos_protection_mode');
   const ddosProtectionProvider = form.watch('ddos_protection_provider');
-  const ddosControlsEnabled = dnsAutoSync && ddosProtectionMode === 'auto';
+  const ddosControlsEnabled =
+    dnsAutoSync && !isAuthoritativeMode && ddosProtectionMode === 'auto';
   const managedDomainsQuery = useQuery({
     queryKey: ['managed-domains'],
     queryFn: getManagedDomains,
@@ -226,6 +261,11 @@ export function ProxyRouteCreateDrawer({
   const dnsAccountsQuery = useQuery({
     queryKey: ['dns-accounts'],
     queryFn: getDnsAccounts,
+    enabled: open,
+  });
+  const dnsZonesQuery = useQuery({
+    queryKey: ['authoritative-dns', 'zones'],
+    queryFn: getDNSZones,
     enabled: open,
   });
   const nodesQuery = useQuery({
@@ -267,6 +307,11 @@ export function ProxyRouteCreateDrawer({
       const { urls } = parseOriginUrls(values.origin_urls_text);
       const primaryOrigin = parseOriginUrl(urls[0]);
       const dnsAccountID = Number(values.dns_account_id);
+      const dnsZoneIDRef = Number(values.dns_zone_id_ref);
+      const authoritativeMode =
+        values.dns_auto_sync && values.dns_provider_mode === 'authoritative';
+      const cloudflareMode =
+        values.dns_auto_sync && values.dns_provider_mode === 'cloudflare';
       const gslbPolicy = buildDefaultGSLBPolicy(
         values.node_pool.trim() || 'default',
       );
@@ -313,21 +358,36 @@ export function ProxyRouteCreateDrawer({
         region_restriction_enabled: false,
         region_restriction_mode: 'block',
         region_restriction_countries: [],
-        dns_auto_sync: values.dns_auto_sync,
+        dns_auto_sync: cloudflareMode,
         dns_account_id:
-          values.dns_auto_sync && Number.isFinite(dnsAccountID) && dnsAccountID > 0
+          cloudflareMode && Number.isFinite(dnsAccountID) && dnsAccountID > 0
             ? dnsAccountID
             : null,
         dns_zone_id: '',
-        dns_record_type: values.dns_record_type,
+        dns_record_type: authoritativeMode
+          ? values.dns_record_type === 'AAAA'
+            ? 'AAAA'
+            : 'A'
+          : values.dns_record_type,
         dns_record_name: '',
-        dns_record_content: values.dns_record_content.trim(),
-        dns_auto_target: values.dns_auto_sync && values.dns_record_content.trim() === '',
+        dns_record_content: authoritativeMode
+          ? ''
+          : values.dns_record_content.trim(),
+        dns_auto_target:
+          authoritativeMode ||
+          (cloudflareMode && values.dns_record_content.trim() === ''),
         dns_target_count: values.dns_target_count,
         dns_schedule_mode: values.dns_schedule_mode,
         dns_ttl: values.dns_ttl,
-        dns_provider_mode: 'cloudflare',
-        dns_zone_id_ref: null,
+        dns_provider_mode: values.dns_auto_sync
+          ? values.dns_provider_mode
+          : 'cloudflare',
+        dns_zone_id_ref:
+          authoritativeMode &&
+          Number.isFinite(dnsZoneIDRef) &&
+          dnsZoneIDRef > 0
+            ? dnsZoneIDRef
+            : null,
         gslb_enabled: false,
         gslb_policy: {
           ...gslbPolicy,
@@ -335,14 +395,19 @@ export function ProxyRouteCreateDrawer({
           target_count: values.dns_target_count,
           ttl: values.dns_ttl,
         },
-        cloudflare_proxied: values.cloudflare_proxied,
-        ddos_protection_mode: values.ddos_protection_mode,
-        ddos_protection_provider: values.ddos_protection_provider,
+        cloudflare_proxied: authoritativeMode ? false : values.cloudflare_proxied,
+        ddos_protection_mode: authoritativeMode
+          ? 'off'
+          : values.ddos_protection_mode,
+        ddos_protection_provider: authoritativeMode
+          ? 'cloudflare'
+          : values.ddos_protection_provider,
         ddos_protection_target:
+          !authoritativeMode &&
           values.ddos_protection_mode === 'auto' &&
           values.ddos_protection_provider === 'cloudflare'
             ? values.ddos_protection_target || values.dns_account_id
-            : values.ddos_protection_mode === 'auto'
+            : !authoritativeMode && values.ddos_protection_mode === 'auto'
               ? values.ddos_protection_target.trim()
               : '',
         remark: values.remark.trim(),
@@ -454,7 +519,7 @@ export function ProxyRouteCreateDrawer({
 
         <ToggleField
           label="创建时自动解析 DNS"
-          description="绑定 Cloudflare 后，创建规则时同步 DNS；记录内容留空会自动选择在线节点公网 IP。"
+          description="可选择 Cloudflare 后台同步，或使用本地自建解析托管域名；记录值留空会自动选择在线节点 IP。"
           checked={dnsAutoSync}
           onChange={(checked) => {
             form.setValue('dns_auto_sync', checked, { shouldDirty: true });
@@ -472,63 +537,136 @@ export function ProxyRouteCreateDrawer({
         {dnsAutoSync ? (
           <div className="grid gap-4 md:grid-cols-2">
             <ResourceField
-              label="DNS 账号"
-              hint="需要 Cloudflare API Token 具备 Zone Read 和 DNS Edit 权限。"
-              error={form.formState.errors.dns_account_id?.message}
+              label="解析方式"
+              hint="Cloudflare 会同步到账号里的 DNS；本地自建解析会交给左侧「本地自建解析」里的托管域名。"
             >
               <ResourceSelect
-                {...form.register('dns_account_id', {
+                aria-label="解析方式"
+                {...form.register('dns_provider_mode', {
                   onChange: (event) => {
-                    if (
-                      form.getValues('ddos_protection_provider') ===
-                        'cloudflare' &&
-                      !form.getValues('ddos_protection_target')
-                    ) {
-                      form.setValue(
-                        'ddos_protection_target',
-                        event.target.value,
-                        { shouldDirty: true },
-                      );
+                    if (event.target.value === 'authoritative') {
+                      form.setValue('dns_account_id', '', {
+                        shouldDirty: true,
+                      });
+                      form.setValue('dns_record_content', '', {
+                        shouldDirty: true,
+                      });
+                      form.setValue('cloudflare_proxied', false, {
+                        shouldDirty: true,
+                      });
+                      form.setValue('ddos_protection_mode', 'off', {
+                        shouldDirty: true,
+                      });
+                      form.setValue('ddos_protection_target', '', {
+                        shouldDirty: true,
+                      });
+                      if (form.getValues('dns_record_type') === 'CNAME') {
+                        form.setValue('dns_record_type', 'A', {
+                          shouldDirty: true,
+                        });
+                      }
+                    } else {
+                      form.setValue('dns_zone_id_ref', '', {
+                        shouldDirty: true,
+                      });
                     }
                   },
                 })}
               >
-                <option value="">请选择 DNS 账号</option>
-                {cloudflareAccounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name}
-                  </option>
-                ))}
+                <option value="cloudflare">Cloudflare 同步</option>
+                <option value="authoritative">本地自建解析</option>
               </ResourceSelect>
             </ResourceField>
+
+            {isAuthoritativeMode ? (
+              <ResourceField
+                label="托管域名"
+                hint="网站域名必须属于所选托管域名。"
+                error={form.formState.errors.dns_zone_id_ref?.message}
+              >
+                <ResourceSelect
+                  aria-label="托管域名"
+                  disabled={dnsZonesQuery.isLoading}
+                  {...form.register('dns_zone_id_ref')}
+                >
+                  <option value="">
+                    {dnsZonesQuery.isLoading
+                      ? '正在加载托管域名...'
+                      : '请选择托管域名'}
+                  </option>
+                  {dnsZonesQuery.data?.map((zone) => (
+                    <option key={zone.id} value={zone.id}>
+                      {zone.name}
+                      {zone.enabled ? '' : '（已停用）'}
+                    </option>
+                  ))}
+                </ResourceSelect>
+              </ResourceField>
+            ) : (
+              <ResourceField
+                label="Cloudflare 账号"
+                hint="需要 API 密钥具备 Zone Read 和 DNS Edit 权限。"
+                error={form.formState.errors.dns_account_id?.message}
+              >
+                <ResourceSelect
+                  aria-label="Cloudflare 账号"
+                  {...form.register('dns_account_id', {
+                    onChange: (event) => {
+                      if (
+                        form.getValues('ddos_protection_provider') ===
+                          'cloudflare' &&
+                        !form.getValues('ddos_protection_target')
+                      ) {
+                        form.setValue(
+                          'ddos_protection_target',
+                          event.target.value,
+                          { shouldDirty: true },
+                        );
+                      }
+                    },
+                  })}
+                >
+                  <option value="">请选择 Cloudflare 账号</option>
+                  {cloudflareAccounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </ResourceSelect>
+              </ResourceField>
+            )}
 
             <ResourceField label="记录类型">
               <ResourceSelect {...form.register('dns_record_type')}>
                 <option value="A">A</option>
                 <option value="AAAA">AAAA</option>
-                <option value="CNAME">CNAME</option>
+                {!isAuthoritativeMode ? (
+                  <option value="CNAME">CNAME</option>
+                ) : null}
               </ResourceSelect>
             </ResourceField>
 
-            <ResourceField
-              label="记录内容"
-              hint={
-                dnsRecordType === 'CNAME'
-                  ? '填写 CNAME 目标域名。'
-                  : '固定 IP 时可用逗号、空格或换行填写多个地址；留空会按节点池自动选择在线节点 IP。'
-              }
-              error={form.formState.errors.dns_record_content?.message}
-              className="md:col-span-2"
-            >
-              <ResourceInput
-                placeholder={
+            {!isAuthoritativeMode ? (
+              <ResourceField
+                label="IP 或目标域名"
+                hint={
                   dnsRecordType === 'CNAME'
-                    ? 'target.example.com'
-                    : '留空自动选择，或填写多个 IP'
+                    ? '填写要指向的目标域名。'
+                    : '固定 IP 时可用逗号、空格或换行填写多个 IP；留空会按节点池自动选择在线节点 IP。'
                 }
-                {...form.register('dns_record_content')}
-              />
-            </ResourceField>
+                error={form.formState.errors.dns_record_content?.message}
+                className="md:col-span-2"
+              >
+                <ResourceInput
+                  placeholder={
+                    dnsRecordType === 'CNAME'
+                      ? 'target.example.com'
+                      : '留空自动选择，或填写多个 IP'
+                  }
+                  {...form.register('dns_record_content')}
+                />
+              </ResourceField>
+            ) : null}
 
             {dnsRecordType !== 'CNAME' ? (
               <>
@@ -553,11 +691,15 @@ export function ProxyRouteCreateDrawer({
                   <ResourceSelect {...form.register('dns_schedule_mode')}>
                     <option value="healthy">健康优先（冷却防抖）</option>
                     <option value="weighted">按权重优先</option>
-                    <option value="load_aware">负载感知</option>
+                    <option value="load_aware">按压力优先</option>
                   </ResourceSelect>
                 </ResourceField>
 
-                <ResourceField label="DNS TTL" hint={dnsTTLHint}>
+                <ResourceField
+                  label="DNS 缓存时间"
+                  hint={dnsTTLHint}
+                  tooltip="这个时间决定用户本地或运营商 DNS 多久刷新一次记录。时间短切换更快，查询量会更高。"
+                >
                   <ResourceInput
                     type="number"
                     min={0}
@@ -572,8 +714,9 @@ export function ProxyRouteCreateDrawer({
 
             <ToggleField
               label="常态开启 Cloudflare 代理"
-              description="正常状态也同步橙云；DDoS 自动防护恢复后会回到这个常态设置。"
+              description="正常状态也同步橙云；攻击自动防护恢复后会回到这个常态设置。"
               checked={form.watch('cloudflare_proxied')}
+              disabled={isAuthoritativeMode}
               onChange={(checked) =>
                 form.setValue('cloudflare_proxied', checked, {
                   shouldDirty: true,
@@ -582,11 +725,13 @@ export function ProxyRouteCreateDrawer({
             />
 
             <ResourceField
-              label="DDoS 防护模式"
-              hint="关闭时不做自动切换；自动时攻击期暂停 GSLB 并临时切到所选防护目标。"
+              label="攻击防护模式"
+              hint="关闭时不做自动切换；自动时攻击期暂停多节点智能解析，并临时切到所选防护目标。"
+              tooltip="系统会根据最近请求量和错误率判断是否疑似攻击。触发后先保护可用性，恢复正常后再回到原解析策略。"
             >
               <ResourceSelect
-                aria-label="DDoS 防护模式"
+                aria-label="攻击防护模式"
+                disabled={isAuthoritativeMode}
                 {...form.register('ddos_protection_mode', {
                   onChange: (event) => {
                     if (event.target.value === 'off') {
@@ -614,7 +759,7 @@ export function ProxyRouteCreateDrawer({
             >
               <ResourceSelect
                 aria-label="防护提供方"
-                disabled={!ddosControlsEnabled}
+                disabled={!ddosControlsEnabled || isAuthoritativeMode}
                 {...form.register('ddos_protection_provider', {
                   onChange: (event) => {
                     form.setValue(
@@ -660,8 +805,8 @@ export function ProxyRouteCreateDrawer({
                 </ResourceSelect>
               ) : (
                 <ResourceSelect
-                  aria-label="DDoS Cloudflare 账号"
-                  disabled={!ddosControlsEnabled}
+                  aria-label="攻击防护 Cloudflare 账号"
+                  disabled={!ddosControlsEnabled || isAuthoritativeMode}
                   {...form.register('ddos_protection_target')}
                 >
                   <option value="">使用上方账号</option>

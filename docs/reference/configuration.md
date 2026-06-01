@@ -163,8 +163,10 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `proxy_routes.dns_zone_id_ref` | 网站配置 | 关联 `dns_zones`，用于把网站域名纳入自建权威 Zone |
 | `proxy_routes.gslb_enabled` | 网站配置 | 是否启用站点级 GSLB 多节点池调度 |
 | `proxy_routes.gslb_policy` | 网站配置 | GSLB 策略 JSON，包含节点池权重、来源 CIDR、国家代码、目标数量、TTL、来源识别接口、最大连接数、最大 CPU/内存使用率和防抖参数 |
-| `proxy_routes.ddos_protection_provider` | 网站配置 | DDoS 自动防护提供方：`cloudflare` 表示攻击期强制橙云并回到默认节点池，`custom` 表示攻击期解析到自定义清洗节点/IP 池 |
-| `proxy_routes.ddos_protection_target` | 网站配置 | DDoS 自动防护目标；Cloudflare 提供方下可保存 DNS 账号 ID，`custom` 提供方下保存清洗节点/IP 池名称 |
+| `proxy_routes.ddos_protection_provider` | 网站配置 | 攻击自动防护提供方：`cloudflare` 表示攻击期强制橙云并回到默认节点池，`custom` 表示攻击期解析到自定义清洗节点/IP 池 |
+| `proxy_routes.ddos_protection_target` | 网站配置 | 攻击自动防护目标；Cloudflare 提供方下可保存 DNS 账号 ID，`custom` 提供方下保存清洗节点/IP 池名称 |
+| `tls_certificates.dns_provider_mode` | TLS 证书 | ACME DNS 验证方式：`cloudflare` 使用 DNS 账号，`authoritative` 使用本地自建解析托管域名 |
+| `tls_certificates.dns_zone_id_ref` | TLS 证书 | ACME 本地自建解析验证关联的 `dns_zones`；申请和续签时临时写入 `_acme-challenge` TXT 记录 |
 | `gslb_scheduling_states.scope_key` | 运行时状态 | 权威 DNS 模式下按来源作用域保存防抖状态，例如 `global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global\|bucket:42` |
 | `gslb_scheduling_states.selected_targets` | 运行时状态 | 最近一次实际选择的 GSLB DNS 目标；权威 DNS Worker 会通过 heartbeat 批量回传运行中产生的状态 |
 | `gslb_scheduling_states.desired_targets` | 运行时状态 | 最近一次评估得到的期望 GSLB DNS 目标 |

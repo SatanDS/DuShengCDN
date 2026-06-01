@@ -589,7 +589,7 @@ func TestCreateAuthoritativeDNSRecordRejectsDynamicRouteConflict(t *testing.T) {
 		t.Fatalf("insert route: %v", err)
 	}
 
-	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.10"}); err == nil || !strings.Contains(err.Error(), "动态") {
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.10"}); err == nil || !strings.Contains(err.Error(), "自动") {
 		t.Fatalf("expected dynamic A conflict, got %v", err)
 	}
 	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "CNAME", Value: "alias.example.com"}); err == nil || !strings.Contains(err.Error(), "冲突") {
@@ -631,7 +631,7 @@ func TestCreateAuthoritativeDNSRecordRejectsWildcardDynamicRouteConflict(t *test
 		t.Fatalf("insert route: %v", err)
 	}
 
-	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "api", Type: "A", Value: "203.0.113.10"}); err == nil || !strings.Contains(err.Error(), "动态") {
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "api", Type: "A", Value: "203.0.113.10"}); err == nil || !strings.Contains(err.Error(), "自动") {
 		t.Fatalf("expected wildcard dynamic A conflict, got %v", err)
 	}
 	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "api", Type: "CNAME", Value: "alias.example.com"}); err == nil || !strings.Contains(err.Error(), "冲突") {
@@ -787,8 +787,8 @@ func TestCreateProxyRouteAuthoritativeRequiresReadyDNSWorker(t *testing.T) {
 		DNSScheduleMode: "weighted",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "DNS Worker") {
-		t.Fatalf("expected missing DNS Worker readiness error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "DNS 响应端") {
+		t.Fatalf("expected missing DNS response worker readiness error, got %v", err)
 	}
 }
 
@@ -841,8 +841,8 @@ func TestCreateProxyRouteAuthoritativeRequiresFreshDNSWorkerSnapshot(t *testing.
 		DNSScheduleMode: "weighted",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "调度快照") {
-		t.Fatalf("expected stale DNS Worker snapshot error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "解析配置") {
+		t.Fatalf("expected stale DNS response worker snapshot error, got %v", err)
 	}
 }
 
@@ -949,8 +949,8 @@ func TestCreateProxyRouteAuthoritativeRejectsDivergentPublicWorkerSnapshots(t *t
 		DNSScheduleMode: "weighted",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "调度快照版本不一致") {
-		t.Fatalf("expected divergent DNS Worker snapshot error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "解析配置版本不一致") {
+		t.Fatalf("expected divergent DNS response worker snapshot error, got %v", err)
 	}
 }
 
@@ -1409,7 +1409,7 @@ func TestListAuthoritativeDNSMigrationCandidatesRequiresFreshWorkerSnapshot(t *t
 	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 1 || candidate.FreshSnapshotWorkerCount != 0 || candidate.ReadyWorkerCount != 0 {
 		t.Fatalf("unexpected candidate metadata: %+v", candidate)
 	}
-	if !containsStringWith(candidate.Blockers, "调度快照") {
+	if !containsStringWith(candidate.Blockers, "解析配置") {
 		t.Fatalf("expected snapshot blocker, got %+v", candidate.Blockers)
 	}
 }
@@ -1486,7 +1486,7 @@ func TestListAuthoritativeDNSMigrationCandidatesClampsHistoricalFutureWorkerSnap
 	if candidate.Ready || candidate.FreshSnapshotWorkerCount != 0 || candidate.ReadyWorkerCount != 0 {
 		t.Fatalf("expected future historical snapshot time to remain blocked, got %+v", candidate)
 	}
-	if !containsStringWith(candidate.Blockers, "调度快照") {
+	if !containsStringWith(candidate.Blockers, "解析配置") {
 		t.Fatalf("expected snapshot blocker, got %+v", candidate.Blockers)
 	}
 }
@@ -1638,7 +1638,7 @@ func TestListAuthoritativeDNSMigrationCandidatesRejectsDivergentPublicWorkerSnap
 	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 2 || candidate.ReadyWorkerCount != 2 {
 		t.Fatalf("unexpected candidate metadata: %+v", candidate)
 	}
-	if !containsStringWith(candidate.Blockers, "调度快照版本不一致") {
+	if !containsStringWith(candidate.Blockers, "解析配置版本不一致") {
 		t.Fatalf("expected divergent snapshot blocker, got %+v", candidate.Blockers)
 	}
 }
@@ -1826,7 +1826,7 @@ func TestSwitchProxyRouteToAuthoritativeDNSRequiresReadyWorker(t *testing.T) {
 	if view.GSLBEnabled != route.GSLBEnabled || view.DNSTargetCount != 2 || view.DNSScheduleMode != "weighted" || view.DNSTTL != 120 {
 		t.Fatalf("expected existing GSLB scheduling settings to be preserved: %+v", view)
 	}
-	if view.DNSLastSyncStatus != DNSRecordSyncStatusSuccess || !strings.Contains(view.DNSLastSyncMessage, "自建权威 DNS") || view.DNSLastSyncedAt == nil {
+	if view.DNSLastSyncStatus != DNSRecordSyncStatusSuccess || !strings.Contains(view.DNSLastSyncMessage, "本地自建解析") || view.DNSLastSyncedAt == nil {
 		t.Fatalf("expected migration status message: %+v", view)
 	}
 }

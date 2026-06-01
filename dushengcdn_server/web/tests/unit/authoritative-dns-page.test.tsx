@@ -1114,19 +1114,19 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('来源作用域')).toBeInTheDocument();
     expect(screen.getByText('国家 HK')).toBeInTheDocument();
     expect(await screen.findByText('查询趋势')).toBeInTheDocument();
-    expect(screen.getByText('快照不一致')).toBeInTheDocument();
+    expect(screen.getByText('解析配置不一致')).toBeInTheDocument();
     expect(
-      screen.getByText(/在线 Worker 当前使用了 2 个快照版本/),
+      screen.getByText(/在线响应端当前使用了 2 个配置版本/),
     ).toBeInTheDocument();
     expect(screen.getByText(/最新版本 snapshot-b/)).toBeInTheDocument();
-    expect(screen.getByText(/Server URL 的网络/)).toBeInTheDocument();
-    expect(screen.getByText(/Worker Token 是否仍有效/)).toBeInTheDocument();
+    expect(screen.getByText(/能访问面板/)).toBeInTheDocument();
+    expect(screen.getByText(/响应端密钥是否仍有效/)).toBeInTheDocument();
     expect(
-      screen.getByText(/重启 Worker 触发重新拉取快照/),
+      screen.getByText(/重启响应端重新拉取配置/),
     ).toBeInTheDocument();
     expect(screen.getByText('snapshot-a')).toBeInTheDocument();
     expect(screen.getAllByText('snapshot-b').length).toBeGreaterThan(0);
-    expect(screen.getByText('Worker 可用性')).toBeInTheDocument();
+    expect(screen.getByText('响应端可用性')).toBeInTheDocument();
     expect(screen.getByText('多节点探测通过')).toBeInTheDocument();
     expect(screen.getByText('Agent 多节点探测')).toBeInTheDocument();
     expect(screen.getByText('hk-edge-1')).toBeInTheDocument();
@@ -1137,17 +1137,17 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('12.5 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('48 ms').length).toBeGreaterThan(0);
     expect(
-      screen.getAllByText(/按国家代码匹配的 GSLB 节点池会回退到全局/).length,
+      screen.getAllByText(/按国家\/地区匹配的节点池会回退到全局规则/).length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText('GSLB 调度模拟')).toBeInTheDocument();
+    expect(screen.getByText('智能解析模拟')).toBeInTheDocument();
     expect(
       screen.getByText(
-        '按站点、记录类型、来源国家和来源 IP 预演当前权威 DNS 快照会返回的边缘 IP。',
+        '按站点、记录类型、来源国家和来源 IP，预演当前解析配置会返回哪些边缘 IP。',
       ),
     ).toBeInTheDocument();
     expect(screen.getByText('例如 HK、DE；留空使用全局。')).toBeInTheDocument();
     expect(
-      screen.getByText('可选；填写后会优先参与来源 CIDR 匹配预演。'),
+      screen.getByText('可选；填写后会优先按来源网段规则预演。'),
     ).toBeInTheDocument();
     const user = userEvent.setup();
     await user.selectOptions(screen.getByLabelText('网站配置'), '93');
@@ -1157,7 +1157,7 @@ describe('Authoritative DNS page', () => {
     await user.selectOptions(screen.getByLabelText('网站配置'), '92');
     expect(screen.getByDisplayValue('api.example.com')).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText('HK'), 'HK');
-    await user.click(screen.getByRole('button', { name: '模拟调度' }));
+    await user.click(screen.getByRole('button', { name: '开始模拟' }));
     await waitFor(() => {
       expect(screen.getAllByText('8.8.4.4').length).toBeGreaterThan(0);
     });
@@ -1168,7 +1168,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('hk-edge')).toBeInTheDocument();
     expect(screen.getByText('hot-edge')).toBeInTheDocument();
     expect(screen.getByText('节点负载超过 GSLB 阈值')).toBeInTheDocument();
-    expect(screen.getAllByText('指标时间').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('负载数据时间').length).toBeGreaterThan(0);
     expect(
       screen.getByText(formatDateTime('2026-05-31T08:19:10Z')),
     ).toBeInTheDocument();
@@ -1180,7 +1180,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('最大 24 ms').length).toBeGreaterThan(0);
     await user.clear(screen.getByPlaceholderText('HK'));
     await user.type(screen.getByPlaceholderText('HK'), 'DE');
-    await user.click(screen.getByRole('button', { name: '模拟调度' }));
+    await user.click(screen.getByRole('button', { name: '开始模拟' }));
     await waitFor(() => {
       expect(screen.getByText('当前没有可返回目标。')).toBeInTheDocument();
     });
@@ -1198,7 +1198,7 @@ describe('Authoritative DNS page', () => {
       screen.getByPlaceholderText('203.0.113.10'),
       '203.0.113.23',
     );
-    await user.click(screen.getByRole('button', { name: '模拟调度' }));
+    await user.click(screen.getByRole('button', { name: '开始模拟' }));
     await waitFor(() => {
       expect(screen.getAllByText('203.0.113.80').length).toBeGreaterThan(0);
     });
@@ -1217,7 +1217,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('cidr-edge')).toBeInTheDocument();
     await user.clear(screen.getByPlaceholderText('203.0.113.10'));
     await user.type(screen.getByPlaceholderText('HK'), 'JP');
-    await user.click(screen.getByRole('button', { name: '模拟调度' }));
+    await user.click(screen.getByRole('button', { name: '开始模拟' }));
     await waitFor(() => {
       expect(screen.getByText(/snapshot-probe-gate/)).toBeInTheDocument();
     });
@@ -1235,16 +1235,16 @@ describe('Authoritative DNS page', () => {
     expect(await screen.findByText('部分匹配')).toBeInTheDocument();
     expect(await screen.findByText('缺失 NS')).toBeInTheDocument();
     expect(screen.getAllByText('ns2.example.net').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Glue 提示/)).toBeInTheDocument();
+    expect(screen.getByText(/主机记录提示/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^迁移向导/ }));
     expect(await screen.findByText('待迁移站点')).toBeInTheDocument();
-    expect(screen.getByText('已权威 DNS')).toBeInTheDocument();
+    expect(screen.getByText('已用自建解析')).toBeInTheDocument();
     expect(screen.getAllByText('edge-site').length).toBeGreaterThan(0);
-    expect(screen.getByText('匹配 Zone example.com')).toBeInTheDocument();
-    expect(screen.getAllByText('在线 Worker').length).toBeGreaterThan(0);
+    expect(screen.getByText('匹配 example.com')).toBeInTheDocument();
+    expect(screen.getAllByText('在线响应端').length).toBeGreaterThan(0);
     expect(screen.getAllByText('公网可达').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('公网可达 Worker').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('公网可达响应端').length).toBeGreaterThan(0);
     expect(screen.getAllByText('1 / 1').length).toBeGreaterThan(0);
     expect(screen.getByRole('link', { name: '去网站详情' })).toHaveAttribute(
       'href',
@@ -1252,7 +1252,7 @@ describe('Authoritative DNS page', () => {
     );
     await user.click(screen.getByRole('button', { name: '一键切换' }));
     const switchDialog = await screen.findByRole('dialog', {
-      name: '切换到权威 DNS',
+      name: '切换到本地自建解析',
     });
     await user.click(
       within(switchDialog).getByRole('button', { name: '切换' }),
@@ -1262,13 +1262,13 @@ describe('Authoritative DNS page', () => {
     });
     expect(screen.getByText('切换后复测')).toBeInTheDocument();
     expect(screen.getByText('网站 DNS 模式')).toBeInTheDocument();
-    expect(screen.getByText('Zone 委派检查')).toBeInTheDocument();
-    expect(screen.getByText('Worker 公网探测')).toBeInTheDocument();
-    expect(screen.getByText('GSLB 模拟复测')).toBeInTheDocument();
+    expect(screen.getByText('托管域名指向检查')).toBeInTheDocument();
+    expect(screen.getByText('响应端公网探测')).toBeInTheDocument();
+    expect(screen.getByText('智能解析复测')).toBeInTheDocument();
     expect(screen.getByText('需要确认')).toBeInTheDocument();
     expect(screen.getByText(/当前委派状态：部分匹配/)).toBeInTheDocument();
     expect(
-      screen.getByText(/1 \/ 1 个在线 Worker UDP\/TCP 53 可达/),
+      screen.getByText(/1 \/ 1 个在线响应端 UDP\/TCP 53 可达/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/已完成 3 组模拟，其中 1 组无返回目标/),
@@ -1278,7 +1278,7 @@ describe('Authoritative DNS page', () => {
     ).toBeGreaterThan(0);
     expect(screen.getByText('全局')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));
+    await user.click(screen.getByRole('button', { name: /^DNS 响应端/ }));
     await waitFor(() => {
       expect(screen.getAllByText('ns1-hk').length).toBeGreaterThan(0);
     });
@@ -1287,11 +1287,11 @@ describe('Authoritative DNS page', () => {
     expect((await screen.findAllByText('TCP 可达')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('18 ms').length).toBeGreaterThan(0);
     await user.click(screen.getByRole('button', { name: '探测' }));
-    expect(await screen.findByText(/DNS Worker 探测完成/)).toBeInTheDocument();
+    expect(await screen.findByText(/DNS 响应端探测完成/)).toBeInTheDocument();
 
-    await user.click(screen.getAllByRole('button', { name: '创建 Worker' })[0]);
+    await user.click(screen.getAllByRole('button', { name: '创建响应端' })[0]);
     const createDialog = await screen.findByRole('dialog', {
-      name: '创建 DNS Worker',
+      name: '创建 DNS 响应端',
     });
     await user.type(
       within(createDialog).getByPlaceholderText('ns1-hk'),
@@ -1307,7 +1307,7 @@ describe('Authoritative DNS page', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole('dialog', { name: 'DNS Worker Token' }),
+        screen.getByRole('dialog', { name: 'DNS 响应端密钥' }),
       ).toBeInTheDocument();
     });
     expect(screen.getByDisplayValue('created-token')).toBeInTheDocument();
@@ -1466,13 +1466,13 @@ describe('Authoritative DNS page', () => {
 
     renderWithProviders(<AuthoritativeDNSPage />);
 
-    expect(await screen.findByText('权威 DNS')).toBeInTheDocument();
-    expect(screen.getByText('暂无 DNS Zone')).toBeInTheDocument();
+    expect(await screen.findByText('本地自建解析')).toBeInTheDocument();
+    expect(screen.getByText('暂无托管域名')).toBeInTheDocument();
     expect(screen.getByText('暂无调度状态')).toBeInTheDocument();
-    expect(screen.getByText('暂无权威 DNS 站点')).toBeInTheDocument();
-    expect(screen.getByText('无在线 Worker')).toBeInTheDocument();
-    expect(screen.getByText('Worker 可用性')).toBeInTheDocument();
-    expect(screen.getByText('暂无 DNS Worker。')).toBeInTheDocument();
+    expect(screen.getByText('暂无本地自建解析站点')).toBeInTheDocument();
+    expect(screen.getByText('无在线响应端')).toBeInTheDocument();
+    expect(screen.getByText('响应端可用性')).toBeInTheDocument();
+    expect(screen.getByText('暂无 DNS 响应端。')).toBeInTheDocument();
   });
 
   it('warns when workers are ready but no site is bound to authoritative DNS', async () => {
@@ -1615,15 +1615,15 @@ describe('Authoritative DNS page', () => {
     renderWithProviders(<AuthoritativeDNSPage />);
 
     expect(
-      await screen.findByText(/DNS Worker 已能拉取快照/),
+      await screen.findByText(/DNS 响应端已经能拉取解析配置/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/只能回答 Zone 的 SOA\/NS 和静态记录/),
+      screen.getByText(/只能回答基础记录和静态记录/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/业务域名的 A\/AAAA 动态调度需要/),
+      screen.getByText(/业务域名的 A\/AAAA 自动选 IP 需要/),
     ).toBeInTheDocument();
-    expect(screen.getByText('暂无权威 DNS 站点')).toBeInTheDocument();
+    expect(screen.getByText('暂无本地自建解析站点')).toBeInTheDocument();
   });
 
   it('creates one A record per IP input', async () => {
@@ -1755,8 +1755,8 @@ describe('Authoritative DNS page', () => {
     });
     await user.click(createRecordButton);
     const dialog = await screen.findByRole('dialog', { name: '新增 DNS 记录' });
-    expect(within(dialog).getByText('IPv4 地址')).toBeInTheDocument();
-    expect(within(dialog).getByText(/数字越小优先级越高/)).toBeInTheDocument();
+    expect(within(dialog).getByText('IP 地址')).toBeInTheDocument();
+    expect(within(dialog).getByText(/数字越小越优先/)).toBeInTheDocument();
 
     const nameInput = within(dialog).getByPlaceholderText('@');
     await user.clear(nameInput);

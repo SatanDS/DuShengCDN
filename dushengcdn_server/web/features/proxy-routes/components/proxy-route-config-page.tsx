@@ -302,7 +302,7 @@ type GSLBPoolRow = {
 };
 
 const dnsTTLHint =
-  'Cloudflare 模式下 0/1 表示自动 TTL，2-29 秒会在保存时提升到 30 秒；权威 DNS 模式下 0/1 映射为默认 30 秒，最高 86400 秒。';
+  'Cloudflare 模式下 0/1 表示自动缓存时间，2-29 秒会在保存时提升到 30 秒；本地自建解析模式下 0/1 使用默认 30 秒，最高 86400 秒。';
 const dnsScheduleModeHints: Record<
   DNSAutomationValues['dns_schedule_mode'],
   string
@@ -312,14 +312,14 @@ const dnsScheduleModeHints: Record<
   weighted:
     '权重优先会先过滤健康候选，再按节点池权重和节点权重排序；同分时参考最近心跳时间。',
   load_aware:
-    '负载感知会在健康候选中使用新鲜连接数、CPU、内存指标评分，并可按阈值跳过过载节点。',
+    '按压力优先会在健康候选中参考最新连接数、CPU、内存，并可按阈值跳过压力过高的节点。',
 };
 const autoDNSNodePoolHint =
-  '反向代理节点池是站点默认承载池：自动 DNS 未启用 GSLB 时从这里选公网 IP，缓存清理/预热也下发到这里。启用 GSLB 后，DNS A/AAAA 返回目标改由下方多节点池策略决定；默认节点池仍保留为运行时操作范围和兜底池。';
+  '反向代理节点池是站点默认承载池：未开启多节点智能解析时，自动 DNS 从这里选公网 IP；缓存清理和预热也发到这里。开启多节点智能解析后，A/AAAA 返回目标由下方策略决定；默认节点池仍作为运行时操作范围和兜底池。';
 const autoDNSRecordContentHint =
-  '固定 IP 时可用逗号、空格或换行填写多个地址。开启自动选择或 GSLB 后由系统从节点公网 IP 池生成。';
+  '固定 IP 时可用逗号、空格或换行填写多个地址。开启自动选择或多节点智能解析后，由系统从节点公网 IP 池生成。';
 const ddosProtectionModeHint =
-  '关闭时不做自动防护；自动时最近 5 分钟请求量或错误率超过阈值后暂停 GSLB，并临时切到所选防护目标，指标恢复后回到正常调度。';
+  '关闭时不做自动防护；自动时最近 5 分钟请求量或错误率超过阈值后暂停多节点智能解析，并临时切到所选防护目标，指标恢复后回到正常调度。';
 const gslbPoolActionButtonClassName = 'h-11 w-11 shrink-0 rounded-2xl px-0';
 const gslbPoolRemoveButtonClassName =
   'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] hover:border-[var(--status-danger-border)] hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger-foreground)] disabled:border-[var(--border-default)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--foreground-muted)]';
@@ -968,7 +968,7 @@ export function DNSAutomationSection({
   return (
     <ConfigSectionShell
       title="自动 DNS"
-      description="选择 Cloudflare 后台同步，或切换到自建权威 DNS 让 Worker 按每次查询来源实时返回边缘 IP。"
+      description="选择 Cloudflare 后台同步，或切换到本地自建解析，让 DNS 响应端按访问来源和节点状态返回边缘 IP。"
       formId={formId}
       saving={saving}
       embedded={embedded}
@@ -1069,7 +1069,7 @@ export function DNSAutomationSection({
             }),
             {
               message: authoritativeMode
-                ? '权威 DNS 设置已保存。'
+                ? '本地自建解析设置已保存。'
                 : '自动 DNS 设置已保存。',
             },
           );
@@ -1077,7 +1077,8 @@ export function DNSAutomationSection({
       >
         <ResourceField
           label="DNS 模式"
-          hint="Cloudflare 模式会后台同步 DNS 记录；自建权威 DNS 会进入 DNS Worker 快照并在查询时实时调度。"
+          hint="Cloudflare 模式会后台同步 DNS 记录；本地自建解析会交给 DNS 响应端，在查询时实时选择 IP。"
+          tooltip="选择 Cloudflare 时，系统把记录同步到 Cloudflare。选择本地自建解析时，需要把域名 NS 指向你的 DNS 响应端。"
         >
           <ResourceSelect
             aria-label="DNS 模式"
@@ -1105,25 +1106,26 @@ export function DNSAutomationSection({
             })}
           >
             <option value="cloudflare">Cloudflare 同步</option>
-            <option value="authoritative">自建权威 DNS</option>
+            <option value="authoritative">本地自建解析</option>
           </ResourceSelect>
         </ResourceField>
 
         {isAuthoritativeMode ? (
           <ResourceField
-            label="权威 DNS Zone"
-            hint="网站域名必须属于所选 Zone；Zone 可在左侧「权威 DNS」页面创建。"
+            label="托管域名"
+            hint="网站域名必须属于所选托管域名；可在左侧「本地自建解析」页面创建。"
+            tooltip="托管域名一般是根域名，例如 example.com。www.example.com、api.example.com 都应选择 example.com。"
             error={
-              !form.watch('dns_zone_id_ref') ? '请选择 DNS Zone' : undefined
+              !form.watch('dns_zone_id_ref') ? '请选择托管域名' : undefined
             }
           >
             <ResourceSelect
-              aria-label="权威 DNS Zone"
+              aria-label="托管域名"
               disabled={dnsZonesLoading}
               {...form.register('dns_zone_id_ref')}
             >
               <option value="">
-                {dnsZonesLoading ? '正在加载 Zone...' : '请选择 DNS Zone'}
+                {dnsZonesLoading ? '正在加载托管域名...' : '请选择托管域名'}
               </option>
               {dnsZones.map((zone) => (
                 <option key={zone.id} value={zone.id}>
@@ -1156,7 +1158,7 @@ export function DNSAutomationSection({
           <div className="grid gap-5 md:grid-cols-2">
             <ResourceField
               label="DNS 账号"
-              hint="需要 Cloudflare API Token 具备 Zone Read 和 DNS Edit 权限。"
+              hint="需要 Cloudflare API 密钥具备 Zone Read 和 DNS Edit 权限。"
               error={
                 autoSyncEnabled && !form.watch('dns_account_id')
                   ? '启用自动 DNS 时请选择 DNS 账号'
@@ -1207,7 +1209,7 @@ export function DNSAutomationSection({
         ) : (
           <ResourceField
             label="动态记录类型"
-            hint="自建权威 DNS 的 GSLB 动态回答仅支持 A 或 AAAA。"
+            hint="本地自建解析的自动选 IP 只支持 A 或 AAAA。"
           >
             <ResourceSelect {...form.register('dns_record_type')}>
               <option value="A">A</option>
@@ -1219,8 +1221,9 @@ export function DNSAutomationSection({
         {!isAuthoritativeMode ? (
           <div className="grid gap-5 md:grid-cols-2">
             <ResourceField
-              label="Zone ID"
+              label="Cloudflare 域名 ID"
               hint="可留空，系统会按主域名自动查找 Cloudflare Zone。"
+              tooltip="这是 Cloudflare 里每个域名区域的 ID。新手可以留空，系统会按域名自动查找。"
             >
               <ResourceInput
                 disabled={!autoSyncEnabled}
@@ -1312,11 +1315,15 @@ export function DNSAutomationSection({
               >
                 <option value="healthy">健康优先（冷却防抖）</option>
                 <option value="weighted">按权重优先</option>
-                <option value="load_aware">负载感知</option>
+                <option value="load_aware">按压力优先</option>
               </ResourceSelect>
             </ResourceField>
 
-            <ResourceField label="DNS TTL" hint={dnsTTLHint}>
+            <ResourceField
+              label="DNS 缓存时间"
+              hint={dnsTTLHint}
+              tooltip="这个时间决定用户本地或运营商 DNS 多久刷新一次记录。时间短切换更快，查询量会更高。"
+            >
               <ResourceInput
                 type="number"
                 min={0}
@@ -1333,8 +1340,9 @@ export function DNSAutomationSection({
         {recordType !== 'CNAME' ? (
           <div className="space-y-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
             <ToggleField
-              label="启用 GSLB 多节点池调度"
+              label="启用多节点智能解析"
               description="开启后 DNS A/AAAA 目标由下方多个节点池策略决定；反向代理节点池仍负责缓存运行时操作和默认兜底。"
+              tooltip="用于按访问来源、节点健康和权重从多个节点池里选择 IP。关闭时只从默认节点池选。"
               checked={gslbEnabled}
               disabled={!autoSyncEnabled}
               onChange={(checked) => {
@@ -1354,7 +1362,7 @@ export function DNSAutomationSection({
               <>
                 <ResourceField
                   label="节点池权重"
-                  hint="池名填写已有节点池；国家代码使用 ISO 两位码，可逗号分隔，例如 HK,TW，留空表示全局兜底。来源 CIDR 会优先于国家代码匹配。"
+                  hint="池名填写已有节点池；国家或地区填写两位代码，可逗号分隔，例如 HK,TW，留空表示全局兜底。来源网段会优先于国家或地区匹配。"
                   container="div"
                 >
                   <Controller
@@ -1371,8 +1379,8 @@ export function DNSAutomationSection({
                           <div className="hidden gap-3 pl-[56px] text-xs font-medium text-[var(--foreground-secondary)] md:grid md:grid-cols-[minmax(0,1fr)_110px_minmax(0,0.9fr)_minmax(0,1.2fr)]">
                             <span>池名</span>
                             <span>权重</span>
-                            <span>国家代码</span>
-                            <span>来源 CIDR</span>
+                            <span>国家或地区</span>
+                            <span>来源网段</span>
                           </div>
 
                           {rows.map((row, index) => (
@@ -1441,7 +1449,7 @@ export function DNSAutomationSection({
 
                               <ResourceInput
                                 value={row.countries}
-                                aria-label={`节点池国家代码 ${index + 1}`}
+                                aria-label={`节点池国家或地区 ${index + 1}`}
                                 placeholder="HK,TW"
                                 disabled={!autoSyncEnabled}
                                 onChange={(event) => {
@@ -1457,7 +1465,7 @@ export function DNSAutomationSection({
 
                               <ResourceInput
                                 value={row.sourceCidrs}
-                                aria-label={`节点池来源 CIDR ${index + 1}`}
+                                aria-label={`节点池来源网段 ${index + 1}`}
                                 placeholder="203.0.113.0/24"
                                 disabled={!autoSyncEnabled}
                                 onChange={(event) => {
@@ -1564,7 +1572,7 @@ export function DNSAutomationSection({
           <div className="space-y-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
             <ToggleField
               label="常态开启 Cloudflare 代理"
-              description="开启后正常状态下也会同步橙云。DDoS 自动防护只在攻击期间临时覆盖解析目标，恢复后回到这里的常态设置。"
+              description="开启后正常状态下也会同步橙云。攻击自动防护只在攻击期间临时覆盖解析目标，恢复后回到这里的常态设置。"
               checked={form.watch('cloudflare_proxied')}
               disabled={!autoSyncEnabled}
               onChange={(checked) =>
@@ -1575,9 +1583,13 @@ export function DNSAutomationSection({
             />
 
             <div className="grid gap-5 md:grid-cols-3">
-              <ResourceField label="DDoS 防护模式" hint={ddosProtectionModeHint}>
+              <ResourceField
+                label="攻击防护模式"
+                hint={ddosProtectionModeHint}
+                tooltip="系统会根据最近请求量和错误率判断是否疑似攻击。触发后先保护可用性，恢复正常后再回到原解析策略。"
+              >
                 <ResourceSelect
-                  aria-label="DDoS 防护模式"
+                  aria-label="攻击防护模式"
                   disabled={!autoSyncEnabled}
                   {...form.register('ddos_protection_mode', {
                     onChange: (event) => {
@@ -1642,7 +1654,7 @@ export function DNSAutomationSection({
                 }
                 hint={
                   ddosProtectionProvider === 'custom'
-                    ? '攻击期只返回该池内在线且可调度的公网 IP，并暂停 GSLB 多节点池调度。'
+                    ? '攻击期只返回该池内在线且可调度的公网 IP，并暂停多节点智能解析。'
                     : '攻击期使用该账号同步记录并开启橙云；留空时使用上方自动解析账号。'
                 }
                 error={form.formState.errors.ddos_protection_target?.message}
@@ -1664,7 +1676,7 @@ export function DNSAutomationSection({
                   </ResourceSelect>
                 ) : (
                   <ResourceSelect
-                    aria-label="DDoS Cloudflare 账号"
+                    aria-label="攻击防护 Cloudflare 账号"
                     disabled={!ddosControlsEnabled}
                     {...form.register('ddos_protection_target')}
                   >
@@ -2880,7 +2892,7 @@ export function ProxyRouteConfigPage({
   if (currentSection === 'dns' && dnsZonesQuery.isError) {
     return (
       <ErrorState
-        title="权威 DNS Zone 加载失败"
+        title="托管域名加载失败"
         description={getErrorMessage(dnsZonesQuery.error)}
       />
     );

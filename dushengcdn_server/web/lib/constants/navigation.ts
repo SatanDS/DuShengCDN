@@ -23,12 +23,12 @@ export const dashboardNavigation: NavigationItem[] = [
   },
   {
     href: '/dns-account',
-    label: 'DNS账号',
+    label: 'DNS 账号',
     icon: 'domain',
   },
   {
     href: '/authoritative-dns',
-    label: '权威 DNS',
+    label: '本地自建解析',
     icon: 'dns',
   },
   {

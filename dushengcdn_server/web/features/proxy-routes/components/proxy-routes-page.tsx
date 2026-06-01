@@ -127,7 +127,7 @@ function getFeatureStatus(route: ProxyRouteItem, section: FeatureSectionKey) {
       return {
         label:
           route.dns_provider_mode === 'authoritative'
-            ? '权威 DNS 已启用'
+            ? '已用自建解析'
             : route.dns_auto_sync
               ? '自动 DNS 已启用'
               : '自动 DNS 未启用',
@@ -640,7 +640,7 @@ export function ProxyRoutesPage() {
   if (activeFeatureSection === 'dns' && dnsZonesQuery.isError) {
     return (
       <ErrorState
-        title="权威 DNS Zone 加载失败"
+        title="托管域名加载失败"
         description={getErrorMessage(dnsZonesQuery.error)}
       />
     );

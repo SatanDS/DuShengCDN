@@ -2,11 +2,13 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { AppModal } from '@/components/ui/app-modal';
+import { getDNSZones } from '@/features/authoritative-dns/api/authoritative-dns';
 import {
   applyTlsCertificate,
   convertTlsCertificateToAcme,
@@ -35,7 +37,15 @@ interface CertificateApplyModalProps {
   onApplied?: (certificate: TlsCertificateItem) => void;
   mode?: 'create' | 'edit-acme' | 'convert-upload';
   certificate?: TlsCertificateItem | null;
+  defaultPrimaryDomain?: string;
+  defaultName?: string;
 }
+
+const emptyAuthoritativeZones: ReturnType<typeof getDNSZones> extends Promise<
+  infer T
+>
+  ? T
+  : never = [];
 
 export function CertificateApplyModal({
   isOpen,
@@ -43,6 +53,8 @@ export function CertificateApplyModal({
   onApplied,
   mode = 'create',
   certificate,
+  defaultPrimaryDomain = '',
+  defaultName = '',
 }: CertificateApplyModalProps) {
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState<{
@@ -54,6 +66,11 @@ export function CertificateApplyModal({
   const dnsAccountsQuery = useQuery({
     queryKey: ['dns-accounts'],
     queryFn: getDnsAccounts,
+    enabled: isOpen,
+  });
+  const dnsZonesQuery = useQuery({
+    queryKey: ['authoritative-dns', 'zones'],
+    queryFn: getDNSZones,
     enabled: isOpen,
   });
 
@@ -83,8 +100,14 @@ export function CertificateApplyModal({
         remark: certificate.remark || '',
         acme_account_id:
           mode === 'convert-upload' ? 0 : certificate.acme_account_id,
+        dns_provider_mode:
+          mode === 'convert-upload'
+            ? 'cloudflare'
+            : certificate.dns_provider_mode || 'cloudflare',
         dns_account_id:
           mode === 'convert-upload' ? 0 : certificate.dns_account_id,
+        dns_zone_id_ref:
+          mode === 'convert-upload' ? null : certificate.dns_zone_id_ref,
         key_algorithm: certificate.key_algorithm || 'EC256',
         auto_renew: mode === 'convert-upload' ? true : certificate.auto_renew,
         dns1: mode === 'convert-upload' ? '' : certificate.dns1 || '',
@@ -103,9 +126,16 @@ export function CertificateApplyModal({
         setShowAdvanced(true);
       }
     } else {
-      form.reset(defaultAcmeApplyValues);
+      const primaryDomain = normalizeCertificateDomain(defaultPrimaryDomain);
+      form.reset({
+        ...defaultAcmeApplyValues,
+        name:
+          defaultName.trim() ||
+          (primaryDomain ? `${primaryDomain} 证书` : ''),
+        primary_domain: primaryDomain,
+      });
     }
-  }, [isOpen, form, mode, certificate]);
+  }, [isOpen, form, mode, certificate, defaultPrimaryDomain, defaultName]);
 
   useEffect(() => {
     if (
@@ -138,8 +168,67 @@ export function CertificateApplyModal({
 
   const onSubmit = form.handleSubmit((values) => {
     setFeedback(null);
-    applyMutation.mutate(values);
+    applyMutation.mutate({
+      ...values,
+      dns_account_id:
+        values.dns_provider_mode === 'cloudflare' ? values.dns_account_id : 0,
+      dns_zone_id_ref:
+        values.dns_provider_mode === 'authoritative'
+          ? values.dns_zone_id_ref
+          : null,
+    });
   });
+
+  const dnsProviderMode = form.watch('dns_provider_mode');
+  const primaryDomain = form.watch('primary_domain');
+  const otherDomains = form.watch('other_domains');
+  const cloudflareAccounts =
+    dnsAccountsQuery.data?.filter((account) => account.type === 'cloudflare') ??
+    [];
+  const authoritativeZones = dnsZonesQuery.data ?? emptyAuthoritativeZones;
+  const enabledAuthoritativeZones = useMemo(
+    () => authoritativeZones.filter((zone) => zone.enabled),
+    [authoritativeZones],
+  );
+  const certificateDomains = useMemo(
+    () => parseCertificateDomains(primaryDomain, otherDomains),
+    [primaryDomain, otherDomains],
+  );
+  const matchingAuthoritativeZones = useMemo(
+    () =>
+      enabledAuthoritativeZones.filter(
+        (zone) =>
+          certificateDomains.length > 0 &&
+          certificateDomains.every((domain) =>
+            certificateDomainBelongsToZone(domain, zone.name),
+          ),
+      ),
+    [enabledAuthoritativeZones, certificateDomains],
+  );
+  useEffect(() => {
+    if (dnsProviderMode !== 'authoritative') {
+      return;
+    }
+    const currentZoneID = Number(form.getValues('dns_zone_id_ref'));
+    if (Number.isFinite(currentZoneID) && currentZoneID > 0) {
+      return;
+    }
+    if (matchingAuthoritativeZones.length === 1) {
+      form.setValue('dns_zone_id_ref', matchingAuthoritativeZones[0].id, {
+        shouldDirty: true,
+      });
+    }
+  }, [dnsProviderMode, form, matchingAuthoritativeZones]);
+
+  const authoritativeZoneHint = dnsZonesQuery.isError
+    ? `权威 DNS 托管域名加载失败：${getErrorMessage(dnsZonesQuery.error)}`
+    : enabledAuthoritativeZones.length === 0
+      ? '还没有可用的权威 DNS 托管域名。先在“本地自建解析”里创建并启用域名，再回来申请证书。'
+      : certificateDomains.length > 0 && matchingAuthoritativeZones.length === 0
+        ? '当前证书域名没有匹配的权威 DNS 托管域名，请先创建或启用对应根域名。'
+        : matchingAuthoritativeZones.length > 0
+          ? '已按证书域名匹配可用的权威 DNS 托管域名。系统会临时写入并清理验证 TXT 记录。'
+          : '证书里的所有域名都必须属于这里选择的权威 DNS 托管域名。系统会临时写入并清理验证 TXT 记录。';
 
   return (
     <AppModal
@@ -202,16 +291,26 @@ export function CertificateApplyModal({
 
         <div className="grid gap-4 md:grid-cols-2">
           <ResourceField
-            label="DNS 服务商账号"
-            error={form.formState.errors.dns_account_id?.message}
+            label="验证方式"
+            hint="申请证书时需要临时写入 _acme-challenge 记录。"
+            tooltip="选择 Cloudflare 时会调用 Cloudflare API 写验证记录；选择本地自建解析（权威 DNS）时，会写入左侧“本地自建解析”的托管域名。"
           >
-            <ResourceSelect {...form.register('dns_account_id')}>
-              <option value={0}>请选择 DNS 账号</option>
-              {dnsAccountsQuery.data?.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.name} ({acc.type})
-                </option>
-              ))}
+            <ResourceSelect
+              aria-label="验证方式"
+              {...form.register('dns_provider_mode', {
+                onChange: (event) => {
+                  if (event.target.value === 'authoritative') {
+                    form.setValue('dns_account_id', 0, { shouldDirty: true });
+                  } else {
+                    form.setValue('dns_zone_id_ref', null, {
+                      shouldDirty: true,
+                    });
+                  }
+                },
+              })}
+            >
+              <option value="cloudflare">Cloudflare 账号</option>
+              <option value="authoritative">本地自建解析（权威 DNS）</option>
             </ResourceSelect>
           </ResourceField>
 
@@ -227,6 +326,73 @@ export function CertificateApplyModal({
             </ResourceSelect>
           </ResourceField>
         </div>
+
+        {dnsProviderMode === 'authoritative' ? (
+          <ResourceField
+            label="权威 DNS 托管域名"
+            hint={authoritativeZoneHint}
+            error={form.formState.errors.dns_zone_id_ref?.message}
+            tooltip="这里选择左侧“本地自建解析”中创建的域名，一般是根域名，例如 example.com。申请 www.example.com 或 *.example.com 证书时，都要选择 example.com。"
+            container="div"
+          >
+            <ResourceSelect
+              aria-label="权威 DNS 托管域名"
+              disabled={
+                dnsZonesQuery.isLoading ||
+                dnsZonesQuery.isError ||
+                enabledAuthoritativeZones.length === 0
+              }
+              {...form.register('dns_zone_id_ref')}
+            >
+              <option value="">
+                {dnsZonesQuery.isLoading
+                  ? '正在加载权威 DNS 托管域名...'
+                  : dnsZonesQuery.isError
+                    ? '权威 DNS 托管域名加载失败'
+                    : enabledAuthoritativeZones.length === 0
+                      ? '暂无权威 DNS 托管域名'
+                      : '请选择权威 DNS 托管域名'}
+              </option>
+              {authoritativeZones.map((zone) => (
+                <option key={zone.id} value={zone.id} disabled={!zone.enabled}>
+                  {zone.name}
+                  {matchingAuthoritativeZones.some(
+                    (matchedZone) => matchedZone.id === zone.id,
+                  )
+                    ? '（匹配当前域名）'
+                    : ''}
+                  {zone.enabled ? '' : '（已停用）'}
+                </option>
+              ))}
+            </ResourceSelect>
+            {enabledAuthoritativeZones.length === 0 ? (
+              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)] px-4 py-3 text-xs leading-5 text-[var(--foreground-secondary)]">
+                还没有可选择的权威 DNS 托管域名。
+                <Link
+                  href="/authoritative-dns"
+                  className="ml-1 font-medium text-[var(--brand-primary)] hover:underline"
+                >
+                  去创建权威 DNS 托管域名
+                </Link>
+              </div>
+            ) : null}
+          </ResourceField>
+        ) : (
+          <ResourceField
+            label="Cloudflare 账号"
+            hint="需要 API 密钥具备 Zone Read 和 DNS Edit 权限。"
+            error={form.formState.errors.dns_account_id?.message}
+          >
+            <ResourceSelect {...form.register('dns_account_id')}>
+              <option value={0}>请选择 Cloudflare 账号</option>
+              {cloudflareAccounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.name}
+                </option>
+              ))}
+            </ResourceSelect>
+          </ResourceField>
+        )}
 
         <div className="grid gap-4 md:grid-cols-1">
           <ResourceField
@@ -277,7 +443,7 @@ export function CertificateApplyModal({
                   error={form.formState.errors.dns1?.message}
                 >
                   <ResourceInput
-                    placeholder="为空则使用默认权威 DNS"
+                    placeholder="为空则使用默认验证查询服务器"
                     {...form.register('dns1')}
                   />
                 </ResourceField>
@@ -287,7 +453,7 @@ export function CertificateApplyModal({
                   error={form.formState.errors.dns2?.message}
                 >
                   <ResourceInput
-                    placeholder="为空则使用默认权威 DNS"
+                    placeholder="为空则使用默认验证查询服务器"
                     {...form.register('dns2')}
                   />
                 </ResourceField>
@@ -323,5 +489,28 @@ export function CertificateApplyModal({
         </PrimaryButton>
       </form>
     </AppModal>
+  );
+}
+
+function normalizeCertificateDomain(value: string) {
+  return value.trim().toLowerCase().replace(/\.$/, '');
+}
+
+function parseCertificateDomains(primaryDomain: string, otherDomains: string) {
+  const domains = [primaryDomain]
+    .concat(otherDomains.split(/[\s,，;；]+/))
+    .map(normalizeCertificateDomain)
+    .filter(Boolean)
+    .map((domain) => domain.replace(/^\*\./, ''));
+
+  return Array.from(new Set(domains));
+}
+
+function certificateDomainBelongsToZone(domain: string, zoneName: string) {
+  const normalizedDomain = normalizeCertificateDomain(domain);
+  const normalizedZoneName = normalizeCertificateDomain(zoneName);
+  return (
+    normalizedDomain === normalizedZoneName ||
+    normalizedDomain.endsWith(`.${normalizedZoneName}`)
   );
 }

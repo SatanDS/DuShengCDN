@@ -72,7 +72,7 @@ export function DnsAccountsPage() {
       <div className="space-y-6">
         <PageHeader
           title="DNS 账号"
-          description="统一管理 DNS 服务商账号，用于 ACME 证书 DNS 验证和 Cloudflare 自动 DNS 调度。"
+          description="统一管理 DNS 服务商账号，用于申请证书时写验证记录，以及 Cloudflare 自动解析。"
           action={
             <div className="flex flex-wrap gap-3">
               <PrimaryButton type="button" onClick={() => setIsCreateOpen(true)}>
@@ -153,15 +153,19 @@ function DnsAccountCreateModal({ isOpen, onClose, onCreated }: { isOpen: boolean
       <form onSubmit={onSubmit} className="space-y-5">
         {error && <InlineMessage tone="danger" message={error} />}
         <ResourceField label="账号名称" error={formState.errors.name?.message as string}>
-          <ResourceInput placeholder="Cloudlfare 邮箱账号" {...register('name', { required: '请输入名称' })} />
+          <ResourceInput placeholder="Cloudflare 账号" {...register('name', { required: '请输入名称' })} />
         </ResourceField>
         <ResourceField label="DNS 服务商">
           <ResourceSelect {...register('type')}>
             <option value="cloudflare">Cloudflare</option>
           </ResourceSelect>
         </ResourceField>
-        <ResourceField label="API Token" hint="请勿使用 Global API Key">
-          <ResourceInput {...register('authorization', { required: '请输入 Token' })} />
+        <ResourceField
+          label="API 密钥"
+          hint="请填写 Cloudflare 里创建的 API 密钥，不要填写全局密钥。权限至少包含读取域名和修改 DNS。"
+          tooltip="API 密钥就是面板代你去 Cloudflare 添加、修改 DNS 记录时使用的授权。建议只授权需要管理的域名。"
+        >
+          <ResourceInput {...register('authorization', { required: '请输入 API 密钥' })} />
         </ResourceField>
         <PrimaryButton type="submit" disabled={createMutation.isPending}>
           {createMutation.isPending ? '提交中...' : '提交'}

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"dushengcdn/model"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-acme/lego/v4/acme"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
@@ -178,6 +180,20 @@ func SetupDNSProvider(client *lego.Client, dnsAccount *model.DnsAccount, dns1, d
 		return fmt.Errorf("unsupported DNS provider: %s", dnsAccount.Type)
 	}
 
+	return setDNS01Provider(client, provider, dns1, dns2, disableCNAME, skipDNS)
+}
+
+func SetupAuthoritativeDNSProvider(client *lego.Client, zoneID uint, dns1, dns2 string, disableCNAME, skipDNS bool) error {
+	if zoneID == 0 {
+		return errors.New("本地自建解析验证需要选择托管域名")
+	}
+	if _, err := model.GetDNSZoneByID(zoneID); err != nil {
+		return errors.New("选择的托管域名不存在")
+	}
+	return setDNS01Provider(client, newAuthoritativeDNSChallengeProvider(zoneID), dns1, dns2, disableCNAME, skipDNS)
+}
+
+func setDNS01Provider(client *lego.Client, provider challengeProvider, dns1, dns2 string, disableCNAME, skipDNS bool) error {
 	// We can use custom DNS servers to verify challenges if provided
 	var resolvers []string
 	if dns1 != "" {
@@ -216,6 +232,82 @@ type challengeProvider interface {
 	CleanUp(domain, token, keyAuth string) error
 }
 
+type authoritativeDNSChallengeProvider struct {
+	zoneID  uint
+	mu      sync.Mutex
+	records map[string]uint
+}
+
+func newAuthoritativeDNSChallengeProvider(zoneID uint) *authoritativeDNSChallengeProvider {
+	return &authoritativeDNSChallengeProvider{
+		zoneID:  zoneID,
+		records: make(map[string]uint),
+	}
+}
+
+func (provider *authoritativeDNSChallengeProvider) Present(domain, token, keyAuth string) error {
+	info := dns01.GetChallengeInfo(domain, keyAuth)
+	name := dns01.UnFqdn(info.EffectiveFQDN)
+	record, err := CreateAuthoritativeDNSRecord(provider.zoneID, DNSRecordInput{
+		Name:    name,
+		Type:    "TXT",
+		Value:   info.Value,
+		TTL:     120,
+		Enabled: boolPtr(true),
+	})
+	if err != nil {
+		return err
+	}
+	provider.mu.Lock()
+	provider.records[token] = record.ID
+	provider.mu.Unlock()
+	return nil
+}
+
+func (provider *authoritativeDNSChallengeProvider) CleanUp(domain, token, keyAuth string) error {
+	info := dns01.GetChallengeInfo(domain, keyAuth)
+	name := normalizeDNSRecordName(dns01.UnFqdn(info.EffectiveFQDN))
+	value := strings.TrimSpace(info.Value)
+
+	provider.mu.Lock()
+	recordID := provider.records[token]
+	delete(provider.records, token)
+	provider.mu.Unlock()
+
+	if recordID != 0 {
+		err := DeleteAuthoritativeDNSRecord(recordID)
+		if err == nil {
+			return nil
+		}
+	}
+
+	records, err := model.ListDNSRecordsByZoneID(provider.zoneID)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		if strings.EqualFold(record.Type, "TXT") &&
+			normalizeDNSRecordName(record.Name) == name &&
+			strings.TrimSpace(record.Value) == value {
+			return DeleteAuthoritativeDNSRecord(record.ID)
+		}
+	}
+	return nil
+}
+
+func (provider *authoritativeDNSChallengeProvider) Timeout() (timeout, interval time.Duration) {
+	return 60 * time.Second, 2 * time.Second
+}
+
+var _ challenge.ProviderTimeout = (*authoritativeDNSChallengeProvider)(nil)
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func ObtainSSL(cert *model.TLSCertificate) error {
 	cert.ApplyStatus = "applying"
 	model.DB.Save(cert)
@@ -233,22 +325,34 @@ func ObtainSSL(cert *model.TLSCertificate) error {
 		model.DB.Save(cert)
 	}
 
-	dnsAccount, err := model.GetDnsAccountByID(cert.DnsAccountID)
-	if err != nil {
-		updateCertError(cert, fmt.Sprintf("Failed to get DNS account: %v", err))
-		return err
-	}
-
 	client, _, err := GetOrCreateLegoClient(acmeAccount, cert.KeyAlgorithm)
 	if err != nil {
 		updateCertError(cert, fmt.Sprintf("Failed to create ACME client: %v", err))
 		return err
 	}
 
-	err = SetupDNSProvider(client, dnsAccount, cert.DNS1, cert.DNS2, cert.DisableCNAME, cert.SkipDNS)
-	if err != nil {
-		updateCertError(cert, fmt.Sprintf("Failed to setup DNS provider: %v", err))
-		return err
+	if normalizeTLSCertificateDNSProviderMode(cert.DNSProviderMode) == DNSProviderModeAuthoritative {
+		if cert.DNSZoneIDRef == nil || *cert.DNSZoneIDRef == 0 {
+			err = errors.New("本地自建解析验证需要选择托管域名")
+			updateCertError(cert, err.Error())
+			return err
+		}
+		err = SetupAuthoritativeDNSProvider(client, *cert.DNSZoneIDRef, cert.DNS1, cert.DNS2, cert.DisableCNAME, cert.SkipDNS)
+		if err != nil {
+			updateCertError(cert, fmt.Sprintf("Failed to setup local DNS challenge: %v", err))
+			return err
+		}
+	} else {
+		dnsAccount, err := model.GetDnsAccountByID(cert.DnsAccountID)
+		if err != nil {
+			updateCertError(cert, fmt.Sprintf("Failed to get DNS account: %v", err))
+			return err
+		}
+		err = SetupDNSProvider(client, dnsAccount, cert.DNS1, cert.DNS2, cert.DisableCNAME, cert.SkipDNS)
+		if err != nil {
+			updateCertError(cert, fmt.Sprintf("Failed to setup DNS provider: %v", err))
+			return err
+		}
 	}
 
 	domains := []string{cert.PrimaryDomain}

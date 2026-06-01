@@ -24,7 +24,7 @@ export const websiteConfigSections = [
   {
     key: 'dns',
     label: '自动 DNS',
-    description: '选择 Cloudflare 同步或自建权威 DNS。',
+    description: '选择 Cloudflare 同步或本地自建解析。',
   },
   {
     key: 'cache',

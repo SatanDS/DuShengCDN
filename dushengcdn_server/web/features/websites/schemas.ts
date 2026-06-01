@@ -66,20 +66,42 @@ export const defaultFileImportValues: FileImportFormValues = {
   remark: '',
 };
 
-export const acmeApplySchema = z.object({
-  name: z.string().trim().min(1, '请输入证书名称').max(255),
-  primary_domain: z.string().trim().min(1, '请输入主域名'),
-  other_domains: z.string(),
-  dns_account_id: z.coerce.number().min(1, '请选择 DNS 账号'),
-  acme_account_id: z.coerce.number(),
-  key_algorithm: z.string(),
-  auto_renew: z.boolean(),
-  disable_cname: z.boolean().default(false),
-  skip_dns: z.boolean().default(false),
-  dns1: z.string().default(''),
-  dns2: z.string().default(''),
-  remark: z.string().max(255),
-});
+export const acmeApplySchema = z
+  .object({
+    name: z.string().trim().min(1, '请输入证书名称').max(255),
+    primary_domain: z.string().trim().min(1, '请输入主域名'),
+    other_domains: z.string(),
+    dns_provider_mode: z.enum(['cloudflare', 'authoritative']),
+    dns_account_id: z.coerce.number(),
+    dns_zone_id_ref: z.coerce.number().nullable(),
+    acme_account_id: z.coerce.number(),
+    key_algorithm: z.string(),
+    auto_renew: z.boolean(),
+    disable_cname: z.boolean().default(false),
+    skip_dns: z.boolean().default(false),
+    dns1: z.string().default(''),
+    dns2: z.string().default(''),
+    remark: z.string().max(255),
+  })
+  .superRefine((value, context) => {
+    if (value.dns_provider_mode === 'cloudflare' && value.dns_account_id < 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dns_account_id'],
+        message: '请选择 Cloudflare 账号',
+      });
+    }
+    if (
+      value.dns_provider_mode === 'authoritative' &&
+      (!value.dns_zone_id_ref || value.dns_zone_id_ref < 1)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dns_zone_id_ref'],
+        message: '请选择权威 DNS 托管域名',
+      });
+    }
+  });
 
 export type AcmeApplyFormValues = z.infer<typeof acmeApplySchema>;
 
@@ -87,7 +109,9 @@ export const defaultAcmeApplyValues: AcmeApplyFormValues = {
   name: '',
   primary_domain: '',
   other_domains: '',
+  dns_provider_mode: 'cloudflare',
   dns_account_id: 0,
+  dns_zone_id_ref: null,
   acme_account_id: 0,
   key_algorithm: 'RSA2048',
   auto_renew: true,
@@ -97,4 +121,3 @@ export const defaultAcmeApplyValues: AcmeApplyFormValues = {
   dns2: '',
   remark: '',
 };
-

@@ -621,6 +621,13 @@ func DeleteAuthoritativeDNSZone(id uint) error {
 	if routeCount > 0 {
 		return errors.New("DNS zone is used by authoritative proxy routes")
 	}
+	var certificateCount int64
+	if err := model.DB.Model(&model.TLSCertificate{}).Where("dns_provider_mode = ? AND dns_zone_id_ref = ?", DNSProviderModeAuthoritative, id).Count(&certificateCount).Error; err != nil {
+		return err
+	}
+	if certificateCount > 0 {
+		return errors.New("DNS zone is used by certificate validation")
+	}
 	if err := model.DB.Where("zone_id = ?", zone.ID).Delete(&model.DNSRecord{}).Error; err != nil {
 		return err
 	}
@@ -810,7 +817,7 @@ func SwitchProxyRouteToAuthoritativeDNS(id uint, input AuthoritativeDNSMigration
 	route.DDOSProtectionProvider = DDOSProtectionProviderCloudflare
 	route.DDOSProtectionTarget = ""
 	route.DNSLastSyncStatus = DNSRecordSyncStatusSuccess
-	route.DNSLastSyncMessage = fmt.Sprintf("已切换到自建权威 DNS Zone %s；请在注册商确认 NS 委派。", zone.Name)
+	route.DNSLastSyncMessage = fmt.Sprintf("已切换到本地自建解析托管域名 %s；请在注册商确认 NS 指向。", zone.Name)
 	route.DNSLastSyncedAt = &now
 	if err := model.DB.Model(route).Select(
 		"dns_provider_mode",
@@ -1301,7 +1308,7 @@ func buildDNSGSLBSimulationView(snapshot *AuthoritativeDNSSnapshot, workerRoute 
 		}
 	}
 	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, policy, GSLBSourceContext{IP: sourceIP, Country: country}, targets, snapshot.GSLBProbeSchedulingEnabled)
-	message := "模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。"
+	message := "模拟结果来自当前面板生成的解析配置，不会写入真实切换状态。"
 	if strings.TrimSpace(messagePrefix) != "" {
 		message = strings.TrimSpace(messagePrefix) + " " + message
 	}
@@ -1798,7 +1805,7 @@ func validateAuthoritativeDNSRecordDynamicConflicts(record *model.DNSRecord) err
 		}
 		for _, domain := range domains {
 			if authoritativeDomainMatchesQName(domain, record.Name) {
-				return fmt.Errorf("静态 DNS 记录 %s %s 与权威 DNS 网站 %s 的动态 %s 记录冲突", record.Name, recordType, route.SiteName, routeType)
+				return fmt.Errorf("静态 DNS 记录 %s %s 与本地自建解析网站 %s 的自动 %s 记录冲突", record.Name, recordType, route.SiteName, routeType)
 			}
 		}
 	}
@@ -1811,7 +1818,7 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 	}
 	recordType = normalizeDNSRecordType(recordType)
 	if recordType != "A" && recordType != "AAAA" {
-		return errors.New("authoritative DNS mode only supports A/AAAA dynamic records")
+		return errors.New("本地自建解析自动选 IP 只支持 A/AAAA")
 	}
 	normalizedDomains := make([]string, 0, len(domains))
 	for _, domain := range domains {
@@ -1838,7 +1845,7 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 		if staticType != "CNAME" && staticType != recordType {
 			continue
 		}
-		return fmt.Errorf("权威 DNS 网站的动态 %s 记录与 Zone 中已有静态记录 %s %s 冲突，请先删除或禁用该静态记录", recordType, record.Name, staticType)
+		return fmt.Errorf("本地自建解析网站的自动 %s 记录与托管域名中已有静态记录 %s %s 冲突，请先删除或禁用该静态记录", recordType, record.Name, staticType)
 	}
 	return nil
 }
@@ -1950,9 +1957,9 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 		candidate.Blockers = append(candidate.Blockers, "网站未配置域名")
 	}
 	if zone == nil {
-		candidate.Blockers = append(candidate.Blockers, "没有匹配的网站 Zone")
+		candidate.Blockers = append(candidate.Blockers, "没有匹配的托管域名")
 	} else if !zone.Enabled {
-		candidate.Blockers = append(candidate.Blockers, "匹配 Zone 已停用")
+		candidate.Blockers = append(candidate.Blockers, "匹配的托管域名已停用")
 	} else if err := validateAuthoritativeProxyRouteStaticRecordConflicts(zone.ID, domains, recordType, route.Enabled); err != nil {
 		candidate.Blockers = append(candidate.Blockers, err.Error())
 	}
@@ -1962,27 +1969,27 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 	}
 	candidate.Warnings = append(candidate.Warnings, targetPrecheck.warnings...)
 	if workerStats.online == 0 {
-		candidate.Blockers = append(candidate.Blockers, "没有在线 DNS Worker")
+		candidate.Blockers = append(candidate.Blockers, "没有在线 DNS 响应端")
 	} else if workerStats.publicReachable == 0 {
-		candidate.Blockers = append(candidate.Blockers, "在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测")
+		candidate.Blockers = append(candidate.Blockers, "在线 DNS 响应端尚未通过公网 UDP/TCP 53 探测")
 	} else if workerStats.ready == 0 {
-		candidate.Blockers = append(candidate.Blockers, "公网可达 DNS Worker 尚未拉取未过期的调度快照")
+		candidate.Blockers = append(candidate.Blockers, "公网可达 DNS 响应端尚未拉取未过期的解析配置")
 	} else if workerStats.publicReachableWithoutFresh > 0 {
-		candidate.Blockers = append(candidate.Blockers, "部分公网可达 DNS Worker 尚未拉取未过期的调度快照")
+		candidate.Blockers = append(candidate.Blockers, "部分公网可达 DNS 响应端尚未拉取未过期的解析配置")
 	} else if workerStats.readySnapshotVersionCount > 1 {
-		candidate.Blockers = append(candidate.Blockers, "公网可达 DNS Worker 的调度快照版本不一致")
+		candidate.Blockers = append(candidate.Blockers, "公网可达 DNS 响应端的解析配置版本不一致")
 	}
 	if !route.GSLBEnabled {
 		candidate.Warnings = append(candidate.Warnings, "未启用 GSLB，多节点池实时分流不会生效")
 	}
 	if workerStats.total < 2 {
-		candidate.Warnings = append(candidate.Warnings, "生产环境建议至少部署 2 个 DNS Worker")
+		candidate.Warnings = append(candidate.Warnings, "生产环境建议至少部署 2 个 DNS 响应端")
 	}
 	if workerStats.online > workerStats.publicReachable {
-		candidate.Warnings = append(candidate.Warnings, "部分在线 Worker 未通过最新公网探测，迁移前建议逐个点击「探测」")
+		candidate.Warnings = append(candidate.Warnings, "部分在线响应端未通过最新公网探测，迁移前建议逐个点击「探测」")
 	}
 	if workerStats.publicReachableWithoutFresh == 0 && workerStats.online > workerStats.freshSnapshot {
-		candidate.Warnings = append(candidate.Warnings, "部分在线 Worker 尚未拉取未过期快照，请确认快照同步正常")
+		candidate.Warnings = append(candidate.Warnings, "部分在线响应端尚未拉取未过期解析配置，请确认配置同步正常")
 	}
 	if !route.DNSAutoSync {
 		candidate.Warnings = append(candidate.Warnings, "当前未启用 Cloudflare 自动 DNS，请确认是否仍需要迁移")
@@ -2030,7 +2037,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 	recordType = normalizeDNSRecordType(recordType)
 	view.recordType = recordType
 	if recordType != "A" && recordType != "AAAA" {
-		return view, errors.New("自建权威 DNS 动态记录仅支持 A/AAAA")
+		return view, errors.New("本地自建解析自动选 IP 只支持 A/AAAA")
 	}
 	view.targetCount = normalizeDNSTargetCount(route.DNSTargetCount)
 	view.strategy = normalizeDNSScheduleMode(route.DNSScheduleMode)
@@ -2410,19 +2417,19 @@ func validateAuthoritativeDNSReadyWorkers() error {
 		return err
 	}
 	if stats.online == 0 {
-		return errors.New("没有在线 DNS Worker")
+		return errors.New("没有在线 DNS 响应端")
 	}
 	if stats.publicReachable == 0 {
-		return errors.New("在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测")
+		return errors.New("在线 DNS 响应端尚未通过公网 UDP/TCP 53 探测")
 	}
 	if stats.ready == 0 {
-		return errors.New("公网可达 DNS Worker 尚未拉取未过期的调度快照")
+		return errors.New("公网可达 DNS 响应端尚未拉取未过期的解析配置")
 	}
 	if stats.publicReachableWithoutFresh > 0 {
-		return errors.New("部分公网可达 DNS Worker 尚未拉取未过期的调度快照")
+		return errors.New("部分公网可达 DNS 响应端尚未拉取未过期的解析配置")
 	}
 	if stats.readySnapshotVersionCount > 1 {
-		return errors.New("公网可达 DNS Worker 的调度快照版本不一致")
+		return errors.New("公网可达 DNS 响应端的解析配置版本不一致")
 	}
 	return nil
 }
@@ -4353,13 +4360,36 @@ func normalizeAuthoritativeDNSRecordName(zoneName string, raw string) (string, e
 	} else if !strings.Contains(name, ".") {
 		name += "." + zoneName
 	}
-	if !isValidProxyRouteDomain(name) {
+	if !isValidAuthoritativeDNSRecordName(name) {
 		return "", errors.New("DNS record name format is invalid")
 	}
 	if !domainBelongsToZone(name, zoneName) {
 		return "", errors.New("DNS record name is outside the zone")
 	}
 	return name, nil
+}
+
+func isValidAuthoritativeDNSRecordName(name string) bool {
+	name = normalizeDNSRecordName(name)
+	if name == "" || len(name) > 253 || strings.ContainsAny(name, " \t\r\n;{}\"'`$:\\/") || strings.Contains(name, "://") {
+		return false
+	}
+	labels := strings.Split(name, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeAuthoritativeDNSRecordValue(recordType string, raw string, priority int) (string, int, error) {

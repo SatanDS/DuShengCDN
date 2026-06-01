@@ -54,6 +54,7 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
   const confirmDialog = useConfirmDialog();
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isCertificateImportOpen, setIsCertificateImportOpen] = useState(false);
+  const [isCertificateApplyOpen, setIsCertificateApplyOpen] = useState(false);
   const [isCertificateDetailOpen, setIsCertificateDetailOpen] = useState(false);
   const [isCertificateEditorOpen, setIsCertificateEditorOpen] = useState(false);
   const [convertCertificate, setConvertCertificate] =
@@ -242,10 +243,16 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
               </SecondaryButton>
               <PrimaryButton
                 type="button"
+                onClick={() => setIsCertificateApplyOpen(true)}
+              >
+                申请证书
+              </PrimaryButton>
+              <SecondaryButton
+                type="button"
                 onClick={() => setIsCertificateImportOpen(true)}
               >
-                添加证书
-              </PrimaryButton>
+                导入证书
+              </SecondaryButton>
               <DangerButton
                 type="button"
                 onClick={handleDeleteWebsite}
@@ -375,7 +382,7 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
             ) : (
               <EmptyState
                 title="未绑定证书"
-                description="点击右上角“添加证书”后，可以在编辑网站时直接选择并应用。"
+                description="可以先申请或导入证书，证书可用后再编辑网站进行绑定。"
               />
             )}
           </AppCard>
@@ -500,6 +507,24 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
               message: `证书 ${importedCertificate.name} 已导入，可在编辑网站时直接应用。`,
             });
             setIsEditorOpen(true);
+          }}
+        />
+      ) : null}
+
+      {isCertificateApplyOpen ? (
+        <CertificateApplyModal
+          isOpen={isCertificateApplyOpen}
+          onClose={() => setIsCertificateApplyOpen(false)}
+          defaultPrimaryDomain={website.domain}
+          defaultName={`${website.domain} 证书`}
+          onApplied={(appliedCertificate) => {
+            void queryClient.invalidateQueries({
+              queryKey: ['tls-certificates'],
+            });
+            setFeedback({
+              tone: 'success',
+              message: `证书 ${appliedCertificate.name} 申请任务已提交。签发完成后可在编辑网站时绑定。`,
+            });
           }}
         />
       ) : null}

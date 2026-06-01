@@ -161,9 +161,9 @@ const migrationRecheckStepTemplates: Array<{
   label: string;
 }> = [
   { key: 'mode', label: '网站 DNS 模式' },
-  { key: 'delegation', label: 'Zone 委派检查' },
-  { key: 'worker_probe', label: 'Worker 公网探测' },
-  { key: 'simulation', label: 'GSLB 模拟复测' },
+  { key: 'delegation', label: '托管域名指向检查' },
+  { key: 'worker_probe', label: '响应端公网探测' },
+  { key: 'simulation', label: '智能解析复测' },
 ];
 
 const dnsRecordTypes: DNSRecordType[] = [
@@ -419,9 +419,9 @@ function getRecordValueHint(type: DNSRecordType) {
 	case 'MX':
 		return '记录值填写邮件服务器域名；MX 优先级数字越小越优先，例如 10 会早于 20。';
     case 'NS':
-      return '填写权威 NS 域名。';
+      return '填写注册商要指向的解析服务器域名。';
     case 'SOA':
-      return '填写 SOA 内容，通常由 Zone 自动生成即可。';
+      return '填写域名基础信息，通常由系统自动生成即可。';
     case 'TXT':
       return '填写 TXT 文本内容。';
   }
@@ -618,13 +618,13 @@ function getSnapshotConsistencyLabel(
 ) {
   switch (status) {
     case 'consistent':
-      return '快照一致';
+      return '解析配置一致';
     case 'divergent':
-      return '快照不一致';
+      return '解析配置不一致';
     case 'stale':
-      return '快照过期';
+      return '解析配置过期';
     case 'no_online_workers':
-      return '无在线 Worker';
+      return '无在线响应端';
     case 'unknown':
       return '状态未知';
   }
@@ -649,12 +649,12 @@ function getSnapshotConsistencyMessage(
   consistency: DNSWorkerSnapshotConsistency,
 ) {
   if (consistency.status === 'stale') {
-    return `快照过期：存在 ${formatCount(consistency.stale_worker_count)} 个在线 Worker 超过 ${formatDurationSeconds(consistency.snapshot_max_age_seconds)} 未拉取新快照。请检查 DNS Worker 的 Server URL 是否可达、Worker Token 是否有效，以及服务日志中 /api/dns-snapshot 的 HTTP 状态。`;
+    return `解析配置过期：有 ${formatCount(consistency.stale_worker_count)} 个在线响应端超过 ${formatDurationSeconds(consistency.snapshot_max_age_seconds)} 没有拉取最新解析配置。请检查响应端能否访问面板地址、响应端密钥是否有效，以及服务日志中 /api/dns-snapshot 的 HTTP 状态。`;
   }
   if (consistency.status === 'divergent') {
     const versionCount = consistency.version_breakdown.length;
     const latestVersion = consistency.latest_snapshot_version || '未知版本';
-    return `快照不一致：在线 Worker 当前使用了 ${formatCount(versionCount)} 个快照版本，查询结果可能不一致。最新版本 ${latestVersion}；请检查落后 Worker 到 Server URL 的网络、Worker Token 是否仍有效，必要时重启 Worker 触发重新拉取快照。`;
+    return `解析配置不一致：在线响应端当前使用了 ${formatCount(versionCount)} 个配置版本，查询结果可能不一致。最新版本 ${latestVersion}；请检查落后的响应端是否能访问面板、响应端密钥是否仍有效，必要时重启响应端重新拉取配置。`;
   }
   return '';
 }
@@ -859,7 +859,7 @@ export function AuthoritativeDNSPage() {
   const deleteZoneMutation = useMutation({
     mutationFn: deleteDNSZone,
     onSuccess: async () => {
-      setFeedback({ tone: 'success', message: 'DNS Zone 已删除。' });
+      setFeedback({ tone: 'success', message: '托管域名已删除。' });
       await queryClient.invalidateQueries({
         queryKey: ['authoritative-dns', 'zones'],
       });
@@ -888,7 +888,7 @@ export function AuthoritativeDNSPage() {
   const deleteWorkerMutation = useMutation({
     mutationFn: deleteDNSWorker,
     onSuccess: async () => {
-      setFeedback({ tone: 'success', message: 'DNS Worker 已删除。' });
+      setFeedback({ tone: 'success', message: 'DNS 响应端已删除。' });
       await queryClient.invalidateQueries({
         queryKey: ['authoritative-dns', 'workers'],
       });
@@ -913,7 +913,7 @@ export function AuthoritativeDNSPage() {
           reachableCount === result.results.length && result.results.length > 0
             ? 'success'
             : 'danger',
-        message: `DNS Worker 探测完成：${reachableCount} / ${result.results.length} 可达。`,
+        message: `DNS 响应端探测完成：${reachableCount} / ${result.results.length} 可达。`,
       });
     },
     onError: (error) => {
@@ -940,7 +940,7 @@ export function AuthoritativeDNSPage() {
     onSuccess: async (updatedRoute, variables) => {
       setFeedback({
         tone: 'success',
-        message: `已切换“${getRouteDisplayName(updatedRoute)}”到自建权威 DNS，正在自动复测。`,
+        message: `已切换“${getRouteDisplayName(updatedRoute)}”到本地自建解析，正在自动复测。`,
       });
       queryClient.setQueryData<ProxyRouteItem[]>(['proxy-routes'], (current) =>
         mergeUpdatedRoute(current ?? proxyRoutes, updatedRoute),
@@ -972,7 +972,7 @@ export function AuthoritativeDNSPage() {
     setRecheckingRouteId(route.id);
     setFeedback({
       tone: 'info',
-      message: `正在复测“${getRouteDisplayName(route)}”的权威 DNS 切换结果。`,
+      message: `正在复测“${getRouteDisplayName(route)}”的本地自建解析切换结果。`,
     });
 
     try {
@@ -1000,8 +1000,8 @@ export function AuthoritativeDNSPage() {
             ? 'success'
             : 'danger',
           latestRoute.dns_provider_mode === 'authoritative'
-            ? `已绑定 Zone ${zone.name}`
-            : '网站尚未切换到自建权威 DNS',
+            ? `已绑定托管域名 ${zone.name}`
+            : '网站尚未切换到本地自建解析',
         );
       } catch (error) {
         result = updateMigrationRecheckStep(
@@ -1017,7 +1017,7 @@ export function AuthoritativeDNSPage() {
         result,
         'delegation',
         'running',
-        '正在检查注册商 NS 委派',
+        '正在检查注册商指向',
       );
       setMigrationRecheck(result);
       try {
@@ -1038,7 +1038,7 @@ export function AuthoritativeDNSPage() {
           'delegation',
           delegationStatus,
           delegationCheck.status === 'matched'
-            ? '公网 NS 已与 Zone 配置匹配'
+            ? '公网解析服务器已与托管域名配置匹配'
             : `当前委派状态：${getDelegationStatusLabel(delegationCheck.status)}`,
         );
       } catch (error) {
@@ -1055,7 +1055,7 @@ export function AuthoritativeDNSPage() {
         result,
         'worker_probe',
         'running',
-        '正在探测在线 DNS Worker 的 UDP/TCP 53',
+        '正在探测在线 DNS 响应端的 UDP/TCP 53',
       );
       setMigrationRecheck(result);
       try {
@@ -1108,8 +1108,8 @@ export function AuthoritativeDNSPage() {
               : 'warning'
             : 'danger',
           onlineWorkersForProbe.length === 0
-            ? '没有在线 DNS Worker'
-            : `${healthyProbeCount} / ${onlineWorkersForProbe.length} 个在线 Worker UDP/TCP 53 可达`,
+            ? '没有在线 DNS 响应端'
+            : `${healthyProbeCount} / ${onlineWorkersForProbe.length} 个在线响应端 UDP/TCP 53 可达`,
         );
       } catch (error) {
         result = updateMigrationRecheckStep(
@@ -1131,7 +1131,7 @@ export function AuthoritativeDNSPage() {
         result,
         'simulation',
         'running',
-        '正在按当前快照模拟全局和来源国家调度',
+        '正在按当前解析配置模拟全局和来源国家的返回 IP',
       );
       setMigrationRecheck(result);
       try {
@@ -1179,7 +1179,7 @@ export function AuthoritativeDNSPage() {
               ? 'warning'
               : 'success',
           returnedTargetCount === 0
-            ? '当前快照没有返回可用目标'
+            ? '当前解析配置没有返回可用目标'
             : noTargetSimulationCount > 0
               ? `已完成 ${simulationResults.length} 组模拟，其中 ${noTargetSimulationCount} 组无返回目标`
               : `已完成 ${simulationResults.length} 组模拟，返回 ${returnedTargetCount} 个目标`,
@@ -1226,8 +1226,8 @@ export function AuthoritativeDNSPage() {
 
   const handleDeleteZone = async (zone: DNSZoneItem) => {
     const confirmed = await confirmDialog({
-      title: '删除 DNS Zone',
-      message: `确认删除 Zone“${zone.name}”吗？会同时删除该 Zone 下的静态记录；已被网站权威 DNS 模式引用时后端会阻止删除。`,
+      title: '删除托管域名',
+      message: `确认删除托管域名“${zone.name}”吗？会同时删除该域名下的静态记录；已被网站本地自建解析引用时后端会阻止删除。`,
       confirmLabel: '删除',
       tone: 'danger',
     });
@@ -1252,8 +1252,8 @@ export function AuthoritativeDNSPage() {
 
   const handleDeleteWorker = async (worker: DNSWorkerItem) => {
     const confirmed = await confirmDialog({
-      title: '删除 DNS Worker',
-      message: `确认删除 Worker“${worker.name}”吗？删除后该 Worker Token 将不可再拉取快照。`,
+      title: '删除 DNS 响应端',
+      message: `确认删除响应端“${worker.name}”吗？删除后该响应端密钥将不能再拉取解析配置。`,
       confirmLabel: '删除',
       tone: 'danger',
     });
@@ -1278,8 +1278,8 @@ export function AuthoritativeDNSPage() {
     zone: DNSZoneItem,
   ) => {
     const confirmed = await confirmDialog({
-      title: '切换到权威 DNS',
-      message: `确认把“${getRouteDisplayName(route)}”切换到自建权威 DNS，并绑定 Zone“${zone.name}”吗？切换后请到注册商确认 NS 委派。`,
+      title: '切换到本地自建解析',
+      message: `确认把“${getRouteDisplayName(route)}”切换到本地自建解析，并绑定托管域名“${zone.name}”吗？切换后请到注册商确认 NS 已指向你的 DNS 响应端。`,
       confirmLabel: '切换',
     });
     if (confirmed) {
@@ -1295,7 +1295,7 @@ export function AuthoritativeDNSPage() {
   if (zonesQuery.isError) {
     return (
       <ErrorState
-        title="DNS Zone 加载失败"
+        title="托管域名加载失败"
         description={getErrorMessage(zonesQuery.error)}
       />
     );
@@ -1304,7 +1304,7 @@ export function AuthoritativeDNSPage() {
   if (workersQuery.isError) {
     return (
       <ErrorState
-        title="DNS Worker 加载失败"
+        title="DNS 响应端加载失败"
         description={getErrorMessage(workersQuery.error)}
       />
     );
@@ -1314,25 +1314,25 @@ export function AuthoritativeDNSPage() {
     <>
       <div className="space-y-6">
         <PageHeader
-          title="权威 DNS"
-          description="管理自建权威 DNS Zone、静态记录和 DNS Worker，用于按来源与节点状态实时执行 GSLB 调度。"
+          title="本地自建解析"
+          description="管理本地自建解析的托管域名、静态记录和 DNS 响应端，用于按访问来源与节点状态自动返回合适的边缘 IP。"
           action={
             <div className="flex flex-wrap gap-3">
               <SecondaryButton
                 type="button"
                 onClick={() => setIsWorkerModalOpen(true)}
               >
-                创建 Worker
+                创建响应端
               </SecondaryButton>
               <PrimaryButton type="button" onClick={openCreateZone}>
-                创建 Zone
+                创建托管域名
               </PrimaryButton>
             </div>
           }
         />
 
         <div className="grid gap-4 md:grid-cols-3">
-          <AppCard title="托管 Zone">
+          <AppCard title="托管域名">
             <div className="space-y-2">
               <p className="text-3xl font-semibold text-[var(--foreground-primary)]">
                 {zones.length}
@@ -1350,11 +1350,11 @@ export function AuthoritativeDNSPage() {
                   .toLocaleString('zh-CN')}
               </p>
               <p className="text-sm text-[var(--foreground-secondary)]">
-                不含网站动态 GSLB 记录
+                不含网站自动返回的动态记录
               </p>
             </div>
           </AppCard>
-          <AppCard title="DNS Worker">
+          <AppCard title="DNS 响应端">
             <div className="space-y-2">
               <p className="text-3xl font-semibold text-[var(--foreground-primary)]">
                 {workers.filter((worker) => worker.status === 'online').length}
@@ -1364,7 +1364,7 @@ export function AuthoritativeDNSPage() {
                 </span>
               </p>
               <p className="text-sm text-[var(--foreground-secondary)]">
-                在线 / 全部 Worker
+                在线 / 全部响应端
               </p>
             </div>
           </AppCard>
@@ -1373,7 +1373,7 @@ export function AuthoritativeDNSPage() {
         {showNoAuthoritativeRoutesNotice ? (
           <InlineMessage
             tone="warning"
-            message="DNS Worker 已能拉取快照，但当前没有启用的网站绑定到自建权威 DNS Zone。此时 Worker 只能回答 Zone 的 SOA/NS 和静态记录；业务域名的 A/AAAA 动态调度需要到网站详情「自动 DNS」切换为自建权威 DNS 并选择对应 Zone，或使用迁移向导一键切换。"
+            message="DNS 响应端已经能拉取解析配置，但当前没有启用的网站绑定到本地自建解析。此时响应端只能回答基础记录和静态记录；业务域名的 A/AAAA 自动选 IP 需要到网站详情「自动 DNS」切换为本地自建解析并选择对应托管域名，或使用迁移向导一键切换。"
           />
         ) : null}
 
@@ -1419,18 +1419,18 @@ export function AuthoritativeDNSPage() {
           {[
             {
               key: 'zones' as const,
-              label: 'Zone 与记录',
-              description: '托管域名、NS、SOA 和静态 DNS 记录。',
+              label: '托管域名与记录',
+              description: '托管域名、注册商 NS 和静态 DNS 记录。',
             },
             {
               key: 'workers' as const,
-              label: 'DNS Worker',
-              description: '管理权威 DNS 查询节点和快照状态。',
+              label: 'DNS 响应端',
+              description: '管理对外回答 DNS 查询的服务和配置状态。',
             },
             {
               key: 'migration' as const,
               label: '迁移向导',
-              description: '检查 Cloudflare 站点切换到自建权威 DNS 的准备项。',
+              description: '检查 Cloudflare 站点切换到本地自建解析的准备项。',
             },
           ].map((tab) => (
             <button
@@ -1537,7 +1537,7 @@ export function AuthoritativeDNSPage() {
             setIsZoneModalOpen(false);
             setFeedback({
               tone: 'success',
-              message: editingZone ? 'DNS Zone 已保存。' : 'DNS Zone 已创建。',
+              message: editingZone ? '托管域名已保存。' : '托管域名已创建。',
             });
             await queryClient.invalidateQueries({
               queryKey: ['authoritative-dns', 'zones'],
@@ -1581,7 +1581,7 @@ export function AuthoritativeDNSPage() {
           onCreated={async (worker) => {
             setIsWorkerModalOpen(false);
             setCreatedWorker(worker);
-            setFeedback({ tone: 'success', message: 'DNS Worker 已创建。' });
+            setFeedback({ tone: 'success', message: 'DNS 响应端已创建。' });
             await queryClient.invalidateQueries({
               queryKey: ['authoritative-dns', 'workers'],
             });
@@ -1639,18 +1639,18 @@ function ZonesPanel({
 }) {
   return (
     <AppCard
-      title="Zone 与记录"
-      description="Zone 用于承接注册商 NS 委派；静态记录和网站权威 DNS 动态记录会一起进入 Worker 快照。"
+      title="托管域名与记录"
+      description="托管域名用来承接注册商 NS 指向；静态记录和网站自动选 IP 记录会一起下发到 DNS 响应端。"
       action={
         <PrimaryButton type="button" onClick={onCreateZone}>
-          创建 Zone
+          创建托管域名
         </PrimaryButton>
       }
     >
       {zones.length === 0 ? (
         <EmptyState
-          title="暂无 DNS Zone"
-          description="创建 Zone 后，再到网站配置的自动 DNS 分区切换为自建权威 DNS。"
+          title="暂无托管域名"
+          description="创建托管域名后，再到网站配置的自动 DNS 分区切换为本地自建解析。"
         />
       ) : (
         <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -1703,7 +1703,7 @@ function ZonesPanel({
                       />
                     </div>
                     <p className="text-sm leading-6 text-[var(--foreground-secondary)]">
-                      SOA {selectedZone.soa_email || 'hostmaster'}，默认 TTL{' '}
+                      基础邮箱 {selectedZone.soa_email || 'hostmaster'}，默认缓存时间{' '}
                       {selectedZone.default_ttl} 秒。
                     </p>
                   </div>
@@ -1712,21 +1712,21 @@ function ZonesPanel({
                       type="button"
                       onClick={() => onEditZone(selectedZone)}
                     >
-                      编辑 Zone
+                      编辑托管域名
                     </SecondaryButton>
                     <DangerButton
                       type="button"
                       disabled={busy}
                       onClick={() => onDeleteZone(selectedZone)}
                     >
-                      删除 Zone
+                      删除托管域名
                     </DangerButton>
                   </div>
                 </div>
 
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <InfoTile
-                    label="Primary NS"
+                    label="主解析服务器"
                     value={selectedZone.primary_ns || '—'}
                   />
                   <InfoTile
@@ -1752,7 +1752,7 @@ function ZonesPanel({
                     </div>
                   ) : (
                     <p className="mt-2 text-sm text-[var(--foreground-secondary)]">
-                      暂未配置 NS。生产环境至少配置两个 Worker 对应的 NS。
+                      暂未配置注册商 NS。生产环境至少配置两个 DNS 响应端对应的 NS。
                     </p>
                   )}
                 </div>
@@ -1773,7 +1773,7 @@ function ZonesPanel({
                       静态记录
                     </h3>
                     <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
-                      A/AAAA/CNAME/TXT/MX/NS/SOA 会由 DNS Worker 从快照回答。
+                      A/AAAA/CNAME/TXT/MX/NS/SOA 会由 DNS 响应端按最新解析配置回答。
                     </p>
                   </div>
                   <PrimaryButton
@@ -1795,7 +1795,7 @@ function ZonesPanel({
                   ) : records.length === 0 ? (
                     <EmptyState
                       title="暂无静态记录"
-                      description="网站绑定权威 DNS 后，A/AAAA 动态记录可由 GSLB 实时生成。"
+                      description="网站绑定本地自建解析后，A/AAAA 动态记录可由系统自动选择边缘 IP。"
                     />
                   ) : (
                     <div className="space-y-3">
@@ -1891,7 +1891,7 @@ function DelegationCheckPanel({
             ) : null}
           </div>
           <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
-            对比当前公网 NS 与 Zone 配置的注册商 NS。
+            对比注册商当前公开的 NS，确认域名是否已经指向这里配置的解析服务器。
           </p>
         </div>
         <SecondaryButton type="button" disabled={isLoading} onClick={onCheck}>
@@ -1910,7 +1910,7 @@ function DelegationCheckPanel({
             {visibleCheck.glue_required ? (
               <InlineMessage
                 tone="info"
-                message={`Glue 提示：${visibleCheck.glue_name_servers.join('、')} 位于 ${zone.name} 内，需要在注册商配置主机记录/Glue。`}
+                message={`主机记录提示：${visibleCheck.glue_name_servers.join('、')} 位于 ${zone.name} 内，需要在注册商配置主机记录，把这些 NS 名称对应到实际 IP，外部才能找到它们。`}
               />
             ) : null}
             <div className="grid gap-3 md:grid-cols-2">
@@ -1943,8 +1943,8 @@ function DelegationCheckPanel({
             </p>
           </div>
         ) : (
-          <p className="text-sm text-[var(--foreground-secondary)]">
-            点击后检查注册商是否已经把 {zone.name} 委派到当前 NS。
+            <p className="text-sm text-[var(--foreground-secondary)]">
+            点击后检查注册商是否已经把 {zone.name} 指向当前 NS。
           </p>
         )}
       </div>
@@ -2005,18 +2005,18 @@ function WorkersPanel({
 }) {
   return (
     <AppCard
-      title="DNS Worker"
-      description="Worker 使用专属 Token 拉取只读 DNS 快照，并监听 UDP/TCP 53 回答权威查询。"
+      title="DNS 响应端"
+      description="响应端使用专属密钥拉取只读解析配置，并监听 UDP/TCP 53 对外回答 DNS 查询。"
       action={
         <PrimaryButton type="button" onClick={onCreateWorker}>
-          创建 Worker
+          创建响应端
         </PrimaryButton>
       }
     >
       {workers.length === 0 ? (
         <EmptyState
-          title="暂无 DNS Worker"
-          description="创建 Worker 后复制部署命令，并在注册商处把 Zone NS 委派到 Worker 地址。"
+          title="暂无 DNS 响应端"
+          description="创建响应端后复制部署命令，并在注册商处把托管域名的 NS 指向响应端地址。"
         />
       ) : (
         <div className="space-y-4">
@@ -2045,13 +2045,13 @@ function WorkersPanel({
                     />
                     <StatusBadge
                       label={
-                        worker.geoip_enabled ? 'GeoIP 已加载' : 'GeoIP 未加载'
+                        worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'
                       }
                       variant={worker.geoip_enabled ? 'success' : 'warning'}
                     />
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <InfoTile label="Worker ID" value={worker.worker_id} />
+                    <InfoTile label="响应端 ID" value={worker.worker_id} />
                     <InfoTile
                       label="公网地址"
                       value={worker.public_address || '—'}
@@ -2061,12 +2061,12 @@ function WorkersPanel({
                       value={formatRelativeTime(worker.last_seen_at)}
                     />
                     <InfoTile
-                      label="最近快照"
+                      label="最近配置"
                       value={formatRelativeTime(worker.last_snapshot_at)}
                     />
                   </div>
                   <p className="text-xs leading-5 text-[var(--foreground-secondary)]">
-                    快照版本：{worker.last_snapshot_version || '—'}
+                    配置版本：{worker.last_snapshot_version || '—'}
                     {worker.last_snapshot_at
                       ? ` · ${formatDateTime(worker.last_snapshot_at)}`
                       : ''}
@@ -2077,16 +2077,16 @@ function WorkersPanel({
                   {worker.geoip_last_error ? (
                     <InlineMessage
                       tone="info"
-                      message={`GeoIP 国家库加载失败：${worker.geoip_last_error}`}
+                      message={`国家识别库加载失败：${worker.geoip_last_error}`}
                     />
                   ) : !worker.geoip_enabled ? (
                     <InlineMessage
                       tone="info"
-                      message="未加载 GeoIP 国家库；国家代码节点池不会命中，仍可按来源 CIDR 或全局调度。"
+                      message="未加载国家识别库；按国家匹配节点池不会命中，仍可按来源网段或全局规则调度。"
                     />
                   ) : (
                     <p className="text-xs break-all text-[var(--foreground-secondary)]">
-                      GeoIP 国家库：{worker.geoip_database_path || '已加载'}
+                      国家识别库：{worker.geoip_database_path || '已加载'}
                     </p>
                   )}
                   {worker.probe_message ? (
@@ -2169,7 +2169,7 @@ function DNSWorkerProbeResultPanel({ probe }: { probe?: DNSWorkerProbe }) {
               </span>
             </div>
             <p className="mt-2 text-xs text-[var(--foreground-secondary)]">
-              RCODE：{result.rcode || '—'} · 应答 {result.answer_count}
+              返回码：{result.rcode || '—'} · 应答 {result.answer_count}
             </p>
             {result.error ? (
               <p className="mt-2 text-xs leading-5 break-all text-[var(--status-danger-foreground)]">
@@ -2194,14 +2194,14 @@ function GSLBSchedulingStatesPanel({
 }) {
   if (isLoading) {
     return (
-      <AppCard title="GSLB 调度状态">
+      <AppCard title="智能解析状态">
         <LoadingState />
       </AppCard>
     );
   }
 
   if (error) {
-    return <ErrorState title="GSLB 调度状态加载失败" description={error} />;
+    return <ErrorState title="智能解析状态加载失败" description={error} />;
   }
 
   const rows = states?.states ?? [];
@@ -2212,13 +2212,13 @@ function GSLBSchedulingStatesPanel({
 
   return (
     <AppCard
-      title="GSLB 调度状态"
-      description="展示 Worker 回传和 Server 记录的当前实际目标、期望目标与逐来源防抖状态。"
+      title="智能解析状态"
+      description="展示响应端和面板记录的当前返回 IP、期望返回 IP，以及不同访问来源的切换冷却状态。"
     >
       {rows.length === 0 ? (
         <EmptyState
           title="暂无调度状态"
-          description="权威 DNS 站点收到 A/AAAA 查询，或 Cloudflare 模式触发 GSLB 重算后，这里会显示当前选中的边缘 IP。"
+          description="本地自建解析站点收到 A/AAAA 查询，或 Cloudflare 模式触发自动选 IP 后，这里会显示当前选中的边缘 IP。"
         />
       ) : (
         <div className="space-y-4">
@@ -2282,7 +2282,7 @@ function GSLBSchedulingStateCard({ state }: { state: DNSGSLBSchedulingState }) {
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <InfoTile
-          label="来源作用域/分流桶"
+          label="访问来源/分流组"
           value={formatSourceScopeLabel(state.scope_key)}
           helper={state.scope_key}
         />
@@ -2290,15 +2290,15 @@ function GSLBSchedulingStateCard({ state }: { state: DNSGSLBSchedulingState }) {
           label="最近评估"
           value={formatRelativeTime(state.last_evaluated_at)}
         />
-        <InfoTile label="当前目标" value={selectedText} />
-        <InfoTile label="期望目标" value={desiredText} />
+        <InfoTile label="当前返回 IP" value={selectedText} />
+        <InfoTile label="期望返回 IP" value={desiredText} />
       </div>
 
       {state.status === 'debouncing' ? (
         <InlineMessage
           className="mt-3"
           tone="info"
-          message="期望目标已变化，但当前目标仍处于防抖冷却或旧目标仍健康，所以暂未切换。"
+          message="期望返回 IP 已变化，但当前返回 IP 仍处于切换冷却，或旧 IP 仍健康，所以暂未切换。"
         />
       ) : null}
       {state.last_reason ? (
@@ -2383,17 +2383,17 @@ function GSLBSimulationPanel({
 
   return (
     <AppCard
-      title="GSLB 调度模拟"
-      description="按站点、记录类型、来源国家和来源 IP 预演当前权威 DNS 快照会返回的边缘 IP。"
+      title="智能解析模拟"
+      description="按站点、记录类型、来源国家和来源 IP，预演当前解析配置会返回哪些边缘 IP。"
     >
       {routesLoading ? (
         <LoadingState />
       ) : routesError ? (
-        <ErrorState title="调度模拟加载失败" description={routesError} />
+        <ErrorState title="智能解析模拟加载失败" description={routesError} />
       ) : routes.length === 0 ? (
         <EmptyState
-          title="暂无权威 DNS 站点"
-          description="把网站配置的自动 DNS 模式切换为自建权威 DNS 后，可在这里模拟实时 GSLB 选点。"
+          title="暂无本地自建解析站点"
+          description="把网站配置的自动 DNS 模式切换为本地自建解析后，可在这里模拟系统会返回哪个边缘 IP。"
         />
       ) : (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
@@ -2448,7 +2448,7 @@ function GSLBSimulationPanel({
             </div>
             <ResourceField
               label="来源 IP"
-              hint="可选；填写后会优先参与来源 CIDR 匹配预演。"
+              hint="可选；填写后会优先按来源网段规则预演。"
             >
               <ResourceInput
                 placeholder="203.0.113.10"
@@ -2458,7 +2458,7 @@ function GSLBSimulationPanel({
             {selectedRoute ? (
               <div className="grid gap-3 md:grid-cols-2">
                 <InfoTile
-                  label="GSLB"
+                  label="多节点智能解析"
                   value={selectedRoute.gslb_enabled ? '已启用' : '未启用'}
                 />
                 <InfoTile
@@ -2468,7 +2468,7 @@ function GSLBSimulationPanel({
               </div>
             ) : null}
             <PrimaryButton type="submit" disabled={isPending}>
-              {isPending ? '模拟中...' : '模拟调度'}
+              {isPending ? '模拟中...' : '开始模拟'}
             </PrimaryButton>
           </form>
 
@@ -2483,7 +2483,7 @@ function GSLBSimulationPanel({
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <InfoTile label="站点" value={result.site_name || '—'} />
                   <InfoTile
-                    label="作用域/分流桶"
+                    label="访问来源/分流组"
                     value={formatSourceScopeLabel(result.source_scope)}
                     helper={result.source_scope}
                   />
@@ -2492,14 +2492,14 @@ function GSLBSimulationPanel({
                     label="策略"
                     value={
                       result.strategy ||
-                      (result.gslb_enabled ? 'GSLB' : '节点池')
+                      (result.gslb_enabled ? '智能解析' : '节点池')
                     }
                   />
                 </div>
                 {result.targets.length > 0 ? (
                   <div className="space-y-2">
                     <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
-                      返回目标
+                      返回 IP
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {result.targets.map((target) => (
@@ -2516,7 +2516,7 @@ function GSLBSimulationPanel({
                   <InlineMessage tone="danger" message="当前没有可返回目标。" />
                 )}
                 <p className="text-xs leading-5 text-[var(--foreground-secondary)]">
-                  {result.qname} {result.record_type} · 快照{' '}
+                  {result.qname} {result.record_type} · 配置{' '}
                   {result.snapshot_version || '—'} ·{' '}
                   {formatDateTime(result.snapshot_at)}
                 </p>
@@ -2534,8 +2534,8 @@ function GSLBSimulationPanel({
               </div>
             ) : (
               <p className="mt-3 text-sm leading-6 text-[var(--foreground-secondary)]">
-                选择站点和来源后点击模拟，可看到 DNS Worker 当前会返回的 A/AAAA
-                目标。
+                选择站点和来源后点击模拟，可看到 DNS 响应端当前会返回的 A/AAAA
+                IP。
               </p>
             )}
           </div>
@@ -2607,11 +2607,11 @@ function GSLBSimulationDiagnostics({
                 </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   <InfoTile
-                    label="候选目标"
+                    label="可返回 IP"
                     value={node.candidate_targets.join(', ') || '—'}
                   />
                   <InfoTile
-                    label="选中目标"
+                    label="已选 IP"
                     value={node.selected_targets.join(', ') || '—'}
                   />
                   <InfoTile
@@ -2619,15 +2619,15 @@ function GSLBSimulationDiagnostics({
                     value={
                       node.has_metric
                         ? formatCount(node.openresty_connections)
-                        : '无指标'
+                        : '无负载数据'
                     }
                   />
                   <InfoTile
-                    label="指标时间"
+                    label="负载数据时间"
                     value={
                       node.has_metric
                         ? formatRelativeTime(node.metric_captured_at)
-                        : '无新鲜指标'
+                        : '无新负载数据'
                     }
                     helper={
                       node.has_metric
@@ -2636,7 +2636,7 @@ function GSLBSimulationDiagnostics({
                     }
                   />
                   <InfoTile
-                    label="评分"
+                    label="权重评分"
                     value={node.score > 0 ? node.score.toFixed(2) : '—'}
                   />
                   <InfoTile
@@ -2651,7 +2651,7 @@ function GSLBSimulationDiagnostics({
                     }
                   />
                   <InfoTile
-                    label="探测 RTT"
+                    label="探测耗时"
                     value={formatLatencyMs(node.node_probe_average_rtt_ms ?? 0)}
                     helper={
                       (node.node_probe_max_rtt_ms ?? 0) > 0
@@ -2716,7 +2716,7 @@ function GSLBSimulationPoolCard({
       <p className="mt-2 text-xs text-[var(--foreground-secondary)]">
         权重 {pool.weight}
         {countries.length > 0 ? ` · 国家 ${countries.join(', ')}` : ''}
-        {sourceCIDRs.length > 0 ? ` · CIDR ${sourceCIDRs.join(', ')}` : ''}
+        {sourceCIDRs.length > 0 ? ` · 来源网段 ${sourceCIDRs.join(', ')}` : ''}
       </p>
       <p className="mt-1 text-xs text-[var(--foreground-muted)]">
         {pool.reason}
@@ -2782,20 +2782,20 @@ function DNSMigrationGuidePanel({
   return (
     <AppCard
       title="迁移向导"
-      description="把 Cloudflare 同步站点切换到自建权威 DNS 前，先检查 Zone、Worker、域名归属和站点 GSLB 配置。"
+      description="把 Cloudflare 同步站点切换到本地自建解析前，先检查托管域名、DNS 响应端、域名归属和多节点解析配置。"
     >
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <InfoTile label="待迁移站点" value={formatCount(candidates.length)} />
         <InfoTile
-          label="已权威 DNS"
+          label="已用自建解析"
           value={formatCount(authoritativeRoutes.length)}
         />
         <InfoTile
-          label="可用 Zone"
+          label="可用托管域名"
           value={`${enabledZones.length} / ${zones.length}`}
         />
         <InfoTile
-          label="在线 Worker"
+          label="在线响应端"
           value={`${onlineWorkers.length} / ${workers.length}`}
         />
         <InfoTile
@@ -2840,7 +2840,7 @@ function DNSMigrationGuidePanel({
                           variant={candidate.dns_auto_sync ? 'info' : 'warning'}
                         />
                         {candidate.gslb_enabled ? (
-                          <StatusBadge label="GSLB 已启用" variant="success" />
+                          <StatusBadge label="多节点解析已启用" variant="success" />
                         ) : null}
                       </div>
                       <p className="text-sm break-all text-[var(--foreground-secondary)]">
@@ -2848,10 +2848,10 @@ function DNSMigrationGuidePanel({
                       </p>
                       <div className="grid gap-3 md:grid-cols-3">
                         <InfoTile
-                          label="匹配 Zone"
+                          label="匹配托管域名"
                           value={
                             candidate.matching_zone_name
-                              ? `匹配 Zone ${candidate.matching_zone_name}`
+                              ? `匹配 ${candidate.matching_zone_name}`
                               : '未匹配'
                           }
                         />
@@ -2864,11 +2864,11 @@ function DNSMigrationGuidePanel({
                           value={getCandidateRecordType(candidate)}
                         />
                         <InfoTile
-                          label="公网可达 Worker"
+                          label="公网可达响应端"
                           value={`${candidate.public_reachable_worker_count} / ${candidate.online_worker_count}`}
                         />
                         <InfoTile
-                          label="快照就绪 Worker"
+                          label="配置就绪响应端"
                           value={`${candidate.ready_worker_count} / ${candidate.public_reachable_worker_count}`}
                         />
                       </div>
@@ -2881,7 +2881,7 @@ function DNSMigrationGuidePanel({
                       ) : (
                         <InlineMessage
                           tone="success"
-                          message="Zone、域名归属、公网 UDP/TCP 53 探测和 Worker 调度快照已满足切换条件。"
+                          message="托管域名、域名归属、公网 UDP/TCP 53 探测和响应端解析配置都已满足切换条件。"
                         />
                       )}
                       {candidate.warnings.length > 0 ? (
@@ -2939,17 +2939,15 @@ function DNSMigrationGuidePanel({
               切换顺序
             </h3>
             <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--foreground-secondary)]">
-              <li>1. 创建覆盖网站域名的 Zone，并填写注册商要使用的 NS。</li>
+              <li>1. 创建覆盖网站域名的托管域名，并填写注册商要使用的 NS。</li>
               <li>
-                2. 部署至少两个 DNS Worker，确认 Worker
-                在线、能拉取快照，并通过公网 UDP/TCP 53 探测。
+                2. 部署至少两个 DNS 响应端，确认响应端在线、能拉取解析配置，并通过公网 UDP/TCP 53 探测。
               </li>
               <li>
-                3. 在网站详情的「自动 DNS」里切换为自建权威 DNS 并选择 Zone。
+                3. 在网站详情的「自动 DNS」里切换为本地自建解析并选择托管域名。
               </li>
               <li>
-                4. 到注册商把域名 NS 委派到 DNS Worker，再回到 Zone
-                详情检查委派。
+                4. 到注册商把域名 NS 指向 DNS 响应端，再回到托管域名详情检查指向。
               </li>
             </ol>
           </div>
@@ -2959,7 +2957,7 @@ function DNSMigrationGuidePanel({
             </h3>
             <p className="mt-3 text-sm leading-6 text-[var(--foreground-secondary)]">
               如需回退，在网站详情把 DNS 模式改回 Cloudflare 同步，并在注册商把
-              NS 改回原 DNS 服务商；DNS TTL 到期后解析会逐步回到原模式。
+              NS 改回原 DNS 服务商；DNS 缓存时间到期后解析会逐步回到原模式。
             </p>
           </div>
         </div>
@@ -2995,7 +2993,7 @@ function MigrationRecheckPanel({ result }: { result: MigrationRecheckResult }) {
             切换后复测
           </h3>
           <p className="mt-1 text-xs break-all text-[var(--foreground-secondary)]">
-            {result.routeName} · Zone {result.zoneName}
+            {result.routeName} · 托管域名 {result.zoneName}
           </p>
         </div>
         <StatusBadge
@@ -3044,7 +3042,7 @@ function MigrationRecheckPanel({ result }: { result: MigrationRecheckResult }) {
           }
         />
         <InfoTile
-          label="Worker 探测"
+          label="响应端探测"
           value={`${healthyProbeCount} / ${result.workerProbes.length}`}
         />
         <InfoTile
@@ -3106,8 +3104,8 @@ function MigrationRecheckPanel({ result }: { result: MigrationRecheckResult }) {
         tone={getMigrationRecheckTone(result.status)}
         message={
           result.status === 'success'
-            ? '切换、委派、Worker 探测和 GSLB 模拟都已通过。'
-            : '复测会帮助确认切换状态；委派不匹配时仍需要到注册商调整 NS 或 Glue。'
+            ? '切换、注册商指向、响应端探测和智能解析模拟都已通过。'
+            : '复测会帮助确认切换状态；指向不匹配时仍需要到注册商调整 NS 或主机记录。'
         }
       />
       <p className="mt-3 text-xs text-[var(--foreground-muted)]">
@@ -3175,11 +3173,11 @@ function DNSObservabilityPanel({
     return (
       <AppCard
         title="DNS 查询观测"
-        description={`最近 ${dnsObservabilityWindowHours} 小时的 Worker 心跳聚合结果。`}
+        description={`最近 ${dnsObservabilityWindowHours} 小时的响应端上报汇总。`}
       >
         <EmptyState
           title="暂无 DNS 查询数据"
-          description="DNS Worker 收到查询并上报心跳后，这里会展示查询量、错误码和返回目标分布。"
+          description="DNS 响应端收到查询并上报后，这里会展示查询量、错误码和返回目标分布。"
         />
       </AppCard>
     );
@@ -3200,7 +3198,7 @@ function DNSObservabilityPanel({
           )}
         />
         <InfoTile
-          label="动态 GSLB"
+          label="动态解析"
           value={formatCount(summary.dynamic_queries)}
         />
         <InfoTile label="错误查询" value={formatCount(summary.error_queries)} />
@@ -3224,7 +3222,7 @@ function DNSObservabilityPanel({
           emptyText="暂无 A/AAAA 目标分布。"
         />
         <CounterList
-          title="Worker 查询"
+          title="响应端查询"
           items={summary.worker_breakdown}
           total={summary.total_queries}
         />
@@ -3232,7 +3230,7 @@ function DNSObservabilityPanel({
           title="动态站点"
           items={summary.route_breakdown}
           total={summary.dynamic_queries}
-          emptyText="暂无动态 GSLB 站点查询。"
+          emptyText="暂无动态解析站点查询。"
         />
         <CounterList
           title="来源作用域"
@@ -3257,10 +3255,10 @@ function DNSWorkerHealthPanel({
     return (
       <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4 xl:col-span-2">
         <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
-          Worker 可用性
+          响应端可用性
         </h3>
         <p className="mt-3 text-sm text-[var(--foreground-secondary)]">
-          暂无 Worker 可用性数据。
+          暂无响应端可用性数据。
         </p>
       </div>
     );
@@ -3271,12 +3269,10 @@ function DNSWorkerHealthPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
-            Worker 可用性
+            响应端可用性
           </h3>
           <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
-            这里统计 DNS Worker
-            本地处理查询的耗时、错误率和快照新鲜度，不代表用户到各地 NS 的网络
-            RTT。
+            这里统计 DNS 响应端本地处理查询的耗时、错误率和解析配置新鲜度；不代表用户到各地 NS 的公网网络耗时。
           </p>
         </div>
         <StatusBadge
@@ -3309,11 +3305,11 @@ function DNSWorkerHealthPanel({
           }
         />
         <InfoTile
-          label="多节点平均 RTT"
+          label="多节点平均耗时"
           value={formatLatencyMs(health.node_probe_average_rtt_ms ?? 0)}
         />
         <InfoTile
-          label="多节点最大 RTT"
+          label="多节点最大耗时"
           value={formatLatencyMs(health.node_probe_max_rtt_ms ?? 0)}
         />
         <InfoTile
@@ -3332,7 +3328,7 @@ function DNSWorkerHealthPanel({
 
       {health.workers.length === 0 ? (
         <p className="mt-4 text-sm text-[var(--foreground-secondary)]">
-          暂无 DNS Worker。
+          暂无 DNS 响应端。
         </p>
       ) : (
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
@@ -3367,10 +3363,10 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
             variant={getProbeStatusVariant(worker.probe_status)}
           />
           {worker.snapshot_stale ? (
-            <StatusBadge label="快照过期" variant="danger" />
+            <StatusBadge label="解析配置过期" variant="danger" />
           ) : null}
           <StatusBadge
-            label={worker.geoip_enabled ? 'GeoIP 已加载' : 'GeoIP 未加载'}
+            label={worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'}
             variant={worker.geoip_enabled ? 'success' : 'warning'}
           />
         </div>
@@ -3391,7 +3387,7 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           value={formatLatencyMs(worker.max_latency_ms)}
         />
         <InfoTile
-          label="快照年龄"
+          label="配置年龄"
           value={formatDurationSeconds(worker.snapshot_age_seconds)}
         />
         <InfoTile
@@ -3408,7 +3404,7 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           }
         />
         <InfoTile
-          label="多节点 RTT"
+          label="多节点耗时"
           value={formatLatencyMs(worker.node_probe_average_rtt_ms ?? 0)}
         />
       </div>
@@ -3424,13 +3420,13 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
         <InlineMessage
           className="mt-3"
           tone="info"
-          message={`GeoIP 国家库加载失败：${worker.geoip_last_error}`}
+          message={`国家识别库加载失败：${worker.geoip_last_error}`}
         />
       ) : !worker.geoip_enabled ? (
         <InlineMessage
           className="mt-3"
           tone="info"
-          message="未加载 GeoIP 国家库；按国家代码匹配的 GSLB 节点池会回退到全局，来源 CIDR 匹配不受影响。"
+          message="未加载国家识别库；按国家/地区匹配的节点池会回退到全局规则，来源网段匹配不受影响。"
         />
       ) : null}
       {worker.probe_message ? (
@@ -3543,7 +3539,7 @@ function DNSQueryTrendPanel({ summary }: { summary: DNSObservabilitySummary }) {
               valueFormatter: formatCount,
             },
             {
-              label: 'SERVFAIL',
+              label: '服务异常',
               color: '#dc2626',
               values: summary.trend_points.map(
                 (point) => point.servfail_queries,
@@ -3551,7 +3547,7 @@ function DNSQueryTrendPanel({ summary }: { summary: DNSObservabilitySummary }) {
               valueFormatter: formatCount,
             },
             {
-              label: 'NXDOMAIN',
+              label: '域名不存在',
               color: '#f59e0b',
               values: summary.trend_points.map(
                 (point) => point.nxdomain_queries,
@@ -3575,10 +3571,10 @@ function DNSSnapshotConsistencyPanel({
     return (
       <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4">
         <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
-          快照一致性
+          解析配置一致性
         </h3>
         <p className="mt-3 text-sm text-[var(--foreground-secondary)]">
-          暂无 Worker 快照状态。
+          暂无响应端解析配置状态。
         </p>
       </div>
     );
@@ -3591,7 +3587,7 @@ function DNSSnapshotConsistencyPanel({
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
-          快照一致性
+          解析配置一致性
         </h3>
         <StatusBadge
           label={getSnapshotConsistencyLabel(consistency.status)}
@@ -3607,19 +3603,19 @@ function DNSSnapshotConsistencyPanel({
       ) : null}
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <InfoTile
-          label="在线 Worker"
+          label="在线响应端"
           value={`${consistency.online_worker_count} / ${consistency.total_worker_count}`}
         />
         <InfoTile
-          label="最新快照"
+          label="最新配置"
           value={consistency.latest_snapshot_version || '—'}
         />
         <InfoTile
-          label="过期 Worker"
+          label="过期响应端"
           value={formatCount(consistency.stale_worker_count)}
         />
         <InfoTile
-          label="最大快照年龄"
+          label="配置最大年龄"
           value={`${consistency.snapshot_max_age_seconds} 秒`}
         />
       </div>
@@ -3635,7 +3631,7 @@ function DNSSnapshotConsistencyPanel({
                   {version.version}
                 </span>
                 <span className="text-[var(--foreground-secondary)]">
-                  {version.worker_count} 个 Worker
+                  {version.worker_count} 个响应端
                 </span>
               </div>
               <p className="mt-2 text-xs text-[var(--foreground-muted)]">
@@ -3772,8 +3768,8 @@ function ZoneEditorModal({
     <AppModal
       isOpen={isOpen}
       onClose={onClose}
-      title={zone ? '编辑 DNS Zone' : '创建 DNS Zone'}
-      description="Zone 名称保存后会规范化为根域名格式；NS 至少建议填写两个可公网访问的 DNS Worker 名称。"
+      title={zone ? '编辑托管域名' : '创建托管域名'}
+      description="托管域名保存后会规范化为根域名格式；生产环境建议至少填写两个可公网访问的 DNS 响应端名称。"
     >
       <form
         className="space-y-5"
@@ -3784,18 +3780,18 @@ function ZoneEditorModal({
       >
         {error ? <InlineMessage tone="danger" message={error} /> : null}
         <ResourceField
-          label="Zone 名称"
+          label="托管域名"
           error={form.formState.errors.name?.message}
         >
           <ResourceInput
             placeholder="example.com"
-            {...form.register('name', { required: '请输入 Zone 名称' })}
+            {...form.register('name', { required: '请输入托管域名' })}
           />
         </ResourceField>
         <div className="grid gap-5 md:grid-cols-2">
           <ResourceField
-            label="SOA 邮箱"
-            hint="留空时后端使用 hostmaster@zone。"
+            label="基础邮箱"
+            hint="留空时后端使用 hostmaster@托管域名。"
           >
             <ResourceInput
               placeholder="hostmaster@example.com"
@@ -3803,7 +3799,7 @@ function ZoneEditorModal({
             />
           </ResourceField>
           <ResourceField
-            label="Primary NS"
+            label="主解析服务器"
             hint="留空时默认使用 NS 列表第一项。"
           >
             <ResourceInput
@@ -3813,8 +3809,9 @@ function ZoneEditorModal({
           </ResourceField>
         </div>
         <ResourceField
-          label="NS 列表"
-          hint="每行一个 NS，也可用逗号或分号分隔。"
+          label="注册商 NS 列表"
+          hint="每行一个 NS，也可用逗号或分号分隔；这些值需要填写到域名注册商后台。"
+          tooltip="NS 是注册商后台里的“域名服务器”。这里填 ns1.example.net、ns2.example.net 这类地址后，还要去注册商把域名指向它们。"
         >
           <ResourceTextarea
             placeholder={'ns1.example.net\nns2.example.net'}
@@ -3822,7 +3819,7 @@ function ZoneEditorModal({
           />
         </ResourceField>
         <div className="grid gap-5 md:grid-cols-2">
-          <ResourceField label="默认 TTL">
+          <ResourceField label="默认缓存时间">
             <ResourceInput
               type="number"
               min={1}
@@ -3831,8 +3828,8 @@ function ZoneEditorModal({
             />
           </ResourceField>
           <ToggleField
-            label="启用 Zone"
-            description="停用后不会进入 DNS Worker 快照。"
+            label="启用托管域名"
+            description="停用后不会下发给 DNS 响应端。"
             checked={form.watch('enabled')}
             onChange={(checked) =>
               form.setValue('enabled', checked, { shouldDirty: true })
@@ -3953,7 +3950,7 @@ function RecordEditorModal({
       isOpen={isOpen}
       onClose={onClose}
       title={record ? '编辑 DNS 记录' : '新增 DNS 记录'}
-      description={`当前 Zone：${zone.name}。记录名可填写 @、完整域名，或填写 www 这类相对名称。`}
+      description={`当前托管域名：${zone.name}。记录名可填写 @、完整域名，或填写 www 这类相对名称。`}
     >
       <form
         className="space-y-5"
@@ -3966,7 +3963,7 @@ function RecordEditorModal({
         <div className="grid gap-5 md:grid-cols-2">
           <ResourceField
             label="记录名"
-            hint="@ 表示 Zone 根域。"
+            hint="@ 表示当前托管域名根域。"
             error={form.formState.errors.name?.message}
           >
             <ResourceInput
@@ -4044,7 +4041,7 @@ function RecordEditorModal({
           </ResourceField>
         )}
         <div className="grid gap-5 md:grid-cols-3">
-          <ResourceField label="TTL" hint="0 表示使用 Zone 默认 TTL。">
+          <ResourceField label="缓存时间" hint="0 表示使用托管域名默认缓存时间。">
             <ResourceInput
               type="number"
               min={0}
@@ -4057,7 +4054,7 @@ function RecordEditorModal({
             hint={
               recordType === 'MX'
                 ? '只对 MX 生效；同一域名有多个 MX 时，邮件会先投递到数字更小的服务器，常见主服务器填 10，备用服务器填 20。'
-                : '仅 MX 记录需要填写优先级，其它记录会自动保存为 0。'
+                : '仅 MX 记录需要填写优先级，数字越小越优先；其它记录会自动保存为 0。'
             }
           >
             <ResourceInput
@@ -4069,7 +4066,7 @@ function RecordEditorModal({
           </ResourceField>
           <ToggleField
             label="启用记录"
-            description="停用后不会进入 DNS Worker 快照。"
+            description="停用后不会下发给 DNS 响应端。"
             checked={form.watch('enabled')}
             onChange={(checked) =>
               form.setValue('enabled', checked, { shouldDirty: true })
@@ -4121,8 +4118,8 @@ function WorkerCreateModal({
     <AppModal
       isOpen={isOpen}
       onClose={onClose}
-      title="创建 DNS Worker"
-      description="Token 只会在创建后返回一次；请在弹窗中复制部署命令。"
+      title="创建 DNS 响应端"
+      description="响应端密钥只会在创建后返回一次；请在弹窗中复制部署命令。"
     >
       <form
         className="space-y-5"
@@ -4133,12 +4130,12 @@ function WorkerCreateModal({
       >
         {error ? <InlineMessage tone="danger" message={error} /> : null}
         <ResourceField
-          label="Worker 名称"
+          label="响应端名称"
           error={form.formState.errors.name?.message}
         >
           <ResourceInput
             placeholder="ns1-hk"
-            {...form.register('name', { required: '请输入 Worker 名称' })}
+            {...form.register('name', { required: '请输入响应端名称' })}
           />
         </ResourceField>
         <ResourceField
@@ -4207,8 +4204,8 @@ go run ./cmd/dns-worker \\
     <AppModal
       isOpen
       onClose={onClose}
-      title="DNS Worker Token"
-      description={`Worker ${worker.name} 已创建。Token 离开弹窗后不会再次显示。`}
+      title="DNS 响应端密钥"
+      description={`响应端 ${worker.name} 已创建。密钥离开弹窗后不会再次显示。`}
       size="xl"
     >
       <div className="space-y-5">
@@ -4218,14 +4215,17 @@ go run ./cmd/dns-worker \\
             message={copyFeedback.message}
           />
         ) : null}
-        <ResourceField label="Worker Token">
+        <ResourceField
+          label="响应端密钥"
+          tooltip="这是 DNS 响应端连接面板用的专属密钥，只在创建后显示一次；不是节点 Agent 密钥，也不是登录密码。"
+        >
           <div className="flex flex-col gap-3 md:flex-row">
             <ResourceInput readOnly value={token} className="font-mono" />
             <SecondaryButton
               type="button"
-              onClick={() => void handleCopy(token, 'Token 已复制。')}
+              onClick={() => void handleCopy(token, '响应端密钥已复制。')}
             >
-              复制 Token
+              复制密钥
             </SecondaryButton>
           </div>
         </ResourceField>

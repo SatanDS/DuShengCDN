@@ -4,12 +4,26 @@ import (
 	"dushengcdn/model"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 func TestAcmeAndDnsIntegration(t *testing.T) {
 	setupServiceTestDB(t)
+
+	releaseFailure := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseFailure) })
+	})
+	restore := SetTLSCertificateObtainFuncForTest(func(c *model.TLSCertificate) error {
+		<-releaseFailure
+		err := errors.New("dns challenge failed")
+		updateCertError(c, err.Error())
+		return err
+	})
+	t.Cleanup(restore)
 
 	// 1. Create a DNS Account
 	dnsAccount := &model.DnsAccount{
@@ -62,17 +76,10 @@ func TestAcmeAndDnsIntegration(t *testing.T) {
 		t.Fatalf("Expected renewed cert ApplyStatus to be applying, got %s", renewedCert.ApplyStatus)
 	}
 
-	// Wait for the async goroutine to fail (it now registers an LE account, which takes longer)
-	time.Sleep(5 * time.Second)
-
-	// Reload cert and verify error status
-	finalCert, err := model.GetTLSCertificateByID(renewedCert.ID)
-	if err != nil {
-		t.Fatalf("Failed to reload cert: %v", err)
-	}
-	if finalCert.ApplyStatus != "error" {
-		t.Fatalf("Expected final cert ApplyStatus to be error, got %s", finalCert.ApplyStatus)
-	}
+	releaseOnce.Do(func() { close(releaseFailure) })
+	finalCert := waitForCertificateState(t, renewedCert.ID, func(c *model.TLSCertificate) bool {
+		return c.ApplyStatus == "error"
+	})
 	if finalCert.ApplyMessage == "" {
 		t.Fatalf("Expected final cert ApplyMessage to be populated, got empty")
 	}
@@ -244,6 +251,111 @@ func TestConvertTLSCertificateToAcmeRejectsInvalidStates(t *testing.T) {
 	}
 	if _, err := ConvertTLSCertificateToAcme(cert.ID, TLSApplyInput{Name: "manual-cert"}); err == nil || !strings.Contains(err.Error(), "already applying") {
 		t.Fatalf("expected applying conversion to fail, got %v", err)
+	}
+}
+
+func TestAuthoritativeDNSChallengeProviderCreatesAndCleansTXTRecord(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone := &model.DNSZone{
+		Name:       "example.com",
+		SOAEmail:   "hostmaster@example.com",
+		PrimaryNS:  "ns1.example.com",
+		DefaultTTL: 300,
+		Serial:     1,
+		Enabled:    true,
+	}
+	if err := zone.Insert(); err != nil {
+		t.Fatalf("insert dns zone: %v", err)
+	}
+
+	provider := newAuthoritativeDNSChallengeProvider(zone.ID)
+	if err := provider.Present("example.com", "token", "key-auth"); err != nil {
+		t.Fatalf("Present failed: %v", err)
+	}
+
+	records, err := model.ListDNSRecordsByZoneID(zone.ID)
+	if err != nil {
+		t.Fatalf("list records: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one TXT record, got %d", len(records))
+	}
+	if records[0].Name != "_acme-challenge.example.com" || records[0].Type != "TXT" || records[0].Value == "" {
+		t.Fatalf("unexpected TXT record: %+v", records[0])
+	}
+
+	if err := provider.CleanUp("example.com", "token", "key-auth"); err != nil {
+		t.Fatalf("CleanUp failed: %v", err)
+	}
+	records, err = model.ListDNSRecordsByZoneID(zone.ID)
+	if err != nil {
+		t.Fatalf("list records after cleanup: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected cleanup to delete TXT record, got %d", len(records))
+	}
+}
+
+func TestApplyTLSCertificateWithAuthoritativeDNS(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone := &model.DNSZone{
+		Name:       "example.com",
+		SOAEmail:   "hostmaster@example.com",
+		PrimaryNS:  "ns1.example.com",
+		DefaultTTL: 300,
+		Serial:     1,
+		Enabled:    true,
+	}
+	if err := zone.Insert(); err != nil {
+		t.Fatalf("insert dns zone: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	restore := SetTLSCertificateObtainFuncForTest(func(c *model.TLSCertificate) error {
+		started <- struct{}{}
+		return nil
+	})
+	t.Cleanup(restore)
+
+	cert, err := ApplyTLSCertificate(TLSApplyInput{
+		Name:            "authoritative-cert",
+		PrimaryDomain:   "example.com",
+		OtherDomains:    "*.example.com",
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		KeyAlgorithm:    "EC256",
+		AutoRenew:       true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyTLSCertificate failed: %v", err)
+	}
+	if cert.DNSProviderMode != DNSProviderModeAuthoritative {
+		t.Fatalf("expected authoritative provider mode, got %s", cert.DNSProviderMode)
+	}
+	if cert.DnsAccountID != 0 {
+		t.Fatalf("expected no cloudflare dns account, got %d", cert.DnsAccountID)
+	}
+	if cert.DNSZoneIDRef == nil || *cert.DNSZoneIDRef != zone.ID {
+		t.Fatalf("expected dns zone ref %d, got %#v", zone.ID, cert.DNSZoneIDRef)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected async obtain task to start")
+	}
+
+	otherZoneID := zone.ID
+	_, err = ApplyTLSCertificate(TLSApplyInput{
+		Name:            "wrong-zone-cert",
+		PrimaryDomain:   "example.net",
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &otherZoneID,
+	})
+	if err == nil || !strings.Contains(err.Error(), "不属于托管域名") {
+		t.Fatalf("expected domain outside zone to fail, got %v", err)
 	}
 }
 

@@ -141,7 +141,7 @@ func (c *APIClient) formatHTTPError(path string, statusCode int, status string, 
 			message = "authentication failed"
 		}
 		return fmt.Errorf(
-			"%s returned %s: %s. DNS Worker Token authentication failed; check DUSHENGCDN_DNS_WORKER_TOKEN/--token uses the DNS Worker Token from 权威 DNS, not an Agent Token or login password",
+			"%s returned %s: %s. DNS Worker Token authentication failed; check DUSHENGCDN_DNS_WORKER_TOKEN/--token uses the DNS Worker Token from 本地自建解析, not an Agent Token or login password",
 			path,
 			status,
 			message,
