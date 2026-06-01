@@ -2000,6 +2000,58 @@ func TestAuthoritativeDNSWorkerHealthIgnoresUnknownWorkerRollups(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDNSObservabilityIncludesOverlappingRollupWindow(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Minute)
+	overlapStart := now.Add(-65 * time.Minute)
+	overlapEnd := overlapStart.Add(10 * time.Minute)
+	if err := (&model.DNSQueryRollup{
+		WindowStart:     overlapStart,
+		WindowMinutes:   10,
+		WorkerID:        worker.WorkerID,
+		QName:           "www.example.com",
+		QType:           "A",
+		RCode:           "NOERROR",
+		QueryCount:      12,
+		TotalDurationMs: 120,
+		MaxDurationMs:   20,
+		TargetSummary:   `{"8.8.8.8":12}`,
+	}).Insert(); err != nil {
+		t.Fatalf("insert overlapping rollup: %v", err)
+	}
+	if err := (&model.DNSQueryRollup{
+		WindowStart:     now.Add(-90 * time.Minute),
+		WindowMinutes:   20,
+		WorkerID:        worker.WorkerID,
+		QName:           "old.example.com",
+		QType:           "A",
+		RCode:           "SERVFAIL",
+		QueryCount:      99,
+		TotalDurationMs: 990,
+		MaxDurationMs:   99,
+		TargetSummary:   `{"1.1.1.1":99}`,
+	}).Insert(); err != nil {
+		t.Fatalf("insert old rollup: %v", err)
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.TotalQueries != 12 || summary.SuccessfulQueries != 12 || summary.ErrorQueries != 0 {
+		t.Fatalf("expected only overlapping rollup to be counted, got %+v", summary)
+	}
+	assertCounter(t, summary.TopTargets, "8.8.8.8", "8.8.8.8", 12)
+	if summary.LastRollupAt == nil || !summary.LastRollupAt.Equal(overlapEnd) {
+		t.Fatalf("expected last rollup at %s, got %+v", overlapEnd, summary.LastRollupAt)
+	}
+}
+
 func TestAuthoritativeDNSZoneDelegationCheckMatchedWithGlueHint(t *testing.T) {
 	setupServiceTestDB(t)
 	restoreDNSLookupNS(t, func(name string) ([]*net.NS, error) {

@@ -23,28 +23,29 @@ import (
 )
 
 const (
-	dnsWorkerStatusOnline           = "online"
-	dnsWorkerStatusOffline          = "offline"
-	dnsDelegationMatched            = "matched"
-	dnsDelegationPartial            = "partial"
-	dnsDelegationMismatch           = "mismatch"
-	dnsDelegationFailed             = "failed"
-	dnsDelegationNotConfig          = "not_configured"
-	dnsSnapshotConsistent           = "consistent"
-	dnsSnapshotDivergent            = "divergent"
-	dnsSnapshotStale                = "stale"
-	dnsSnapshotNoOnline             = "no_online_workers"
-	dnsSnapshotUnknown              = "unknown"
-	dnsWorkerProbeHealthy           = "healthy"
-	dnsWorkerProbePartial           = "partial"
-	dnsWorkerProbeFailed            = "failed"
-	dnsWorkerProbeStale             = "stale"
-	dnsWorkerProbeUnknown           = "unknown"
-	defaultDNSZoneTTL               = 300
-	defaultDNSSnapshotMaxAge        = 5 * time.Minute
-	defaultDNSWorkerProbeTimeout    = 3 * time.Second
-	defaultDNSWorkerProbeMaxAge     = 24 * time.Hour
-	defaultDNSWorkerNodeProbeMaxAge = 5 * time.Minute
+	dnsWorkerStatusOnline            = "online"
+	dnsWorkerStatusOffline           = "offline"
+	dnsDelegationMatched             = "matched"
+	dnsDelegationPartial             = "partial"
+	dnsDelegationMismatch            = "mismatch"
+	dnsDelegationFailed              = "failed"
+	dnsDelegationNotConfig           = "not_configured"
+	dnsSnapshotConsistent            = "consistent"
+	dnsSnapshotDivergent             = "divergent"
+	dnsSnapshotStale                 = "stale"
+	dnsSnapshotNoOnline              = "no_online_workers"
+	dnsSnapshotUnknown               = "unknown"
+	dnsWorkerProbeHealthy            = "healthy"
+	dnsWorkerProbePartial            = "partial"
+	dnsWorkerProbeFailed             = "failed"
+	dnsWorkerProbeStale              = "stale"
+	dnsWorkerProbeUnknown            = "unknown"
+	defaultDNSZoneTTL                = 300
+	defaultDNSSnapshotMaxAge         = 5 * time.Minute
+	defaultDNSWorkerProbeTimeout     = 3 * time.Second
+	defaultDNSWorkerProbeMaxAge      = 24 * time.Hour
+	defaultDNSWorkerNodeProbeMaxAge  = 5 * time.Minute
+	defaultDNSMaxRollupWindowMinutes = 1440
 )
 
 var dnsLookupNS = net.LookupNS
@@ -889,7 +890,8 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	windowEnd := time.Now().UTC()
 	windowStart := windowEnd.Add(-time.Duration(hours) * time.Hour)
 	var rollups []model.DNSQueryRollup
-	query := model.DB.Where("window_start >= ? AND window_start <= ?", windowStart, windowEnd)
+	queryStart := windowStart.Add(-time.Duration(defaultDNSMaxRollupWindowMinutes) * time.Minute)
+	query := model.DB.Where("window_start >= ? AND window_start <= ?", queryStart, windowEnd)
 	if input.ZoneID > 0 {
 		query = query.Where("zone_id = ?", input.ZoneID)
 	}
@@ -917,6 +919,11 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 
 	for _, rollup := range rollups {
 		if rollup.QueryCount <= 0 {
+			continue
+		}
+		rollupStart := rollup.WindowStart.UTC()
+		rollupEnd := rollupStart.Add(time.Duration(normalizeDNSRollupWindow(rollup.WindowMinutes)) * time.Minute)
+		if !rollupEnd.After(windowStart) || rollupStart.After(windowEnd) {
 			continue
 		}
 		count := rollup.QueryCount
@@ -958,7 +965,6 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 			}
 			targetCounts[target] += targetCount
 		}
-		rollupEnd := rollup.WindowStart.Add(time.Duration(normalizeDNSRollupWindow(rollup.WindowMinutes)) * time.Minute)
 		if summary.LastRollupAt == nil || rollupEnd.After(*summary.LastRollupAt) {
 			lastRollupAt := rollupEnd
 			summary.LastRollupAt = &lastRollupAt
@@ -4200,8 +4206,8 @@ func normalizeDNSRollupWindow(value int) int {
 	if value <= 0 {
 		return 1
 	}
-	if value > 1440 {
-		return 1440
+	if value > defaultDNSMaxRollupWindowMinutes {
+		return defaultDNSMaxRollupWindowMinutes
 	}
 	return value
 }
