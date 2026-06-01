@@ -108,6 +108,9 @@ func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string,
 	}
 	desiredTargets := selectWeightedGSLBTargets(candidates, policy)
 	if len(desiredTargets) == 0 {
+		if options.RequireHealthyDNSProbe && gslbHasCandidatesWithoutDNSProbe(recordType, policy, source) {
+			return selection, fmt.Errorf("Agent 探测未达到调度门槛，当前来源没有可用于 %s 记录的边缘节点", recordType)
+		}
 		return selection, fmt.Errorf("no online public node IP is available for %s records in GSLB pools", recordType)
 	}
 
@@ -181,6 +184,11 @@ func gslbScopeKeyForPolicy(policy ProxyRouteGSLBPolicy, source GSLBSourceContext
 
 func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext) ([]gslbDNSTargetCandidate, error) {
 	return buildGSLBDNSTargetCandidatesWithOptions(recordType, policy, source, gslbDNSSchedulingOptions{})
+}
+
+func gslbHasCandidatesWithoutDNSProbe(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext) bool {
+	candidates, err := buildGSLBDNSTargetCandidatesWithOptions(recordType, policy, source, gslbDNSSchedulingOptions{})
+	return err == nil && len(candidates) > 0
 }
 
 func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext, options gslbDNSSchedulingOptions) ([]gslbDNSTargetCandidate, error) {

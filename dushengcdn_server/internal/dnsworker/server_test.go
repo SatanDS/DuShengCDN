@@ -207,6 +207,41 @@ func TestResolveDynamicRouteProbeSchedulingDisabledKeepsExistingBehavior(t *test
 	}
 }
 
+func TestResolveDynamicRouteProbeSchedulingExplainsFilteredCandidates(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.GSLBProbeSchedulingEnabled = true
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           22,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	unhealthyProbe := testNode("unhealthy-probe", "hk", "1.1.1.1", 100, 1)
+	unhealthyProbe.DNSProbeHealthy = false
+	snapshot.Nodes = []SnapshotNode{unhealthyProbe}
+	scheduler := NewScheduler()
+
+	_, _, _, err := scheduler.Select(snapshot, &snapshot.Routes[0], "A", SourceContext{}, true)
+	if err == nil || !strings.Contains(err.Error(), "Agent DNS Worker probe threshold") {
+		t.Fatalf("expected probe threshold error, got %v", err)
+	}
+}
+
 func TestResolveGSLBMatchesECSCountryPools(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.Routes = []SnapshotRoute{

@@ -46,6 +46,8 @@ type sourceSpread struct {
 	Bucket int
 }
 
+var ErrDNSProbeThresholdNotSatisfied = errors.New("Agent DNS Worker probe threshold is not satisfied")
+
 func NewScheduler() *Scheduler {
 	return &Scheduler{
 		states: map[string]debounceState{},
@@ -184,6 +186,9 @@ func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType 
 	}
 	candidates := buildCandidates(snapshot, recordType, policy, source)
 	if len(candidates) == 0 {
+		if snapshot != nil && snapshot.GSLBProbeSchedulingEnabled && hasCandidatesWithoutDNSProbe(snapshot, recordType, policy, source) {
+			return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("%w for %s records", ErrDNSProbeThresholdNotSatisfied, recordType)
+		}
 		return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("no online public node IP is available for %s records", recordType)
 	}
 	desired := selectWeightedTargets(candidates, policy, spread)
@@ -311,6 +316,15 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 	}
 	sortCandidates(candidates, policy.Strategy)
 	return candidates
+}
+
+func hasCandidatesWithoutDNSProbe(snapshot *Snapshot, recordType string, policy GSLBPolicy, source SourceContext) bool {
+	if snapshot == nil {
+		return false
+	}
+	copySnapshot := *snapshot
+	copySnapshot.GSLBProbeSchedulingEnabled = false
+	return len(buildCandidates(&copySnapshot, recordType, policy, source)) > 0
 }
 
 func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[string]GSLBPoolPolicy {

@@ -2341,7 +2341,7 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected DE simulation to fail without healthy Agent probe when probe scheduling is enabled, got %+v", probeFiltered)
 	}
-	if !strings.Contains(err.Error(), "no online public node IP") {
+	if !strings.Contains(err.Error(), "Agent 探测未达到调度门槛") {
 		t.Fatalf("expected no target error when probe scheduling filters DE node, got %v", err)
 	}
 	if diagnostic := findSimulationNode(hk.Nodes, "node-eu"); diagnostic != nil && containsString(diagnostic.Reasons, "Agent 探测未达到调度门槛") {

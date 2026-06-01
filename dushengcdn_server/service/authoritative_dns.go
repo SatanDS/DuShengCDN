@@ -1256,6 +1256,9 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 	scheduler.LoadSnapshotStates(workerSnapshot)
 	targets, ttl, sourceScope, err := scheduler.Select(workerSnapshot, workerRoute, recordType, source, fresh)
 	if err != nil {
+		if errors.Is(err, dnsworker.ErrDNSProbeThresholdNotSatisfied) {
+			return nil, fmt.Errorf("Agent 探测未达到调度门槛，当前来源没有可用于 %s 记录的边缘节点", recordType)
+		}
 		return nil, err
 	}
 
