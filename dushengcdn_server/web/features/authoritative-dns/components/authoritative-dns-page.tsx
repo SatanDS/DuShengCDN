@@ -215,9 +215,12 @@ function getDefaultSimulationQName(route?: ProxyRouteItem | null) {
   if (!route) {
     return '';
   }
-  return (
-    getRouteDomains(route)[0] ?? route.primary_domain ?? route.domain ?? ''
-  );
+  const domain =
+    getRouteDomains(route)[0] ?? route.primary_domain ?? route.domain ?? '';
+  if (domain.startsWith('*.')) {
+    return `www.${domain.slice(2)}`;
+  }
+  return domain;
 }
 
 function getRouteRecordType(route?: ProxyRouteItem | null): 'A' | 'AAAA' {

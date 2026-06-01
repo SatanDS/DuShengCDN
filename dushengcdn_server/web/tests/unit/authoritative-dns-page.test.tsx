@@ -1005,6 +1005,24 @@ describe('Authoritative DNS page', () => {
                     created_at: '2026-05-31T08:00:00Z',
                     updated_at: '2026-05-31T08:00:00Z',
                   },
+                  {
+                    id: 93,
+                    site_name: 'wildcard-authoritative',
+                    domain: '*.wild.example.com',
+                    domains: ['*.wild.example.com'],
+                    primary_domain: '*.wild.example.com',
+                    domain_count: 1,
+                    enabled: true,
+                    node_pool: 'default',
+                    dns_auto_sync: false,
+                    dns_record_type: 'A',
+                    dns_provider_mode: 'authoritative',
+                    dns_zone_id_ref: 1,
+                    gslb_enabled: false,
+                    gslb_policy: null,
+                    created_at: '2026-05-31T08:00:00Z',
+                    updated_at: '2026-05-31T08:00:00Z',
+                  },
                 ],
               }),
             ),
@@ -1056,6 +1074,12 @@ describe('Authoritative DNS page', () => {
       screen.getByText('可选；填写后会优先参与来源 CIDR 匹配预演。'),
     ).toBeInTheDocument();
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText('网站配置'), '93');
+    expect(
+      screen.getByDisplayValue('www.wild.example.com'),
+    ).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('网站配置'), '92');
+    expect(screen.getByDisplayValue('api.example.com')).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText('HK'), 'HK');
     await user.click(screen.getByRole('button', { name: '模拟调度' }));
     await waitFor(() => {
