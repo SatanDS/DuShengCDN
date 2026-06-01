@@ -73,6 +73,15 @@ If you had manually set a different PostgreSQL password, replace `replace-with-s
 
 ## UI Does Not Open or Is Blank
 
+For source Compose deployments or upgrades, run the read-only diagnostic helper from the repository root first:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-server.sh
+```
+
+The helper reads `dushengcdn_server/.env`, shows Compose service state, checks `SERVER_URL/api/status`, lists listeners for the host panel port and `3000`, prints recent `dushengcdn` / `postgres` logs, and highlights common database authentication, port binding, and reverse-proxy upstream-port issues. It does not restart services or edit configuration.
+
 1. Confirm that the Server responds. Source Compose defaults to the host port from `.env` (`DUSHENGCDN_HTTP_PORT=3010`), while the container listens on `3000`:
 
 ```bash

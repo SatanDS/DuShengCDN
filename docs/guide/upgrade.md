@@ -46,6 +46,15 @@ docker compose ps
 docker compose logs -n 100 dushengcdn
 ```
 
+如果升级命令执行完成但面板打不开，先运行只读诊断脚本收集端口、健康接口、Compose 状态和最近日志：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-server.sh
+```
+
+源码 Compose 默认宿主机面板端口来自 `.env` 的 `DUSHENGCDN_HTTP_PORT=3010`，容器内才是 `3000`。如果诊断显示 `http://127.0.0.1:3010/api/status` 正常，但浏览器域名打不开，通常是 Nginx、Nginx Proxy Manager、宝塔或其它反向代理仍指向旧的 `127.0.0.1:3000`，应把上游改到 `.env` 中的宿主机端口。
+
 如果是源码部署，重新启动 Server 后确认日志中没有数据库迁移或启动错误。
 
 ## Agent 升级

@@ -12,6 +12,7 @@
 | 文档构建进入 CI 或本地一键验证 | 已新增 `.github/workflows/docs-ci.yml`，在 `docs/**` 或该 workflow 变化时安装依赖并执行 `pnpm build`；本地开发文档也补充了同样命令 | GitHub Actions `Docs CI` 通过；本地 `cd docs && pnpm install --frozen-lockfile && pnpm build` 通过 |
 | 升级后旧 Agent 兼容窗口 | Server 已兼容旧全局 `AGENT_TOKEN` 的 HTTP 心跳、配置拉取和应用日志上报；旧 Token 只允许绑定已有 `node_id` 且不覆盖专属 Token 节点 | `go test ./...` 覆盖旧 Agent 兼容用例；排障文档说明旧 Token 迁移路径 |
 | 面板与同机 DNS Worker 一体化部署 | 已新增 `scripts/install-server.sh`；全新部署首次创建 `.env` 时自动生成数据库密码、`SESSION_SECRET` 和 `DSN`，升级旧源码部署且已有 `postgres-data` 时保留旧默认数据库密码/DSN 以避免认证失败；启动面板后默认自动探测公网 IP、创建 `DNS服务响应端` Worker 并安装 DNS Worker；安装前会检查本机已有 Worker、同名 Docker 容器和 systemd unit 文件，避免覆盖；Compose 启动后会确认 `dushengcdn` 服务处于 running，并访问 `SERVER_URL/api/status` 做 HTTP 健康检查，不运行或 HTTP 检查失败时打印最近日志并提示数据库密码/DSN、连接、端口映射或反向代理上游端口方向 | `bash -n scripts/install-server.sh`、`scripts/install-server.sh --help`、全新 `.env` 生成回归、已有 `postgres-data` 时保留数据库凭据回归、服务未 running 时日志诊断回归、HTTP 健康检查失败诊断回归、go/前端/文档构建通过；文档已说明 `--skip-dns-worker` 与 `--force-dns-worker-reinstall` |
+| 升级后面板访问诊断脚本 | 已新增只读 `scripts/diagnose-server.sh`，读取 `.env` 推导 `DUSHENGCDN_HTTP_PORT`，输出 Compose 状态、`SERVER_URL/api/status`、默认宿主机端口与 `3000` 健康检查、端口监听、最近 `dushengcdn` / `postgres` 日志和反向代理上游端口提示，专门用于升级后“网页打不开”的快速收集现场 | `bash -n scripts/diagnose-server.sh`、`scripts/diagnose-server.sh --help` 通过；在无本地 Docker/面板环境下运行能完成只读诊断并以失败状态提示不可达；README、升级、部署、排障、CLI 和配置参考已补充入口 |
 
 ## 中优先级
 

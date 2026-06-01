@@ -437,6 +437,15 @@ docker compose up -d
 
 后续端口、数据库密码、`SESSION_SECRET`、DSN、旧版 `AGENT_TOKEN` 等本地部署参数都改 `.env`，不要直接改仓库里的 `dushengcdn_server/docker-compose.yaml`。这样后续 `git pull --ff-only origin main` 不会因为本地 Compose 模板改动被阻塞。
 
+如果升级后面板打不开，先运行只读诊断脚本：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-server.sh
+```
+
+脚本会输出 `.env` 中的面板宿主机端口、Compose 状态、`/api/status` 检查、端口监听和最近日志。源码 Compose 默认宿主机端口是 `3010`，容器内才是 `3000`；如果 `127.0.0.1:3010/api/status` 正常但域名打不开，通常需要把 Nginx、Nginx Proxy Manager、宝塔或其它反向代理上游改到 `127.0.0.1:3010`。
+
 节点使用 Docker Compose 部署 Agent 时，更新节点端：
 
 ```bash

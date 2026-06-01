@@ -52,6 +52,15 @@ docker compose ps
 docker compose logs -n 100 dushengcdn
 ```
 
+If the upgrade command finishes but the management UI does not open, run the read-only diagnostic helper first:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-server.sh
+```
+
+For source Compose deployments, the default host panel port comes from `.env` as `DUSHENGCDN_HTTP_PORT=3010`; the container listens on `3000`. If the diagnostic output shows `http://127.0.0.1:3010/api/status` is healthy but the browser domain still fails, Nginx, Nginx Proxy Manager, Baota, or another reverse proxy is usually still pointing at the old `127.0.0.1:3000` upstream. Point it to the host port from `.env` instead.
+
 If it is a source deployment, confirm that there are no database migration or startup errors in the logs after restarting the Server.
 
 ## DNS Worker Upgrade

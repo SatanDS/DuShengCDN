@@ -386,6 +386,8 @@ DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -
 docker compose ps
 ```
 
+If the panel still does not open after an upgrade, run `bash scripts/diagnose-server.sh` from the repository root to collect Compose state, `/api/status`, port listeners, and recent logs. Source Compose uses the host port from `.env` (`DUSHENGCDN_HTTP_PORT`, default `3010`); the container listens on `3000`, so reverse proxies should point to the host port.
+
 For source Compose builds, `DUSHENGCDN_VERSION` is passed into the Dockerfile and embedded into the Server or Agent binary. The top-bar version reads the running Server version from `/api/status`, and the node list shows the version reported by Agent.
 
 Agent:

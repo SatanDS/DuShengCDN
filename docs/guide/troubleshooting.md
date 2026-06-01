@@ -75,6 +75,15 @@ docker compose --env-file .env logs --tail=100 dushengcdn
 
 ## 管理端打不开或空白
 
+源码 Compose 部署或升级后，优先在仓库根目录运行只读诊断脚本：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-server.sh
+```
+
+脚本会读取 `dushengcdn_server/.env`，展示 Compose 服务状态、`SERVER_URL/api/status` 健康检查、宿主机面板端口和 `3000` 端口监听、最近 `dushengcdn` / `postgres` 日志，并提示常见的数据库认证、端口占用和反向代理上游端口问题。脚本不会重启服务或修改配置。
+
 1. 确认 Server 正在监听。源码 Compose 默认宿主机端口是 `.env` 中的 `DUSHENGCDN_HTTP_PORT=3010`，不是容器内监听的 `3000`：
 
 ```bash

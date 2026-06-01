@@ -48,6 +48,27 @@ bash scripts/install-server.sh --public-ip 203.0.113.10
 
 The script checks for an existing DNS Worker before automatic creation and installation. Use `--skip-dns-worker` for panel-only installs, and `--force-dns-worker-reinstall` only when you intentionally want to replace local Worker configuration.
 
+Diagnose source Compose panel access issues:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-server.sh
+```
+
+Common options:
+
+| Option | Description |
+| --- | --- |
+| `--server-dir` | Server compose/source directory, default repository `dushengcdn_server` |
+| `--compose-file` | Docker Compose file, default `SERVER_DIR/docker-compose.yaml` |
+| `--env-file` | Compose env file, default `SERVER_DIR/.env` |
+| `--server-url` | Server URL to check, default `http://127.0.0.1:DUSHENGCDN_HTTP_PORT` |
+| `--log-tail` | Number of Compose log lines to print per service, default `120` |
+| `--curl-timeout` | Health-check timeout in seconds, default `5` |
+| `--skip-logs` | Do not print Compose logs |
+
+The script is read-only. It collects `.env` port settings, Compose state, `/api/status`, port listeners, and recent logs without restarting services or editing configuration.
+
 Reusable Compose templates:
 
 | Template | Description |

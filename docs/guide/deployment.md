@@ -449,6 +449,7 @@ curl -I "http://127.0.0.1:${panel_port:-3010}/api/status"
 ```
 
 如果使用 Nginx、Nginx Proxy Manager、宝塔或其它反向代理对外提供 HTTPS，升级后也要确认反代上游端口指向 `.env` 中的宿主机端口；源码 Compose 默认是 `3010`，不是容器内的 `3000`。
+如果面板仍打不开，可以在仓库根目录运行 `bash scripts/diagnose-server.sh`，一次性查看 Compose 状态、`/api/status`、端口监听和最近日志。
 
 如果服务器上曾经直接改过仓库里的 `docker-compose.yaml`，`git pull` 可能提示本地改动会被覆盖。推荐先把本地端口、密码、DSN、`SESSION_SECRET` 和 Token 迁移到 `dushengcdn_server/.env`，再执行：
 
