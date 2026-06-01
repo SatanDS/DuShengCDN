@@ -408,6 +408,118 @@ func TestResolveDynamicRouteProbeSchedulingPrefersLowerRTT(t *testing.T) {
 	}
 }
 
+func TestResolveDynamicRouteProbeSchedulingScoresProbeQuality(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.GSLBProbeSchedulingEnabled = true
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           24,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	now := time.Now().UTC()
+	weakProbe := testNode("weak-probe", "hk", "1.1.1.1", 100, 1)
+	weakProbe.LastSeenAt = now
+	weakProbe.DNSProbeHealthy = true
+	weakProbe.DNSProbeCheckedCount = 4
+	weakProbe.DNSProbeHealthyCount = 1
+	weakProbe.DNSProbeStaleCount = 2
+	weakProbe.DNSProbeAverageRTTMs = 900
+	strongProbe := testNode("strong-probe", "hk", "8.8.4.4", 100, 1)
+	strongProbe.LastSeenAt = now.Add(-10 * time.Second)
+	strongProbe.DNSProbeHealthy = true
+	strongProbe.DNSProbeCheckedCount = 4
+	strongProbe.DNSProbeHealthyCount = 4
+	strongProbe.DNSProbeAverageRTTMs = 20
+	snapshot.Nodes = []SnapshotNode{weakProbe, strongProbe}
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected higher Agent probe quality target, got %s", got)
+	}
+}
+
+func TestResolveDynamicRouteProbeSchedulingLoadAwareCombinesLoadAndProbeQuality(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.GSLBProbeSchedulingEnabled = true
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           25,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "load_aware",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "load_aware",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	lowLoadPoorProbe := testNode("low-load-poor-probe", "hk", "1.1.1.1", 100, 0)
+	lowLoadPoorProbe.DNSProbeHealthy = true
+	lowLoadPoorProbe.DNSProbeCheckedCount = 4
+	lowLoadPoorProbe.DNSProbeHealthyCount = 1
+	lowLoadPoorProbe.DNSProbeAverageRTTMs = 900
+	higherLoadGoodProbe := testNode("higher-load-good-probe", "hk", "8.8.4.4", 100, 20)
+	higherLoadGoodProbe.DNSProbeHealthy = true
+	higherLoadGoodProbe.DNSProbeCheckedCount = 4
+	higherLoadGoodProbe.DNSProbeHealthyCount = 4
+	higherLoadGoodProbe.DNSProbeAverageRTTMs = 10
+	snapshot.Nodes = []SnapshotNode{lowLoadPoorProbe, higherLoadGoodProbe}
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected load-aware score to include Agent probe quality, got %s", got)
+	}
+}
+
+func TestSpreadCandidateWeightUsesProbeQualityScoreForWeighted(t *testing.T) {
+	candidate := targetCandidate{
+		NodeWeight: 100,
+		Score:      25,
+	}
+	if got := spreadCandidateWeight(candidate, "weighted"); got != 25 {
+		t.Fatalf("expected weighted source spread to use score with probe quality, got %v", got)
+	}
+	if got := spreadCandidateWeight(candidate, "load_aware"); got != 25 {
+		t.Fatalf("expected load-aware source spread to use score with probe quality, got %v", got)
+	}
+	if got := spreadCandidateWeight(candidate, "healthy"); got != 100 {
+		t.Fatalf("expected non-weighted source spread fallback to node weight, got %v", got)
+	}
+}
+
 func TestResolveDynamicRouteProbeSchedulingExplainsFilteredCandidates(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.GSLBProbeSchedulingEnabled = true

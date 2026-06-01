@@ -97,7 +97,7 @@ go run . --port 3000 --log-dir ./logs
 | `AuthoritativeDNSDefaultTTL` | 权威 DNS 模式下 `0/1` TTL 映射值 | `30` |
 | `AuthoritativeDNSSnapshotMaxAge` | DNS Worker 最后有效快照最大使用时间 | `300` |
 | `GSLBMetricFreshnessSeconds` | Server 生成 GSLB 调度快照和模拟诊断时接受的节点负载指标最大年龄；超过该窗口的 `node_metric_snapshots` 不参与 `load_aware` 评分 | `120` |
-| `GSLBProbeSchedulingEnabled` | 是否让 Agent 对 DNS Worker 的多点探测结果参与自建权威 DNS GSLB 选点；开启后无新鲜成功探测的边缘节点不会进入权威 DNS 快照和 Worker 实时调度候选，健康候选在主规则并列时会优先选择平均 RTT 更低的节点 | `false` |
+| `GSLBProbeSchedulingEnabled` | 是否让 Agent 对 DNS Worker 的多点探测结果参与自建权威 DNS GSLB 选点；开启后无新鲜成功探测的边缘节点不会进入权威 DNS 快照和 Worker 实时调度候选，进入候选后会按健康比例、过期比例和平均 RTT 对权重或负载感知基础评分做有界修正 | `false` |
 
 说明：
 
@@ -109,7 +109,7 @@ go run . --port 3000 --log-dir ./logs
 * 微信登录旧 Option 保留为兼容字段，但管理端不再提供微信登录配置入口。
 * Turnstile 旧 Option 与后端校验能力保留，已有配置仍会生效。
 * `GSLBMetricFreshnessSeconds` 只影响负载感知调度输入的新鲜度；没有新鲜指标的节点不会被直接剔除，但在 `load_aware` 策略中仅作为有指标候选不足时的兜底目标。
-* `GSLBProbeSchedulingEnabled` 默认关闭以保持现有调度行为；开启后只影响自建权威 DNS 查询面和 GSLB 模拟，不影响 Cloudflare DNS 同步模式；Agent 多点探测平均 RTT 只作为同等健康候选之间的辅助排序依据。
+* `GSLBProbeSchedulingEnabled` 默认关闭以保持现有调度行为；开启后只影响自建权威 DNS 查询面和 GSLB 模拟，不影响 Cloudflare DNS 同步模式；探测质量系数被限制在 `0.25` 到 `1.0` 之间，避免 RTT 或少量失败样本完全压倒节点池权重、节点权重和负载感知评分。
 
 ## OpenResty 参数
 

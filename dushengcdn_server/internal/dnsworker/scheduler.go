@@ -38,6 +38,9 @@ type targetCandidate struct {
 	MemoryUsagePercent   float64
 	HasMetric            bool
 	DNSProbeHealthy      bool
+	DNSProbeCheckedCount int
+	DNSProbeHealthyCount int
+	DNSProbeStaleCount   int
 	DNSProbeAverageRTTMs float64
 	Score                float64
 }
@@ -324,6 +327,9 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 			}
 			if snapshot.GSLBProbeSchedulingEnabled {
 				candidate.DNSProbeHealthy = node.DNSProbeHealthy
+				candidate.DNSProbeCheckedCount = node.DNSProbeCheckedCount
+				candidate.DNSProbeHealthyCount = node.DNSProbeHealthyCount
+				candidate.DNSProbeStaleCount = node.DNSProbeStaleCount
 				candidate.DNSProbeAverageRTTMs = node.DNSProbeAverageRTTMs
 			}
 			candidate.Score = scoreCandidate(candidate, policy.Strategy)
@@ -485,20 +491,54 @@ func scoreCandidate(candidate targetCandidate, strategy string) float64 {
 	if base <= 0 {
 		base = 1
 	}
-	if strategy != "load_aware" {
-		return base
+	score := base
+	if strategy == "load_aware" {
+		penalty := 1.0
+		if candidate.OpenrestyConnections > 0 {
+			penalty += float64(candidate.OpenrestyConnections) / 100
+		}
+		if candidate.CPUUsagePercent > 0 {
+			penalty += candidate.CPUUsagePercent / 100
+		}
+		if candidate.MemoryUsagePercent > 0 {
+			penalty += candidate.MemoryUsagePercent / 100
+		}
+		score = base / penalty
 	}
-	penalty := 1.0
-	if candidate.OpenrestyConnections > 0 {
-		penalty += float64(candidate.OpenrestyConnections) / 100
+	return score * dnsProbeQualityFactor(
+		candidate.DNSProbeHealthy,
+		candidate.DNSProbeCheckedCount,
+		candidate.DNSProbeHealthyCount,
+		candidate.DNSProbeStaleCount,
+		candidate.DNSProbeAverageRTTMs,
+	)
+}
+
+func dnsProbeQualityFactor(healthy bool, checkedCount int, healthyCount int, staleCount int, averageRTTMs float64) float64 {
+	if !healthy {
+		return 1
 	}
-	if candidate.CPUUsagePercent > 0 {
-		penalty += candidate.CPUUsagePercent / 100
+	factor := 1.0
+	if checkedCount > 0 {
+		healthyRatio := clampFloat(float64(healthyCount)/float64(checkedCount), 0, 1)
+		staleRatio := clampFloat(float64(staleCount)/float64(checkedCount), 0, 1)
+		factor *= 0.5 + 0.5*healthyRatio
+		factor *= 1 - math.Min(staleRatio, 0.5)*0.2
 	}
-	if candidate.MemoryUsagePercent > 0 {
-		penalty += candidate.MemoryUsagePercent / 100
+	if averageRTTMs > 0 {
+		factor *= clampFloat(200/(200+averageRTTMs), 0.25, 1)
 	}
-	return base / penalty
+	return clampFloat(factor, 0.25, 1)
+}
+
+func clampFloat(value float64, minValue float64, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func sortCandidates(candidates []targetCandidate, strategy string) {
@@ -729,10 +769,12 @@ func selectCandidateBySpread(candidates []targetCandidate, strategy string, key 
 }
 
 func spreadCandidateWeight(candidate targetCandidate, strategy string) float64 {
-	if normalizeStrategy(strategy) == "load_aware" {
+	switch normalizeStrategy(strategy) {
+	case "weighted", "load_aware":
 		return candidate.Score
+	default:
+		return float64(normalizeWeight(candidate.NodeWeight))
 	}
-	return float64(normalizeWeight(candidate.NodeWeight))
 }
 
 func selectRankedCandidates(candidates []targetCandidate, strategy string) []targetCandidate {

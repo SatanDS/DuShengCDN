@@ -1528,7 +1528,7 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 	probeSummary := summarizeDNSWorkerNodeProbeStats(probeStats)
 	score := float64(0)
 	if poolMatched {
-		score = scoreGSLBCandidate(gslbDNSTargetCandidate{
+		candidate := gslbDNSTargetCandidate{
 			NodeID:               node.NodeID,
 			PoolName:             poolName,
 			NodeWeight:           normalizeNodeWeight(node.Weight),
@@ -1538,7 +1538,15 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 			CPUUsagePercent:      cpuUsage,
 			MemoryUsagePercent:   memoryUsage,
 			HasMetric:            hasMetric,
-		}, policy.Strategy)
+		}
+		if requireHealthyDNSProbe && probeStats != nil {
+			candidate.DNSProbeHealthy = dnsWorkerNodeProbeStatsSchedulable(probeStats)
+			candidate.DNSProbeCheckedCount = probeStats.totalCount
+			candidate.DNSProbeHealthyCount = probeStats.healthyCount
+			candidate.DNSProbeStaleCount = probeStats.staleCount
+			candidate.DNSProbeAverageRTTMs = averageFloat(probeStats.totalAverageRTTMs, probeStats.averageSamples)
+		}
+		score = scoreGSLBCandidate(candidate, policy.Strategy)
 	}
 	lastSeenAt := node.LastSeenAt
 	return DNSGSLBSimulationNodeView{

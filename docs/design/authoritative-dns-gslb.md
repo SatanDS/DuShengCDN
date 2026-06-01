@@ -156,7 +156,7 @@ route_id + record_type + source_scope
 * 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、GeoIP 国家库加载状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 查询延迟、可用率、错误率、Agent 多点探测通过率/RTT、返回码、返回目标、来源作用域、动态站点分布和当前 GSLB 调度状态。
 * DNS Worker 列表支持按需探测单个 Worker 的公网 UDP/TCP 53，返回 RTT、RCODE、应答数量和错误信息，并在刷新后继续展示最近一次结果，用于验证 Server 到该 NS 的解析可达性。
 * Worker 可用性面板会把最近一次公网探测归类为 `healthy`、`partial`、`failed`、`stale` 或 `unknown`，并展示各 Agent 节点对 DNS Worker 的 UDP/TCP `53` 探测结果、平均 RTT、最大 RTT、过期数量和失败原因；Agent 多点探测超过新鲜度窗口后仍保留明细但不计入健康通过率，避免旧成功结果误导排障；迁移向导、一键切换和网站详情启用保存会要求公网可达的在线 Worker 均已拉取未超过 `AuthoritativeDNSSnapshotMaxAge` 的调度快照，且快照版本一致。
-* 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，并展示匹配节点池、候选节点、被跳过节点、负载指标时间，以及各边缘节点到 DNS Worker 的 Agent 多点探测摘要；当本次选点没有可返回目标时，模拟接口返回 `targets: []` 并继续保留匹配节点池、节点诊断和无目标原因，供管理端解释普通无目标与探测门槛无目标场景；模拟不会改变真实调度状态。Agent 多点探测默认只用于诊断展示；当运行时 Option `GSLBProbeSchedulingEnabled` 开启时，Server 生成权威 DNS 快照和 DNS Worker 实时 GSLB 调度会排除没有新鲜成功探测的边缘节点，并在权重、负载评分等主规则相同的健康候选之间优先选择 Agent 多点探测平均 RTT 更低的节点。
+* 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，并展示匹配节点池、候选节点、被跳过节点、负载指标时间，以及各边缘节点到 DNS Worker 的 Agent 多点探测摘要；当本次选点没有可返回目标时，模拟接口返回 `targets: []` 并继续保留匹配节点池、节点诊断和无目标原因，供管理端解释普通无目标与探测门槛无目标场景；模拟不会改变真实调度状态。Agent 多点探测默认只用于诊断展示；当运行时 Option `GSLBProbeSchedulingEnabled` 开启时，Server 生成权威 DNS 快照和 DNS Worker 实时 GSLB 调度会排除没有新鲜成功探测的边缘节点，并把 Agent 多点探测健康比例、过期比例和平均 RTT 转换为有上下限的探测质量系数，乘到权重或负载感知基础评分中；主评分仍并列时，平均 RTT 更低的节点继续作为辅助排序依据。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
 * 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否公网可达 Worker 均持有未过期且版本一致的调度快照、是否存在同名静态 A/AAAA/CNAME 冲突、当前节点池或 GSLB 策略是否能选出可用边缘 IP、策略里声明的来源国家和来源 CIDR 是否都有可用边缘 IP、是否已启用站点 GSLB，并可对满足条件的站点一键切换到自建权威 DNS；网站详情手动保存启用的权威 DNS 站点时也执行同一套 Worker 就绪与目标预检，未启用草稿不阻断；切换成功后会自动刷新网站 DNS 模式、执行 Zone 委派检查、探测在线 Worker 公网 UDP/TCP 53，并按当前快照执行 global 与来源国家 GSLB 模拟，切换后仍需在注册商确认 NS 委派。
@@ -192,7 +192,7 @@ TTL 规则：
 * DNS Worker 保存最后一次有效快照，并在本地缓存文件中写入 SHA-256 checksum 完整性元数据；启动加载缓存时会先校验 checksum，并从快照中的 GSLB 防抖状态恢复最近可用选择，Server 暂时不可用时继续使用最后一次校验通过的快照服务。
 * 快照超过 `AuthoritativeDNSSnapshotMaxAge` 后，动态 GSLB 记录返回 `SERVFAIL`，静态 SOA/NS 可继续返回。
 * 管理端会按最近心跳检测在线 Worker 的快照版本和快照年龄，并在多 Worker 版本不一致或快照过期时告警。
-* 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；最近探测和最近有效快照都会参与迁移准备状态。在线 Agent 还会接收 Server 下发的少量 Worker 探测目标，主动探测公网 UDP/TCP `53` 可达性并回传 RTT，用于补充多节点视角；过期的 Agent 探测结果不会继续计入健康通过率。默认情况下该结果只进入观测面板；开启 `GSLBProbeSchedulingEnabled` 后，权威 DNS 快照会携带每个节点的探测健康摘要，DNS Worker 查询时只把有新鲜成功探测的节点纳入 GSLB 候选，并在主调度规则并列时把平均 RTT 更低的节点排在前面。
+* 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；最近探测和最近有效快照都会参与迁移准备状态。在线 Agent 还会接收 Server 下发的少量 Worker 探测目标，主动探测公网 UDP/TCP `53` 可达性并回传 RTT，用于补充多节点视角；过期的 Agent 探测结果不会继续计入健康通过率。默认情况下该结果只进入观测面板；开启 `GSLBProbeSchedulingEnabled` 后，权威 DNS 快照会携带每个节点的探测健康摘要，DNS Worker 查询时只把有新鲜成功探测的节点纳入 GSLB 候选，并用有边界的探测质量系数影响权重或负载感知评分，避免低可达率、过期比例高或 RTT 明显偏高的节点与高质量探测节点完全同分。
 * DNS Worker 不直接修改数据库，不在查询路径里写入状态。
 * 快照携带 Server 侧最近一次 GSLB 防抖状态，Worker 启动或拉取新快照后会恢复可用的 `route_id + record_type + source_scope` 选择状态；逐查询产生的新状态先保存在 Worker 内存中，再通过 heartbeat 批量回传 Server。
 * 查询聚合按窗口批量上报，失败时本地缓冲，避免每次查询写库。
@@ -222,7 +222,7 @@ TTL 规则：
 * 使用 `github.com/miekg/dns` 实现 UDP/TCP 53 监听。
 * DNS Worker 从 Server 拉取只读调度快照，写入本地缓存并在内存中构建 Zone、记录和站点索引。
 * 支持 `SOA`、`NS`、静态记录和网站 `A`/`AAAA` 动态 GSLB 回答。
-* 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、来源分流桶、节点权重、OpenResty 健康、排空、调度开关、新鲜负载指标、最大连接数、最大 CPU 使用率和最大内存使用率选点；`load_aware` 会优先选择有新鲜指标的候选，缺失指标的节点仅作为兜底。开启 `GSLBProbeSchedulingEnabled` 后，Agent 多点探测健康状态会成为权威 DNS 候选门槛，平均 RTT 会作为同等候选之间的辅助排序因子。
+* 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、来源分流桶、节点权重、OpenResty 健康、排空、调度开关、新鲜负载指标、最大连接数、最大 CPU 使用率和最大内存使用率选点；`load_aware` 会优先选择有新鲜指标的候选，缺失指标的节点仅作为兜底。开启 `GSLBProbeSchedulingEnabled` 后，Agent 多点探测健康状态会成为权威 DNS 候选门槛；进入候选后，探测质量系数按健康比例、过期比例和平均 RTT 计算，并被限制在 `0.25` 到 `1.0` 之间，再乘到基础评分中，避免探测指标短时波动完全压倒节点池和节点权重。
 * 支持 EDNS Client Subnet 来源识别；节点池策略可按来源 CIDR 优先命中，也可在配置本地 MaxMind Country MMDB 后按国家代码命中节点池，否则回退到 `global` 作用域。
 * 防抖状态按 `route_id + record_type + source_scope` 保存在 Worker 内存中。
 * 支持按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，避免异常递归解析器或放大流量压垮查询面。
@@ -244,7 +244,7 @@ TTL 规则：
 * 已提供基于心跳和真实 DNS 查询聚合的 Worker 查询延迟、错误率和可用性看板。
 * 已提供 Server 侧按需 Worker UDP/TCP 53 探测，验证单个 NS 的解析可达性。
 * 已提供复用在线 Agent 节点的主动多点 DNS Worker UDP/TCP 53 探测，验证不同边缘节点到 Worker NS 的公网 RTT 和解析可达性。
-* 后续可在当前探测调度门槛基础上扩展更细的评分模型，例如按 RTT、丢包率、区域覆盖或独立探测点网络进行加权。
+* 当前探测调度门槛已支持按健康比例、过期比例和平均 RTT 对候选评分做有界修正；后续可继续扩展丢包率、区域覆盖或独立探测点网络等更细粒度输入。
 
 ## 验收标准
 

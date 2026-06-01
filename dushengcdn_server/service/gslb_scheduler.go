@@ -37,6 +37,9 @@ type gslbDNSTargetCandidate struct {
 	MemoryUsagePercent   float64
 	HasMetric            bool
 	DNSProbeHealthy      bool
+	DNSProbeCheckedCount int
+	DNSProbeHealthyCount int
+	DNSProbeStaleCount   int
 	DNSProbeAverageRTTMs float64
 	Score                float64
 }
@@ -250,6 +253,9 @@ func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRout
 			}
 			if options.RequireHealthyDNSProbe && probeStats != nil {
 				candidate.DNSProbeHealthy = dnsWorkerNodeProbeStatsSchedulable(probeStats)
+				candidate.DNSProbeCheckedCount = probeStats.totalCount
+				candidate.DNSProbeHealthyCount = probeStats.healthyCount
+				candidate.DNSProbeStaleCount = probeStats.staleCount
 				candidate.DNSProbeAverageRTTMs = averageFloat(probeStats.totalAverageRTTMs, probeStats.averageSamples)
 			}
 			if hasMetric {
@@ -354,20 +360,57 @@ func scoreGSLBCandidate(candidate gslbDNSTargetCandidate, strategy string) float
 	if base <= 0 {
 		base = 1
 	}
-	if strategy != "load_aware" {
-		return base
+	score := base
+	if strategy == "load_aware" {
+		penalty := 1.0
+		if candidate.OpenrestyConnections > 0 {
+			penalty += float64(candidate.OpenrestyConnections) / 100
+		}
+		if candidate.CPUUsagePercent > 0 {
+			penalty += candidate.CPUUsagePercent / 100
+		}
+		if candidate.MemoryUsagePercent > 0 {
+			penalty += candidate.MemoryUsagePercent / 100
+		}
+		score = base / penalty
 	}
-	penalty := 1.0
-	if candidate.OpenrestyConnections > 0 {
-		penalty += float64(candidate.OpenrestyConnections) / 100
+	return score * dnsProbeQualityFactorForGSLB(
+		candidate.DNSProbeHealthy,
+		candidate.DNSProbeCheckedCount,
+		candidate.DNSProbeHealthyCount,
+		candidate.DNSProbeStaleCount,
+		candidate.DNSProbeAverageRTTMs,
+	)
+}
+
+func dnsProbeQualityFactorForGSLB(healthy bool, checkedCount int, healthyCount int, staleCount int, averageRTTMs float64) float64 {
+	if !healthy {
+		return 1
 	}
-	if candidate.CPUUsagePercent > 0 {
-		penalty += candidate.CPUUsagePercent / 100
+	factor := 1.0
+	if checkedCount > 0 {
+		healthyRatio := clampGSLBFloat(float64(healthyCount)/float64(checkedCount), 0, 1)
+		staleRatio := clampGSLBFloat(float64(staleCount)/float64(checkedCount), 0, 1)
+		factor *= 0.5 + 0.5*healthyRatio
+		if staleRatio > 0.5 {
+			staleRatio = 0.5
+		}
+		factor *= 1 - staleRatio*0.2
 	}
-	if candidate.MemoryUsagePercent > 0 {
-		penalty += candidate.MemoryUsagePercent / 100
+	if averageRTTMs > 0 {
+		factor *= clampGSLBFloat(200/(200+averageRTTMs), 0.25, 1)
 	}
-	return base / penalty
+	return clampGSLBFloat(factor, 0.25, 1)
+}
+
+func clampGSLBFloat(value float64, minValue float64, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func sortGSLBCandidates(candidates []gslbDNSTargetCandidate, strategy string) {

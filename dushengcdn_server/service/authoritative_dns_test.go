@@ -3690,6 +3690,166 @@ func TestSimulateAuthoritativeDNSGSLBProbeSchedulingPrefersLowerRTT(t *testing.T
 	}
 }
 
+func TestSimulateAuthoritativeDNSGSLBProbeSchedulingScoresProbeQuality(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = true
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	workerA, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker ns1: %v", err)
+	}
+	workerB, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns2",
+		PublicAddress: "ns2.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker ns2: %v", err)
+	}
+	now := time.Now()
+	for _, node := range []*model.Node{
+		{
+			NodeID:          "node-weak",
+			Name:            "weak",
+			IP:              "1.1.1.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          100,
+			AgentToken:      "token-weak",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-strong",
+			Name:            "strong",
+			IP:              "8.8.4.4",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.4.4"]`,
+			Weight:          100,
+			AgentToken:      "token-strong",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-10 * time.Second),
+		},
+	} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node %s: %v", node.NodeID, err)
+		}
+	}
+	persistHeartbeatObservability("node-weak", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{
+			{
+				WorkerID:      workerA.WorkerID,
+				PublicAddress: "ns1.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results: []AgentDNSProbeResult{
+					{Network: "UDP", Reachable: true, DurationMs: 850, RCode: "NOERROR", AnswerCount: 1},
+					{Network: "TCP", Reachable: true, DurationMs: 950, RCode: "NOERROR", AnswerCount: 1},
+				},
+			},
+			{
+				WorkerID:      workerB.WorkerID,
+				PublicAddress: "ns2.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results: []AgentDNSProbeResult{
+					{Network: "UDP", Reachable: false, Error: "timeout"},
+					{Network: "TCP", Reachable: false, Error: "timeout"},
+				},
+			},
+		},
+	}, now)
+	persistHeartbeatObservability("node-strong", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{
+			{
+				WorkerID:      workerA.WorkerID,
+				PublicAddress: "ns1.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results: []AgentDNSProbeResult{
+					{Network: "UDP", Reachable: true, DurationMs: 15, RCode: "NOERROR", AnswerCount: 1},
+					{Network: "TCP", Reachable: true, DurationMs: 25, RCode: "NOERROR", AnswerCount: 1},
+				},
+			},
+			{
+				WorkerID:      workerB.WorkerID,
+				PublicAddress: "ns2.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results: []AgentDNSProbeResult{
+					{Network: "UDP", Reachable: true, DurationMs: 20, RCode: "NOERROR", AnswerCount: 1},
+					{Network: "TCP", Reachable: true, DurationMs: 30, RCode: "NOERROR", AnswerCount: 1},
+				},
+			},
+		},
+	}, now)
+
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 30)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 100, Enabled: true},
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	simulation, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB: %v", err)
+	}
+	if len(simulation.Targets) != 1 || simulation.Targets[0] != "8.8.4.4" {
+		t.Fatalf("expected higher Agent probe quality target, got %+v", simulation.Targets)
+	}
+	strong := findSimulationNode(simulation.Nodes, "node-strong")
+	weak := findSimulationNode(simulation.Nodes, "node-weak")
+	if strong == nil || weak == nil || !strong.Selected || weak.Selected || !(strong.Score > weak.Score) {
+		t.Fatalf("expected probe quality score to prefer strong node, strong=%+v weak=%+v", strong, weak)
+	}
+}
+
 func TestSimulateAuthoritativeDNSGSLBNoAvailableTargetReturnsDiagnostics(t *testing.T) {
 	setupServiceTestDB(t)
 

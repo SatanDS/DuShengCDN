@@ -92,7 +92,7 @@ The settings page maintains these hot-updatable options:
 | `AuthoritativeDNSDefaultTTL` | TTL used by authoritative DNS mode when UI value is automatic | `30` |
 | `AuthoritativeDNSSnapshotMaxAge` | Maximum age of the last valid DNS Worker snapshot | `300` |
 | `GSLBMetricFreshnessSeconds` | Maximum node load metric age accepted by GSLB snapshot generation and simulation diagnostics | `120` |
-| `GSLBProbeSchedulingEnabled` | Whether Agent DNS Worker probe results participate in authoritative DNS GSLB candidate filtering and tie-breaking | `false` |
+| `GSLBProbeSchedulingEnabled` | Whether Agent DNS Worker probe results participate in authoritative DNS GSLB selection; enabled mode filters candidates without fresh successful probes, then applies a bounded quality factor from healthy ratio, stale ratio, and average RTT to the base weight/load-aware score | `false` |
 
 OpenResty performance and cache options are also stored in the Option table, including `OpenRestyWorkerProcesses`, `OpenRestyWorkerConnections`, `OpenRestyProxyConnectTimeout`, `OpenRestyProxyReadTimeout`, `OpenRestyCacheEnabled`, `OpenRestyCachePath`, and `OpenRestyCacheMaxSize`.
 
