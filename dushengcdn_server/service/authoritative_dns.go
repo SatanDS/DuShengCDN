@@ -764,6 +764,9 @@ func SwitchProxyRouteToAuthoritativeDNS(id uint, input AuthoritativeDNSMigration
 	if err := validateAuthoritativeProxyRouteStaticRecordConflicts(zone.ID, domains, recordType, route.Enabled); err != nil {
 		return nil, err
 	}
+	if _, err := precheckAuthoritativeRouteDNSTargets(route, recordType); err != nil {
+		return nil, err
+	}
 
 	now := time.Now()
 	zoneID := zone.ID
@@ -1746,6 +1749,13 @@ type authoritativeDNSMigrationWorkerStatsView struct {
 	publicReachable int
 }
 
+type authoritativeDNSTargetPrecheckView struct {
+	targets     []string
+	targetCount int
+	recordType  string
+	strategy    string
+}
+
 func authoritativeDNSMigrationWorkerStats() (authoritativeDNSMigrationWorkerStatsView, error) {
 	workers, err := model.ListDNSWorkers()
 	if err != nil {
@@ -1805,6 +1815,12 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 	} else if err := validateAuthoritativeProxyRouteStaticRecordConflicts(zone.ID, domains, recordType, route.Enabled); err != nil {
 		candidate.Blockers = append(candidate.Blockers, err.Error())
 	}
+	targetPrecheck, targetErr := precheckAuthoritativeRouteDNSTargets(route, recordType)
+	if targetErr != nil {
+		candidate.Blockers = append(candidate.Blockers, targetErr.Error())
+	} else if targetPrecheck.targetCount > len(targetPrecheck.targets) {
+		candidate.Warnings = append(candidate.Warnings, fmt.Sprintf("当前只能返回 %d / %d 个 %s 边缘 IP，请检查节点池容量", len(targetPrecheck.targets), targetPrecheck.targetCount, targetPrecheck.recordType))
+	}
 	if workerStats.online == 0 {
 		candidate.Blockers = append(candidate.Blockers, "没有在线 DNS Worker")
 	} else if workerStats.publicReachable == 0 {
@@ -1850,6 +1866,49 @@ func bestAuthoritativeZoneForDomains(zones []*model.DNSZone, domains []string) *
 		}
 	}
 	return best
+}
+
+func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType string) (authoritativeDNSTargetPrecheckView, error) {
+	view := authoritativeDNSTargetPrecheckView{
+		targetCount: 1,
+		recordType:  normalizeDNSRecordType(recordType),
+		strategy:    "healthy",
+	}
+	if route == nil {
+		return view, errors.New("网站配置不存在")
+	}
+	recordType = normalizeDNSRecordType(recordType)
+	view.recordType = recordType
+	if recordType != "A" && recordType != "AAAA" {
+		return view, errors.New("自建权威 DNS 动态记录仅支持 A/AAAA")
+	}
+	view.targetCount = normalizeDNSTargetCount(route.DNSTargetCount)
+	view.strategy = normalizeDNSScheduleMode(route.DNSScheduleMode)
+	if route.GSLBEnabled {
+		policy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
+		if err != nil {
+			return view, err
+		}
+		policy, err = normalizeGSLBPolicy(policy, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, route.DNSTTL)
+		if err != nil {
+			return view, err
+		}
+		view.targetCount = normalizeDNSTargetCount(policy.TargetCount)
+		view.strategy = normalizeDNSScheduleMode(policy.Strategy)
+	}
+	selection, err := selectProxyRouteDNSTargets(route, recordType)
+	if err != nil {
+		return view, fmt.Errorf("当前节点池/GSLB 无法返回 %s 边缘 IP，请检查节点池、公网 IP、节点在线状态、OpenResty 健康和 GSLB 负载阈值：%w", recordType, err)
+	}
+	targets, err := normalizeDNSRecordContents(recordType, selection.Targets)
+	if err != nil {
+		return view, fmt.Errorf("当前节点池/GSLB 返回的 %s 边缘 IP 无效：%w", recordType, err)
+	}
+	if len(targets) == 0 {
+		return view, fmt.Errorf("当前节点池/GSLB 没有可用于 %s 记录的边缘 IP", recordType)
+	}
+	view.targets = targets
+	return view, nil
 }
 
 func buildDNSZoneView(zone *model.DNSZone, includeRecords bool) (*DNSZoneView, error) {
