@@ -1996,7 +1996,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 	}
 	selection, err := selectProxyRouteDNSTargetsWithOptions(route, recordType, authoritativeDNSSchedulingOptions())
 	if err != nil {
-		return view, fmt.Errorf("当前节点池/GSLB 无法返回 %s 边缘 IP，请检查节点池、公网 IP、节点在线状态、OpenResty 健康和 GSLB 负载阈值：%w", recordType, err)
+		return view, fmt.Errorf("当前节点池/GSLB 无法返回 %s 边缘 IP，请检查节点池、公网 IP、节点在线状态、OpenResty 健康、GSLB 负载阈值和 Agent 探测调度门槛：%w", recordType, err)
 	}
 	targets, err := normalizeDNSRecordContents(recordType, selection.Targets)
 	if err != nil {
