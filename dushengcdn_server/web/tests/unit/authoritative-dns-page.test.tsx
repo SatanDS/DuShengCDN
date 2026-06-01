@@ -1116,7 +1116,13 @@ describe('Authoritative DNS page', () => {
     expect(await screen.findByText('查询趋势')).toBeInTheDocument();
     expect(screen.getByText('快照不一致')).toBeInTheDocument();
     expect(
-      screen.getByText(/在线 Worker 当前使用了不同快照版本/),
+      screen.getByText(/在线 Worker 当前使用了 2 个快照版本/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/最新版本 snapshot-b/)).toBeInTheDocument();
+    expect(screen.getByText(/Server URL 的网络/)).toBeInTheDocument();
+    expect(screen.getByText(/Worker Token 是否仍有效/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/重启 Worker 触发重新拉取快照/),
     ).toBeInTheDocument();
     expect(screen.getByText('snapshot-a')).toBeInTheDocument();
     expect(screen.getAllByText('snapshot-b').length).toBeGreaterThan(0);

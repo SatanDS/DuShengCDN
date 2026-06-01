@@ -598,6 +598,20 @@ function getSnapshotConsistencyVariant(
   }
 }
 
+function getSnapshotConsistencyMessage(
+  consistency: DNSWorkerSnapshotConsistency,
+) {
+  if (consistency.status === 'stale') {
+    return `快照过期：存在 ${formatCount(consistency.stale_worker_count)} 个在线 Worker 超过 ${formatDurationSeconds(consistency.snapshot_max_age_seconds)} 未拉取新快照。请检查 DNS Worker 的 Server URL 是否可达、Worker Token 是否有效，以及服务日志中 /api/dns-snapshot 的 HTTP 状态。`;
+  }
+  if (consistency.status === 'divergent') {
+    const versionCount = consistency.version_breakdown.length;
+    const latestVersion = consistency.latest_snapshot_version || '未知版本';
+    return `快照不一致：在线 Worker 当前使用了 ${formatCount(versionCount)} 个快照版本，查询结果可能不一致。最新版本 ${latestVersion}；请检查落后 Worker 到 Server URL 的网络、Worker Token 是否仍有效，必要时重启 Worker 触发重新拉取快照。`;
+  }
+  return '';
+}
+
 function getSchedulingStateStatusLabel(status: DNSGSLBSchedulingStateStatus) {
   switch (status) {
     case 'active':
@@ -3498,11 +3512,7 @@ function DNSSnapshotConsistencyPanel({
         <InlineMessage
           className="mt-3"
           tone="danger"
-          message={
-            consistency.status === 'stale'
-              ? '存在在线 Worker 快照超过最大有效时间，请检查 Worker 到 Server 的网络和 Token。'
-              : '在线 Worker 当前使用了不同快照版本，查询结果可能不一致。'
-          }
+          message={getSnapshotConsistencyMessage(consistency)}
         />
       ) : null}
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
