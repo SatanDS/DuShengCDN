@@ -2047,6 +2047,14 @@ func TestAuthoritativeDNSObservabilityIncludesOverlappingRollupWindow(t *testing
 		t.Fatalf("expected only overlapping rollup to be counted, got %+v", summary)
 	}
 	assertCounter(t, summary.TopTargets, "8.8.8.8", "8.8.8.8", 12)
+	if summary.WorkerHealth.MaxLatencyMs != 20 || summary.WorkerHealth.AverageLatencyMs != 10 || summary.WorkerHealth.ErrorRatePercent != 0 {
+		t.Fatalf("worker health should use the same filtered rollups: %+v", summary.WorkerHealth)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 ||
+		summary.WorkerHealth.Workers[0].QueryCount != 12 ||
+		summary.WorkerHealth.Workers[0].MaxLatencyMs != 20 {
+		t.Fatalf("unexpected worker health rollup scope: %+v", summary.WorkerHealth.Workers)
+	}
 	if summary.LastRollupAt == nil || !summary.LastRollupAt.Equal(overlapEnd) {
 		t.Fatalf("expected last rollup at %s, got %+v", overlapEnd, summary.LastRollupAt)
 	}

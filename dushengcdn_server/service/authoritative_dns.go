@@ -916,6 +916,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	routeCounts := map[uint]int64{}
 	sourceScopeCounts := map[string]int64{}
 	trendPoints := initDNSObservabilityTrendPoints(windowEnd, hours)
+	windowRollups := make([]model.DNSQueryRollup, 0, len(rollups))
 
 	for _, rollup := range rollups {
 		if rollup.QueryCount <= 0 {
@@ -926,6 +927,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 		if !rollupEnd.After(windowStart) || rollupStart.After(windowEnd) {
 			continue
 		}
+		windowRollups = append(windowRollups, rollup)
 		count := rollup.QueryCount
 		rcode := normalizeDNSRCode(rollup.RCode)
 		qtype := normalizeAuthoritativeDNSRecordTypeOrDefault(rollup.QType)
@@ -995,7 +997,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	summary.TrendPoints = trendPoints
 	checkedAt := time.Now().UTC()
 	summary.SnapshotConsistency = buildDNSWorkerSnapshotConsistency(checkedAt)
-	summary.WorkerHealth = buildDNSWorkerHealthSummary(checkedAt, rollups)
+	summary.WorkerHealth = buildDNSWorkerHealthSummary(checkedAt, windowRollups)
 	return summary, nil
 }
 
