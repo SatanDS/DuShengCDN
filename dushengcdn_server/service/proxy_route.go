@@ -381,6 +381,11 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
+	if dnsProviderMode == DNSProviderModeAuthoritative && dnsZoneIDRef != nil {
+		if err := validateAuthoritativeProxyRouteStaticRecordConflicts(*dnsZoneIDRef, domains, dnsRecordType, input.Enabled); err != nil {
+			return nil, err
+		}
+	}
 	gslbPolicyJSON, err := json.Marshal(gslbPolicy)
 	if err != nil {
 		return nil, err

@@ -258,6 +258,13 @@ curl -Iv https://your-domain
 3. 「Worker 公网探测」至少应有一个在线 Worker UDP/TCP `53` 可达；若失败，检查 Worker 公网地址、防火墙、端口映射和安全组。
 4. 「GSLB 模拟复测」应返回目标 IP；若无目标，检查节点是否在线、OpenResty 是否健康、公网 IP 池、节点池、排空模式、GSLB 权重和负载阈值。
 
+如果保存 Zone 静态记录、网站配置或迁移向导切换时提示“静态记录冲突”：
+
+1. 到左侧「权威 DNS」进入对应 Zone，检查是否已有同名启用的静态 `A`、`AAAA` 或 `CNAME`。
+2. 如果该域名已经由网站配置的自建权威 DNS 动态 GSLB 接管，删除或禁用同名同类型静态 `A`/`AAAA`，并删除或改名同名 `CNAME`。
+3. 如果想保留静态解析，不要把该网站切换到自建权威 DNS 动态模式，或改用另一个不冲突的域名。
+4. `TXT`、`MX`、`NS`、`SOA` 等其它类型记录不属于该冲突范围，可继续保留。
+
 如果「Worker 可用性」里 Server 侧公网探测正常，但「Agent 多节点探测」异常：
 
 1. 确认对应 Agent 节点可以直接访问 DNS Worker 公网地址的 UDP/TCP `53`，例如在节点上执行 `dig @ns1.example.net example.com SOA`。

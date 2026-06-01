@@ -609,6 +609,9 @@ func CreateAuthoritativeDNSRecord(zoneID uint, input DNSRecordInput) (*DNSRecord
 	if err != nil {
 		return nil, err
 	}
+	if err := validateAuthoritativeDNSRecordDynamicConflicts(record); err != nil {
+		return nil, err
+	}
 	if err := record.Insert(); err != nil {
 		return nil, err
 	}
@@ -631,6 +634,9 @@ func UpdateAuthoritativeDNSRecord(id uint, input DNSRecordInput) (*DNSRecordView
 	}
 	record, err = buildDNSRecord(record, input)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateAuthoritativeDNSRecordDynamicConflicts(record); err != nil {
 		return nil, err
 	}
 	if err := record.Update(); err != nil {
@@ -694,6 +700,9 @@ func SwitchProxyRouteToAuthoritativeDNS(id uint, input AuthoritativeDNSMigration
 		if _, err := decodeStoredGSLBPolicy(route.GSLBPolicy); err != nil {
 			return nil, err
 		}
+	}
+	if err := validateAuthoritativeProxyRouteStaticRecordConflicts(zone.ID, domains, recordType, route.Enabled); err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
@@ -1595,6 +1604,80 @@ func buildDNSRecord(record *model.DNSRecord, input DNSRecordInput) (*model.DNSRe
 	record.Priority = priority
 	record.Enabled = enabled
 	return record, nil
+}
+
+func validateAuthoritativeDNSRecordDynamicConflicts(record *model.DNSRecord) error {
+	if record == nil || !record.Enabled {
+		return nil
+	}
+	recordType := strings.ToUpper(strings.TrimSpace(record.Type))
+	if recordType != "A" && recordType != "AAAA" && recordType != "CNAME" {
+		return nil
+	}
+	var routes []*model.ProxyRoute
+	if err := model.DB.
+		Where("enabled = ? AND dns_provider_mode = ? AND dns_zone_id_ref = ?", true, DNSProviderModeAuthoritative, record.ZoneID).
+		Order("site_name asc").
+		Find(&routes).Error; err != nil {
+		return err
+	}
+	for _, route := range routes {
+		if route == nil {
+			continue
+		}
+		routeType := normalizeDNSRecordType(route.DNSRecordType)
+		if recordType != "CNAME" && routeType != recordType {
+			continue
+		}
+		domains, err := decodeStoredDomains(route.Domains, route.Domain)
+		if err != nil {
+			return fmt.Errorf("existing authoritative route %d domains are invalid: %w", route.ID, err)
+		}
+		for _, domain := range domains {
+			if normalizeDNSRecordName(domain) == normalizeDNSRecordName(record.Name) {
+				return fmt.Errorf("静态 DNS 记录 %s %s 与权威 DNS 网站 %s 的动态 %s 记录冲突", record.Name, recordType, route.SiteName, routeType)
+			}
+		}
+	}
+	return nil
+}
+
+func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains []string, recordType string, enabled bool) error {
+	if !enabled || zoneID == 0 {
+		return nil
+	}
+	recordType = normalizeDNSRecordType(recordType)
+	if recordType != "A" && recordType != "AAAA" {
+		return errors.New("authoritative DNS mode only supports A/AAAA dynamic records")
+	}
+	domainSet := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		normalized := normalizeDNSRecordName(domain)
+		if normalized != "" {
+			domainSet[normalized] = struct{}{}
+		}
+	}
+	if len(domainSet) == 0 {
+		return nil
+	}
+	records, err := model.ListDNSRecordsByZoneID(zoneID)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record == nil || !record.Enabled {
+			continue
+		}
+		if _, ok := domainSet[normalizeDNSRecordName(record.Name)]; !ok {
+			continue
+		}
+		staticType := strings.ToUpper(strings.TrimSpace(record.Type))
+		if staticType != "CNAME" && staticType != recordType {
+			continue
+		}
+		return fmt.Errorf("权威 DNS 网站的动态 %s 记录与 Zone 中已有静态记录 %s %s 冲突，请先删除或禁用该静态记录", recordType, record.Name, staticType)
+	}
+	return nil
 }
 
 func buildDNSZoneView(zone *model.DNSZone, includeRecords bool) (*DNSZoneView, error) {

@@ -125,6 +125,8 @@ route_id + record_type + source_scope
 | `dns_zone_id_ref` | 关联 `dns_zones`，用于把网站域名纳入自建权威 Zone |
 最终以 `dns_provider_mode` 为准，避免长期维护两套开关。
 
+权威 DNS 模式下，网站动态 `A` / `AAAA` 记录与 Zone 静态记录由控制面做冲突校验：同一名称下，动态 `A` 不允许再创建启用的静态 `A` 或 `CNAME`，动态 `AAAA` 不允许再创建启用的静态 `AAAA` 或 `CNAME`；反向从网站配置或迁移向导启用权威 DNS 时，也会拒绝已有同名静态 `CNAME` 或同类型静态地址记录。`TXT`、`MX`、`NS`、`SOA` 等不同类型记录仍可按 DNS 语义共存。
+
 ## API 与前端规划
 
 已实现的控制面 API：
