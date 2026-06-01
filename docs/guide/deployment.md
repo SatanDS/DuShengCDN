@@ -215,6 +215,15 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   ghcr.io/satands/dushengcdn-dns-worker:latest
 ```
 
+需要按国家代码匹配节点池时，再额外挂载本地 Country MMDB 并设置路径：
+
+```bash
+  -v /path/to/GeoLite2-Country.mmdb:/geoip/GeoLite2-Country.mmdb:ro \
+  -e DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=/geoip/GeoLite2-Country.mmdb \
+```
+
+只使用来源 CIDR 或全局调度时可以省略 GeoIP。
+
 源码运行示例：
 
 ```bash

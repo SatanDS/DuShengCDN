@@ -14,12 +14,17 @@ services:
 
     volumes:
       - ./dushengcdn_dns/data:/data
+      # Optional: put GeoLite2-Country.mmdb in ./dushengcdn_dns/geoip/ to enable country-code GSLB pools.
+      # Source CIDR pools do not require GeoIP.
+      # - ./dushengcdn_dns/geoip/GeoLite2-Country.mmdb:/geoip/GeoLite2-Country.mmdb:ro
 
     environment:
       DUSHENGCDN_DNS_WORKER_SERVER_URL: "http://host.docker.internal:3010"
       DUSHENGCDN_DNS_WORKER_TOKEN: "replace-with-dns-worker-token"
       DUSHENGCDN_DNS_WORKER_LISTEN_ADDR: ":53"
       DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH: "/data/dns-worker-snapshot.json"
+      # Uncomment together with the GeoIP volume above when country-code pools are used.
+      # DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH: "/geoip/GeoLite2-Country.mmdb"
       DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL: "10s"
       DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE: "5m"
       DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT: "200"
