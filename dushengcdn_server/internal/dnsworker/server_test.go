@@ -88,6 +88,48 @@ func TestResolveDynamicRouteSkipsUnhealthyAndLoadThresholds(t *testing.T) {
 	}
 }
 
+func TestResolveDynamicRouteMatchesSingleLevelWildcardDomain(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           30,
+			Domains:      []string{"*.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("hk-node", "hk", "8.8.4.4", 100, 1),
+	}
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQuery("api.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected wildcard dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected wildcard route target, got %s", got)
+	}
+
+	response = server.Resolve(testQuery("deep.api.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeNameError {
+		t.Fatalf("expected single-level wildcard not to match deep subdomain, got %s", dns.RcodeToString[response.Rcode])
+	}
+}
+
 func TestResolveDynamicRouteSkipsDisabledGSLBPool(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.Routes = []SnapshotRoute{

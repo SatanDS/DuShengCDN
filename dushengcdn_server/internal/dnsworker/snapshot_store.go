@@ -31,6 +31,7 @@ type snapshotIndex struct {
 	zonesByID         map[uint]*SnapshotZone
 	zonesByName       map[string]*SnapshotZone
 	routesByDomain    map[string][]*SnapshotRoute
+	routesByWildcard  map[string][]*SnapshotRoute
 	recordsByNameType map[recordKey][]SnapshotRecord
 	namesByZone       map[uint]map[string]struct{}
 }
@@ -353,6 +354,7 @@ func buildSnapshotIndex(snapshot *Snapshot) snapshotIndex {
 		zonesByID:         map[uint]*SnapshotZone{},
 		zonesByName:       map[string]*SnapshotZone{},
 		routesByDomain:    map[string][]*SnapshotRoute{},
+		routesByWildcard:  map[string][]*SnapshotRoute{},
 		recordsByNameType: map[recordKey][]SnapshotRecord{},
 		namesByZone:       map[uint]map[string]struct{}{},
 	}
@@ -379,6 +381,20 @@ func buildSnapshotIndex(snapshot *Snapshot) snapshotIndex {
 		for _, domain := range route.Domains {
 			domain = normalizeDomain(domain)
 			if domain == "" {
+				continue
+			}
+			if strings.HasPrefix(domain, "*.") {
+				wildcardBase := strings.TrimPrefix(domain, "*.")
+				if wildcardBase == "" {
+					continue
+				}
+				index.routesByWildcard[wildcardBase] = append(index.routesByWildcard[wildcardBase], route)
+				if route.ZoneID != 0 {
+					if _, ok := index.namesByZone[route.ZoneID]; !ok {
+						index.namesByZone[route.ZoneID] = map[string]struct{}{}
+					}
+					index.namesByZone[route.ZoneID][domain] = struct{}{}
+				}
 				continue
 			}
 			index.routesByDomain[domain] = append(index.routesByDomain[domain], route)

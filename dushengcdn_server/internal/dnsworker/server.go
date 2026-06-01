@@ -187,7 +187,7 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 			targets = append([]string(nil), zone.NameServers...)
 		}
 	case dns.TypeA, dns.TypeAAAA:
-		route := matchRoute(qname, qtype, index.routesByDomain[qname])
+		route := matchRoute(qname, qtype, routesForQName(index, qname))
 		if route != nil {
 			routeID = route.ID
 			selected, ttl, selectedScope, err := s.Scheduler.Select(snapshot, route, qtype, source, fresh)
@@ -319,6 +319,27 @@ func matchRoute(qname string, qtype string, routes []*SnapshotRoute) *SnapshotRo
 		return route
 	}
 	return nil
+}
+
+func routesForQName(index snapshotIndex, qname string) []*SnapshotRoute {
+	qname = normalizeDomain(qname)
+	routes := append([]*SnapshotRoute(nil), index.routesByDomain[qname]...)
+	if wildcardBase, ok := wildcardBaseForQName(qname); ok {
+		routes = append(routes, index.routesByWildcard[wildcardBase]...)
+	}
+	return routes
+}
+
+func wildcardBaseForQName(qname string) (string, bool) {
+	qname = normalizeDomain(qname)
+	if qname == "" {
+		return "", false
+	}
+	firstDot := strings.Index(qname, ".")
+	if firstDot <= 0 || firstDot == len(qname)-1 {
+		return "", false
+	}
+	return qname[firstDot+1:], true
 }
 
 func nameExists(zoneID uint, qname string, namesByZone map[uint]map[string]struct{}) bool {

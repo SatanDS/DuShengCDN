@@ -1328,11 +1328,31 @@ func authoritativeRouteHasDomain(route *dnsworker.SnapshotRoute, qname string) b
 	}
 	name := normalizeDNSRecordName(qname)
 	for _, domain := range route.Domains {
-		if normalizeDNSRecordName(domain) == name {
+		if authoritativeDomainMatchesQName(normalizeDNSRecordName(domain), name) {
 			return true
 		}
 	}
 	return false
+}
+
+func authoritativeDomainMatchesQName(domain string, qname string) bool {
+	domain = normalizeDNSRecordName(domain)
+	qname = normalizeDNSRecordName(qname)
+	if domain == "" || qname == "" {
+		return false
+	}
+	if domain == qname {
+		return true
+	}
+	if !strings.HasPrefix(domain, "*.") {
+		return false
+	}
+	base := strings.TrimPrefix(domain, "*.")
+	if base == "" || qname == base || !strings.HasSuffix(qname, "."+base) {
+		return false
+	}
+	leftmostLabel := strings.TrimSuffix(qname, "."+base)
+	return leftmostLabel != "" && !strings.Contains(leftmostLabel, ".")
 }
 
 type dnsGSLBSimulationDiagnostics struct {

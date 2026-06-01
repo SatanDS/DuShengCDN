@@ -3688,6 +3688,82 @@ func TestSimulateAuthoritativeDNSGSLBLoadAwareMarksMissingMetricsAsFallback(t *t
 	}
 }
 
+func TestSimulateAuthoritativeDNSGSLBMatchesWildcardRouteDomain(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 30)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 100, Enabled: true},
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "wildcard-site",
+		Domain:          "*.example.com",
+		Domains:         `["*.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	simulation, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "api.example.com",
+		RecordType:   "A",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB wildcard: %v", err)
+	}
+	if len(simulation.Targets) != 1 || simulation.Targets[0] != "8.8.4.4" {
+		t.Fatalf("expected wildcard simulation target, got %+v", simulation.Targets)
+	}
+
+	if _, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "deep.api.example.com",
+		RecordType:   "A",
+	}); err == nil || !strings.Contains(err.Error(), "qname does not belong") {
+		t.Fatalf("expected deep subdomain to stay outside single-level wildcard, got %v", err)
+	}
+}
+
 func TestSimulateAuthoritativeDNSGSLBProbeSchedulingExplainsThresholdReasons(t *testing.T) {
 	setupServiceTestDB(t)
 
