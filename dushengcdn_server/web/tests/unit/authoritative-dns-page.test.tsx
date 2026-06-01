@@ -970,7 +970,12 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('最大延迟').length).toBeGreaterThan(0);
     expect(screen.getAllByText('12.5 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('48 ms').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/按国家代码匹配的 GSLB 节点池会回退到全局/)
+        .length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText('GSLB 调度模拟')).toBeInTheDocument();
+    expect(screen.getByText('例如 HK、DE；留空使用全局。')).toBeInTheDocument();
     const user = userEvent.setup();
     await user.type(screen.getByPlaceholderText('HK'), 'HK');
     await user.click(screen.getByRole('button', { name: '模拟调度' }));

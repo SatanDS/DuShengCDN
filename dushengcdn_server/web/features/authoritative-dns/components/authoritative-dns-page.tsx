@@ -1026,7 +1026,7 @@ export function AuthoritativeDNSPage() {
         result,
         'simulation',
         'running',
-        '正在按当前快照模拟 global 和来源国家调度',
+        '正在按当前快照模拟全局和来源国家调度',
       );
       setMigrationRecheck(result);
       try {
@@ -1961,7 +1961,7 @@ function WorkersPanel({
                   ) : !worker.geoip_enabled ? (
                     <InlineMessage
                       tone="info"
-                      message="未加载 GeoIP 国家库；国家代码节点池不会命中，仍可按来源 CIDR 或 global 调度。"
+                      message="未加载 GeoIP 国家库；国家代码节点池不会命中，仍可按来源 CIDR 或全局调度。"
                     />
                   ) : (
                     <p className="text-xs break-all text-[var(--foreground-secondary)]">
@@ -2316,7 +2316,7 @@ function GSLBSimulationPanel({
               </ResourceField>
               <ResourceField
                 label="来源国家"
-                hint="例如 HK、DE；留空使用 global。"
+                hint="例如 HK、DE；留空使用全局。"
               >
                 <ResourceInput
                   maxLength={2}
@@ -3294,7 +3294,7 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
         <InlineMessage
           className="mt-3"
           tone="info"
-          message="未加载 GeoIP 国家库；按国家代码匹配的 GSLB 节点池会回退到 global，来源 CIDR 匹配不受影响。"
+          message="未加载 GeoIP 国家库；按国家代码匹配的 GSLB 节点池会回退到全局，来源 CIDR 匹配不受影响。"
         />
       ) : null}
       {worker.probe_message ? (
