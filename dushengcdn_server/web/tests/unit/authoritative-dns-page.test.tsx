@@ -1617,8 +1617,179 @@ describe('Authoritative DNS page', () => {
     expect(
       await screen.findByText(/DNS Worker 已能拉取快照/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/只能回答 Zone 的 SOA\/NS 和静态记录/)).toBeInTheDocument();
-    expect(screen.getByText(/业务域名的 A\/AAAA 动态调度需要/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/只能回答 Zone 的 SOA\/NS 和静态记录/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/业务域名的 A\/AAAA 动态调度需要/),
+    ).toBeInTheDocument();
     expect(screen.getByText('暂无权威 DNS 站点')).toBeInTheDocument();
+  });
+
+  it('creates one A record per IP input', async () => {
+    const createdPayloads: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/dns-zones/1/records') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body ?? '{}')) as Record<
+            string,
+            unknown
+          >;
+          createdPayloads.push(payload);
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  id: 100 + createdPayloads.length,
+                  zone_id: 1,
+                  ...payload,
+                  created_at: '2026-06-01T12:00:00Z',
+                  updated_at: '2026-06-01T12:00:00Z',
+                },
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-zones/1/records')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/observability')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ success: true, message: '', data: null }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/scheduling-states')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  checked_at: '2026-06-01T12:00:00Z',
+                  total: 0,
+                  states: [],
+                },
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/migration-candidates')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ success: true, message: '', data: [] }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    id: 1,
+                    name: 'satandu.com',
+                    soa_email: 'hostmaster@satandu.com',
+                    primary_ns: 'ns1.satandu.com',
+                    name_servers: ['ns1.satandu.com'],
+                    default_ttl: 30,
+                    serial: 1780323564,
+                    enabled: true,
+                    record_count: 0,
+                    created_at: '2026-06-01T12:00:00Z',
+                    updated_at: '2026-06-01T12:00:00Z',
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ success: true, message: '', data: [] }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ success: true, message: '', data: [] }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderWithProviders(<AuthoritativeDNSPage />);
+
+    const createRecordButton = await screen.findByRole('button', {
+      name: '新增记录',
+    });
+    await user.click(createRecordButton);
+    const dialog = await screen.findByRole('dialog', { name: '新增 DNS 记录' });
+    expect(within(dialog).getByText('IPv4 地址')).toBeInTheDocument();
+    expect(within(dialog).getByText(/数字越小优先级越高/)).toBeInTheDocument();
+
+    const nameInput = within(dialog).getByPlaceholderText('@');
+    await user.clear(nameInput);
+    await user.type(nameInput, 'cdn');
+    await user.type(
+      within(dialog).getByPlaceholderText('203.0.113.10'),
+      '145.239.140.145',
+    );
+    await user.click(
+      within(dialog).getByRole('button', { name: '增加 IP 地址' }),
+    );
+    const ipInputs = within(dialog).getAllByPlaceholderText('203.0.113.10');
+    await user.type(ipInputs[1], '145.239.140.146');
+    await user.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(createdPayloads).toHaveLength(2);
+    });
+    expect(createdPayloads).toEqual([
+      expect.objectContaining({
+        name: 'cdn',
+        type: 'A',
+        value: '145.239.140.145',
+        priority: 0,
+        enabled: true,
+      }),
+      expect.objectContaining({
+        name: 'cdn',
+        type: 'A',
+        value: '145.239.140.146',
+        priority: 0,
+        enabled: true,
+      }),
+    ]);
   });
 });

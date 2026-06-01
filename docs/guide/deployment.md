@@ -136,6 +136,29 @@ ports:
 
 此时浏览器访问 `http://localhost:3010`，容器内部仍监听 `3000`。
 
+也可以在仓库根目录使用一体化部署脚本。脚本会在 `.env` 不存在时从 `.env.example` 创建环境文件，使用 Docker Compose 启动面板，并默认在面板本机自动部署 DNS Worker：部署前先检查本机是否已有 `dushengcdn-dns-worker.service`、`/opt/dushengcdn-dns-worker`、Worker 环境文件、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时会跳过自动创建和安装，避免覆盖现有 Worker。没有发现本地 Worker 时，脚本会自动探测公网 IPv4，在 Server 中创建名为 `DNS服务响应端` 的 DNS Worker，拿到 Token 后调用 `scripts/install-dns-worker.sh` 监听 `PUBLIC_IP:53`。
+
+```bash
+cd /opt/dushengcdn
+bash scripts/install-server.sh
+```
+
+公网 IP 探测失败或需要绑定指定公网地址时显式传入：
+
+```bash
+bash scripts/install-server.sh \
+  --server-url http://127.0.0.1:3010 \
+  --public-ip 203.0.113.10
+```
+
+如只部署面板、不自动部署 DNS Worker：
+
+```bash
+bash scripts/install-server.sh --skip-dns-worker
+```
+
+如确认要覆盖本机已有 Worker 配置，可追加 `--force-dns-worker-reinstall`。自动安装 DNS Worker 仍要求宿主机放行公网 UDP/TCP `53`；如果该地址的 `53` 已被其它 DNS 服务占用，Worker 安装脚本会提示先停用或改端口。
+
 ## 源码启动 Server
 
 先构建管理端前端：
@@ -173,7 +196,7 @@ go run . --port 3000 --log-dir ./logs
 
 ## 自建权威 DNS 部署规划
 
-自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。面板本机可以同时部署 DNS Worker，但面板服务本身不会自动监听公网 `53`；创建 Zone、NS 和 Worker Token 后，仍必须单独运行安装脚本、Docker 或源码命令启动 Worker。
+自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。面板本机可以同时部署 DNS Worker，但面板服务本身不会监听公网 `53`；使用 `scripts/install-server.sh` 部署面板时可默认一起创建并安装本机 DNS Worker，脚本会先检查本地是否已有 Worker，避免重复部署。单独安装或多机部署 Worker 时，也可以继续在管理端创建 Token 后运行安装脚本、Docker 或源码命令。
 
 Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、Agent 多节点探测通过率/RTT、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，可用于检查实时 GSLB 是否按来源 CIDR、国家代码、来源分流桶、节点池权重、健康状态和负载阈值返回预期边缘 IP。「GSLB 调度状态」展示当前实际目标、期望目标、最近评估时间和防抖冷却状态；「GSLB 调度模拟」还可以在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照返回目标，并解释节点池匹配、候选节点、跳过节点和原因；即使没有可返回目标，模拟也会保留节点诊断和无目标原因，便于上线前定位节点池、健康状态、公网 IP、负载阈值或探测门槛问题。这里的 Worker 查询延迟是 Worker 本地处理真实 DNS 查询的耗时；Agent 多节点探测 RTT 表示各边缘节点到 Worker NS 的主动探测耗时，默认只用于观测与排障；设置页「权威 DNS 运行参数」启用 Agent 探测调度门槛后，无新鲜成功探测的边缘节点不会进入自建权威 DNS GSLB 候选。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Worker 快照一致性会显示快照版本和最近拉取时间，迁移向导会要求公网可达 Worker 均持有未过期且版本一致的快照。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
 

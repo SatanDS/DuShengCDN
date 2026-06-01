@@ -69,6 +69,19 @@ func main() {
 		return
 	}
 
+	if *common.CreateDNSWorkerName != "" {
+		worker, err := service.CreateAuthoritativeDNSWorker(service.DNSWorkerInput{
+			Name:          *common.CreateDNSWorkerName,
+			PublicAddress: *common.CreateDNSWorkerPublicAddress,
+		})
+		if err != nil {
+			slog.Error("create DNS worker failed", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println(worker.Token)
+		return
+	}
+
 	// Initialize Redis
 	err = common.InitRedisClient()
 	if err != nil {

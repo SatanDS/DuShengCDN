@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Minus, Plus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
@@ -99,6 +100,7 @@ type RecordFormValues = {
   name: string;
   type: DNSRecordType;
   value: string;
+  ip_values: string[];
   ttl: number;
   priority: number;
   enabled: boolean;
@@ -371,22 +373,47 @@ function zoneToFormValues(zone?: DNSZoneItem | null): ZoneFormValues {
 }
 
 function recordToFormValues(record?: DNSRecordItem | null): RecordFormValues {
+  const value = record?.value ?? '';
   return {
     name: record?.name ?? '@',
     type: record?.type ?? 'A',
-    value: record?.value ?? '',
+    value,
+    ip_values: value ? [value] : [''],
     ttl: record?.ttl ?? 0,
     priority: record?.priority ?? 0,
     enabled: record?.enabled ?? true,
   };
 }
 
+function isAddressRecordType(type: DNSRecordType) {
+  return type === 'A' || type === 'AAAA';
+}
+
+function getRecordValueLabel(type: DNSRecordType) {
+  switch (type) {
+    case 'A':
+      return 'IPv4 地址';
+    case 'AAAA':
+      return 'IPv6 地址';
+    case 'MX':
+      return '邮件服务器';
+    case 'CNAME':
+      return '目标域名';
+    case 'NS':
+      return 'NS 域名';
+    case 'TXT':
+      return 'TXT 内容';
+    case 'SOA':
+      return 'SOA 内容';
+  }
+}
+
 function getRecordValueHint(type: DNSRecordType) {
   switch (type) {
     case 'A':
-      return '填写 IPv4 地址。';
+      return '每个输入框填写一个 IPv4 地址，可点 + 增加多个地址。';
     case 'AAAA':
-      return '填写 IPv6 地址。';
+      return '每个输入框填写一个 IPv6 地址，可点 + 增加多个地址。';
     case 'CNAME':
       return '填写目标域名，同名下不要再添加其它记录。';
     case 'MX':
@@ -397,6 +424,25 @@ function getRecordValueHint(type: DNSRecordType) {
       return '填写 SOA 内容，通常由 Zone 自动生成即可。';
     case 'TXT':
       return '填写 TXT 文本内容。';
+  }
+}
+
+function getRecordValuePlaceholder(type: DNSRecordType) {
+  switch (type) {
+    case 'A':
+      return '203.0.113.10';
+    case 'AAAA':
+      return '2001:db8::10';
+    case 'MX':
+      return 'mail.example.com';
+    case 'CNAME':
+      return 'target.example.com';
+    case 'NS':
+      return 'ns1.example.com';
+    case 'TXT':
+      return 'v=spf1 ...';
+    case 'SOA':
+      return 'ns1.example.com hostmaster.example.com ...';
   }
 }
 
@@ -782,13 +828,15 @@ export function AuthoritativeDNSPage() {
         .filter((route) => route.enabled || route.gslb_enabled),
     [proxyRoutes],
   );
-  const showNoAuthoritativeRoutesNotice = shouldShowNoAuthoritativeRoutesNotice({
-    zones,
-    workers,
-    routes: proxyRoutes,
-    routesLoading: proxyRoutesQuery.isLoading,
-    routesError: proxyRoutesQuery.isError,
-  });
+  const showNoAuthoritativeRoutesNotice = shouldShowNoAuthoritativeRoutesNotice(
+    {
+      zones,
+      workers,
+      routes: proxyRoutes,
+      routesLoading: proxyRoutesQuery.isLoading,
+      routesError: proxyRoutesQuery.isError,
+    },
+  );
   const selectedZone = useMemo(
     () => zones.find((zone) => zone.id === selectedZoneId) ?? zones[0] ?? null,
     [selectedZoneId, zones],
@@ -3817,9 +3865,12 @@ function RecordEditorModal({
     defaultValues: recordToFormValues(record),
   });
   const recordType = form.watch('type');
+  const ipValues = form.watch('ip_values');
+  const isAddressRecord = isAddressRecordType(recordType);
+  const valuePlaceholder = getRecordValuePlaceholder(recordType);
   const saveMutation = useMutation({
     mutationFn: (values: RecordFormValues) => {
-      const payload: DNSRecordMutationPayload = {
+      const basePayload: DNSRecordMutationPayload = {
         zone_id: zone.id,
         name: values.name.trim(),
         type: values.type,
@@ -3828,9 +3879,33 @@ function RecordEditorModal({
         priority: values.type === 'MX' ? values.priority : 0,
         enabled: values.enabled,
       };
+      if (isAddressRecordType(values.type)) {
+        const addresses = (values.ip_values ?? [])
+          .map((item) => item.trim())
+          .filter(Boolean);
+        if (addresses.length === 0) {
+          throw new Error(
+            values.type === 'A' ? '请输入 IPv4 地址' : '请输入 IPv6 地址',
+          );
+        }
+        if (record) {
+          return updateDNSRecord(record.id, {
+            ...basePayload,
+            value: addresses[0],
+          });
+        }
+        return Promise.all(
+          addresses.map((address) =>
+            createDNSZoneRecord(zone.id, {
+              ...basePayload,
+              value: address,
+            }),
+          ),
+        ).then((records) => records[0]);
+      }
       return record
-        ? updateDNSRecord(record.id, payload)
-        : createDNSZoneRecord(zone.id, payload);
+        ? updateDNSRecord(record.id, basePayload)
+        : createDNSZoneRecord(zone.id, basePayload);
     },
     onSuccess: onSaved,
     onError: (err) => setError(getErrorMessage(err)),
@@ -3842,6 +3917,36 @@ function RecordEditorModal({
       form.reset(recordToFormValues(record));
     }
   }, [form, isOpen, record]);
+
+  useEffect(() => {
+    if (!isAddressRecord) {
+      return;
+    }
+    const current = form.getValues('ip_values') ?? [];
+    if (current.length === 0) {
+      form.setValue('ip_values', [''], { shouldDirty: false });
+    }
+  }, [form, isAddressRecord, recordType]);
+
+  const updateIPAddressValue = (index: number, value: string) => {
+    const current = form.getValues('ip_values') ?? [''];
+    const next = current.length > 0 ? [...current] : [''];
+    next[index] = value;
+    form.setValue('ip_values', next, { shouldDirty: true });
+  };
+
+  const addIPAddressValue = () => {
+    const current = form.getValues('ip_values') ?? [''];
+    form.setValue('ip_values', [...current, ''], { shouldDirty: true });
+  };
+
+  const removeIPAddressValue = (index: number) => {
+    const current = form.getValues('ip_values') ?? [''];
+    const next = current.filter((_, itemIndex) => itemIndex !== index);
+    form.setValue('ip_values', next.length > 0 ? next : [''], {
+      shouldDirty: true,
+    });
+  };
 
   return (
     <AppModal
@@ -3879,16 +3984,65 @@ function RecordEditorModal({
             </ResourceSelect>
           </ResourceField>
         </div>
-        <ResourceField
-          label="记录值"
-          hint={getRecordValueHint(recordType)}
-          error={form.formState.errors.value?.message}
-        >
-          <ResourceTextarea
-            placeholder={recordType === 'TXT' ? 'v=spf1 ...' : '记录值'}
-            {...form.register('value', { required: '请输入记录值' })}
-          />
-        </ResourceField>
+        {isAddressRecord ? (
+          <ResourceField
+            label={getRecordValueLabel(recordType)}
+            hint={getRecordValueHint(recordType)}
+            container="div"
+          >
+            <div className="space-y-3">
+              {(ipValues?.length ? ipValues : ['']).map((value, index) => (
+                <div
+                  key={index}
+                  className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]"
+                >
+                  <ResourceInput
+                    value={value}
+                    placeholder={valuePlaceholder}
+                    onChange={(event) =>
+                      updateIPAddressValue(index, event.target.value)
+                    }
+                  />
+                  <div className="flex gap-2">
+                    {!record && index === (ipValues?.length ?? 1) - 1 ? (
+                      <SecondaryButton
+                        type="button"
+                        aria-label="增加 IP 地址"
+                        title="增加 IP 地址"
+                        className="h-12 w-12 shrink-0 px-0"
+                        onClick={addIPAddressValue}
+                      >
+                        <Plus className="h-4 w-4" aria-hidden="true" />
+                      </SecondaryButton>
+                    ) : null}
+                    {!record && (ipValues?.length ?? 1) > 1 ? (
+                      <SecondaryButton
+                        type="button"
+                        aria-label="删除 IP 地址"
+                        title="删除 IP 地址"
+                        className="h-12 w-12 shrink-0 px-0"
+                        onClick={() => removeIPAddressValue(index)}
+                      >
+                        <Minus className="h-4 w-4" aria-hidden="true" />
+                      </SecondaryButton>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ResourceField>
+        ) : (
+          <ResourceField
+            label={getRecordValueLabel(recordType)}
+            hint={getRecordValueHint(recordType)}
+            error={form.formState.errors.value?.message}
+          >
+            <ResourceTextarea
+              placeholder={valuePlaceholder}
+              {...form.register('value', { required: '请输入记录内容' })}
+            />
+          </ResourceField>
+        )}
         <div className="grid gap-5 md:grid-cols-3">
           <ResourceField label="TTL" hint="0 表示使用 Zone 默认 TTL。">
             <ResourceInput
@@ -3898,7 +4052,10 @@ function RecordEditorModal({
               {...form.register('ttl', { valueAsNumber: true })}
             />
           </ResourceField>
-          <ResourceField label="MX 优先级">
+          <ResourceField
+            label="MX 优先级"
+            hint="数字越小优先级越高；同一域名有多个 MX 时，邮件会优先投递到较小数值的服务器。"
+          >
             <ResourceInput
               type="number"
               min={0}

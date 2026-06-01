@@ -69,6 +69,19 @@ volumes:
 docker compose up -d
 ```
 
+如果使用仓库源码部署，也可以在仓库根目录执行一体化脚本。它会启动面板，并默认自动探测公网 IPv4、创建名为 `DNS服务响应端` 的 DNS Worker、安装同机 DNS Worker。脚本会先检查本机是否已经部署过 DNS Worker；检测到已有服务、安装目录、环境文件、进程或 DuShengCDN 监听 `53` 端口时会跳过 Worker 自动安装。
+
+```bash
+cd /opt/dushengcdn
+bash scripts/install-server.sh --public-ip 203.0.113.10
+```
+
+只想部署面板时：
+
+```bash
+bash scripts/install-server.sh --skip-dns-worker
+```
+
 确认容器已经运行：
 
 ```bash
@@ -161,7 +174,7 @@ journalctl -u dushengcdn-agent -f
 
 ## 5. 可选：启用自建权威 DNS
 
-如果希望域名按每次 DNS 查询来源实时调度到不同边缘节点，先在左侧「权威 DNS」创建 Zone 和 DNS Worker Token，再部署 DNS Worker：
+如果希望域名按每次 DNS 查询来源实时调度到不同边缘节点，可以使用 `scripts/install-server.sh` 在部署面板时自动创建并安装同机 DNS Worker；也可以先在左侧「权威 DNS」创建 Zone 和 DNS Worker Token，再手动部署 DNS Worker：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \

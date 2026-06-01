@@ -44,6 +44,8 @@ go run . --port 3000 --log-dir ./logs
 | `--port` | 指定 Server 监听端口 | `3000` |
 | `--log-dir` | 指定日志目录 | 空 |
 | `--reset-root-password` | 重置 `root` 用户密码后退出，不启动 HTTP 服务 | 空 |
+| `--create-dns-worker-name` | 创建 DNS Worker、输出本次创建的 Token 后退出，不启动 HTTP 服务；用于部署脚本自动生成 Worker Token | 空 |
+| `--create-dns-worker-public-address` | 配合 `--create-dns-worker-name` 保存 Worker 公网地址 | 空 |
 | `--version` | 输出当前版本后退出 | `false` |
 | `--help` | 输出帮助信息后退出 | `false` |
 
@@ -188,6 +190,28 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `DUSHENGCDN_VERSION` | 源码 Compose 构建 Server 或 Agent 镜像时传给 Dockerfile，并写入对应二进制版本 | `dev` |
 
 源码 Compose 更新 Server 时建议使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build`，让顶栏“版本”显示当前运行中的 Git 版本；更新 Agent Compose 时同样设置该变量，节点列表会显示 Agent 上报的 Git 版本。
+
+## 一体化部署脚本参数
+
+`scripts/install-server.sh` 用于源码 Compose 面板部署，并默认自动部署同机 DNS Worker。脚本会先检查本地是否已有 `dushengcdn-dns-worker.service`、安装目录、环境文件、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时默认跳过 Worker 自动创建和安装。
+
+| 参数 | 作用 | 默认值 |
+| --- | --- | --- |
+| `--server-dir` | Server compose/source 目录 | 仓库内 `dushengcdn_server` |
+| `--compose-file` | Docker Compose 文件 | `SERVER_DIR/docker-compose.yaml` |
+| `--env-file` | Docker Compose 环境文件 | `SERVER_DIR/.env` |
+| `--server-url` | DNS Worker 访问 Server 的地址 | `http://127.0.0.1:DUSHENGCDN_HTTP_PORT` |
+| `--public-ip` | DNS Worker 公网地址；未传时自动探测公网 IPv4 | 空 |
+| `--skip-dns-worker` | 只部署面板，不自动创建或安装 DNS Worker | `false` |
+| `--force-dns-worker-reinstall` | 即使检测到本地已有 Worker，也继续创建 Token 并重装 | `false` |
+| `--dns-worker-name` | 自动创建的 DNS Worker 名称 | `DNS服务响应端` |
+| `--dns-worker-install-dir` | DNS Worker 安装目录 | `/opt/dushengcdn-dns-worker` |
+| `--dns-worker-listen` | DNS Worker 监听地址 | `PUBLIC_IP:53` |
+| `--dns-worker-query-rate-limit` | DNS Worker 按来源 IP 的每秒查询上限 | `200` |
+| `--dns-worker-udp-response-size` | DNS Worker UDP 响应最大字节数 | `1232` |
+| `--dns-worker-repo` | DNS Worker 安装脚本下载/源码构建使用的 GitHub 仓库 | `SatanDS/DuShengCDN` |
+| `--dns-worker-source-ref` | DNS Worker 无 Release 资产时源码构建使用的分支、标签或 commit | `main` |
+| `--dns-worker-no-geoip-download` | 不自动下载 Country MMDB | `false` |
 
 ## Agent 环境变量
 

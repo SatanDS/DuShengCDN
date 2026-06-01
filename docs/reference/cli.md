@@ -27,6 +27,26 @@ cd dushengcdn_server
 ./dushengcdn-server --reset-root-password 'replace-with-new-password'
 ```
 
+创建 DNS Worker 并输出本次创建的 Token：
+
+```bash
+cd dushengcdn_server
+./dushengcdn-server \
+  --create-dns-worker-name 'DNS服务响应端' \
+  --create-dns-worker-public-address '203.0.113.10'
+```
+
+该命令只创建 Worker 身份并打印 Token，不启动 HTTP 服务，主要供 `scripts/install-server.sh` 在部署面板时自动安装同机 DNS Worker 使用。
+
+源码 Compose 一体化部署面板和同机 DNS Worker：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/install-server.sh --public-ip 203.0.113.10
+```
+
+脚本默认先检查本机是否已有 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、安装目录、环境文件、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动创建和安装。只部署面板可加 `--skip-dns-worker`，确认要覆盖本机 Worker 配置时再加 `--force-dns-worker-reinstall`。
+
 备份 Server 数据：
 
 ```bash

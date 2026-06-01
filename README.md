@@ -100,6 +100,19 @@ docker compose up -d
 
 访问地址：`http://localhost:3000`
 
+源码 Compose 部署时，也可以在仓库根目录使用一体化脚本启动面板并默认安装同机 DNS Worker。脚本会先检查本机是否已部署 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、`/opt/dushengcdn-dns-worker`、Worker 环境文件、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动安装，避免覆盖现有配置。
+
+```bash
+cd /opt/dushengcdn
+bash scripts/install-server.sh --public-ip 203.0.113.10
+```
+
+只部署面板可使用：
+
+```bash
+bash scripts/install-server.sh --skip-dns-worker
+```
+
 默认账号：
 
 * 用户名：`root`
@@ -258,7 +271,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 ### 4. 可选：部署自建权威 DNS Worker
 
-如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker Token，然后打开「迁移向导」检查 Cloudflare 模式网站的 Zone、Worker、公网探测和 GSLB 准备状态；满足条件时可点击「一键切换」，也可以在网站详情「自动 DNS」里手动切换到自建权威 DNS。之后把域名 NS 委派到 DNS Worker。完成注册商 NS 配置后，可以在 Zone 详情点击「检查委派」确认公网 NS 是否匹配；如果使用 `ns1.example.com` 这类 Zone 内 NS，还需要在注册商配置 Glue/主机记录。面板本机可以同时部署 DNS Worker，但面板服务不会自动监听公网 `53`；创建 Zone 和 Token 后仍必须单独运行 DNS Worker 安装脚本、Docker 或源码命令。
+如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker，然后打开「迁移向导」检查 Cloudflare 模式网站的 Zone、Worker、公网探测和 GSLB 准备状态；满足条件时可点击「一键切换」，也可以在网站详情「自动 DNS」里手动切换到自建权威 DNS。之后把域名 NS 委派到 DNS Worker。完成注册商 NS 配置后，可以在 Zone 详情点击「检查委派」确认公网 NS 是否匹配；如果使用 `ns1.example.com` 这类 Zone 内 NS，还需要在注册商配置 Glue/主机记录。面板本机可以同时部署 DNS Worker；使用 `scripts/install-server.sh` 部署面板时，脚本可默认自动创建名为 `DNS服务响应端` 的 Worker、探测公网 IP 并安装同机 Worker。手动或多机部署时，仍可复制 Token 后单独运行 DNS Worker 安装脚本、Docker 或源码命令。
 
 推荐使用安装脚本部署 DNS Worker：
 

@@ -10,11 +10,13 @@ import (
 )
 
 var (
-	Port              = flag.Int("port", 3000, "the listening port")
-	PrintVersion      = flag.Bool("version", false, "print version and exit")
-	PrintHelp         = flag.Bool("help", false, "print help and exit")
-	LogDir            = flag.String("log-dir", "", "specify the log directory")
-	ResetRootPassword = flag.String("reset-root-password", "", "reset root password and exit without starting the HTTP server")
+	Port                         = flag.Int("port", 3000, "the listening port")
+	PrintVersion                 = flag.Bool("version", false, "print version and exit")
+	PrintHelp                    = flag.Bool("help", false, "print help and exit")
+	LogDir                       = flag.String("log-dir", "", "specify the log directory")
+	ResetRootPassword            = flag.String("reset-root-password", "", "reset root password and exit without starting the HTTP server")
+	CreateDNSWorkerName          = flag.String("create-dns-worker-name", "", "create a DNS Worker with this name, print its token, and exit without starting the HTTP server")
+	CreateDNSWorkerPublicAddress = flag.String("create-dns-worker-public-address", "", "public address saved for --create-dns-worker-name")
 )
 
 // UploadPath Maybe override by ENV_VAR
@@ -24,7 +26,7 @@ func printHelp() {
 	fmt.Println("DuShengCDN " + Version + " - Internal OpenResty Control Plane.")
 	fmt.Println("Copyright (C) 2023 JustSong. All rights reserved.")
 	fmt.Println("GitHub: https://github.com/SatanDS/DuShengCDN")
-	fmt.Println("Usage: dushengcdn [--port <port>] [--log-dir <log directory>] [--reset-root-password <password>] [--version] [--help]")
+	fmt.Println("Usage: dushengcdn [--port <port>] [--log-dir <log directory>] [--reset-root-password <password>] [--create-dns-worker-name <name>] [--create-dns-worker-public-address <address>] [--version] [--help]")
 }
 
 func init() {
