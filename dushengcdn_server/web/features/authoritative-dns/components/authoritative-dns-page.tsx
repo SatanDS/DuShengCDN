@@ -2263,7 +2263,7 @@ function GSLBSimulationPanel({
   return (
     <AppCard
       title="GSLB 调度模拟"
-      description="按站点、记录类型和来源国家预演当前权威 DNS 快照会返回的边缘 IP。"
+      description="按站点、记录类型、来源国家和来源 IP 预演当前权威 DNS 快照会返回的边缘 IP。"
     >
       {routesLoading ? (
         <LoadingState />
@@ -2325,7 +2325,10 @@ function GSLBSimulationPanel({
                 />
               </ResourceField>
             </div>
-            <ResourceField label="来源 IP" hint="可选，仅用于记录模拟输入。">
+            <ResourceField
+              label="来源 IP"
+              hint="可选；填写后会参与来源 CIDR 和 GeoIP 匹配预演。"
+            >
               <ResourceInput
                 placeholder="203.0.113.10"
                 {...form.register('source_ip')}

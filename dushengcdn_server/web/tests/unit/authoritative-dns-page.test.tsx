@@ -975,7 +975,15 @@ describe('Authoritative DNS page', () => {
         .length,
     ).toBeGreaterThan(0);
     expect(screen.getByText('GSLB 调度模拟')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '按站点、记录类型、来源国家和来源 IP 预演当前权威 DNS 快照会返回的边缘 IP。',
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText('例如 HK、DE；留空使用全局。')).toBeInTheDocument();
+    expect(
+      screen.getByText('可选；填写后会参与来源 CIDR 和 GeoIP 匹配预演。'),
+    ).toBeInTheDocument();
     const user = userEvent.setup();
     await user.type(screen.getByPlaceholderText('HK'), 'HK');
     await user.click(screen.getByRole('button', { name: '模拟调度' }));
