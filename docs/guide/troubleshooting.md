@@ -162,7 +162,7 @@ sed -n '1,160p' /opt/dushengcdn-agent/agent.json
 | `heartbeat_interval` | 支持毫秒整数或 Go duration 字符串 |
 | `request_timeout` | 网络较慢时可适当增大 |
 
-如果日志提示 Token 无效，重新在管理端准备 Token 并更新 `agent.json`，然后重启：
+如果日志提示 Token 无效，重新在管理端准备 Token 并更新 `agent.json`，然后重启。日志中出现 `Agent authentication failed` 时，优先核对 `agent_token` / `discovery_token` 或 `DUSHENGCDN_AGENT_TOKEN` / `DUSHENGCDN_DISCOVERY_TOKEN`；首次注册应使用 Discovery Token，注册后心跳、拉取配置和 WebSocket 应使用节点专属 Agent Token。日志中出现 `request to Server URL ... failed` 时，优先核对 `server_url`、DNS 解析、防火墙和证书信任。
 
 ```bash
 systemctl restart dushengcdn-agent

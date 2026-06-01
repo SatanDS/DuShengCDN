@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -105,12 +107,21 @@ func (c *Client) do(req *http.Request, target any) error {
 	res, err := c.httpClient.Do(req)
 	if err != nil {
 		slog.Error("http request failed", "method", req.Method, "path", req.URL.Path, "error", err)
-		return err
+		return fmt.Errorf(
+			"%s request to Server URL %s failed: %w. Check agent server_url, DNS/firewall connectivity, and HTTPS certificate trust",
+			req.URL.Path,
+			c.baseURL,
+			err,
+		)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		slog.Warn("http request returned non-200", "method", req.Method, "path", req.URL.Path, "status", res.Status)
-		return errors.New(res.Status)
+		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
+		if readErr != nil {
+			return readErr
+		}
+		return c.formatHTTPError(req.URL.Path, res.StatusCode, res.Status, raw)
 	}
 	if target == nil {
 		var wrapper protocol.APIResponse[json.RawMessage]
@@ -129,4 +140,44 @@ func (c *Client) do(req *http.Request, target any) error {
 		return err
 	}
 	return nil
+}
+
+func (c *Client) formatHTTPError(path string, statusCode int, status string, raw []byte) error {
+	message := extractAPIErrorMessage(raw)
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		if message == "" {
+			message = "authentication failed"
+		}
+		return fmt.Errorf(
+			"%s returned %s: %s. Agent authentication failed; check agent_token/discovery_token in agent.json or DUSHENGCDN_AGENT_TOKEN/DUSHENGCDN_DISCOVERY_TOKEN, and make sure registration uses Discovery Token while heartbeat/config pull uses the node Agent Token",
+			path,
+			status,
+			message,
+		)
+	}
+	if statusCode == http.StatusNotFound {
+		if message == "" {
+			message = "endpoint not found"
+		}
+		return fmt.Errorf(
+			"%s returned %s: %s. Check agent server_url points to the DuShengCDN Server API root",
+			path,
+			status,
+			message,
+		)
+	}
+	if message == "" {
+		return errors.New(status)
+	}
+	return fmt.Errorf("%s returned %s: %s", path, status, message)
+}
+
+func extractAPIErrorMessage(raw []byte) string {
+	var response struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	return strings.TrimSpace(response.Message)
 }

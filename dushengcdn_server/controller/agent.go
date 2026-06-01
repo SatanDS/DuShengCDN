@@ -68,7 +68,7 @@ func AgentHeartbeat(c *gin.Context) {
 
 	authNode, ok := c.Get("agent_node")
 	if !ok {
-		respondUnauthorized(c, "鏃犳潈杩涜姝ゆ搷浣滐紝Agent Token 鏃犳晥")
+		respondUnauthorized(c, "无权进行此操作，Agent Token 无效")
 		return
 	}
 
