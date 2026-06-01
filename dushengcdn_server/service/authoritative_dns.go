@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"sort"
@@ -3687,12 +3688,13 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 		case dnsWorkerProbeUnknown:
 			stats.unknownCount++
 		}
-		if probeState.status != dnsWorkerProbeStale && probe.AverageRTTMs > 0 {
-			stats.totalAverageRTTMs += probe.AverageRTTMs
+		averageRTTMs, maxRTTMs := normalizeDNSWorkerNodeProbeRTT(probe.AverageRTTMs, probe.MaxRTTMs)
+		if probeState.status != dnsWorkerProbeStale && averageRTTMs > 0 {
+			stats.totalAverageRTTMs += averageRTTMs
 			stats.averageSamples++
 		}
-		if probeState.status != dnsWorkerProbeStale && probe.MaxRTTMs > stats.maxRTTMs {
-			stats.maxRTTMs = probe.MaxRTTMs
+		if probeState.status != dnsWorkerProbeStale && maxRTTMs > stats.maxRTTMs {
+			stats.maxRTTMs = maxRTTMs
 		}
 		stats.probes = append(stats.probes, DNSWorkerNodeProbeView{
 			NodeID:          nodeID,
@@ -3704,8 +3706,8 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 			ProbeStatus:     probeState.status,
 			ProbeAgeSeconds: probeState.ageSeconds,
 			ProbeMessage:    probeState.message,
-			AverageRTTMs:    probe.AverageRTTMs,
-			MaxRTTMs:        probe.MaxRTTMs,
+			AverageRTTMs:    averageRTTMs,
+			MaxRTTMs:        maxRTTMs,
 			Results:         decodeDNSWorkerProbeResults(probe.ResultsJSON),
 			LastError:       probe.LastError,
 			FailureSamples:  probe.FailureSamples,
@@ -3755,15 +3757,29 @@ func buildDNSWorkerNodeProbeStatsByNode(now time.Time) map[string]*dnsWorkerNode
 		case dnsWorkerProbeUnknown:
 			stats.unknownCount++
 		}
-		if probeState.status != dnsWorkerProbeStale && probe.AverageRTTMs > 0 {
-			stats.totalAverageRTTMs += probe.AverageRTTMs
+		averageRTTMs, maxRTTMs := normalizeDNSWorkerNodeProbeRTT(probe.AverageRTTMs, probe.MaxRTTMs)
+		if probeState.status != dnsWorkerProbeStale && averageRTTMs > 0 {
+			stats.totalAverageRTTMs += averageRTTMs
 			stats.averageSamples++
 		}
-		if probeState.status != dnsWorkerProbeStale && probe.MaxRTTMs > stats.maxRTTMs {
-			stats.maxRTTMs = probe.MaxRTTMs
+		if probeState.status != dnsWorkerProbeStale && maxRTTMs > stats.maxRTTMs {
+			stats.maxRTTMs = maxRTTMs
 		}
 	}
 	return statsByNode
+}
+
+func normalizeDNSWorkerNodeProbeRTT(averageRTTMs float64, maxRTTMs int64) (float64, int64) {
+	if averageRTTMs < 0 {
+		averageRTTMs = 0
+	}
+	if maxRTTMs < 0 {
+		maxRTTMs = 0
+	}
+	if averageRTTMs > 0 && float64(maxRTTMs) < averageRTTMs {
+		maxRTTMs = int64(math.Ceil(averageRTTMs))
+	}
+	return averageRTTMs, maxRTTMs
 }
 
 type dnsWorkerNodeProbeSummary struct {

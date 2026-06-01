@@ -2462,6 +2462,78 @@ func TestAgentDNSProbeResultsPersistToWorkerHealth(t *testing.T) {
 	}
 }
 
+func TestAgentDNSProbeSummaryNormalizesHistoricalRTT(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now().UTC()
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1-hk",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	_, err = RecordDNSWorkerHeartbeat(workerModel, DNSWorkerHeartbeatInput{
+		Status:         dnsWorkerStatusOnline,
+		LastSnapshotAt: &now,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	node := &model.Node{
+		NodeID:            "node-hk",
+		Name:              "hk-edge",
+		PoolName:          "HK",
+		AgentToken:        "agent-token",
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		Status:            NodeStatusOnline,
+		LastSeenAt:        now,
+		SchedulingEnabled: true,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	if err := model.UpsertDNSWorkerNodeProbe(nil, &model.DNSWorkerNodeProbe{
+		WorkerID:      worker.WorkerID,
+		NodeID:        node.NodeID,
+		PublicAddress: "ns1.example.net",
+		QueryName:     "example.com.",
+		QueryType:     "SOA",
+		CheckedAt:     now,
+		ResultsJSON:   `[{"network":"UDP","reachable":true,"duration_ms":13,"rcode":"NOERROR","answer_count":1}]`,
+		Healthy:       true,
+		AverageRTTMs:  12.5,
+		MaxRTTMs:      7,
+	}); err != nil {
+		t.Fatalf("UpsertDNSWorkerNodeProbe: %v", err)
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.WorkerHealth.NodeProbeAverageRTTMs != 12.5 || summary.WorkerHealth.NodeProbeMaxRTTMs != 13 {
+		t.Fatalf("expected normalized summary RTT, got %+v", summary.WorkerHealth)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 || len(summary.WorkerHealth.Workers[0].NodeProbes) != 1 {
+		t.Fatalf("expected node probe in worker health item: %+v", summary.WorkerHealth.Workers)
+	}
+	nodeProbe := summary.WorkerHealth.Workers[0].NodeProbes[0]
+	if nodeProbe.AverageRTTMs != 12.5 || nodeProbe.MaxRTTMs != 13 {
+		t.Fatalf("expected normalized node probe RTT, got %+v", nodeProbe)
+	}
+
+	nodeStats := buildDNSWorkerNodeProbeStatsByNode(now)
+	probeStats := nodeStats[node.NodeID]
+	if probeStats == nil || averageFloat(probeStats.totalAverageRTTMs, probeStats.averageSamples) != 12.5 || probeStats.maxRTTMs != 13 {
+		t.Fatalf("expected normalized node-level probe stats, got %+v", probeStats)
+	}
+}
+
 func TestAgentDNSProbeResultsStaleExcludedFromWorkerHealth(t *testing.T) {
 	setupServiceTestDB(t)
 
