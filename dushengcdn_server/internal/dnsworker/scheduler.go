@@ -75,6 +75,7 @@ func (s *Scheduler) SnapshotStates(snapshot *Snapshot) []SnapshotSchedulingState
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now().UTC()
 	states := make([]SnapshotSchedulingState, 0, len(s.states))
 	for key, state := range s.states {
 		routeID, recordType, scopeKey, ok := parseSchedulerStateKey(key)
@@ -84,6 +85,10 @@ func (s *Scheduler) SnapshotStates(snapshot *Snapshot) []SnapshotSchedulingState
 		expectedType, exists := routeTypes[routeID]
 		if !exists || expectedType != recordType || len(state.Targets) == 0 || state.LastChangedAt.IsZero() {
 			continue
+		}
+		if state.LastChangedAt.After(now) {
+			state.LastChangedAt = now
+			s.states[key] = state
 		}
 		lastChangedAt := state.LastChangedAt.UTC()
 		states = append(states, SnapshotSchedulingState{
@@ -118,12 +123,14 @@ func (s *Scheduler) LoadSnapshotStates(snapshot *Snapshot) {
 		}
 	}
 	snapshotStates := make(map[string]debounceState, len(snapshot.SchedulingStates))
+	now := s.now().UTC()
 	for _, item := range snapshot.SchedulingStates {
 		recordType := normalizeAddressRecordType(item.RecordType)
 		scopeKey := normalizeSourceScope(item.ScopeKey)
 		targets := normalizeIPList(item.SelectedTargets, recordType)
 		desired := normalizeIPList(item.DesiredTargets, recordType)
-		if item.RouteID == 0 || len(targets) == 0 || item.LastChangedAt == nil || item.LastChangedAt.IsZero() {
+		lastChangedAt := normalizeSnapshotSchedulingStateChangedAt(item.LastChangedAt, now, snapshot.GeneratedAt)
+		if item.RouteID == 0 || len(targets) == 0 || lastChangedAt == nil || lastChangedAt.IsZero() {
 			continue
 		}
 		if _, ok := routeIDs[item.RouteID]; !ok {
@@ -132,7 +139,7 @@ func (s *Scheduler) LoadSnapshotStates(snapshot *Snapshot) {
 		snapshotStates[schedulerStateKey(item.RouteID, recordType, scopeKey)] = debounceState{
 			Targets:       targets,
 			Desired:       desired,
-			LastChangedAt: item.LastChangedAt.UTC(),
+			LastChangedAt: lastChangedAt.UTC(),
 		}
 	}
 	s.mu.Lock()

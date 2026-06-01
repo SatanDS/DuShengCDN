@@ -102,6 +102,7 @@ func (s *SnapshotStore) Set(snapshot *Snapshot) error {
 		return errors.New("snapshot is invalid")
 	}
 	normalized := normalizeSnapshot(snapshot)
+	normalizeSnapshotRuntimeTimes(normalized, time.Now().UTC())
 	index := buildSnapshotIndex(normalized)
 	s.mu.Lock()
 	s.snapshot = normalized
@@ -125,6 +126,7 @@ func (s *SnapshotStore) Save(snapshot *Snapshot) error {
 		s.setLastError(err)
 		return err
 	}
+	normalizeSnapshotRuntimeTimes(normalized, time.Now().UTC())
 	checksum, err := checksumSnapshot(normalized)
 	if err != nil {
 		s.setLastError(err)
@@ -312,6 +314,38 @@ func normalizeSnapshot(input *Snapshot) *Snapshot {
 	}
 	out.SchedulingStates = states
 	return &out
+}
+
+func normalizeSnapshotRuntimeTimes(snapshot *Snapshot, now time.Time) {
+	if snapshot == nil {
+		return
+	}
+	normalizedNow := now.UTC()
+	if snapshot.GeneratedAt.After(normalizedNow) {
+		snapshot.GeneratedAt = normalizedNow
+	}
+	for i := range snapshot.SchedulingStates {
+		snapshot.SchedulingStates[i].LastChangedAt = normalizeSnapshotSchedulingStateChangedAt(snapshot.SchedulingStates[i].LastChangedAt, normalizedNow, snapshot.GeneratedAt)
+	}
+}
+
+func normalizeSnapshotSchedulingStateChangedAt(changedAt *time.Time, now time.Time, generatedAt time.Time) *time.Time {
+	if changedAt == nil {
+		return nil
+	}
+	normalizedNow := now.UTC()
+	normalized := changedAt.UTC()
+	if !normalized.After(normalizedNow) {
+		return &normalized
+	}
+	if !generatedAt.IsZero() {
+		generated := generatedAt.UTC()
+		if !generated.After(normalizedNow) {
+			return &generated
+		}
+	}
+	normalized = normalizedNow
+	return &normalized
 }
 
 func buildSnapshotIndex(snapshot *Snapshot) snapshotIndex {

@@ -660,6 +660,65 @@ func TestSchedulerKeepsLocalStateForRoutesPresentInNewSnapshot(t *testing.T) {
 	}
 }
 
+func TestSchedulerClampsFutureLoadedSnapshotState(t *testing.T) {
+	now := time.Unix(350, 0).UTC()
+	generatedAt := now.Add(-20 * time.Second)
+	futureChangedAt := now.Add(time.Hour)
+	snapshot := baseSnapshot()
+	snapshot.GeneratedAt = generatedAt
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           12,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+				Debounce: GSLBDebounce{CooldownSeconds: 60},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("previous", "hk", "8.8.4.4", 100, 1),
+		testNode("desired", "hk", "1.1.1.1", 900, 1),
+	}
+	snapshot.SchedulingStates = []SnapshotSchedulingState{
+		{
+			RouteID:         12,
+			RecordType:      "A",
+			ScopeKey:        "global",
+			SelectedTargets: []string{"8.8.4.4"},
+			DesiredTargets:  []string{"8.8.4.4"},
+			LastChangedAt:   &futureChangedAt,
+		},
+	}
+
+	scheduler := NewScheduler()
+	scheduler.now = func() time.Time { return now }
+	scheduler.LoadSnapshotStates(snapshot)
+	selected, _, _, err := scheduler.Select(snapshot, &snapshot.Routes[0], "A", SourceContext{}, true)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(selected) != 1 || selected[0] != "8.8.4.4" {
+		t.Fatalf("expected clamped snapshot state to keep previous target, got %+v", selected)
+	}
+	states := scheduler.SnapshotStates(snapshot)
+	if len(states) != 1 || states[0].LastChangedAt == nil || !states[0].LastChangedAt.Equal(generatedAt) {
+		t.Fatalf("expected exported state time to use snapshot generated time, got %+v", states)
+	}
+}
+
 func TestSchedulerExportsSnapshotStates(t *testing.T) {
 	now := time.Unix(400, 0).UTC()
 	snapshot := baseSnapshot()

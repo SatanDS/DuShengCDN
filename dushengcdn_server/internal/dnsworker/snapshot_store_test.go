@@ -111,6 +111,37 @@ func TestSnapshotStoreLoadsLegacySnapshotFile(t *testing.T) {
 	}
 }
 
+func TestSnapshotStoreClampsFutureRuntimeTimesAfterLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	snapshot := snapshotStoreTestSnapshot("future-times")
+	futureGeneratedAt := time.Now().UTC().Add(time.Hour)
+	futureChangedAt := futureGeneratedAt.Add(time.Minute)
+	snapshot.GeneratedAt = futureGeneratedAt
+	snapshot.SchedulingStates[0].LastChangedAt = &futureChangedAt
+
+	store := NewSnapshotStore(path, time.Minute)
+	if err := store.Save(snapshot); err != nil {
+		t.Fatalf("save future snapshot: %v", err)
+	}
+
+	loadedStore := NewSnapshotStore(path, time.Minute)
+	if err := loadedStore.LoadFromDisk(); err != nil {
+		t.Fatalf("load future snapshot: %v", err)
+	}
+	loaded, _, _, _ := loadedStore.Current()
+	if loaded == nil {
+		t.Fatal("expected loaded snapshot")
+	}
+	if !loaded.GeneratedAt.Before(futureGeneratedAt) {
+		t.Fatalf("expected future GeneratedAt to be clamped, got %v", loaded.GeneratedAt)
+	}
+	if len(loaded.SchedulingStates) != 1 ||
+		loaded.SchedulingStates[0].LastChangedAt == nil ||
+		!loaded.SchedulingStates[0].LastChangedAt.Before(futureChangedAt) {
+		t.Fatalf("expected future scheduling state time to be clamped, got %+v", loaded.SchedulingStates)
+	}
+}
+
 func TestSnapshotStoreLoadsLegacyGSLBPoolsWithoutEnabledAsEnabled(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 	snapshot := snapshotStoreTestGSLBSnapshot("legacy-gslb")
