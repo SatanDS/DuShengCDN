@@ -48,7 +48,8 @@ Options:
   -h, --help                        Show this help message
 
 Behavior:
-  1. Copies dushengcdn_server/.env.example to .env when .env does not exist
+  1. Creates dushengcdn_server/.env from .env.example when .env does not exist
+     and fills POSTGRES_PASSWORD, SESSION_SECRET, and DSN with generated values
   2. Starts or updates Server with Docker Compose
   3. When DNS Worker is enabled, checks whether a local Worker is already deployed
   4. If no local Worker is found, detects public IP, creates a DNS Worker Token, and runs install-dns-worker.sh
@@ -121,6 +122,64 @@ is_ipv4() {
   done
 }
 
+random_hex() {
+  local bytes="$1"
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex "$bytes"
+    return 0
+  fi
+  if [[ -r /dev/urandom ]]; then
+    od -An -N "$bytes" -tx1 /dev/urandom | tr -d ' \n'
+    return 0
+  fi
+  return 1
+}
+
+escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
+}
+
+write_env_key() {
+  local key="$1"
+  local value="$2"
+  local escaped
+
+  escaped="$(escape_sed_replacement "$value")"
+  if grep -Eq "^[[:space:]]*${key}=" "$ENV_FILE"; then
+    sed -i.bak -E "s|^[[:space:]]*${key}=.*|${key}=${escaped}|" "$ENV_FILE"
+    rm -f "${ENV_FILE}.bak"
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
+initialize_env_file() {
+  local postgres_db postgres_user postgres_password session_secret dsn
+
+  if [[ -f "$ENV_FILE" ]]; then
+    return
+  fi
+  [[ -f "${SERVER_DIR}/.env.example" ]] || return
+
+  log "Creating ${ENV_FILE} from .env.example..."
+  cp -n "${SERVER_DIR}/.env.example" "$ENV_FILE"
+
+  postgres_password="$(random_hex 18 || true)"
+  session_secret="$(random_hex 32 || true)"
+  if [[ -z "$postgres_password" || -z "$session_secret" ]]; then
+    warn "could not generate random secrets; edit ${ENV_FILE} before production use."
+    return
+  fi
+
+  postgres_db="$(env_value POSTGRES_DB dushengcdn)"
+  postgres_user="$(env_value POSTGRES_USER dushengcdn)"
+  dsn="postgres://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}?sslmode=disable"
+  write_env_key POSTGRES_PASSWORD "$postgres_password"
+  write_env_key SESSION_SECRET "$session_secret"
+  write_env_key DSN "$dsn"
+  log "Generated POSTGRES_PASSWORD, SESSION_SECRET, and DSN in ${ENV_FILE}."
+}
+
 detect_public_ip() {
   local endpoint ip
   for endpoint in \
@@ -175,6 +234,11 @@ dns_worker_already_installed() {
     return 0
   fi
 
+  if [[ -f "/etc/systemd/system/${DNS_WORKER_SERVICE}.service" || -f "/lib/systemd/system/${DNS_WORKER_SERVICE}.service" || -f "/usr/lib/systemd/system/${DNS_WORKER_SERVICE}.service" ]]; then
+    DNS_WORKER_FOUND_REASON="systemd unit file for ${DNS_WORKER_SERVICE}.service already exists"
+    return 0
+  fi
+
   if [[ -x "${DNS_WORKER_INSTALL_DIR}/dushengcdn-dns-worker" ]]; then
     DNS_WORKER_FOUND_REASON="binary exists at ${DNS_WORKER_INSTALL_DIR}/dushengcdn-dns-worker"
     return 0
@@ -182,6 +246,11 @@ dns_worker_already_installed() {
 
   if [[ -f "${DNS_WORKER_INSTALL_DIR}/dns-worker.env" ]]; then
     DNS_WORKER_FOUND_REASON="environment file exists at ${DNS_WORKER_INSTALL_DIR}/dns-worker.env"
+    return 0
+  fi
+
+  if command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fxq "$DNS_WORKER_SERVICE"; then
+    DNS_WORKER_FOUND_REASON="Docker container ${DNS_WORKER_SERVICE} already exists"
     return 0
   fi
 
@@ -282,10 +351,7 @@ fi
 [[ -d "$SERVER_DIR" ]] || die "server directory does not exist: ${SERVER_DIR}"
 [[ -f "$COMPOSE_FILE" ]] || die "compose file does not exist: ${COMPOSE_FILE}"
 
-if [[ ! -f "$ENV_FILE" && -f "${SERVER_DIR}/.env.example" ]]; then
-  log "Creating ${ENV_FILE} from .env.example..."
-  cp -n "${SERVER_DIR}/.env.example" "$ENV_FILE"
-fi
+initialize_env_file
 
 ensure_docker_compose
 build_compose_cmd
@@ -311,6 +377,7 @@ if [[ "$INSTALL_DNS_WORKER" != "true" ]]; then
   exit 0
 fi
 
+log "Checking whether DNS Worker is already deployed locally..."
 if dns_worker_already_installed && [[ "$FORCE_DNS_WORKER_REINSTALL" != "true" ]]; then
   log "DNS Worker already deployed locally; skipping automatic Worker creation and install."
   log "${DNS_WORKER_FOUND_REASON}"

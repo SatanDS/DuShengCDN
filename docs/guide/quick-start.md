@@ -69,7 +69,7 @@ volumes:
 docker compose up -d
 ```
 
-如果使用仓库源码部署，也可以在仓库根目录执行一体化脚本。它会启动面板，并默认自动探测公网 IPv4、创建名为 `DNS服务响应端` 的 DNS Worker、安装同机 DNS Worker。脚本会先检查本机是否已经部署过 DNS Worker；检测到已有服务、安装目录、环境文件、进程或 DuShengCDN 监听 `53` 端口时会跳过 Worker 自动安装。
+如果使用仓库源码部署，也可以在仓库根目录执行一体化脚本。它会在首次部署时自动生成 `.env` 里的数据库密码、`SESSION_SECRET` 和 `DSN`，启动面板，并默认自动探测公网 IPv4、创建名为 `DNS服务响应端` 的 DNS Worker、安装同机 DNS Worker。脚本会先检查本机是否已经部署过 DNS Worker；检测到已有服务、systemd unit 文件、安装目录、环境文件、同名 Docker 容器、进程或 DuShengCDN 监听 `53` 端口时会跳过 Worker 自动安装。
 
 ```bash
 cd /opt/dushengcdn

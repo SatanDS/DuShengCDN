@@ -193,7 +193,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 
 ## 一体化部署脚本参数
 
-`scripts/install-server.sh` 用于源码 Compose 面板部署，并默认自动部署同机 DNS Worker。脚本会先检查本地是否已有 `dushengcdn-dns-worker.service`、安装目录、环境文件、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时默认跳过 Worker 自动创建和安装。
+`scripts/install-server.sh` 用于源码 Compose 面板部署，并默认自动部署同机 DNS Worker。脚本会在 `.env` 不存在时从 `.env.example` 创建环境文件，并自动生成 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和匹配的 `DSN`；已有 `.env` 不会被覆盖。脚本会先检查本地是否已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、安装目录、环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时默认跳过 Worker 自动创建和安装。
 
 | 参数 | 作用 | 默认值 |
 | --- | --- | --- |

@@ -11,6 +11,7 @@
 | Server Compose 本地参数隔离 | 已提供 `dushengcdn_server/.env.example`，`dushengcdn_server/docker-compose.yaml` 已改为读取 `.env` 变量；后续继续观察用户升级是否还会直接改仓库模板 | 文档说明可执行；源码 Compose 更新时不需要修改仓库内 `docker-compose.yaml` |
 | 文档构建进入 CI 或本地一键验证 | 已新增 `.github/workflows/docs-ci.yml`，在 `docs/**` 或该 workflow 变化时安装依赖并执行 `pnpm build`；本地开发文档也补充了同样命令 | GitHub Actions `Docs CI` 通过；本地 `cd docs && pnpm install --frozen-lockfile && pnpm build` 通过 |
 | 升级后旧 Agent 兼容窗口 | Server 已兼容旧全局 `AGENT_TOKEN` 的 HTTP 心跳、配置拉取和应用日志上报；旧 Token 只允许绑定已有 `node_id` 且不覆盖专属 Token 节点 | `go test ./...` 覆盖旧 Agent 兼容用例；排障文档说明旧 Token 迁移路径 |
+| 面板与同机 DNS Worker 一体化部署 | 已新增 `scripts/install-server.sh`，首次创建 `.env` 时自动生成数据库密码、`SESSION_SECRET` 和 `DSN`，启动面板后默认自动探测公网 IP、创建 `DNS服务响应端` Worker 并安装 DNS Worker；安装前会检查本机已有 Worker、同名 Docker 容器和 systemd unit 文件，避免覆盖 | `bash -n scripts/install-server.sh`、`scripts/install-server.sh --help`、`go test ./...`、前端/文档构建通过；文档已说明 `--skip-dns-worker` 与 `--force-dns-worker-reinstall` |
 
 ## 中优先级
 
@@ -20,6 +21,7 @@
 | root 密码重置端到端 CLI 回归 | 已新增 `dushengcdn_server/reset_root_cli_test.go`，通过 `go run . --reset-root-password ...` 覆盖创建 root、拒绝旧密码、以及重置被禁用/降级 root 的完整命令入口 | `cd dushengcdn_server && go test . -run TestResetRootPasswordCLI -count=1` 和 `go test ./...` 通过 |
 | 网站配置分区前端测试补强 | 已覆盖列表入口、分区展开、创建网站、域名、反向代理节点池、自动 DNS/GSLB、权威 DNS、WAF、PoW、Basic Auth 和地区限制保存回归；后续可继续补缓存保存失败和加载态 | `cd dushengcdn_server/web && pnpm test -- tests/unit/proxy-routes-page.test.tsx` 通过 |
 | 权威 DNS 调度评分增强 | 当前 Agent 多点探测默认只用于观测；启用门槛后参与候选过滤和同等候选排序 | 如扩展 RTT、丢包、区域覆盖评分，先更新 `docs/design/authoritative-dns-gslb.md`，再补 Worker/Server/前端测试 |
+| 权威 DNS 新手部署闭环实机验证 | 一体化脚本已覆盖自动创建 Worker Token 和本机安装路径，但尚未在真实 Linux 服务器上完成从空目录到 `dig @PUBLIC_IP zone SOA` 的端到端演练 | 在 Debian/Ubuntu 空机执行 `bash scripts/install-server.sh --public-ip PUBLIC_IP`，确认 `docker compose ps`、`systemctl status dushengcdn-dns-worker`、`ss -lntup/ss -lnuap :53` 和 `dig @PUBLIC_IP example.com SOA` 均符合预期 |
 
 ## 低优先级
 
