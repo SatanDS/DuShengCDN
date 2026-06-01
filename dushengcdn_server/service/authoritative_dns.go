@@ -203,26 +203,34 @@ type DNSGSLBSimulationPoolView struct {
 }
 
 type DNSGSLBSimulationNodeView struct {
-	NodeID               string     `json:"node_id"`
-	Name                 string     `json:"name"`
-	PoolName             string     `json:"pool_name"`
-	Status               string     `json:"status"`
-	OpenrestyStatus      string     `json:"openresty_status"`
-	SchedulingEnabled    bool       `json:"scheduling_enabled"`
-	DrainMode            bool       `json:"drain_mode"`
-	LastSeenAt           *time.Time `json:"last_seen_at"`
-	PublicIPs            []string   `json:"public_ips"`
-	CandidateTargets     []string   `json:"candidate_targets"`
-	SelectedTargets      []string   `json:"selected_targets"`
-	Eligible             bool       `json:"eligible"`
-	Selected             bool       `json:"selected"`
-	Reasons              []string   `json:"reasons"`
-	HasMetric            bool       `json:"has_metric"`
-	MetricCapturedAt     *time.Time `json:"metric_captured_at,omitempty"`
-	OpenrestyConnections int64      `json:"openresty_connections"`
-	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
-	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
-	Score                float64    `json:"score"`
+	NodeID                  string     `json:"node_id"`
+	Name                    string     `json:"name"`
+	PoolName                string     `json:"pool_name"`
+	Status                  string     `json:"status"`
+	OpenrestyStatus         string     `json:"openresty_status"`
+	SchedulingEnabled       bool       `json:"scheduling_enabled"`
+	DrainMode               bool       `json:"drain_mode"`
+	LastSeenAt              *time.Time `json:"last_seen_at"`
+	PublicIPs               []string   `json:"public_ips"`
+	CandidateTargets        []string   `json:"candidate_targets"`
+	SelectedTargets         []string   `json:"selected_targets"`
+	Eligible                bool       `json:"eligible"`
+	Selected                bool       `json:"selected"`
+	Reasons                 []string   `json:"reasons"`
+	HasMetric               bool       `json:"has_metric"`
+	MetricCapturedAt        *time.Time `json:"metric_captured_at,omitempty"`
+	OpenrestyConnections    int64      `json:"openresty_connections"`
+	CPUUsagePercent         float64    `json:"cpu_usage_percent"`
+	MemoryUsagePercent      float64    `json:"memory_usage_percent"`
+	Score                   float64    `json:"score"`
+	NodeProbeStatus         string     `json:"node_probe_status"`
+	NodeProbeMessage        string     `json:"node_probe_message"`
+	NodeProbeCheckedCount   int        `json:"node_probe_checked_count"`
+	NodeProbeHealthyCount   int        `json:"node_probe_healthy_count"`
+	NodeProbeStaleCount     int        `json:"node_probe_stale_count"`
+	NodeProbeHealthyPercent float64    `json:"node_probe_healthy_percent"`
+	NodeProbeAverageRTTMs   float64    `json:"node_probe_average_rtt_ms"`
+	NodeProbeMaxRTTMs       int64      `json:"node_probe_max_rtt_ms"`
 }
 
 type AuthoritativeDNSMigrationCandidateView struct {
@@ -463,12 +471,13 @@ type DNSZoneDelegationCheckView struct {
 }
 
 type AuthoritativeDNSSnapshot struct {
-	SnapshotVersion  string                                    `json:"snapshot_version"`
-	GeneratedAt      time.Time                                 `json:"generated_at"`
-	Zones            []AuthoritativeDNSSnapshotZone            `json:"zones"`
-	Routes           []AuthoritativeDNSSnapshotRoute           `json:"routes"`
-	Nodes            []AuthoritativeDNSSnapshotNode            `json:"nodes"`
-	SchedulingStates []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
+	SnapshotVersion            string                                    `json:"snapshot_version"`
+	GeneratedAt                time.Time                                 `json:"generated_at"`
+	GSLBProbeSchedulingEnabled bool                                      `json:"gslb_probe_scheduling_enabled"`
+	Zones                      []AuthoritativeDNSSnapshotZone            `json:"zones"`
+	Routes                     []AuthoritativeDNSSnapshotRoute           `json:"routes"`
+	Nodes                      []AuthoritativeDNSSnapshotNode            `json:"nodes"`
+	SchedulingStates           []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type AuthoritativeDNSSnapshotZone struct {
@@ -522,6 +531,12 @@ type AuthoritativeDNSSnapshotNode struct {
 	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
 	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
 	MetricCapturedAt     *time.Time `json:"metric_captured_at,omitempty"`
+	DNSProbeHealthy      bool       `json:"dns_probe_healthy"`
+	DNSProbeCheckedCount int        `json:"dns_probe_checked_count"`
+	DNSProbeHealthyCount int        `json:"dns_probe_healthy_count"`
+	DNSProbeStaleCount   int        `json:"dns_probe_stale_count"`
+	DNSProbeAverageRTTMs float64    `json:"dns_probe_average_rtt_ms"`
+	DNSProbeMaxRTTMs     int64      `json:"dns_probe_max_rtt_ms"`
 }
 
 type AuthoritativeDNSSnapshotSchedulingState struct {
@@ -1147,11 +1162,12 @@ func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnap
 		return nil, err
 	}
 	snapshot := &AuthoritativeDNSSnapshot{
-		GeneratedAt:      time.Now().UTC(),
-		Zones:            zones,
-		Routes:           routes,
-		Nodes:            nodes,
-		SchedulingStates: schedulingStates,
+		GeneratedAt:                time.Now().UTC(),
+		GSLBProbeSchedulingEnabled: common.GSLBProbeSchedulingEnabled,
+		Zones:                      zones,
+		Routes:                     routes,
+		Nodes:                      nodes,
+		SchedulingStates:           schedulingStates,
 	}
 	version, err := authoritativeDNSSnapshotVersion(snapshot)
 	if err != nil {
@@ -1315,6 +1331,8 @@ func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBP
 		return diagnostics
 	}
 	metrics := latestNodeMetricSnapshots()
+	nodeProbeStats := buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
+	requireHealthyDNSProbe := common.GSLBProbeSchedulingEnabled
 	selectedSet := make(map[string]struct{}, len(selectedTargets))
 	for _, target := range selectedTargets {
 		selectedSet[strings.TrimSpace(target)] = struct{}{}
@@ -1323,7 +1341,7 @@ func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBP
 		if node == nil {
 			continue
 		}
-		view := buildDNSGSLBSimulationNodeView(node, recordType, servicePolicy, matchedPools, metrics[node.NodeID], selectedSet)
+		view := buildDNSGSLBSimulationNodeView(node, recordType, servicePolicy, matchedPools, metrics[node.NodeID], selectedSet, nodeProbeStats[node.NodeID], requireHealthyDNSProbe)
 		diagnostics.nodes = append(diagnostics.nodes, view)
 	}
 	sort.SliceStable(diagnostics.nodes, func(i, j int) bool {
@@ -1408,7 +1426,7 @@ func enabledGSLBPoolNames(pools []ProxyRouteGSLBPoolPolicy) map[string]struct{} 
 	return result
 }
 
-func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy ProxyRouteGSLBPolicy, matchedPools map[string]ProxyRouteGSLBPoolPolicy, metric *model.NodeMetricSnapshot, selectedSet map[string]struct{}) DNSGSLBSimulationNodeView {
+func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy ProxyRouteGSLBPolicy, matchedPools map[string]ProxyRouteGSLBPoolPolicy, metric *model.NodeMetricSnapshot, selectedSet map[string]struct{}, probeStats *dnsWorkerNodeProbeStats, requireHealthyDNSProbe bool) DNSGSLBSimulationNodeView {
 	poolName := normalizeNodePoolName(node.PoolName)
 	poolPolicy, poolMatched := matchedPools[poolName]
 	reasons := []string{}
@@ -1427,6 +1445,9 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 	publicIPs := resolveNodePublicIPs(node)
 	candidateTargets, ipReasons := filterDNSGSLBSimulationTargets(publicIPs, recordType)
 	reasons = append(reasons, ipReasons...)
+	if requireHealthyDNSProbe && !dnsWorkerNodeProbeStatsSchedulable(probeStats) {
+		reasons = append(reasons, "Agent 探测未达到调度门槛")
+	}
 	hasMetric := metric != nil
 	openrestyConnections := int64(0)
 	cpuUsage := float64(0)
@@ -1451,6 +1472,7 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 	eligible := poolMatched &&
 		isNodeSchedulableForDNS(node) &&
 		isNodeOnlineAndOpenRestyHealthy(node) &&
+		(!requireHealthyDNSProbe || dnsWorkerNodeProbeStatsSchedulable(probeStats)) &&
 		(!hasMetric || metricWithinGSLBThresholds(metric, policy.LoadThresholds)) &&
 		len(candidateTargets) > 0
 	if eligible {
@@ -1459,6 +1481,7 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 			reasons = append(reasons, "暂无新鲜负载指标，仅作为兜底候选")
 		}
 	}
+	probeSummary := summarizeDNSWorkerNodeProbeStats(probeStats)
 	score := float64(0)
 	if poolMatched {
 		score = scoreGSLBCandidate(gslbDNSTargetCandidate{
@@ -1475,26 +1498,34 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 	}
 	lastSeenAt := node.LastSeenAt
 	return DNSGSLBSimulationNodeView{
-		NodeID:               node.NodeID,
-		Name:                 node.Name,
-		PoolName:             poolName,
-		Status:               computeNodeStatus(node),
-		OpenrestyStatus:      normalizeOpenrestyStatus(node.OpenrestyStatus),
-		SchedulingEnabled:    isNodeSchedulableForDNS(node),
-		DrainMode:            node.DrainMode,
-		LastSeenAt:           &lastSeenAt,
-		PublicIPs:            publicIPs,
-		CandidateTargets:     candidateTargets,
-		SelectedTargets:      selected,
-		Eligible:             eligible,
-		Selected:             len(selected) > 0,
-		Reasons:              dedupeStrings(reasons),
-		HasMetric:            hasMetric,
-		MetricCapturedAt:     metricCapturedAt,
-		OpenrestyConnections: openrestyConnections,
-		CPUUsagePercent:      cpuUsage,
-		MemoryUsagePercent:   memoryUsage,
-		Score:                score,
+		NodeID:                  node.NodeID,
+		Name:                    node.Name,
+		PoolName:                poolName,
+		Status:                  computeNodeStatus(node),
+		OpenrestyStatus:         normalizeOpenrestyStatus(node.OpenrestyStatus),
+		SchedulingEnabled:       isNodeSchedulableForDNS(node),
+		DrainMode:               node.DrainMode,
+		LastSeenAt:              &lastSeenAt,
+		PublicIPs:               publicIPs,
+		CandidateTargets:        candidateTargets,
+		SelectedTargets:         selected,
+		Eligible:                eligible,
+		Selected:                len(selected) > 0,
+		Reasons:                 dedupeStrings(reasons),
+		HasMetric:               hasMetric,
+		MetricCapturedAt:        metricCapturedAt,
+		OpenrestyConnections:    openrestyConnections,
+		CPUUsagePercent:         cpuUsage,
+		MemoryUsagePercent:      memoryUsage,
+		Score:                   score,
+		NodeProbeStatus:         probeSummary.status,
+		NodeProbeMessage:        probeSummary.message,
+		NodeProbeCheckedCount:   probeSummary.checkedCount,
+		NodeProbeHealthyCount:   probeSummary.healthyCount,
+		NodeProbeStaleCount:     probeSummary.staleCount,
+		NodeProbeHealthyPercent: probeSummary.healthyPercent,
+		NodeProbeAverageRTTMs:   probeSummary.averageRTTMs,
+		NodeProbeMaxRTTMs:       probeSummary.maxRTTMs,
 	}
 }
 
@@ -1948,7 +1979,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 		view.targetCount = normalizeDNSTargetCount(policy.TargetCount)
 		view.strategy = normalizeDNSScheduleMode(policy.Strategy)
 	}
-	selection, err := selectProxyRouteDNSTargets(route, recordType)
+	selection, err := selectProxyRouteDNSTargetsWithOptions(route, recordType, authoritativeDNSSchedulingOptions())
 	if err != nil {
 		return view, fmt.Errorf("当前节点池/GSLB 无法返回 %s 边缘 IP，请检查节点池、公网 IP、节点在线状态、OpenResty 健康和 GSLB 负载阈值：%w", recordType, err)
 	}
@@ -1966,7 +1997,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 	if route.GSLBEnabled {
 		blockers := []string{}
 		for _, source := range authoritativeDNSTargetPrecheckSources(policy) {
-			selection, err := selectGSLBDNSTargetsForSource(route, recordType, source.source)
+			selection, err := selectGSLBDNSTargetsWithOptions(route, recordType, source.source, authoritativeDNSSchedulingOptions())
 			if err != nil {
 				blockers = append(blockers, fmt.Sprintf("%s 无法返回 %s 边缘 IP：%v", source.label, recordType, err))
 				continue
@@ -1989,6 +2020,12 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 		}
 	}
 	return view, nil
+}
+
+func authoritativeDNSSchedulingOptions() gslbDNSSchedulingOptions {
+	return gslbDNSSchedulingOptions{
+		RequireHealthyDNSProbe: common.GSLBProbeSchedulingEnabled,
+	}
 }
 
 func authoritativeDNSTargetPrecheckSources(policy ProxyRouteGSLBPolicy) []authoritativeDNSTargetPrecheckSource {
@@ -2375,7 +2412,7 @@ func snapshotAuthoritativeRoutes() ([]AuthoritativeDNSSnapshotRoute, error) {
 			GSLBEnabled:  route.GSLBEnabled,
 			GSLBPolicy:   policy,
 		}
-		selection, selectErr := selectProxyRouteDNSTargets(route, recordType)
+		selection, selectErr := selectProxyRouteDNSTargetsWithOptions(route, recordType, authoritativeDNSSchedulingOptions())
 		if selectErr != nil {
 			item.TargetError = selectErr.Error()
 		} else {
@@ -2393,6 +2430,10 @@ func snapshotNodes() ([]AuthoritativeDNSSnapshotNode, error) {
 		return nil, err
 	}
 	metrics := latestNodeMetricSnapshots()
+	probeStatsByNode := map[string]*dnsWorkerNodeProbeStats{}
+	if common.GSLBProbeSchedulingEnabled {
+		probeStatsByNode = buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
+	}
 	result := make([]AuthoritativeDNSSnapshotNode, 0, len(nodes))
 	for _, node := range nodes {
 		if node == nil {
@@ -2416,6 +2457,14 @@ func snapshotNodes() ([]AuthoritativeDNSSnapshotNode, error) {
 			item.CPUUsagePercent = metric.CPUUsagePercent
 			item.MemoryUsagePercent = nodeMetricMemoryUsagePercent(metric)
 			item.MetricCapturedAt = &capturedAt
+		}
+		if probeStats := probeStatsByNode[node.NodeID]; probeStats != nil {
+			item.DNSProbeHealthy = dnsWorkerNodeProbeStatsSchedulable(probeStats)
+			item.DNSProbeCheckedCount = probeStats.totalCount
+			item.DNSProbeHealthyCount = probeStats.healthyCount
+			item.DNSProbeStaleCount = probeStats.staleCount
+			item.DNSProbeAverageRTTMs = averageFloat(probeStats.totalAverageRTTMs, probeStats.averageSamples)
+			item.DNSProbeMaxRTTMs = probeStats.maxRTTMs
 		}
 		result = append(result, item)
 	}
@@ -2493,12 +2542,13 @@ func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *d
 		return nil
 	}
 	result := &dnsworker.Snapshot{
-		SnapshotVersion:  snapshot.SnapshotVersion,
-		GeneratedAt:      snapshot.GeneratedAt,
-		Zones:            make([]dnsworker.SnapshotZone, 0, len(snapshot.Zones)),
-		Routes:           make([]dnsworker.SnapshotRoute, 0, len(snapshot.Routes)),
-		Nodes:            make([]dnsworker.SnapshotNode, 0, len(snapshot.Nodes)),
-		SchedulingStates: make([]dnsworker.SnapshotSchedulingState, 0, len(snapshot.SchedulingStates)),
+		SnapshotVersion:            snapshot.SnapshotVersion,
+		GeneratedAt:                snapshot.GeneratedAt,
+		GSLBProbeSchedulingEnabled: snapshot.GSLBProbeSchedulingEnabled,
+		Zones:                      make([]dnsworker.SnapshotZone, 0, len(snapshot.Zones)),
+		Routes:                     make([]dnsworker.SnapshotRoute, 0, len(snapshot.Routes)),
+		Nodes:                      make([]dnsworker.SnapshotNode, 0, len(snapshot.Nodes)),
+		SchedulingStates:           make([]dnsworker.SnapshotSchedulingState, 0, len(snapshot.SchedulingStates)),
 	}
 	for _, zone := range snapshot.Zones {
 		item := dnsworker.SnapshotZone{
@@ -2556,6 +2606,12 @@ func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *d
 			CPUUsagePercent:      node.CPUUsagePercent,
 			MemoryUsagePercent:   node.MemoryUsagePercent,
 			MetricCapturedAt:     node.MetricCapturedAt,
+			DNSProbeHealthy:      node.DNSProbeHealthy,
+			DNSProbeCheckedCount: node.DNSProbeCheckedCount,
+			DNSProbeHealthyCount: node.DNSProbeHealthyCount,
+			DNSProbeStaleCount:   node.DNSProbeStaleCount,
+			DNSProbeAverageRTTMs: node.DNSProbeAverageRTTMs,
+			DNSProbeMaxRTTMs:     node.DNSProbeMaxRTTMs,
 		})
 	}
 	for _, state := range snapshot.SchedulingStates {
@@ -2608,15 +2664,17 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 
 func authoritativeDNSSnapshotVersion(snapshot *AuthoritativeDNSSnapshot) (string, error) {
 	payload := struct {
-		Zones            []AuthoritativeDNSSnapshotZone            `json:"zones"`
-		Routes           []AuthoritativeDNSSnapshotRoute           `json:"routes"`
-		Nodes            []AuthoritativeDNSSnapshotNode            `json:"nodes"`
-		SchedulingStates []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
+		GSLBProbeSchedulingEnabled bool                                      `json:"gslb_probe_scheduling_enabled"`
+		Zones                      []AuthoritativeDNSSnapshotZone            `json:"zones"`
+		Routes                     []AuthoritativeDNSSnapshotRoute           `json:"routes"`
+		Nodes                      []authoritativeDNSSnapshotVersionNode     `json:"nodes"`
+		SchedulingStates           []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 	}{
-		Zones:            snapshot.Zones,
-		Routes:           snapshot.Routes,
-		Nodes:            snapshot.Nodes,
-		SchedulingStates: snapshot.SchedulingStates,
+		GSLBProbeSchedulingEnabled: snapshot.GSLBProbeSchedulingEnabled,
+		Zones:                      snapshot.Zones,
+		Routes:                     snapshot.Routes,
+		Nodes:                      authoritativeDNSSnapshotVersionNodes(snapshot.Nodes),
+		SchedulingStates:           snapshot.SchedulingStates,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -2624,6 +2682,48 @@ func authoritativeDNSSnapshotVersion(snapshot *AuthoritativeDNSSnapshot) (string
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])[:24], nil
+}
+
+type authoritativeDNSSnapshotVersionNode struct {
+	NodeID               string     `json:"node_id"`
+	Name                 string     `json:"name"`
+	PoolName             string     `json:"pool_name"`
+	PublicIPs            []string   `json:"public_ips"`
+	Weight               int        `json:"weight"`
+	SchedulingEnabled    bool       `json:"scheduling_enabled"`
+	DrainMode            bool       `json:"drain_mode"`
+	Status               string     `json:"status"`
+	OpenrestyStatus      string     `json:"openresty_status"`
+	LastSeenAt           time.Time  `json:"last_seen_at"`
+	OpenrestyConnections int64      `json:"openresty_connections"`
+	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
+	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
+	MetricCapturedAt     *time.Time `json:"metric_captured_at,omitempty"`
+	DNSProbeHealthy      bool       `json:"dns_probe_healthy"`
+}
+
+func authoritativeDNSSnapshotVersionNodes(nodes []AuthoritativeDNSSnapshotNode) []authoritativeDNSSnapshotVersionNode {
+	result := make([]authoritativeDNSSnapshotVersionNode, 0, len(nodes))
+	for _, node := range nodes {
+		result = append(result, authoritativeDNSSnapshotVersionNode{
+			NodeID:               node.NodeID,
+			Name:                 node.Name,
+			PoolName:             node.PoolName,
+			PublicIPs:            append([]string(nil), node.PublicIPs...),
+			Weight:               node.Weight,
+			SchedulingEnabled:    node.SchedulingEnabled,
+			DrainMode:            node.DrainMode,
+			Status:               node.Status,
+			OpenrestyStatus:      node.OpenrestyStatus,
+			LastSeenAt:           node.LastSeenAt,
+			OpenrestyConnections: node.OpenrestyConnections,
+			CPUUsagePercent:      node.CPUUsagePercent,
+			MemoryUsagePercent:   node.MemoryUsagePercent,
+			MetricCapturedAt:     node.MetricCapturedAt,
+			DNSProbeHealthy:      node.DNSProbeHealthy,
+		})
+	}
+	return result
 }
 
 func recordDNSWorkerSnapshotPull(worker *model.DNSWorker, version string) error {
@@ -3560,6 +3660,98 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 		})
 	}
 	return statsByWorker
+}
+
+func buildDNSWorkerNodeProbeStatsByNode(now time.Time) map[string]*dnsWorkerNodeProbeStats {
+	probes, err := model.ListDNSWorkerNodeProbes()
+	if err != nil || len(probes) == 0 {
+		return map[string]*dnsWorkerNodeProbeStats{}
+	}
+	statsByNode := make(map[string]*dnsWorkerNodeProbeStats)
+	for _, probe := range probes {
+		if probe == nil {
+			continue
+		}
+		nodeID := strings.TrimSpace(probe.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		stats := statsByNode[nodeID]
+		if stats == nil {
+			stats = &dnsWorkerNodeProbeStats{}
+			statsByNode[nodeID] = stats
+		}
+		probeState := evaluateDNSWorkerNodeProbeState(now, probe)
+		stats.totalCount++
+		if probeState.status == dnsWorkerProbeStale {
+			stats.staleCount++
+		}
+		if probeState.healthy {
+			stats.healthyCount++
+		}
+		if probeState.status != dnsWorkerProbeStale && probe.AverageRTTMs > 0 {
+			stats.totalAverageRTTMs += probe.AverageRTTMs
+			stats.averageSamples++
+		}
+		if probeState.status != dnsWorkerProbeStale && probe.MaxRTTMs > stats.maxRTTMs {
+			stats.maxRTTMs = probe.MaxRTTMs
+		}
+	}
+	return statsByNode
+}
+
+type dnsWorkerNodeProbeSummary struct {
+	status         string
+	message        string
+	checkedCount   int
+	healthyCount   int
+	staleCount     int
+	healthyPercent float64
+	averageRTTMs   float64
+	maxRTTMs       int64
+}
+
+func summarizeDNSWorkerNodeProbeStats(stats *dnsWorkerNodeProbeStats) dnsWorkerNodeProbeSummary {
+	if stats == nil || stats.totalCount == 0 {
+		return dnsWorkerNodeProbeSummary{
+			status:  dnsWorkerProbeUnknown,
+			message: "尚未收到该节点的 DNS Worker 多点探测结果",
+		}
+	}
+	freshCount := stats.totalCount - stats.staleCount
+	summary := dnsWorkerNodeProbeSummary{
+		checkedCount:   stats.totalCount,
+		healthyCount:   stats.healthyCount,
+		staleCount:     stats.staleCount,
+		healthyPercent: ratioPercent(int64(stats.healthyCount), int64(stats.totalCount)),
+		averageRTTMs:   averageFloat(stats.totalAverageRTTMs, stats.averageSamples),
+		maxRTTMs:       stats.maxRTTMs,
+	}
+	switch {
+	case freshCount <= 0:
+		summary.status = dnsWorkerProbeStale
+		summary.message = "该节点的 DNS Worker 多点探测结果均已过期"
+	case stats.healthyCount == freshCount:
+		summary.status = dnsWorkerProbeHealthy
+		summary.message = fmt.Sprintf("该节点到 DNS Worker 多点探测全部可达（%d/%d）", stats.healthyCount, freshCount)
+	case stats.healthyCount > 0:
+		summary.status = dnsWorkerProbePartial
+		summary.message = fmt.Sprintf("该节点到 DNS Worker 多点探测部分可达（%d/%d）", stats.healthyCount, freshCount)
+	default:
+		summary.status = dnsWorkerProbeFailed
+		summary.message = fmt.Sprintf("该节点到 DNS Worker 多点探测均失败（0/%d）", freshCount)
+	}
+	if stats.staleCount > 0 && freshCount > 0 {
+		summary.message += fmt.Sprintf("，另有 %d 个过期", stats.staleCount)
+	}
+	return summary
+}
+
+func dnsWorkerNodeProbeStatsSchedulable(stats *dnsWorkerNodeProbeStats) bool {
+	if stats == nil {
+		return false
+	}
+	return stats.healthyCount > 0 && stats.totalCount > stats.staleCount
 }
 
 func evaluateDNSWorkerNodeProbeState(now time.Time, probe *model.DNSWorkerNodeProbe) dnsWorkerProbeState {

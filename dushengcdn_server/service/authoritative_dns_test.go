@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"dushengcdn/common"
+	"dushengcdn/internal/dnsworker"
 	"dushengcdn/model"
 
 	"github.com/miekg/dns"
@@ -19,9 +20,12 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
 	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = false
 	t.Cleanup(func() {
 		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
 	})
 
 	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{
@@ -143,6 +147,9 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	if len(snapshot.Nodes) != 1 || snapshot.Nodes[0].PublicIPs[0] != "8.8.4.4" {
 		t.Fatalf("unexpected snapshot nodes: %+v", snapshot.Nodes)
 	}
+	if snapshot.GSLBProbeSchedulingEnabled {
+		t.Fatal("expected probe scheduling to be disabled by default in snapshot")
+	}
 	if len(snapshot.SchedulingStates) != 1 {
 		t.Fatalf("expected one scheduling state in snapshot, got %+v", snapshot.SchedulingStates)
 	}
@@ -169,6 +176,201 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	}
 	if reloadedWorker.LastSnapshotVersion != snapshot.SnapshotVersion || reloadedWorker.LastSnapshotAt == nil {
 		t.Fatalf("expected worker snapshot metadata to be updated, got %+v", reloadedWorker)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotProbeSchedulingFiltersTargets(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = true
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{
+		Name:        "example.com",
+		NameServers: []string{"ns1.example.com"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1",
+		PublicAddress: "203.0.113.10:53",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+
+	now := time.Now()
+	nodes := []*model.Node{
+		{
+			NodeID:          "node-unprobed",
+			Name:            "unprobed",
+			IP:              "1.1.1.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          1000,
+			AgentToken:      "token-unprobed",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-probed",
+			Name:            "probed",
+			IP:              "8.8.4.4",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.4.4"]`,
+			Weight:          10,
+			AgentToken:      "token-probed",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+	if err := model.UpsertDNSWorkerNodeProbe(model.DB, &model.DNSWorkerNodeProbe{
+		WorkerID:       workerModel.WorkerID,
+		NodeID:         "node-probed",
+		PublicAddress:  workerModel.PublicAddress,
+		QueryName:      "example.com",
+		QueryType:      "SOA",
+		Healthy:        true,
+		AverageRTTMs:   12,
+		MaxRTTMs:       18,
+		ResultsJSON:    `[]`,
+		CheckedAt:      now,
+		FailureSamples: 0,
+	}); err != nil {
+		t.Fatalf("upsert probe: %v", err)
+	}
+
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 30)
+	rawPolicy, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("marshal policy: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		DNSAutoSync:     true,
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      string(rawPolicy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	snapshot, err := GetAuthoritativeDNSSnapshot(nil)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+	if !snapshot.GSLBProbeSchedulingEnabled {
+		t.Fatal("expected probe scheduling flag in snapshot")
+	}
+	if len(snapshot.Routes) != 1 || len(snapshot.Routes[0].CurrentTargets) != 1 || snapshot.Routes[0].CurrentTargets[0] != "8.8.4.4" {
+		t.Fatalf("expected snapshot target to require healthy DNS probe, got %+v", snapshot.Routes)
+	}
+	probed := findSnapshotNode(snapshot.Nodes, "node-probed")
+	if probed == nil || !probed.DNSProbeHealthy || probed.DNSProbeHealthyCount != 1 || probed.DNSProbeAverageRTTMs != 12 || probed.DNSProbeMaxRTTMs != 18 {
+		t.Fatalf("expected probed node summary in snapshot, got %+v", probed)
+	}
+	unprobed := findSnapshotNode(snapshot.Nodes, "node-unprobed")
+	if unprobed == nil || unprobed.DNSProbeHealthy || unprobed.DNSProbeCheckedCount != 0 {
+		t.Fatalf("expected unprobed node to be unhealthy for probe scheduling, got %+v", unprobed)
+	}
+
+	workerSnapshot := convertAuthoritativeSnapshotToWorker(snapshot)
+	server := dnsworker.NewDNSServer(
+		dnsworker.NewSnapshotStore("", dnsworker.DefaultSnapshotMaxAge),
+		dnsworker.NewScheduler(),
+		dnsworker.NewRollupAggregator(time.Minute),
+		nil,
+		"",
+	)
+	if err := server.Store.Set(workerSnapshot); err != nil {
+		t.Fatalf("set worker snapshot: %v", err)
+	}
+	response := server.Resolve(testDNSQuery("www.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected worker response from probed node, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected worker scheduler to require healthy DNS probe, got %s", got)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotVersionIgnoresProbeRTTJitter(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := &AuthoritativeDNSSnapshot{
+		GSLBProbeSchedulingEnabled: true,
+		GeneratedAt:                now,
+		Nodes: []AuthoritativeDNSSnapshotNode{
+			{
+				NodeID:               "node-a",
+				Name:                 "node-a",
+				PoolName:             "hk",
+				PublicIPs:            []string{"8.8.4.4"},
+				Weight:               100,
+				SchedulingEnabled:    true,
+				Status:               NodeStatusOnline,
+				OpenrestyStatus:      OpenrestyStatusHealthy,
+				LastSeenAt:           now,
+				DNSProbeHealthy:      true,
+				DNSProbeCheckedCount: 1,
+				DNSProbeHealthyCount: 1,
+				DNSProbeAverageRTTMs: 12,
+				DNSProbeMaxRTTMs:     18,
+			},
+		},
+	}
+	left, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("snapshot version: %v", err)
+	}
+	snapshot.Nodes[0].DNSProbeAverageRTTMs = 99
+	snapshot.Nodes[0].DNSProbeMaxRTTMs = 120
+	right, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("snapshot version after rtt jitter: %v", err)
+	}
+	if left != right {
+		t.Fatalf("expected probe RTT jitter not to change snapshot version, got %s and %s", left, right)
+	}
+	snapshot.Nodes[0].DNSProbeHealthy = false
+	changed, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("snapshot version after health change: %v", err)
+	}
+	if changed == left {
+		t.Fatalf("expected probe health change to affect snapshot version, got %s", changed)
 	}
 }
 
@@ -2072,6 +2274,28 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	if err := route.Insert(); err != nil {
 		t.Fatalf("insert route: %v", err)
 	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	persistHeartbeatObservability("node-hk", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{
+			{
+				WorkerID:      worker.WorkerID,
+				PublicAddress: "ns1.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results: []AgentDNSProbeResult{
+					{Network: "UDP", Reachable: true, DurationMs: 12, RCode: "NOERROR", AnswerCount: 1},
+					{Network: "TCP", Reachable: true, DurationMs: 18, RCode: "NOERROR", AnswerCount: 1},
+				},
+			},
+		},
+	}, now)
 
 	hk, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
 		ProxyRouteID: route.ID,
@@ -2093,8 +2317,35 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	assertSimulationNode(t, hk.Nodes, "node-hk", true, true, "可参与当前调度")
 	assertSimulationNode(t, hk.Nodes, "node-hot", false, false, "节点负载超过 GSLB 阈值")
 	assertSimulationNode(t, hk.Nodes, "node-eu", false, false, "节点池未匹配当前来源")
+	if hkNode := findSimulationNode(hk.Nodes, "node-hk"); hkNode == nil ||
+		hkNode.NodeProbeStatus != dnsWorkerProbeHealthy ||
+		hkNode.NodeProbeHealthyCount != 1 ||
+		hkNode.NodeProbeCheckedCount != 1 ||
+		hkNode.NodeProbeAverageRTTMs != 15 ||
+		hkNode.NodeProbeMaxRTTMs != 18 {
+		t.Fatalf("expected HK node simulation to include Agent probe summary, got %+v", hkNode)
+	}
 	if hot := findSimulationNode(hk.Nodes, "node-hot"); hot == nil || hot.MetricCapturedAt == nil {
 		t.Fatalf("expected hot node simulation to include metric captured time, got %+v", hot)
+	}
+
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.GSLBProbeSchedulingEnabled = true
+	probeFiltered, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+		Country:      "DE",
+	})
+	common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	if err == nil {
+		t.Fatalf("expected DE simulation to fail without healthy Agent probe when probe scheduling is enabled, got %+v", probeFiltered)
+	}
+	if !strings.Contains(err.Error(), "no online public node IP") {
+		t.Fatalf("expected no target error when probe scheduling filters DE node, got %v", err)
+	}
+	if diagnostic := findSimulationNode(hk.Nodes, "node-eu"); diagnostic != nil && containsString(diagnostic.Reasons, "Agent 探测未达到调度门槛") {
+		t.Fatalf("expected probe threshold reason to stay hidden while option is disabled, got %+v", diagnostic.Reasons)
 	}
 
 	de, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
@@ -2248,6 +2499,15 @@ func containsStringWith(values []string, fragment string) bool {
 	return false
 }
 
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func assertCounter(t *testing.T, counters []DNSObservabilityCounterView, key string, label string, count int64) {
 	t.Helper()
 	for _, counter := range counters {
@@ -2314,4 +2574,21 @@ func findSimulationNode(nodes []DNSGSLBSimulationNodeView, nodeID string) *DNSGS
 		return &found
 	}
 	return nil
+}
+
+func findSnapshotNode(nodes []AuthoritativeDNSSnapshotNode, nodeID string) *AuthoritativeDNSSnapshotNode {
+	for _, node := range nodes {
+		if node.NodeID != nodeID {
+			continue
+		}
+		found := node
+		return &found
+	}
+	return nil
+}
+
+func testDNSQuery(name string, qtype uint16, remoteAddr string) *dns.Msg {
+	message := new(dns.Msg)
+	message.SetQuestion(dns.Fqdn(name), qtype)
+	return message
 }

@@ -314,4 +314,4 @@ Agent 必须满足：
 
 当前专项“网站级规则与配置界面改造”的模型边界已纳入 [产品边界](./)，执行时仍按数据模型、接口、前端页面、迁移测试与文档联动的顺序推进。
 
-当前专项“自建权威 DNS 与 GSLB 调度”的设计边界见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)。数据模型、快照 API、DNS Worker 查询面、管理端入口、查询趋势、快照一致性告警、委派检查、迁移向导、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测，以及复用在线 Agent 节点的 DNS Worker 多点主动探测已具备；后续如需更完整独立探测网络或将探测纳入调度评分，应继续同步设计文档。
+当前专项“自建权威 DNS 与 GSLB 调度”的设计边界见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)。数据模型、快照 API、DNS Worker 查询面、管理端入口、查询趋势、快照一致性告警、委派检查、迁移向导、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测、复用在线 Agent 节点的 DNS Worker 多点主动探测，以及默认关闭的 Agent 探测调度门槛已具备；后续如需更完整独立探测网络或 RTT/丢包/区域覆盖评分模型，应继续同步设计文档。

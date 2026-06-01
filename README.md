@@ -184,7 +184,7 @@ proxy_set_header Connection "upgrade";
 * 自建权威 DNS 模式下，`weighted` / `load_aware` 会按来源 IP/ECS 生成稳定分流桶，所以 HK 池权重 80、EU 池权重 20 这类配置会在不同来源桶之间形成接近 8:2 的 DNS 答案分布；Cloudflare 模式只同步一组静态记录，不具备逐查询来源分流。
 * GSLB 会记录最近一次实际目标和期望目标，旧目标仍健康且冷却时间未到时不会反复切换。
 * Cloudflare DNS 模式不是逐请求实时调度，而是后台巡检重算并同步记录；实际流量还会受到 DNS TTL 与递归解析缓存影响。
-* 自建权威 DNS 模式需要把域名 NS 委派到 DuShengCDN DNS Worker；Worker 会在查询时实时执行 GSLB 调度。左侧「权威 DNS」的「迁移向导」可检查 Cloudflare 模式网站是否已有匹配 Zone、在线 Worker、公网 UDP/TCP 53 探测和 GSLB 配置，满足条件时可一键切换到自建权威 DNS；「GSLB 调度模拟」可按来源 IP 和国家代码预演当前快照返回目标并解释节点候选/跳过原因，Zone 详情可检查公网 NS 是否匹配，并在 Zone 内 NS 需要 Glue/主机记录时提示。未配置本地 GeoIP 库时，国家代码匹配会回退到 `global` 作用域，详见 `docs/design/authoritative-dns-gslb.md`。
+* 自建权威 DNS 模式需要把域名 NS 委派到 DuShengCDN DNS Worker；Worker 会在查询时实时执行 GSLB 调度。左侧「权威 DNS」的「迁移向导」可检查 Cloudflare 模式网站是否已有匹配 Zone、在线 Worker、公网 UDP/TCP 53 探测和 GSLB 配置，满足条件时可一键切换到自建权威 DNS；「GSLB 调度模拟」可按来源 IP 和国家代码预演当前快照返回目标，并解释节点候选/跳过原因、负载指标时间和 Agent 多点探测摘要。Agent 多点探测默认仅用于观测；在设置页「权威 DNS 运行参数」启用探测调度门槛后，无新鲜成功探测的边缘节点不会进入自建权威 DNS GSLB 候选。Zone 详情可检查公网 NS 是否匹配，并在 Zone 内 NS 需要 Glue/主机记录时提示。未配置本地 GeoIP 库时，国家代码匹配会回退到 `global` 作用域，详见 `docs/design/authoritative-dns-gslb.md`。
 * 手动填写的 DNS 记录内容不会被后台覆盖；A/AAAA 可用逗号、空格或换行填写多个目标。
 * 多域名规则默认会同步规则里的所有域名；单域名规则可在详情页手动指定记录名称。
 * 删除规则时，如果该规则曾由 DuShengCDN 创建 DNS 记录，会尝试同步删除对应 Cloudflare DNS 记录。
@@ -304,7 +304,7 @@ dig @YOUR_DNS_WORKER_IP www.example.com A
 
 生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。Worker 本地快照缓存会写入 SHA-256 checksum 元数据，启动加载时会校验完整性，并从快照中的 GSLB 防抖状态恢复最近可用选择；运行中产生的新防抖状态会随 heartbeat 批量回传 Server，同时兼容旧版本生成的裸快照 JSON。Worker 默认按来源 IP 每秒限制 `200` 次查询，并把 UDP 响应上限限制为 `1232` 字节；超大响应会设置 TC 位让递归解析器回退 TCP。安装脚本会默认准备本地 Country MMDB；如果使用 Docker 或源码方式部署且要按国家代码匹配 GSLB 节点池，需要自行配置本地 MaxMind Country MMDB。如果在节点池里配置来源 CIDR，则会优先按来源 IP/ECS 命中 `cidr:...` 作用域；启用 `weighted` 或 `load_aware` 时会追加 `|bucket:xx` 分流桶，未命中且无法识别国家时会回退到 `global` 作用域。
 
-Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前调度状态，便于确认实时 GSLB 是否按预期分流；「GSLB 调度状态」会列出每个站点、A/AAAA、`global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42` 等来源作用域的当前实际目标、期望目标和防抖状态；「GSLB 调度模拟」可在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照会返回的边缘 IP，并展示节点池匹配、候选节点、跳过节点和原因。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
+Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前调度状态，便于确认实时 GSLB 是否按预期分流；「GSLB 调度状态」会列出每个站点、A/AAAA、`global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42` 等来源作用域的当前实际目标、期望目标和防抖状态；「GSLB 调度模拟」可在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照会返回的边缘 IP，并展示节点池匹配、候选节点、跳过节点、负载指标时间和 Agent 多点探测摘要。这里的 Worker 延迟是 Worker 本地处理真实 DNS 查询的耗时；Agent 多点探测 RTT 表示各边缘节点到 Worker NS 的主动探测耗时，默认只用于观测与排障；开启「启用 Agent 探测调度门槛」后，才会影响自建权威 DNS GSLB 选点。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
 
 卸载 DNS Worker：
 

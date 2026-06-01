@@ -37,6 +37,7 @@ type targetCandidate struct {
 	CPUUsagePercent      float64
 	MemoryUsagePercent   float64
 	HasMetric            bool
+	DNSProbeHealthy      bool
 	Score                float64
 }
 
@@ -269,6 +270,9 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 		if !isNodeSchedulable(node) || !metricWithinThresholds(node, policy.LoadThresholds) {
 			continue
 		}
+		if snapshot.GSLBProbeSchedulingEnabled && !node.DNSProbeHealthy {
+			continue
+		}
 		for _, value := range node.PublicIPs {
 			ip := net.ParseIP(strings.TrimSpace(value))
 			if ip == nil {
@@ -299,6 +303,7 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 				CPUUsagePercent:      node.CPUUsagePercent,
 				MemoryUsagePercent:   node.MemoryUsagePercent,
 				HasMetric:            node.MetricCapturedAt != nil,
+				DNSProbeHealthy:      node.DNSProbeHealthy,
 			}
 			candidate.Score = scoreCandidate(candidate, policy.Strategy)
 			candidates = append(candidates, candidate)

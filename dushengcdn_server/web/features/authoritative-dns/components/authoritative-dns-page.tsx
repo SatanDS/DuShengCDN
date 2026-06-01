@@ -2462,6 +2462,41 @@ function GSLBSimulationDiagnostics({
                     label="评分"
                     value={node.score > 0 ? node.score.toFixed(2) : '—'}
                   />
+                  <InfoTile
+                    label="Agent 探测"
+                    value={`${node.node_probe_healthy_count ?? 0} / ${
+                      node.node_probe_checked_count ?? 0
+                    }`}
+                    helper={
+                      (node.node_probe_stale_count ?? 0) > 0
+                        ? `${node.node_probe_stale_count} 个过期`
+                        : node.node_probe_message || undefined
+                    }
+                  />
+                  <InfoTile
+                    label="探测 RTT"
+                    value={formatLatencyMs(node.node_probe_average_rtt_ms ?? 0)}
+                    helper={
+                      (node.node_probe_max_rtt_ms ?? 0) > 0
+                        ? `最大 ${formatLatencyMs(node.node_probe_max_rtt_ms)}`
+                        : undefined
+                    }
+                  />
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <StatusBadge
+                    label={getNodeDNSProbeStatusLabel(
+                      node.node_probe_status ?? 'unknown',
+                    )}
+                    variant={getProbeStatusVariant(
+                      node.node_probe_status ?? 'unknown',
+                    )}
+                  />
+                  {node.node_probe_message ? (
+                    <span className="text-xs text-[var(--foreground-secondary)]">
+                      {node.node_probe_message}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {node.reasons.map((reason) => (

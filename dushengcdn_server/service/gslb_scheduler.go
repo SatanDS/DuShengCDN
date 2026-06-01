@@ -39,7 +39,15 @@ type gslbDNSTargetCandidate struct {
 	Score                float64
 }
 
+type gslbDNSSchedulingOptions struct {
+	RequireHealthyDNSProbe bool
+}
+
 func selectProxyRouteDNSTargets(route *model.ProxyRoute, recordType string) (proxyRouteDNSTargetSelection, error) {
+	return selectProxyRouteDNSTargetsWithOptions(route, recordType, gslbDNSSchedulingOptions{})
+}
+
+func selectProxyRouteDNSTargetsWithOptions(route *model.ProxyRoute, recordType string, options gslbDNSSchedulingOptions) (proxyRouteDNSTargetSelection, error) {
 	selection := proxyRouteDNSTargetSelection{
 		TTL:      cloudflareDefaultRecordTTL,
 		ScopeKey: defaultGSLBScopeKey,
@@ -49,7 +57,7 @@ func selectProxyRouteDNSTargets(route *model.ProxyRoute, recordType string) (pro
 	}
 	selection.TTL = normalizeDNSTTL(route.DNSTTL)
 	if route.GSLBEnabled {
-		return selectGSLBDNSTargets(route, recordType)
+		return selectGSLBDNSTargetsWithOptions(route, recordType, GSLBSourceContext{}, options)
 	}
 	targets, err := selectHealthyNodeDNSTargets(recordType, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode)
 	if err != nil {
@@ -66,6 +74,10 @@ func selectGSLBDNSTargets(route *model.ProxyRoute, recordType string) (proxyRout
 }
 
 func selectGSLBDNSTargetsForSource(route *model.ProxyRoute, recordType string, source GSLBSourceContext) (proxyRouteDNSTargetSelection, error) {
+	return selectGSLBDNSTargetsWithOptions(route, recordType, source, gslbDNSSchedulingOptions{})
+}
+
+func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string, source GSLBSourceContext, options gslbDNSSchedulingOptions) (proxyRouteDNSTargetSelection, error) {
 	selection := proxyRouteDNSTargetSelection{
 		TTL:      cloudflareDefaultRecordTTL,
 		GSLB:     true,
@@ -90,7 +102,7 @@ func selectGSLBDNSTargetsForSource(route *model.ProxyRoute, recordType string, s
 	selection.TTL = normalizeDNSTTL(policy.TTL)
 	selection.ScopeKey = gslbScopeKeyForPolicy(policy, source)
 
-	candidates, err := buildGSLBDNSTargetCandidates(recordType, policy, source)
+	candidates, err := buildGSLBDNSTargetCandidatesWithOptions(recordType, policy, source, options)
 	if err != nil {
 		return selection, err
 	}
@@ -168,11 +180,19 @@ func gslbScopeKeyForPolicy(policy ProxyRouteGSLBPolicy, source GSLBSourceContext
 }
 
 func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext) ([]gslbDNSTargetCandidate, error) {
+	return buildGSLBDNSTargetCandidatesWithOptions(recordType, policy, source, gslbDNSSchedulingOptions{})
+}
+
+func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext, options gslbDNSSchedulingOptions) ([]gslbDNSTargetCandidate, error) {
 	nodes, err := model.ListNodes()
 	if err != nil {
 		return nil, err
 	}
 	metrics := latestNodeMetricSnapshots()
+	probeStatsByNode := map[string]*dnsWorkerNodeProbeStats{}
+	if options.RequireHealthyDNSProbe {
+		probeStatsByNode = buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
+	}
 	poolPolicies := matchGSLBPoolsForSource(policy.Pools, source)
 	candidates := make([]gslbDNSTargetCandidate, 0, len(nodes))
 	seen := make(map[string]struct{}, len(nodes))
@@ -182,6 +202,9 @@ func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy
 			continue
 		}
 		if !isNodeSchedulableForDNS(node) || !isNodeOnlineAndOpenRestyHealthy(node) {
+			continue
+		}
+		if options.RequireHealthyDNSProbe && !dnsWorkerNodeProbeStatsSchedulable(probeStatsByNode[node.NodeID]) {
 			continue
 		}
 		metric, hasMetric := metrics[node.NodeID]

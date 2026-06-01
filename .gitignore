@@ -1,4 +1,7 @@
 .cache
+.corepack/
+.npm-cache/
+.pnpm-store/
 .gocache*
 .idea
 .vscode

@@ -150,6 +150,14 @@ export interface DNSGSLBSimulationNode {
   cpu_usage_percent: number;
   memory_usage_percent: number;
   score: number;
+  node_probe_status: DNSWorkerProbeStatus;
+  node_probe_message: string;
+  node_probe_checked_count: number;
+  node_probe_healthy_count: number;
+  node_probe_stale_count: number;
+  node_probe_healthy_percent: number;
+  node_probe_average_rtt_ms: number;
+  node_probe_max_rtt_ms: number;
 }
 
 export interface DNSGSLBSchedulingStates {

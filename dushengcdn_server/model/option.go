@@ -67,6 +67,7 @@ func InitOptionMap() {
 	common.OptionMap["AuthoritativeDNSDefaultTTL"] = strconv.Itoa(common.AuthoritativeDNSDefaultTTL)
 	common.OptionMap["AuthoritativeDNSSnapshotMaxAge"] = strconv.Itoa(common.AuthoritativeDNSSnapshotMaxAge)
 	common.OptionMap["GSLBMetricFreshnessSeconds"] = strconv.Itoa(common.GSLBMetricFreshnessSeconds)
+	common.OptionMap["GSLBProbeSchedulingEnabled"] = strconv.FormatBool(common.GSLBProbeSchedulingEnabled)
 	common.OptionMap["OpenRestyWorkerProcesses"] = common.OpenRestyWorkerProcesses
 	common.OptionMap["OpenRestyWorkerConnections"] = strconv.Itoa(common.OpenRestyWorkerConnections)
 	common.OptionMap["OpenRestyWorkerRlimitNofile"] = strconv.Itoa(common.OpenRestyWorkerRlimitNofile)
@@ -276,6 +277,8 @@ func updateOptionMap(key string, value string) {
 		if v, err := strconv.Atoi(value); err == nil && v > 0 {
 			common.GSLBMetricFreshnessSeconds = v
 		}
+	case "GSLBProbeSchedulingEnabled":
+		common.GSLBProbeSchedulingEnabled = value == "true"
 	case "OpenRestyWorkerProcesses":
 		if strings.TrimSpace(value) != "" {
 			common.OpenRestyWorkerProcesses = value

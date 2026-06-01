@@ -156,7 +156,7 @@ route_id + record_type + source_scope
 * 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、GeoIP 国家库加载状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 查询延迟、可用率、错误率、Agent 多点探测通过率/RTT、返回码、返回目标、来源作用域、动态站点分布和当前 GSLB 调度状态。
 * DNS Worker 列表支持按需探测单个 Worker 的公网 UDP/TCP 53，返回 RTT、RCODE、应答数量和错误信息，并在刷新后继续展示最近一次结果，用于验证 Server 到该 NS 的解析可达性。
 * Worker 可用性面板会把最近一次公网探测归类为 `healthy`、`partial`、`failed`、`stale` 或 `unknown`，并展示各 Agent 节点对 DNS Worker 的 UDP/TCP `53` 探测结果、平均 RTT、最大 RTT、过期数量和失败原因；Agent 多点探测超过新鲜度窗口后仍保留明细但不计入健康通过率，避免旧成功结果误导排障；迁移向导、一键切换和网站详情启用保存会要求公网可达的在线 Worker 均已拉取未超过 `AuthoritativeDNSSnapshotMaxAge` 的调度快照，且快照版本一致。
-* 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，并展示匹配节点池、候选节点、被跳过节点与原因，不改变真实调度状态。
+* 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，并展示匹配节点池、候选节点、被跳过节点、负载指标时间，以及各边缘节点到 DNS Worker 的 Agent 多点探测摘要；模拟不会改变真实调度状态。Agent 多点探测默认只用于诊断展示；当运行时 Option `GSLBProbeSchedulingEnabled` 开启时，Server 生成权威 DNS 快照和 DNS Worker 实时 GSLB 调度会排除没有新鲜成功探测的边缘节点。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
 * 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否公网可达 Worker 均持有未过期且版本一致的调度快照、是否存在同名静态 A/AAAA/CNAME 冲突、当前节点池或 GSLB 策略是否能选出可用边缘 IP、策略里声明的来源国家和来源 CIDR 是否都有可用边缘 IP、是否已启用站点 GSLB，并可对满足条件的站点一键切换到自建权威 DNS；网站详情手动保存启用的权威 DNS 站点时也执行同一套 Worker 就绪与目标预检，未启用草稿不阻断；切换成功后会自动刷新网站 DNS 模式、执行 Zone 委派检查、探测在线 Worker 公网 UDP/TCP 53，并按当前快照执行 global 与来源国家 GSLB 模拟，切换后仍需在注册商确认 NS 委派。
@@ -192,7 +192,7 @@ TTL 规则：
 * DNS Worker 保存最后一次有效快照，并在本地缓存文件中写入 SHA-256 checksum 完整性元数据；启动加载缓存时会先校验 checksum，并从快照中的 GSLB 防抖状态恢复最近可用选择，Server 暂时不可用时继续使用最后一次校验通过的快照服务。
 * 快照超过 `AuthoritativeDNSSnapshotMaxAge` 后，动态 GSLB 记录返回 `SERVFAIL`，静态 SOA/NS 可继续返回。
 * 管理端会按最近心跳检测在线 Worker 的快照版本和快照年龄，并在多 Worker 版本不一致或快照过期时告警。
-* 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；最近探测和最近有效快照都会参与迁移准备状态。在线 Agent 还会接收 Server 下发的少量 Worker 探测目标，主动探测公网 UDP/TCP `53` 可达性并回传 RTT，用于补充多节点视角；过期的 Agent 探测结果不会继续计入健康通过率，但当前结果整体仍仅进入观测面板，尚不参与 GSLB 调度评分。
+* 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；最近探测和最近有效快照都会参与迁移准备状态。在线 Agent 还会接收 Server 下发的少量 Worker 探测目标，主动探测公网 UDP/TCP `53` 可达性并回传 RTT，用于补充多节点视角；过期的 Agent 探测结果不会继续计入健康通过率。默认情况下该结果只进入观测面板；开启 `GSLBProbeSchedulingEnabled` 后，权威 DNS 快照会携带每个节点的探测健康摘要，DNS Worker 查询时只把有新鲜成功探测的节点纳入 GSLB 候选。
 * DNS Worker 不直接修改数据库，不在查询路径里写入状态。
 * 快照携带 Server 侧最近一次 GSLB 防抖状态，Worker 启动或拉取新快照后会恢复可用的 `route_id + record_type + source_scope` 选择状态；逐查询产生的新状态先保存在 Worker 内存中，再通过 heartbeat 批量回传 Server。
 * 查询聚合按窗口批量上报，失败时本地缓冲，避免每次查询写库。
@@ -232,7 +232,7 @@ TTL 规则：
 ### 阶段 3：观测、联调与迁移体验
 
 * DNS Worker 已上报查询聚合、返回目标分布、来源作用域分布、错误码分布和本地查询处理耗时。
-* 管理端已展示 DNS Worker 状态、GeoIP 国家库加载状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 可用率、查询错误率、平均/最大查询延迟、Agent 多点探测通过率/RTT、返回码、来源作用域、Worker/Zone/站点维度、返回目标分布、当前 GSLB 调度状态、按需 Worker UDP/TCP 53 探测、最近公网探测健康状态、GSLB 调度模拟诊断、Zone 委派检查和 Glue 提示。
+* 管理端已展示 DNS Worker 状态、GeoIP 国家库加载状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 可用率、查询错误率、平均/最大查询延迟、Agent 多点探测通过率/RTT、返回码、来源作用域、Worker/Zone/站点维度、返回目标分布、当前 GSLB 调度状态、按需 Worker UDP/TCP 53 探测、最近公网探测健康状态、带节点负载与 Agent 多点探测摘要的 GSLB 调度模拟诊断、Zone 委派检查和 Glue 提示。
 * 已提供从 Cloudflare 同步模式切换到自建权威 DNS 模式的迁移检查向导和一键切换动作。
 * 文档补充注册商 NS、Glue、端口、防火墙和回滚步骤。
 
@@ -244,7 +244,7 @@ TTL 规则：
 * 已提供基于心跳和真实 DNS 查询聚合的 Worker 查询延迟、错误率和可用性看板。
 * 已提供 Server 侧按需 Worker UDP/TCP 53 探测，验证单个 NS 的解析可达性。
 * 已提供复用在线 Agent 节点的主动多点 DNS Worker UDP/TCP 53 探测，验证不同边缘节点到 Worker NS 的公网 RTT 和解析可达性。
-* 后续可将 Agent 多点探测纳入 GSLB 调度评分，或扩展独立探测点网络、丢包统计和更细区域覆盖。
+* 后续可在当前探测调度门槛基础上扩展更细的评分模型，例如按 RTT、丢包率、区域覆盖或独立探测点网络进行加权。
 
 ## 验收标准
 

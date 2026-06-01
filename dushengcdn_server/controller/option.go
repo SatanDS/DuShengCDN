@@ -151,6 +151,8 @@ func validateAuthoritativeDNSOption(key string, value string) error {
 			return fmt.Errorf("%s 必须为大于 0 的整数秒", key)
 		}
 		return nil
+	case "GSLBProbeSchedulingEnabled":
+		return validateBooleanOption(key, trimmed)
 	default:
 		return nil
 	}

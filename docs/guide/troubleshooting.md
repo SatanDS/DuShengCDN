@@ -276,7 +276,7 @@ curl -Iv https://your-domain
 4. 如果提示的是特定国家或 CIDR，检查该来源匹配到的节点池是否至少有一个可用节点；来源 CIDR 会优先于国家代码匹配。
 5. 如果启用了 `负载感知` 或负载阈值，检查当前连接数、CPU 和内存快照是否把全部节点剔除了；可临时放宽最大连接数、最大 CPU 或最大内存阈值后再试。
 6. 检查「GSLB 调度模拟」里的指标时间；超过 `GSLBMetricFreshnessSeconds` 的旧指标不会参与评分，缺少新鲜指标的节点只作为兜底候选。如果所有节点都显示无新鲜指标，先确认 Agent 心跳和指标上报是否正常，或临时放宽设置页「权威 DNS 运行参数」里的 GSLB 指标新鲜度。
-7. 到「权威 DNS」里的「GSLB 调度模拟」按同一站点、记录类型和来源再次模拟，查看每个节点的跳过原因。
+7. 到「权威 DNS」里的「GSLB 调度模拟」按同一站点、记录类型和来源再次模拟，查看每个节点的跳过原因、Agent 探测摘要和探测 RTT。Agent 探测异常说明边缘节点到 DNS Worker NS 的 UDP/TCP `53` 可达性存在风险；默认不会直接把该边缘节点从 GSLB 选点中剔除，但如果设置页「权威 DNS 运行参数」开启了「启用 Agent 探测调度门槛」，无新鲜成功探测的节点会被排除。
 
 如果迁移向导、一键切换或网站详情保存时提示“没有在线 DNS Worker”或“在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测”：
 
@@ -301,6 +301,7 @@ curl -Iv https://your-domain
 3. 查看 `journalctl -u dushengcdn-agent -n 200 --no-pager`，确认 Agent 心跳是否正常；Agent 只有在收到 Server 下发的探测目标后，才会在下一次心跳或 WebSocket status 上报结果。
 4. 如果某个 Worker 没有出现在多节点探测中，确认该 Worker 已在线且填写了公网地址；Server 每次只下发少量在线 Worker 目标，避免心跳被大量探测拖慢。
 5. 如果显示「探测过期」，说明 Server 最近没有收到该 Agent 对 Worker 的新探测结果；先确认 Agent 已升级到支持 DNS 探测的版本，再检查心跳或 WebSocket status 是否持续上报。
+6. 如果已开启「启用 Agent 探测调度门槛」，多节点探测失败或过期会影响自建权威 DNS GSLB 选点；排障期间可临时关闭该开关，让节点先按在线状态、OpenResty 健康和负载阈值参与调度。
 
 迁移向导不会直接修改注册商 NS。注册商侧 NS 生效还受上级 DNS 缓存和 TTL 影响，调整后可再次执行 Zone 委派检查。
 

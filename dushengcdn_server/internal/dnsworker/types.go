@@ -18,12 +18,13 @@ const (
 )
 
 type Snapshot struct {
-	SnapshotVersion  string                    `json:"snapshot_version"`
-	GeneratedAt      time.Time                 `json:"generated_at"`
-	Zones            []SnapshotZone            `json:"zones"`
-	Routes           []SnapshotRoute           `json:"routes"`
-	Nodes            []SnapshotNode            `json:"nodes"`
-	SchedulingStates []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
+	SnapshotVersion            string                    `json:"snapshot_version"`
+	GeneratedAt                time.Time                 `json:"generated_at"`
+	GSLBProbeSchedulingEnabled bool                      `json:"gslb_probe_scheduling_enabled"`
+	Zones                      []SnapshotZone            `json:"zones"`
+	Routes                     []SnapshotRoute           `json:"routes"`
+	Nodes                      []SnapshotNode            `json:"nodes"`
+	SchedulingStates           []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type SnapshotZone struct {
@@ -77,6 +78,12 @@ type SnapshotNode struct {
 	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
 	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
 	MetricCapturedAt     *time.Time `json:"metric_captured_at,omitempty"`
+	DNSProbeHealthy      bool       `json:"dns_probe_healthy"`
+	DNSProbeCheckedCount int        `json:"dns_probe_checked_count"`
+	DNSProbeHealthyCount int        `json:"dns_probe_healthy_count"`
+	DNSProbeStaleCount   int        `json:"dns_probe_stale_count"`
+	DNSProbeAverageRTTMs float64    `json:"dns_probe_average_rtt_ms"`
+	DNSProbeMaxRTTMs     int64      `json:"dns_probe_max_rtt_ms"`
 }
 
 type SnapshotSchedulingState struct {

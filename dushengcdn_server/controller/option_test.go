@@ -76,6 +76,8 @@ func TestValidateAuthoritativeDNSOption(t *testing.T) {
 		{name: "snapshot max age invalid", key: "AuthoritativeDNSSnapshotMaxAge", value: "0", wantErr: true},
 		{name: "gslb metric freshness", key: "GSLBMetricFreshnessSeconds", value: "120"},
 		{name: "gslb metric freshness invalid", key: "GSLBMetricFreshnessSeconds", value: "0", wantErr: true},
+		{name: "gslb probe scheduling enabled", key: "GSLBProbeSchedulingEnabled", value: "true"},
+		{name: "gslb probe scheduling invalid", key: "GSLBProbeSchedulingEnabled", value: "yes", wantErr: true},
 	}
 
 	for _, testCase := range testCases {

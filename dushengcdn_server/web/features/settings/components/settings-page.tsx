@@ -127,6 +127,7 @@ const defaultOperationFields = {
   AuthoritativeDNSDefaultTTL: '30',
   AuthoritativeDNSSnapshotMaxAge: '300',
   GSLBMetricFreshnessSeconds: '120',
+  GSLBProbeSchedulingEnabled: false,
   GlobalApiRateLimitNum: '300',
   GlobalApiRateLimitDuration: '180',
   GlobalWebRateLimitNum: '300',
@@ -457,6 +458,10 @@ export function SettingsPage() {
         optionMap.AuthoritativeDNSSnapshotMaxAge ?? '300',
       GSLBMetricFreshnessSeconds:
         optionMap.GSLBMetricFreshnessSeconds ?? '120',
+      GSLBProbeSchedulingEnabled: toBoolean(
+        optionMap.GSLBProbeSchedulingEnabled,
+        false,
+      ),
       GlobalApiRateLimitNum: optionMap.GlobalApiRateLimitNum ?? '300',
       GlobalApiRateLimitDuration: optionMap.GlobalApiRateLimitDuration ?? '180',
       GlobalWebRateLimitNum: optionMap.GlobalWebRateLimitNum ?? '300',
@@ -1412,6 +1417,12 @@ export function SettingsPage() {
                               'GSLBMetricFreshnessSeconds',
                               String(metricFreshness),
                             ],
+                            [
+                              'GSLBProbeSchedulingEnabled',
+                              String(
+                                operationFields.GSLBProbeSchedulingEnabled,
+                              ),
+                            ],
                           ],
                           '权威 DNS 参数已保存。',
                         );
@@ -1464,6 +1475,19 @@ export function SettingsPage() {
                     }
                   />
                 </ResourceField>
+              </div>
+              <div className="mt-5">
+                <ToggleField
+                  label="启用 Agent 探测调度门槛"
+                  description="开启后，自建权威 DNS 的 GSLB 选点只会使用仍有新鲜成功 DNS Worker 探测结果的边缘节点。"
+                  checked={operationFields.GSLBProbeSchedulingEnabled}
+                  onChange={(checked) =>
+                    setOperationFields((previous) => ({
+                      ...previous,
+                      GSLBProbeSchedulingEnabled: checked,
+                    }))
+                  }
+                />
               </div>
             </AppCard>
 

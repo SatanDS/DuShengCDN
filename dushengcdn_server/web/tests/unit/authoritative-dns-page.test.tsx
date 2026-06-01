@@ -497,6 +497,15 @@ describe('Authoritative DNS page', () => {
                       cpu_usage_percent: 10,
                       memory_usage_percent: 30,
                       score: 8000,
+                      node_probe_status: 'healthy',
+                      node_probe_message:
+                        '该节点到 DNS Worker 多点探测全部可达（1/1）',
+                      node_probe_checked_count: 1,
+                      node_probe_healthy_count: 1,
+                      node_probe_stale_count: 0,
+                      node_probe_healthy_percent: 100,
+                      node_probe_average_rtt_ms: 21,
+                      node_probe_max_rtt_ms: 24,
                     },
                     {
                       node_id: 'node-hot',
@@ -519,6 +528,15 @@ describe('Authoritative DNS page', () => {
                       cpu_usage_percent: 20,
                       memory_usage_percent: 40,
                       score: 0,
+                      node_probe_status: 'unknown',
+                      node_probe_message:
+                        '尚未收到该节点的 DNS Worker 多点探测结果',
+                      node_probe_checked_count: 0,
+                      node_probe_healthy_count: 0,
+                      node_probe_stale_count: 0,
+                      node_probe_healthy_percent: 0,
+                      node_probe_average_rtt_ms: 0,
+                      node_probe_max_rtt_ms: 0,
                     },
                   ],
                 },
@@ -891,6 +909,12 @@ describe('Authoritative DNS page', () => {
     expect(
       screen.getByText(formatDateTime('2026-05-31T08:19:10Z')),
     ).toBeInTheDocument();
+    expect(screen.getAllByText('Agent 探测').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('该节点到 DNS Worker 多点探测全部可达（1/1）').length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText('21 ms')).toBeInTheDocument();
+    expect(screen.getAllByText('最大 24 ms').length).toBeGreaterThan(0);
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '检查委派' }));

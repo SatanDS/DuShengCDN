@@ -127,6 +127,86 @@ func TestResolveDynamicRouteLoadAwarePrefersFreshMetrics(t *testing.T) {
 	}
 }
 
+func TestResolveDynamicRouteProbeSchedulingSkipsUnhealthyProbe(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.GSLBProbeSchedulingEnabled = true
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           20,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	unhealthyProbe := testNode("unhealthy-probe", "hk", "1.1.1.1", 1000, 1)
+	unhealthyProbe.DNSProbeHealthy = false
+	healthyProbe := testNode("healthy-probe", "hk", "8.8.4.4", 10, 1)
+	healthyProbe.DNSProbeHealthy = true
+	snapshot.Nodes = []SnapshotNode{unhealthyProbe, healthyProbe}
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected node with healthy DNS probe, got %s", got)
+	}
+}
+
+func TestResolveDynamicRouteProbeSchedulingDisabledKeepsExistingBehavior(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.GSLBProbeSchedulingEnabled = false
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           21,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	unhealthyProbe := testNode("unhealthy-probe", "hk", "1.1.1.1", 1000, 1)
+	unhealthyProbe.DNSProbeHealthy = false
+	healthyProbe := testNode("healthy-probe", "hk", "8.8.4.4", 10, 1)
+	healthyProbe.DNSProbeHealthy = true
+	snapshot.Nodes = []SnapshotNode{unhealthyProbe, healthyProbe}
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "1.1.1.1" {
+		t.Fatalf("expected weighted scheduling to ignore DNS probe when disabled, got %s", got)
+	}
+}
+
 func TestResolveGSLBMatchesECSCountryPools(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.Routes = []SnapshotRoute{
