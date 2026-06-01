@@ -259,6 +259,131 @@ func TestCreateProxyRouteAuthoritativeRejectsStaticRecordConflict(t *testing.T) 
 	}
 }
 
+func TestCreateProxyRouteAuthoritativeRejectsNoAvailableTargets(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+
+	_, err = CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err == nil || !strings.Contains(err.Error(), "无法返回 A 边缘 IP") {
+		t.Fatalf("expected missing target error, got %v", err)
+	}
+}
+
+func TestCreateProxyRouteAuthoritativeAllowsDisabledDraftWithoutTargets(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+
+	view, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         false,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute: %v", err)
+	}
+	if view.Enabled || view.DNSProviderMode != DNSProviderModeAuthoritative {
+		t.Fatalf("unexpected disabled draft view: %+v", view)
+	}
+}
+
+func TestUpdateProxyRouteAuthoritativeRejectsSourceSpecificNoTargets(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         false,
+		DNSProviderMode: DNSProviderModeCloudflare,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 60)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 80, Countries: []string{"HK"}, Enabled: true},
+		{Name: "eu", Weight: 20, Countries: []string{"DE"}, Enabled: true},
+	}
+	_, err = UpdateProxyRoute(route.ID, ProxyRouteInput{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      policy,
+	})
+	if err == nil || !strings.Contains(err.Error(), "来源国家 DE 无法返回 A 边缘 IP") {
+		t.Fatalf("expected DE source target error, got %v", err)
+	}
+}
+
 func TestListAuthoritativeDNSMigrationCandidatesReportsStaticRecordConflict(t *testing.T) {
 	setupServiceTestDB(t)
 

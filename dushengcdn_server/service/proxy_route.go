@@ -381,14 +381,31 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
+	gslbPolicyJSON, err := json.Marshal(gslbPolicy)
+	if err != nil {
+		return nil, err
+	}
 	if dnsProviderMode == DNSProviderModeAuthoritative && dnsZoneIDRef != nil {
 		if err := validateAuthoritativeProxyRouteStaticRecordConflicts(*dnsZoneIDRef, domains, dnsRecordType, input.Enabled); err != nil {
 			return nil, err
 		}
-	}
-	gslbPolicyJSON, err := json.Marshal(gslbPolicy)
-	if err != nil {
-		return nil, err
+		if input.Enabled {
+			precheckRoute := buildAuthoritativeDNSPrecheckProxyRoute(
+				route,
+				nodePool,
+				dnsRecordType,
+				dnsRecordName,
+				dnsTargetCount,
+				dnsScheduleMode,
+				dnsTTL,
+				gslbEnabled,
+				string(gslbPolicyJSON),
+				dnsZoneIDRef,
+			)
+			if _, err := precheckAuthoritativeRouteDNSTargets(precheckRoute, dnsRecordType); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	if route == nil {
@@ -444,6 +461,39 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.DDOSProtectionMode = ddosMode
 	route.Remark = remark
 	return route, nil
+}
+
+func buildAuthoritativeDNSPrecheckProxyRoute(
+	route *model.ProxyRoute,
+	nodePool string,
+	dnsRecordType string,
+	dnsRecordName string,
+	dnsTargetCount int,
+	dnsScheduleMode string,
+	dnsTTL int,
+	gslbEnabled bool,
+	gslbPolicyJSON string,
+	dnsZoneIDRef *uint,
+) *model.ProxyRoute {
+	precheckRoute := &model.ProxyRoute{}
+	if route != nil {
+		copied := *route
+		precheckRoute = &copied
+	}
+	precheckRoute.NodePool = nodePool
+	precheckRoute.Enabled = true
+	precheckRoute.DNSProviderMode = DNSProviderModeAuthoritative
+	precheckRoute.DNSZoneIDRef = dnsZoneIDRef
+	precheckRoute.DNSRecordType = dnsRecordType
+	precheckRoute.DNSRecordName = dnsRecordName
+	precheckRoute.DNSRecordContent = ""
+	precheckRoute.DNSAutoTarget = true
+	precheckRoute.DNSTargetCount = dnsTargetCount
+	precheckRoute.DNSScheduleMode = dnsScheduleMode
+	precheckRoute.DNSTTL = dnsTTL
+	precheckRoute.GSLBEnabled = gslbEnabled
+	precheckRoute.GSLBPolicy = gslbPolicyJSON
+	return precheckRoute
 }
 
 func buildProxyRouteViews(routes []*model.ProxyRoute) ([]*ProxyRouteView, error) {

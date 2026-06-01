@@ -83,7 +83,17 @@ func ListProxyRoutesByOriginID(originID uint) (routes []*ProxyRoute, err error) 
 }
 
 func (route *ProxyRoute) Insert() error {
-	return DB.Create(route).Error
+	enabled := route.Enabled
+	if err := DB.Create(route).Error; err != nil {
+		return err
+	}
+	if !enabled {
+		if err := DB.Model(route).UpdateColumn("enabled", false).Error; err != nil {
+			return err
+		}
+		route.Enabled = false
+	}
+	return nil
 }
 
 func (route *ProxyRoute) Update() error {
