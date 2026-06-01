@@ -297,7 +297,7 @@ curl -Iv https://your-domain
 
 1. 先确认至少一个 Worker 在列表中为在线，并且最近一次公网 UDP/TCP `53` 探测为健康。
 2. 查看「Worker 快照一致性」，确认公网可达 Worker 的 `last_snapshot_version` 不为空且一致，`last_snapshot_at` 没有超过 `AuthoritativeDNSSnapshotMaxAge`。
-3. 在 Worker 服务器查看服务日志，重点检查 Token 无效、Server URL 不可达、HTTPS 证书校验失败、快照接口返回错误等信息。
+3. 在 Worker 服务器查看服务日志，重点检查 Token 无效、Server URL 不可达、HTTPS 证书校验失败、快照接口返回错误等信息。日志中出现 `DNS Worker Token authentication failed` 时，优先核对 `DUSHENGCDN_DNS_WORKER_TOKEN` 或 `--token`；出现 `request to Server URL ... failed` 时，优先核对 `DUSHENGCDN_DNS_WORKER_SERVER_URL` 或 `--server-url`、DNS 解析、防火墙和证书信任。
 4. 确认 Worker 使用的 Token 是左侧「权威 DNS」中创建的 DNS Worker Token，不是 Agent Token 或登录密码。
 5. 修复后等待下一次 Worker 心跳/快照拉取，或重启 Worker，再刷新迁移向导或重新保存网站。
 

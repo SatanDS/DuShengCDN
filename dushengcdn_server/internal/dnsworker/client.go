@@ -113,7 +113,12 @@ func (c *APIClient) doJSON(ctx context.Context, method string, path string, body
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"%s request to Server URL %s failed: %w. Check DUSHENGCDN_DNS_WORKER_SERVER_URL/--server-url, DNS/firewall connectivity, and HTTPS certificate trust",
+			path,
+			c.baseURL,
+			err,
+		)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
@@ -121,10 +126,50 @@ func (c *APIClient) doJSON(ctx context.Context, method string, path string, body
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s returned %s", path, resp.Status)
+		return c.formatHTTPError(path, resp.StatusCode, resp.Status, raw)
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (c *APIClient) formatHTTPError(path string, statusCode int, status string, raw []byte) error {
+	message := extractAPIErrorMessage(raw)
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		if message == "" {
+			message = "authentication failed"
+		}
+		return fmt.Errorf(
+			"%s returned %s: %s. DNS Worker Token authentication failed; check DUSHENGCDN_DNS_WORKER_TOKEN/--token uses the DNS Worker Token from 权威 DNS, not an Agent Token or login password",
+			path,
+			status,
+			message,
+		)
+	}
+	if statusCode == http.StatusNotFound {
+		if message == "" {
+			message = "endpoint not found"
+		}
+		return fmt.Errorf(
+			"%s returned %s: %s. Check DUSHENGCDN_DNS_WORKER_SERVER_URL/--server-url points to the DuShengCDN Server API root",
+			path,
+			status,
+			message,
+		)
+	}
+	if message == "" {
+		return fmt.Errorf("%s returned %s", path, status)
+	}
+	return fmt.Errorf("%s returned %s: %s", path, status, message)
+}
+
+func extractAPIErrorMessage(raw []byte) string {
+	var response struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	return strings.TrimSpace(response.Message)
 }
