@@ -2175,8 +2175,10 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 	if worker == nil {
 		return DNSWorkerView{}
 	}
+	now := time.Now().UTC()
 	probeResults := decodeDNSWorkerProbeResults(worker.LastProbeResult)
-	probeState := evaluateDNSWorkerProbeState(time.Now().UTC(), worker.LastProbeAt, probeResults)
+	probeAt := normalizeDNSWorkerProbeAt(worker.LastProbeAt, now, worker.UpdatedAt, worker.CreatedAt)
+	probeState := evaluateDNSWorkerProbeState(now, probeAt, probeResults)
 	view := DNSWorkerView{
 		ID:                  worker.ID,
 		WorkerID:            worker.WorkerID,
@@ -2191,7 +2193,7 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		GeoIPEnabled:        worker.GeoIPEnabled,
 		GeoIPDatabasePath:   worker.GeoIPDatabasePath,
 		GeoIPLastError:      worker.GeoIPLastError,
-		LastProbeAt:         worker.LastProbeAt,
+		LastProbeAt:         probeAt,
 		LastProbeQuery:      worker.LastProbeQuery,
 		LastProbeResults:    probeResults,
 		ProbeStatus:         probeState.status,
@@ -2284,7 +2286,7 @@ func evaluateAuthoritativeDNSWorkerReadiness(now time.Time, snapshotMaxAge time.
 		return authoritativeDNSWorkerReadiness{}
 	}
 	readiness := authoritativeDNSWorkerReadiness{online: true}
-	probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, decodeDNSWorkerProbeResults(worker.LastProbeResult))
+	probeState := evaluateDNSWorkerProbeState(now, normalizeDNSWorkerProbeAt(worker.LastProbeAt, now, worker.UpdatedAt, worker.CreatedAt), decodeDNSWorkerProbeResults(worker.LastProbeResult))
 	readiness.publicReachable = probeState.healthy
 	readiness.freshSnapshot = hasFreshAuthoritativeDNSWorkerSnapshot(now, snapshotMaxAge, worker)
 	readiness.ready = readiness.publicReachable && readiness.freshSnapshot
@@ -3586,7 +3588,8 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 		}
 		snapshotStale := status == dnsWorkerStatusOnline && (snapshotAt == nil || now.Sub(snapshotAt.UTC()) > snapshotMaxAge)
 		probeResults := decodeDNSWorkerProbeResults(worker.LastProbeResult)
-		probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, probeResults)
+		probeAt := normalizeDNSWorkerProbeAt(worker.LastProbeAt, now, worker.UpdatedAt, worker.CreatedAt)
+		probeState := evaluateDNSWorkerProbeState(now, probeAt, probeResults)
 		if probeState.status != dnsWorkerProbeUnknown {
 			view.ProbeCheckedCount++
 		}
@@ -3625,7 +3628,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			GeoIPDatabasePath:       worker.GeoIPDatabasePath,
 			GeoIPLastError:          worker.GeoIPLastError,
 			LastError:               worker.LastError,
-			LastProbeAt:             worker.LastProbeAt,
+			LastProbeAt:             probeAt,
 			LastProbeResults:        probeResults,
 			ProbeStatus:             probeState.status,
 			ProbeHealthy:            probeState.healthy,
@@ -4282,6 +4285,14 @@ func normalizeDNSWorkerSnapshotAt(snapshotAt *time.Time, now time.Time, fallback
 		}
 	}
 	normalized = normalizedNow
+	return &normalized
+}
+
+func normalizeDNSWorkerProbeAt(probeAt *time.Time, now time.Time, fallbacks ...time.Time) *time.Time {
+	if probeAt == nil {
+		return nil
+	}
+	normalized := normalizeDNSWorkerCheckedAt(probeAt, now, fallbacks...)
 	return &normalized
 }
 

@@ -1293,6 +1293,83 @@ func TestListAuthoritativeDNSMigrationCandidatesClampsHistoricalFutureWorkerSnap
 	}
 }
 
+func TestListAuthoritativeDNSMigrationCandidatesClampsHistoricalFutureWorkerProbe(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	if _, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSAutoSync:     true,
+		DNSProviderMode: DNSProviderModeCloudflare,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 60)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	worker := createReadyDNSWorker(t, now)
+	futureProbeAt := now.Add(time.Hour)
+	staleUpdatedAt := now.Add(-(defaultDNSWorkerProbeMaxAge + time.Minute))
+	if err := model.DB.Model(&model.DNSWorker{}).
+		Where("id = ?", worker.ID).
+		Updates(map[string]any{
+			"last_probe_at": futureProbeAt,
+			"updated_at":    staleUpdatedAt,
+		}).Error; err != nil {
+		t.Fatalf("update future worker probe: %v", err)
+	}
+
+	candidates, err := ListAuthoritativeDNSMigrationCandidates()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSMigrationCandidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected one migration candidate, got %+v", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.Ready || candidate.PublicReachableWorkerCount != 0 || candidate.ReadyWorkerCount != 0 {
+		t.Fatalf("expected future historical probe time to remain blocked, got %+v", candidate)
+	}
+	if !containsStringWith(candidate.Blockers, "公网 UDP/TCP 53 探测") {
+		t.Fatalf("expected public probe blocker, got %+v", candidate.Blockers)
+	}
+}
+
 func TestListAuthoritativeDNSMigrationCandidatesRejectsDivergentPublicWorkerSnapshots(t *testing.T) {
 	setupServiceTestDB(t)
 
