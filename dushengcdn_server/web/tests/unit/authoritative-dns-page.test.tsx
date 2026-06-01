@@ -982,7 +982,7 @@ describe('Authoritative DNS page', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('例如 HK、DE；留空使用全局。')).toBeInTheDocument();
     expect(
-      screen.getByText('可选；填写后会参与来源 CIDR 和 GeoIP 匹配预演。'),
+      screen.getByText('可选；填写后会优先参与来源 CIDR 匹配预演。'),
     ).toBeInTheDocument();
     const user = userEvent.setup();
     await user.type(screen.getByPlaceholderText('HK'), 'HK');

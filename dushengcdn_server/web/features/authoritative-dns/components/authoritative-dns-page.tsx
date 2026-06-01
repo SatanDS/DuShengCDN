@@ -2327,7 +2327,7 @@ function GSLBSimulationPanel({
             </div>
             <ResourceField
               label="来源 IP"
-              hint="可选；填写后会参与来源 CIDR 和 GeoIP 匹配预演。"
+              hint="可选；填写后会优先参与来源 CIDR 匹配预演。"
             >
               <ResourceInput
                 placeholder="203.0.113.10"
