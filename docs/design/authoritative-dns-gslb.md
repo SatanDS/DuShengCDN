@@ -143,7 +143,7 @@ route_id + record_type + source_scope
 | `GET /api/dns-workers/` | 查看 DNS Worker 在线状态、监听地址、版本、快照时间和 GeoIP 国家库加载状态 |
 | `GET /api/dns-workers/observability` | 查看 DNS Worker 查询聚合、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、Agent 多点探测通过率/RTT、Worker/Zone/站点维度和返回目标分布 |
 | `GET /api/dns-workers/scheduling-states` | 查看 `gslb_scheduling_states` 中每个站点、记录类型和来源作用域的当前实际目标、期望目标、最近评估时间和防抖状态 |
-| `POST /api/dns-workers/simulate` | 按网站、记录类型、来源国家代码和来源 IP 预演当前权威 DNS 快照的 GSLB 返回目标，不写入真实防抖状态 |
+| `POST /api/dns-workers/simulate` | 按网站、记录类型、来源国家代码和来源 IP 预演当前权威 DNS 快照的 GSLB 返回目标；无可返回目标时返回空 `targets` 并保留节点诊断，不写入真实防抖状态 |
 | `POST /api/dns-workers/` | 创建 DNS Worker Token |
 | `POST /api/dns-workers/{id}/probe` | 管理端按需从 Server 探测 DNS Worker 公网 UDP/TCP 53 可达性、RTT、RCODE 和应答数量，并保存最近一次探测结果 |
 | `POST /api/dns-workers/{id}/delete` | 删除 DNS Worker |

@@ -257,7 +257,7 @@ curl -Iv https://your-domain
 2. 「Zone 委派检查」应为已匹配；若部分匹配、不匹配或提示 Glue，登录注册商补齐 NS 或 Glue/主机记录。
 3. 「Worker 公网探测」至少应有一个在线 Worker UDP/TCP `53` 可达；若失败，检查 Worker 公网地址、防火墙、端口映射和安全组。
 4. 「Worker 快照一致性」应显示公网可达 Worker 都持有未超过 `AuthoritativeDNSSnapshotMaxAge` 的调度快照，且版本一致；若快照为空、过期或版本不一致，检查 Worker 到 Server 的 HTTPS 访问、Token、心跳日志和快照拉取错误。
-5. 「GSLB 模拟复测」应返回目标 IP；若无目标，检查节点是否在线、OpenResty 是否健康、公网 IP 池、节点池、排空模式、GSLB 权重和负载阈值。
+5. 「GSLB 模拟复测」通常应返回目标 IP；若无目标，打开模拟节点诊断，检查节点是否在线、OpenResty 是否健康、公网 IP 池、节点池、排空模式、GSLB 权重、负载阈值和探测门槛原因。
 
 如果保存 Zone 静态记录、网站配置或迁移向导切换时提示“静态记录冲突”：
 
