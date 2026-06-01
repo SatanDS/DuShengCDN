@@ -437,6 +437,86 @@ describe('Authoritative DNS page', () => {
         }
 
         if (url.includes('/dns-workers/simulate') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body ?? '{}')) as {
+            country?: string;
+          };
+          if (payload.country === 'DE') {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  message: '',
+                  data: {
+                    proxy_route_id: 92,
+                    site_name: 'authoritative-site',
+                    qname: 'api.example.com',
+                    record_type: 'A',
+                    country: 'DE',
+                    source_ip: '',
+                    source_scope: 'country:DE',
+                    ttl: 30,
+                    targets: [],
+                    target_count: 0,
+                    strategy: 'load_aware',
+                    gslb_enabled: true,
+                    snapshot_version: 'snapshot-d',
+                    snapshot_at: '2026-05-31T08:25:00Z',
+                    message:
+                      '当前来源没有可用于 A 记录的边缘节点。请查看下方节点原因确认节点池、在线状态、OpenResty 健康、公网 IP 类型和负载阈值。 模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。',
+                    matched_pools: [
+                      {
+                        name: 'hk',
+                        weight: 80,
+                        countries: ['HK'],
+                        matched: false,
+                        reason: '未匹配来源国家',
+                      },
+                      {
+                        name: 'eu',
+                        weight: 20,
+                        countries: ['DE'],
+                        matched: true,
+                        reason: '匹配来源国家 DE',
+                      },
+                    ],
+                    nodes: [
+                      {
+                        node_id: 'node-eu-hot',
+                        name: 'eu-hot',
+                        pool_name: 'eu',
+                        status: 'online',
+                        openresty_status: 'healthy',
+                        scheduling_enabled: true,
+                        drain_mode: false,
+                        last_seen_at: '2026-05-31T08:24:00Z',
+                        public_ips: ['1.1.1.1'],
+                        candidate_targets: ['1.1.1.1'],
+                        selected_targets: [],
+                        eligible: false,
+                        selected: false,
+                        reasons: ['节点负载超过 GSLB 阈值'],
+                        has_metric: true,
+                        metric_captured_at: '2026-05-31T08:24:10Z',
+                        openresty_connections: 120,
+                        cpu_usage_percent: 95,
+                        memory_usage_percent: 70,
+                        score: 0,
+                        node_probe_status: 'unknown',
+                        node_probe_message:
+                          '尚未收到该节点的 DNS Worker 多点探测结果',
+                        node_probe_checked_count: 0,
+                        node_probe_healthy_count: 0,
+                        node_probe_stale_count: 0,
+                        node_probe_healthy_percent: 0,
+                        node_probe_average_rtt_ms: 0,
+                        node_probe_max_rtt_ms: 0,
+                      },
+                    ],
+                  },
+                }),
+              ),
+            );
+          }
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -891,10 +971,9 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('12.5 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('48 ms').length).toBeGreaterThan(0);
     expect(screen.getByText('GSLB 调度模拟')).toBeInTheDocument();
-    await userEvent.setup().type(screen.getByPlaceholderText('HK'), 'HK');
-    await userEvent
-      .setup()
-      .click(screen.getByRole('button', { name: '模拟调度' }));
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText('HK'), 'HK');
+    await user.click(screen.getByRole('button', { name: '模拟调度' }));
     await waitFor(() => {
       expect(screen.getAllByText('8.8.4.4').length).toBeGreaterThan(0);
     });
@@ -915,8 +994,21 @@ describe('Authoritative DNS page', () => {
     ).toBeGreaterThan(0);
     expect(screen.getByText('21 ms')).toBeInTheDocument();
     expect(screen.getAllByText('最大 24 ms').length).toBeGreaterThan(0);
+    await user.clear(screen.getByPlaceholderText('HK'));
+    await user.type(screen.getByPlaceholderText('HK'), 'DE');
+    await user.click(screen.getByRole('button', { name: '模拟调度' }));
+    await waitFor(() => {
+      expect(screen.getByText('当前没有可返回目标。')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/当前来源没有可用于 A 记录的边缘节点/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/snapshot-d/)).toBeInTheDocument();
+    expect(screen.getByText('eu-hot')).toBeInTheDocument();
+    expect(screen.getAllByText('节点负载超过 GSLB 阈值').length).toBeGreaterThan(
+      0,
+    );
 
-    const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '检查委派' }));
     expect(await screen.findByText('部分匹配')).toBeInTheDocument();
     expect(await screen.findByText('缺失 NS')).toBeInTheDocument();
