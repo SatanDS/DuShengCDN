@@ -2519,6 +2519,87 @@ func TestSimulateAuthoritativeDNSGSLBProbeSchedulingPrefersLowerRTT(t *testing.T
 	}
 }
 
+func TestSimulateAuthoritativeDNSGSLBNoAvailableTargetReturnsDiagnostics(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now()
+	if err := (&model.Node{
+		NodeID:          "node-hot",
+		Name:            "hot",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hot",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:               "node-hot",
+		CapturedAt:           now,
+		CPUUsagePercent:      95,
+		MemoryUsedBytes:      95,
+		MemoryTotalBytes:     100,
+		OpenrestyConnections: 100,
+	}).Insert(); err != nil {
+		t.Fatalf("insert metric: %v", err)
+	}
+	policy := defaultGSLBPolicy("hk", 1, "load_aware", 30)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 100, Enabled: true},
+	}
+	policy.LoadThresholds.MaxOpenrestyConnections = 50
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "load_aware",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	simulation, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+	})
+	if err != nil {
+		t.Fatalf("expected no-available-target simulation to return diagnostics, got %v", err)
+	}
+	if simulation == nil || len(simulation.Targets) != 0 || simulation.Targets == nil || !strings.Contains(simulation.Message, "当前来源没有可用于 A 记录的边缘节点") {
+		t.Fatalf("unexpected no-target simulation result: %+v", simulation)
+	}
+	assertSimulationPool(t, simulation.MatchedPools, "hk", true)
+	assertSimulationNode(t, simulation.Nodes, "node-hot", false, false, "节点负载超过 GSLB 阈值")
+}
+
 func TestSimulateAuthoritativeDNSGSLBProbeSchedulingExplainsThresholdReasons(t *testing.T) {
 	setupServiceTestDB(t)
 

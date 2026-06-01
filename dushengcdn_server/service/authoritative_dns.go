@@ -1259,6 +1259,9 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 		if errors.Is(err, dnsworker.ErrDNSProbeThresholdNotSatisfied) {
 			return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, nil, ttl, sourceScope, "Agent 探测未达到调度门槛，当前来源没有可用于 "+recordType+" 记录的边缘节点。请查看下方节点原因确认是未探测、探测过期还是 UDP/TCP 53 未同时可达。"), nil
 		}
+		if errors.Is(err, dnsworker.ErrNoAvailableTarget) || errors.Is(err, dnsworker.ErrNoTargetSelected) {
+			return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, nil, ttl, sourceScope, "当前来源没有可用于 "+recordType+" 记录的边缘节点。请查看下方节点原因确认节点池、在线状态、OpenResty 健康、公网 IP 类型和负载阈值。"), nil
+		}
 		return nil, err
 	}
 

@@ -48,6 +48,8 @@ type sourceSpread struct {
 }
 
 var ErrDNSProbeThresholdNotSatisfied = errors.New("Agent DNS Worker probe threshold is not satisfied")
+var ErrNoAvailableTarget = errors.New("no online public node IP is available")
+var ErrNoTargetSelected = errors.New("no target selected")
 
 func NewScheduler() *Scheduler {
 	return &Scheduler{
@@ -190,11 +192,11 @@ func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType 
 		if snapshot != nil && snapshot.GSLBProbeSchedulingEnabled && hasCandidatesWithoutDNSProbe(snapshot, recordType, policy, source) {
 			return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("%w for %s records", ErrDNSProbeThresholdNotSatisfied, recordType)
 		}
-		return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("no online public node IP is available for %s records", recordType)
+		return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("%w for %s records", ErrNoAvailableTarget, recordType)
 	}
 	desired := selectWeightedTargets(candidates, policy, spread)
 	if len(desired) == 0 {
-		return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("no target selected for %s records", recordType)
+		return nil, normalizeAuthoritativeTTL(policy.TTL), scopeKey, fmt.Errorf("%w for %s records", ErrNoTargetSelected, recordType)
 	}
 	selected := s.applyDebounce(route.ID, recordType, scopeKey, desired, candidates, policy)
 	return selected, normalizeAuthoritativeTTL(policy.TTL), scopeKey, nil
