@@ -2776,10 +2776,7 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 		if input.QueryCount <= 0 {
 			continue
 		}
-		targetSummary := input.TargetSummary
-		if targetSummary == nil {
-			targetSummary = map[string]int64{}
-		}
+		targetSummary := normalizeDNSTargetSummary(input.TargetSummary)
 		targetSummaryJSON, err := json.Marshal(targetSummary)
 		if err != nil {
 			return err
@@ -2965,16 +2962,20 @@ func decodeDNSTargetSummary(raw string) map[string]int64 {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return map[string]int64{}
 	}
-	for target, count := range result {
+	return normalizeDNSTargetSummary(result)
+}
+
+func normalizeDNSTargetSummary(values map[string]int64) map[string]int64 {
+	if len(values) == 0 {
+		return map[string]int64{}
+	}
+	result := make(map[string]int64, len(values))
+	for target, count := range values {
 		trimmed := strings.TrimSpace(target)
 		if trimmed == "" || count <= 0 {
-			delete(result, target)
 			continue
 		}
-		if trimmed != target {
-			delete(result, target)
-			result[trimmed] += count
-		}
+		result[trimmed] += count
 	}
 	return result
 }

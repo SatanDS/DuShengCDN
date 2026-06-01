@@ -1577,7 +1577,13 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 				TotalDurationMs: 210,
 				MaxDurationMs:   12,
 				SourceScope:     "country:HK",
-				TargetSummary:   map[string]int64{"8.8.8.8": 42},
+				TargetSummary: map[string]int64{
+					"8.8.8.8":   40,
+					" 8.8.8.8 ": 2,
+					" ":         9,
+					"1.1.1.1":   0,
+					"9.9.9.9":   -3,
+				},
 			},
 		},
 	})
@@ -1609,6 +1615,10 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 	if rollup.SourceScope != "country:HK" {
 		t.Fatalf("unexpected rollup source scope: %+v", rollup)
+	}
+	targetSummary := decodeDNSTargetSummary(rollup.TargetSummary)
+	if len(targetSummary) != 1 || targetSummary["8.8.8.8"] != 42 {
+		t.Fatalf("expected sanitized target summary, got raw=%s decoded=%+v", rollup.TargetSummary, targetSummary)
 	}
 }
 
