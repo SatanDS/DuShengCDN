@@ -20,6 +20,7 @@ import {
   PrimaryButton,
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
+import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime } from '@/lib/utils/date';
 
 interface CertificateDetailModalProps {
@@ -39,7 +40,10 @@ export function CertificateDetailModal({
   onDelete,
   deleting = false,
 }: CertificateDetailModalProps) {
-  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<{
+    tone: 'success' | 'danger';
+    message: string;
+  } | null>(null);
 
   const certificateQuery = useQuery({
     queryKey: ['tls-certificates', 'detail', certificateId],
@@ -59,10 +63,10 @@ export function CertificateDetailModal({
 
   const handleCopy = async (value: string, message: string) => {
     try {
-      await navigator.clipboard.writeText(value);
-      setCopyMessage(message);
+      await copyToClipboard(value);
+      setCopyFeedback({ tone: 'success', message });
     } catch (error) {
-      setCopyMessage(getErrorMessage(error));
+      setCopyFeedback({ tone: 'danger', message: getErrorMessage(error) });
     }
   };
 
@@ -70,7 +74,7 @@ export function CertificateDetailModal({
     <AppModal
       isOpen={isOpen}
       onClose={() => {
-        setCopyMessage(null);
+        setCopyFeedback(null);
         onClose();
       }}
       title="证书详情"
@@ -98,8 +102,11 @@ export function CertificateDetailModal({
         </div>
       }
     >
-      {copyMessage ? (
-        <InlineMessage tone="success" message={copyMessage} />
+      {copyFeedback ? (
+        <InlineMessage
+          tone={copyFeedback.tone}
+          message={copyFeedback.message}
+        />
       ) : null}
 
       {certificateQuery.isLoading || contentQuery.isLoading ? (

@@ -14,21 +14,30 @@ import {
   AuthInput,
   SecondaryButton,
 } from '@/features/auth/components/auth-form-primitives';
+import { copyToClipboard } from '@/lib/utils/clipboard';
+
+function getCopyErrorMessage(error: unknown) {
+  return error instanceof Error
+    ? error.message
+    : '复制失败：浏览器拒绝写入剪贴板，请手动复制新密码。';
+}
 
 export function PasswordResetConfirmForm() {
   const searchParams = useSearchParams();
   const email = searchParams?.get('email') || '';
   const token = searchParams?.get('token') || '';
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
   const [message, setMessage] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
 
   const mutation = useMutation({
     mutationFn: () => resetPassword({ email, token }),
     onSuccess: async (password) => {
+      setResetPasswordValue(password);
       try {
-        await navigator.clipboard.writeText(password);
+        await copyToClipboard(password);
         setMessage({ tone: 'success', text: `密码已重置，新密码已复制到剪贴板：${password}` });
-      } catch {
-        setMessage({ tone: 'success', text: `密码已重置：${password}` });
+      } catch (error) {
+        setMessage({ tone: 'success', text: `密码已重置：${password}。${getCopyErrorMessage(error)}` });
       }
     },
     onError: (error: Error) => {
@@ -55,13 +64,20 @@ export function PasswordResetConfirmForm() {
           <AuthButton type='button' disabled={missingParams || mutation.isPending} onClick={() => mutation.mutate()}>
             {mutation.isPending ? '处理中...' : '确认重置密码'}
           </AuthButton>
-          {message?.tone === 'success' ? (
+          {resetPasswordValue ? (
             <SecondaryButton
               type='button'
               onClick={async () => {
-                const password = message.text.split('：').pop() || '';
-                if (password) {
-                  await navigator.clipboard.writeText(password);
+                if (resetPasswordValue) {
+                  try {
+                    await copyToClipboard(resetPasswordValue);
+                    setMessage({ tone: 'success', text: `新密码已复制到剪贴板：${resetPasswordValue}` });
+                  } catch (error) {
+                    setMessage({
+                      tone: 'danger',
+                      text: `新密码：${resetPasswordValue}。${getCopyErrorMessage(error)}`,
+                    });
+                  }
                 }
               }}
             >

@@ -46,6 +46,7 @@ import {
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 import type { ReleaseChannel } from '@/features/update/types';
+import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
 import {
   formatBytes,
@@ -78,10 +79,6 @@ type NodeDetailTab = 'dashboard' | 'info';
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
-
-async function copyToClipboard(value: string) {
-  await navigator.clipboard.writeText(value);
 }
 
 function formatUsageRatio(used?: number | null, total?: number | null) {

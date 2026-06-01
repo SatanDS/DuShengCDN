@@ -76,6 +76,7 @@ import {
   ToggleField,
 } from '@/features/shared/components/resource-primitives';
 import { cn } from '@/lib/utils/cn';
+import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
 
 type FeedbackState = {
@@ -670,10 +671,6 @@ function getDelegationStatusVariant(status: DNSZoneDelegationStatus) {
     case 'failed':
       return 'danger' as const;
   }
-}
-
-async function copyToClipboard(value: string) {
-  await navigator.clipboard.writeText(value);
 }
 
 export function AuthoritativeDNSPage() {
@@ -3964,7 +3961,10 @@ function WorkerTokenModal({
   serverUrl: string;
   onClose: () => void;
 }) {
-  const [copyMessage, setCopyMessage] = useState('');
+  const [copyFeedback, setCopyFeedback] = useState<{
+    tone: 'success' | 'danger';
+    message: string;
+  } | null>(null);
   const token = worker.token ?? '';
   const installCommand = `curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \\
   --server-url ${serverUrl} \\
@@ -3991,9 +3991,9 @@ go run ./cmd/dns-worker \\
   const handleCopy = async (value: string, message: string) => {
     try {
       await copyToClipboard(value);
-      setCopyMessage(message);
+      setCopyFeedback({ tone: 'success', message });
     } catch (error) {
-      setCopyMessage(getErrorMessage(error));
+      setCopyFeedback({ tone: 'danger', message: getErrorMessage(error) });
     }
   };
 
@@ -4006,8 +4006,11 @@ go run ./cmd/dns-worker \\
       size="xl"
     >
       <div className="space-y-5">
-        {copyMessage ? (
-          <InlineMessage tone="success" message={copyMessage} />
+        {copyFeedback ? (
+          <InlineMessage
+            tone={copyFeedback.tone}
+            message={copyFeedback.message}
+          />
         ) : null}
         <ResourceField label="Worker Token">
           <div className="flex flex-col gap-3 md:flex-row">

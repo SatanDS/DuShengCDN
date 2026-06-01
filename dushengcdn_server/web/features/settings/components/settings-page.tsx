@@ -56,6 +56,7 @@ import {
   ToggleField,
 } from '@/features/shared/components/resource-primitives';
 import { ApiError } from '@/lib/api/client';
+import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime } from '@/lib/utils/date';
 
 const settingsQueryKey = ['settings', 'options'] as const;
@@ -253,10 +254,6 @@ function buildDiscoveryCommand(serverUrl: string, discoveryToken: string) {
   ].join('\n');
 }
 
-async function copyToClipboard(value: string) {
-  await navigator.clipboard.writeText(value);
-}
-
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const { refreshUser, user } = useAuth();
@@ -284,6 +281,15 @@ export function SettingsPage() {
   const isRoot = (user?.role ?? 0) >= 100;
 
   const setFeedback = showToast;
+
+  const handleCopy = async (value: string, message: string) => {
+    try {
+      await copyToClipboard(value);
+      setFeedback({ tone: 'success', message });
+    } catch (error) {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    }
+  };
 
   const publicStatusQuery = useQuery({
     queryKey: ['public-status'],
@@ -502,8 +508,12 @@ export function SettingsPage() {
       if (data.discovery_token) {
         try {
           await copyToClipboard(data.discovery_token);
-        } catch {
-          // ignore clipboard errors
+        } catch (error) {
+          setFeedback({
+            tone: 'success',
+            message: 'Discovery Token 已重新生成，但未能自动复制。',
+            detail: getErrorMessage(error),
+          });
         }
       }
     },
@@ -917,7 +927,9 @@ export function SettingsPage() {
                     </CodeBlock>
                     <SecondaryButton
                       type="button"
-                      onClick={() => void copyToClipboard(accessToken)}
+                      onClick={() =>
+                        void handleCopy(accessToken, '访问令牌已复制。')
+                      }
                     >
                       复制令牌
                     </SecondaryButton>
@@ -1508,7 +1520,9 @@ export function SettingsPage() {
                   {discoveryCommand ? (
                     <PrimaryButton
                       type="button"
-                      onClick={() => void copyToClipboard(discoveryCommand)}
+                      onClick={() =>
+                        void handleCopy(discoveryCommand, '部署命令已复制。')
+                      }
                     >
                       复制命令
                     </PrimaryButton>
