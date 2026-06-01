@@ -1325,4 +1325,153 @@ describe('Authoritative DNS page', () => {
       screen.getAllByText(/--udp-response-size 1232/).length,
     ).toBeGreaterThan(0);
   });
+
+  it('renders empty authoritative DNS data when API list fields are null', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes('/dns-workers/observability')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  window_hours: 24,
+                  window_start: '2026-06-01T00:00:00Z',
+                  window_end: '2026-06-02T00:00:00Z',
+                  last_rollup_at: null,
+                  total_queries: 0,
+                  successful_queries: 0,
+                  negative_queries: 0,
+                  error_queries: 0,
+                  dynamic_queries: 0,
+                  static_queries: 0,
+                  rcode_breakdown: null,
+                  qtype_breakdown: null,
+                  top_qnames: null,
+                  top_targets: null,
+                  worker_breakdown: null,
+                  zone_breakdown: null,
+                  route_breakdown: null,
+                  source_scope_breakdown: null,
+                  trend_points: null,
+                  snapshot_consistency: {
+                    status: 'no_online_workers',
+                    checked_at: '2026-06-02T00:00:00Z',
+                    snapshot_max_age_seconds: 300,
+                    total_worker_count: 0,
+                    online_worker_count: 0,
+                    stale_worker_count: 0,
+                    divergent_worker_count: 0,
+                    latest_snapshot_version: '',
+                    latest_snapshot_at: null,
+                    version_breakdown: null,
+                    workers: null,
+                  },
+                  worker_health: {
+                    checked_at: '2026-06-02T00:00:00Z',
+                    total_worker_count: 0,
+                    online_worker_count: 0,
+                    probe_healthy_count: 0,
+                    probe_checked_count: 0,
+                    probe_healthy_percent: 0,
+                    node_probe_healthy_count: 0,
+                    node_probe_checked_count: 0,
+                    node_probe_stale_count: 0,
+                    node_probe_healthy_percent: 0,
+                    node_probe_average_rtt_ms: 0,
+                    node_probe_max_rtt_ms: 0,
+                    availability_percent: 0,
+                    average_latency_ms: 0,
+                    max_latency_ms: 0,
+                    error_rate_percent: 0,
+                    workers: null,
+                  },
+                },
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/scheduling-states')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  checked_at: '2026-06-02T00:00:00Z',
+                  total: 0,
+                  states: null,
+                },
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/migration-candidates')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: null,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: null,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: null,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(<AuthoritativeDNSPage />);
+
+    expect(await screen.findByText('权威 DNS')).toBeInTheDocument();
+    expect(screen.getByText('暂无 DNS Zone')).toBeInTheDocument();
+    expect(screen.getByText('暂无调度状态')).toBeInTheDocument();
+    expect(screen.getByText('暂无权威 DNS 站点')).toBeInTheDocument();
+    expect(screen.getByText('无在线 Worker')).toBeInTheDocument();
+    expect(screen.getByText('Worker 可用性')).toBeInTheDocument();
+    expect(screen.getByText('暂无 DNS Worker。')).toBeInTheDocument();
+  });
 });
