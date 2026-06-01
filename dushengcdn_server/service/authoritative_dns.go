@@ -2878,6 +2878,9 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 		if lastChangedAt == nil || lastChangedAt.IsZero() {
 			lastChangedAt = &now
 		}
+		if lastChangedAt.After(now) {
+			lastChangedAt = &now
+		}
 		if err := upsertDNSWorkerSchedulingState(input.RouteID, recordType, scopeKey, selectedTargets, desiredTargets, *lastChangedAt, now); err != nil {
 			return err
 		}

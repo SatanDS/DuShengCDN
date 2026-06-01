@@ -1750,6 +1750,55 @@ func TestDNSWorkerHeartbeatPersistsSchedulingStates(t *testing.T) {
 	if state.SelectedTargets != `["8.8.4.4"]` {
 		t.Fatalf("expected older heartbeat not to overwrite state, got %+v", state)
 	}
+
+	futureChangedAt := time.Now().UTC().Add(time.Hour)
+	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status: "online",
+		SchedulingStates: []AuthoritativeDNSSnapshotSchedulingState{
+			{
+				RouteID:         route.ID,
+				RecordType:      "A",
+				ScopeKey:        "country:HK",
+				SelectedTargets: []string{"8.8.8.8"},
+				DesiredTargets:  []string{"8.8.8.8"},
+				LastChangedAt:   &futureChangedAt,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat future state: %v", err)
+	}
+	if err := model.DB.Where("proxy_route_id = ? AND dns_record_type = ? AND scope_key = ?", route.ID, "A", "country:HK").First(&state).Error; err != nil {
+		t.Fatalf("reload future scheduling state: %v", err)
+	}
+	if state.LastChangedAt == nil || !state.LastChangedAt.Before(futureChangedAt) {
+		t.Fatalf("expected future LastChangedAt to be clamped, got %+v", state)
+	}
+	clampedChangedAt := *state.LastChangedAt
+	for !time.Now().UTC().After(clampedChangedAt) {
+		time.Sleep(time.Millisecond)
+	}
+	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status: "online",
+		SchedulingStates: []AuthoritativeDNSSnapshotSchedulingState{
+			{
+				RouteID:         route.ID,
+				RecordType:      "A",
+				ScopeKey:        "country:HK",
+				SelectedTargets: []string{"1.1.1.1"},
+				DesiredTargets:  []string{"1.1.1.1"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat normal state after future: %v", err)
+	}
+	if err := model.DB.Where("proxy_route_id = ? AND dns_record_type = ? AND scope_key = ?", route.ID, "A", "country:HK").First(&state).Error; err != nil {
+		t.Fatalf("reload normal scheduling state: %v", err)
+	}
+	if state.SelectedTargets != `["1.1.1.1"]` || state.LastChangedAt == nil || !state.LastChangedAt.After(clampedChangedAt) {
+		t.Fatalf("expected normal heartbeat to overwrite clamped future state, got %+v", state)
+	}
 }
 
 func TestListAuthoritativeDNSGSLBSchedulingStates(t *testing.T) {
