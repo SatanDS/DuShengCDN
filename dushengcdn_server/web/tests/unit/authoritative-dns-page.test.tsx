@@ -1155,7 +1155,12 @@ describe('Authoritative DNS page', () => {
     expect(
       screen.getByText(/1 \/ 1 个在线 Worker UDP\/TCP 53 可达/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/已完成 3 组模拟/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/已完成 3 组模拟，其中 1 组无返回目标/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/当前来源没有可用于 A 记录的边缘节点/).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText('全局')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));

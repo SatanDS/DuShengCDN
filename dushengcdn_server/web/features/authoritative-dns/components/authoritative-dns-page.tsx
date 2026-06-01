@@ -432,9 +432,7 @@ function formatSourceScopeLabel(value: string) {
     .map((item) => item.trim())
     .filter(Boolean);
   const base = parts[0] ?? 'global';
-  const bucket = parts.find((item) =>
-    item.toLowerCase().startsWith('bucket:'),
-  );
+  const bucket = parts.find((item) => item.toLowerCase().startsWith('bucket:'));
   const baseLabel = formatSourceScopeBaseLabel(base);
   if (!bucket) {
     return baseLabel;
@@ -450,7 +448,10 @@ function formatSourceScopeBaseLabel(value: string) {
     return '全局';
   }
   if (lower.startsWith('country:')) {
-    const country = text.slice(text.indexOf(':') + 1).trim().toUpperCase();
+    const country = text
+      .slice(text.indexOf(':') + 1)
+      .trim()
+      .toUpperCase();
     return country ? `国家 ${country}` : text;
   }
   if (lower.startsWith('cidr:')) {
@@ -1062,13 +1063,22 @@ export function AuthoritativeDNSPage() {
           (count, simulation) => count + simulation.targets.length,
           0,
         );
+        const noTargetSimulationCount = simulationResults.filter(
+          (simulation) => simulation.targets.length === 0,
+        ).length;
         result = updateMigrationRecheckStep(
           result,
           'simulation',
-          returnedTargetCount > 0 ? 'success' : 'danger',
-          returnedTargetCount > 0
-            ? `已完成 ${simulationResults.length} 组模拟，返回 ${returnedTargetCount} 个目标`
-            : '当前快照没有返回可用目标',
+          returnedTargetCount === 0
+            ? 'danger'
+            : noTargetSimulationCount > 0
+              ? 'warning'
+              : 'success',
+          returnedTargetCount === 0
+            ? '当前快照没有返回可用目标'
+            : noTargetSimulationCount > 0
+              ? `已完成 ${simulationResults.length} 组模拟，其中 ${noTargetSimulationCount} 组无返回目标`
+              : `已完成 ${simulationResults.length} 组模拟，返回 ${returnedTargetCount} 个目标`,
         );
       } catch (error) {
         result = updateMigrationRecheckStep(
@@ -2962,6 +2972,11 @@ function MigrationRecheckPanel({ result }: { result: MigrationRecheckResult }) {
                   {simulation.qname} {simulation.record_type} ·{' '}
                   {simulation.targets.join(', ') || '—'}
                 </p>
+                {simulation.message ? (
+                  <p className="mt-1 text-xs leading-5 text-[var(--foreground-muted)]">
+                    {simulation.message}
+                  </p>
+                ) : null}
               </div>
             ))}
           </div>
