@@ -164,6 +164,44 @@ func TestResolveDynamicRouteTreatsLegacyGSLBPoolsAsEnabled(t *testing.T) {
 	}
 }
 
+func TestResolveDynamicRouteSkipsNonPublicSnapshotIPs(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           31,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("private-node", "hk", "10.0.0.1", 1000, 1),
+		testNode("public-node", "hk", "8.8.4.4", 100, 1),
+	}
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected non-public snapshot IP to be skipped, got %s", got)
+	}
+}
+
 func TestResolveDynamicRouteLoadAwarePrefersFreshMetrics(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.Routes = []SnapshotRoute{

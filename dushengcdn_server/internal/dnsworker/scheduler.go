@@ -289,6 +289,9 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 			if ipv4 := ip.To4(); ipv4 != nil {
 				ip = ipv4
 			}
+			if !isPublicIP(ip) {
+				continue
+			}
 			if recordType == "A" && ip.To4() == nil {
 				continue
 			}
@@ -442,6 +445,19 @@ func isNodeSchedulable(node SnapshotNode) bool {
 		return false
 	}
 	return len(node.PublicIPs) > 0
+}
+
+func isPublicIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+	}
+	if !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	return true
 }
 
 func metricWithinThresholds(node SnapshotNode, thresholds GSLBLoadThresholds) bool {
