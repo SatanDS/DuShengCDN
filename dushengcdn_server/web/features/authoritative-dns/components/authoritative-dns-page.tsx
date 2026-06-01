@@ -2644,7 +2644,7 @@ function DNSMigrationGuidePanel({
                         />
                         <InfoTile
                           label="快照就绪 Worker"
-                          value={`${candidate.ready_worker_count} / ${candidate.online_worker_count}`}
+                          value={`${candidate.ready_worker_count} / ${candidate.public_reachable_worker_count}`}
                         />
                       </div>
                       {candidate.blockers.length > 0 ? (

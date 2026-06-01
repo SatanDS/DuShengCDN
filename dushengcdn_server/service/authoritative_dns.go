@@ -1746,11 +1746,13 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 }
 
 type authoritativeDNSMigrationWorkerStatsView struct {
-	total           int
-	online          int
-	publicReachable int
-	freshSnapshot   int
-	ready           int
+	total                       int
+	online                      int
+	publicReachable             int
+	freshSnapshot               int
+	ready                       int
+	publicReachableWithoutFresh int
+	readySnapshotVersionCount   int
 }
 
 type authoritativeDNSWorkerReadiness struct {
@@ -1782,6 +1784,7 @@ func authoritativeDNSMigrationWorkerStats() (authoritativeDNSMigrationWorkerStat
 	stats := authoritativeDNSMigrationWorkerStatsView{total: len(workers)}
 	now := time.Now().UTC()
 	snapshotMaxAge := authoritativeDNSSnapshotMaxAge()
+	readySnapshotVersions := map[string]int{}
 	for _, worker := range workers {
 		readiness := evaluateAuthoritativeDNSWorkerReadiness(now, snapshotMaxAge, worker)
 		if readiness.online {
@@ -1795,8 +1798,13 @@ func authoritativeDNSMigrationWorkerStats() (authoritativeDNSMigrationWorkerStat
 		}
 		if readiness.ready {
 			stats.ready++
+			readySnapshotVersions[strings.TrimSpace(worker.LastSnapshotVersion)]++
+		}
+		if readiness.publicReachable && !readiness.freshSnapshot {
+			stats.publicReachableWithoutFresh++
 		}
 	}
+	stats.readySnapshotVersionCount = len(readySnapshotVersions)
 	return stats, nil
 }
 
@@ -1850,10 +1858,12 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 		candidate.Blockers = append(candidate.Blockers, "没有在线 DNS Worker")
 	} else if workerStats.publicReachable == 0 {
 		candidate.Blockers = append(candidate.Blockers, "在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测")
-	} else if workerStats.freshSnapshot == 0 {
-		candidate.Blockers = append(candidate.Blockers, "在线 DNS Worker 尚未拉取未过期的调度快照")
 	} else if workerStats.ready == 0 {
-		candidate.Blockers = append(candidate.Blockers, "没有同时满足公网可达和快照未过期的 DNS Worker")
+		candidate.Blockers = append(candidate.Blockers, "公网可达 DNS Worker 尚未拉取未过期的调度快照")
+	} else if workerStats.publicReachableWithoutFresh > 0 {
+		candidate.Blockers = append(candidate.Blockers, "部分公网可达 DNS Worker 尚未拉取未过期的调度快照")
+	} else if workerStats.readySnapshotVersionCount > 1 {
+		candidate.Blockers = append(candidate.Blockers, "公网可达 DNS Worker 的调度快照版本不一致")
 	}
 	if !route.GSLBEnabled {
 		candidate.Warnings = append(candidate.Warnings, "未启用 GSLB，多节点池实时分流不会生效")
@@ -1864,7 +1874,7 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 	if workerStats.online > workerStats.publicReachable {
 		candidate.Warnings = append(candidate.Warnings, "部分在线 Worker 未通过最新公网探测，迁移前建议逐个点击「探测」")
 	}
-	if workerStats.online > workerStats.freshSnapshot {
+	if workerStats.publicReachableWithoutFresh == 0 && workerStats.online > workerStats.freshSnapshot {
 		candidate.Warnings = append(candidate.Warnings, "部分在线 Worker 尚未拉取未过期快照，请确认快照同步正常")
 	}
 	if !route.DNSAutoSync {
@@ -2188,11 +2198,14 @@ func validateAuthoritativeDNSReadyWorkers() error {
 	if stats.publicReachable == 0 {
 		return errors.New("在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测")
 	}
-	if stats.freshSnapshot == 0 {
-		return errors.New("在线 DNS Worker 尚未拉取未过期的调度快照")
-	}
 	if stats.ready == 0 {
-		return errors.New("没有同时满足公网可达和快照未过期的 DNS Worker")
+		return errors.New("公网可达 DNS Worker 尚未拉取未过期的调度快照")
+	}
+	if stats.publicReachableWithoutFresh > 0 {
+		return errors.New("部分公网可达 DNS Worker 尚未拉取未过期的调度快照")
+	}
+	if stats.readySnapshotVersionCount > 1 {
+		return errors.New("公网可达 DNS Worker 的调度快照版本不一致")
 	}
 	return nil
 }

@@ -413,6 +413,114 @@ func TestCreateProxyRouteAuthoritativeRequiresFreshDNSWorkerSnapshot(t *testing.
 	}
 }
 
+func TestCreateProxyRouteAuthoritativeRejectsPartialPublicWorkerStaleSnapshot(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	createReadyDNSWorker(t, now)
+	staleWorker := createReadyDNSWorkerWithName(t, "ns2", now)
+	staleWorker.LastSnapshotVersion = "stale-snapshot"
+	staleSnapshotAt := now.Add(-(defaultDNSSnapshotMaxAge + time.Minute))
+	staleWorker.LastSnapshotAt = &staleSnapshotAt
+	if err := staleWorker.Update(); err != nil {
+		t.Fatalf("update stale worker snapshot: %v", err)
+	}
+
+	_, err = CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err == nil || !strings.Contains(err.Error(), "部分公网可达") {
+		t.Fatalf("expected partial stale DNS Worker snapshot error, got %v", err)
+	}
+}
+
+func TestCreateProxyRouteAuthoritativeRejectsDivergentPublicWorkerSnapshots(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	createReadyDNSWorker(t, now)
+	peerWorker := createReadyDNSWorkerWithName(t, "ns2", now)
+	peerWorker.LastSnapshotVersion = "snapshot-b"
+	if err := peerWorker.Update(); err != nil {
+		t.Fatalf("update divergent worker snapshot: %v", err)
+	}
+
+	_, err = CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err == nil || !strings.Contains(err.Error(), "调度快照版本不一致") {
+		t.Fatalf("expected divergent DNS Worker snapshot error, got %v", err)
+	}
+}
+
 func TestCreateProxyRouteAuthoritativeAllowsReadyDNSWorker(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -736,6 +844,81 @@ func TestListAuthoritativeDNSMigrationCandidatesRequiresFreshWorkerSnapshot(t *t
 	}
 	if !containsStringWith(candidate.Blockers, "调度快照") {
 		t.Fatalf("expected snapshot blocker, got %+v", candidate.Blockers)
+	}
+}
+
+func TestListAuthoritativeDNSMigrationCandidatesRejectsDivergentPublicWorkerSnapshots(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSAutoSync:     true,
+		DNSProviderMode: DNSProviderModeCloudflare,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 60)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	createReadyDNSWorker(t, now)
+	peerWorker := createReadyDNSWorkerWithName(t, "ns2", now)
+	peerWorker.LastSnapshotVersion = "snapshot-b"
+	if err := peerWorker.Update(); err != nil {
+		t.Fatalf("update divergent worker snapshot: %v", err)
+	}
+
+	candidates, err := ListAuthoritativeDNSMigrationCandidates()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSMigrationCandidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected one migration candidate, got %+v", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.Ready {
+		t.Fatalf("expected candidate to be blocked by divergent snapshots: %+v", candidate)
+	}
+	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 2 || candidate.ReadyWorkerCount != 2 {
+		t.Fatalf("unexpected candidate metadata: %+v", candidate)
+	}
+	if !containsStringWith(candidate.Blockers, "调度快照版本不一致") {
+		t.Fatalf("expected divergent snapshot blocker, got %+v", candidate.Blockers)
 	}
 }
 
@@ -2007,7 +2190,12 @@ func ptrUint(value uint) *uint {
 
 func createReadyDNSWorker(t *testing.T, checkedAt time.Time) *model.DNSWorker {
 	t.Helper()
-	workerModel := createProbeHealthyDNSWorker(t, checkedAt)
+	return createReadyDNSWorkerWithName(t, "ns1", checkedAt)
+}
+
+func createReadyDNSWorkerWithName(t *testing.T, name string, checkedAt time.Time) *model.DNSWorker {
+	t.Helper()
+	workerModel := createProbeHealthyDNSWorkerWithName(t, name, checkedAt)
 	checkedAt = checkedAt.UTC()
 	workerModel.LastSnapshotVersion = "snapshot-a"
 	workerModel.LastSnapshotAt = &checkedAt
@@ -2019,7 +2207,16 @@ func createReadyDNSWorker(t *testing.T, checkedAt time.Time) *model.DNSWorker {
 
 func createProbeHealthyDNSWorker(t *testing.T, checkedAt time.Time) *model.DNSWorker {
 	t.Helper()
-	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1", PublicAddress: "ns1.example.net"})
+	return createProbeHealthyDNSWorkerWithName(t, "ns1", checkedAt)
+}
+
+func createProbeHealthyDNSWorkerWithName(t *testing.T, name string, checkedAt time.Time) *model.DNSWorker {
+	t.Helper()
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "ns1"
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: name, PublicAddress: name + ".example.net"})
 	if err != nil {
 		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
 	}
