@@ -8,6 +8,7 @@ import { ConfirmDialogProvider } from '@/components/feedback/confirm-dialog-prov
 import { ToastProvider } from '@/components/feedback/toast-provider';
 import { ThemeProvider } from '@/components/providers/theme-provider';
 import { AuthoritativeDNSPage } from '@/features/authoritative-dns/components/authoritative-dns-page';
+import { formatDateTime } from '@/lib/utils/date';
 
 vi.mock('echarts-for-react', () => ({
   default: () => <div data-testid="echarts-mock" />,
@@ -491,6 +492,7 @@ describe('Authoritative DNS page', () => {
                       selected: true,
                       reasons: ['可参与当前调度'],
                       has_metric: true,
+                      metric_captured_at: '2026-05-31T08:19:10Z',
                       openresty_connections: 12,
                       cpu_usage_percent: 10,
                       memory_usage_percent: 30,
@@ -512,6 +514,7 @@ describe('Authoritative DNS page', () => {
                       selected: false,
                       reasons: ['节点负载超过 GSLB 阈值'],
                       has_metric: true,
+                      metric_captured_at: '2026-05-31T08:18:50Z',
                       openresty_connections: 99,
                       cpu_usage_percent: 20,
                       memory_usage_percent: 40,
@@ -884,6 +887,10 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('hk-edge')).toBeInTheDocument();
     expect(screen.getByText('hot-edge')).toBeInTheDocument();
     expect(screen.getByText('节点负载超过 GSLB 阈值')).toBeInTheDocument();
+    expect(screen.getAllByText('指标时间').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(formatDateTime('2026-05-31T08:19:10Z')),
+    ).toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '检查委派' }));

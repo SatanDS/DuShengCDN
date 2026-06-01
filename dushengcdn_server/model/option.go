@@ -66,6 +66,7 @@ func InitOptionMap() {
 	common.OptionMap["AuthoritativeDNSListenAddr"] = common.AuthoritativeDNSListenAddr
 	common.OptionMap["AuthoritativeDNSDefaultTTL"] = strconv.Itoa(common.AuthoritativeDNSDefaultTTL)
 	common.OptionMap["AuthoritativeDNSSnapshotMaxAge"] = strconv.Itoa(common.AuthoritativeDNSSnapshotMaxAge)
+	common.OptionMap["GSLBMetricFreshnessSeconds"] = strconv.Itoa(common.GSLBMetricFreshnessSeconds)
 	common.OptionMap["OpenRestyWorkerProcesses"] = common.OpenRestyWorkerProcesses
 	common.OptionMap["OpenRestyWorkerConnections"] = strconv.Itoa(common.OpenRestyWorkerConnections)
 	common.OptionMap["OpenRestyWorkerRlimitNofile"] = strconv.Itoa(common.OpenRestyWorkerRlimitNofile)
@@ -270,6 +271,10 @@ func updateOptionMap(key string, value string) {
 	case "AuthoritativeDNSSnapshotMaxAge":
 		if v, err := strconv.Atoi(value); err == nil && v > 0 {
 			common.AuthoritativeDNSSnapshotMaxAge = v
+		}
+	case "GSLBMetricFreshnessSeconds":
+		if v, err := strconv.Atoi(value); err == nil && v > 0 {
+			common.GSLBMetricFreshnessSeconds = v
 		}
 	case "OpenRestyWorkerProcesses":
 		if strings.TrimSpace(value) != "" {

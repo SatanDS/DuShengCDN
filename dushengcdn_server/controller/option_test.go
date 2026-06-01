@@ -74,6 +74,8 @@ func TestValidateAuthoritativeDNSOption(t *testing.T) {
 		{name: "default ttl too high", key: "AuthoritativeDNSDefaultTTL", value: "86401", wantErr: true},
 		{name: "snapshot max age", key: "AuthoritativeDNSSnapshotMaxAge", value: "300"},
 		{name: "snapshot max age invalid", key: "AuthoritativeDNSSnapshotMaxAge", value: "0", wantErr: true},
+		{name: "gslb metric freshness", key: "GSLBMetricFreshnessSeconds", value: "120"},
+		{name: "gslb metric freshness invalid", key: "GSLBMetricFreshnessSeconds", value: "0", wantErr: true},
 	}
 
 	for _, testCase := range testCases {

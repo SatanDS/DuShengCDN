@@ -2446,6 +2446,19 @@ function GSLBSimulationDiagnostics({
                     }
                   />
                   <InfoTile
+                    label="指标时间"
+                    value={
+                      node.has_metric
+                        ? formatRelativeTime(node.metric_captured_at)
+                        : '无新鲜指标'
+                    }
+                    helper={
+                      node.has_metric
+                        ? formatDateTime(node.metric_captured_at)
+                        : undefined
+                    }
+                  />
+                  <InfoTile
                     label="评分"
                     value={node.score > 0 ? node.score.toFixed(2) : '—'}
                   />

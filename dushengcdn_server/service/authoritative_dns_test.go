@@ -2093,6 +2093,9 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	assertSimulationNode(t, hk.Nodes, "node-hk", true, true, "可参与当前调度")
 	assertSimulationNode(t, hk.Nodes, "node-hot", false, false, "节点负载超过 GSLB 阈值")
 	assertSimulationNode(t, hk.Nodes, "node-eu", false, false, "节点池未匹配当前来源")
+	if hot := findSimulationNode(hk.Nodes, "node-hot"); hot == nil || hot.MetricCapturedAt == nil {
+		t.Fatalf("expected hot node simulation to include metric captured time, got %+v", hot)
+	}
 
 	de, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
 		ProxyRouteID: route.ID,
@@ -2287,19 +2290,28 @@ func assertSimulationPoolReason(t *testing.T, pools []DNSGSLBSimulationPoolView,
 
 func assertSimulationNode(t *testing.T, nodes []DNSGSLBSimulationNodeView, nodeID string, eligible bool, selected bool, reason string) {
 	t.Helper()
+	node := findSimulationNode(nodes, nodeID)
+	if node == nil {
+		t.Fatalf("missing simulation node %s in %+v", nodeID, nodes)
+	}
+	if node.Eligible != eligible || node.Selected != selected {
+		t.Fatalf("unexpected simulation node %s: %+v", nodeID, node)
+	}
+	for _, item := range node.Reasons {
+		if item == reason {
+			return
+		}
+	}
+	t.Fatalf("missing reason %q for node %s: %+v", reason, nodeID, node.Reasons)
+}
+
+func findSimulationNode(nodes []DNSGSLBSimulationNodeView, nodeID string) *DNSGSLBSimulationNodeView {
 	for _, node := range nodes {
 		if node.NodeID != nodeID {
 			continue
 		}
-		if node.Eligible != eligible || node.Selected != selected {
-			t.Fatalf("unexpected simulation node %s: %+v", nodeID, node)
-		}
-		for _, item := range node.Reasons {
-			if item == reason {
-				return
-			}
-		}
-		t.Fatalf("missing reason %q for node %s: %+v", reason, nodeID, node.Reasons)
+		found := node
+		return &found
 	}
-	t.Fatalf("missing simulation node %s in %+v", nodeID, nodes)
+	return nil
 }

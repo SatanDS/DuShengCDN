@@ -64,6 +64,7 @@ var AuthoritativeDNSEnabled = false
 var AuthoritativeDNSListenAddr = ":53"
 var AuthoritativeDNSDefaultTTL = 30
 var AuthoritativeDNSSnapshotMaxAge = 300
+var GSLBMetricFreshnessSeconds = 120
 
 // V5 OpenResty performance settings (hot-reloadable via Option table)
 var OpenRestyWorkerProcesses = "auto"

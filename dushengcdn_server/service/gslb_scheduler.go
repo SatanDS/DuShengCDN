@@ -1,6 +1,7 @@
 package service
 
 import (
+	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip/iputil"
 	"encoding/json"
@@ -227,7 +228,11 @@ func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy
 }
 
 func latestNodeMetricSnapshots() map[string]*model.NodeMetricSnapshot {
-	rows, err := model.ListMetricSnapshotsSince(time.Now().Add(-10 * time.Minute))
+	freshness := time.Duration(common.GSLBMetricFreshnessSeconds) * time.Second
+	if freshness <= 0 {
+		freshness = 120 * time.Second
+	}
+	rows, err := model.ListMetricSnapshotsSince(time.Now().Add(-freshness))
 	if err != nil {
 		return map[string]*model.NodeMetricSnapshot{}
 	}
@@ -327,6 +332,9 @@ func sortGSLBCandidates(candidates []gslbDNSTargetCandidate, strategy string) {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left := candidates[i]
 		right := candidates[j]
+		if strategy == "load_aware" && left.HasMetric != right.HasMetric {
+			return left.HasMetric
+		}
 		if strategy == "weighted" || strategy == "load_aware" {
 			if left.Score != right.Score {
 				return left.Score > right.Score

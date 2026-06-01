@@ -88,6 +88,45 @@ func TestResolveDynamicRouteSkipsUnhealthyAndLoadThresholds(t *testing.T) {
 	}
 }
 
+func TestResolveDynamicRouteLoadAwarePrefersFreshMetrics(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           19,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "load_aware",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "load_aware",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, Enabled: true},
+				},
+			},
+		},
+	}
+	withMetric := testNode("with-metric", "hk", "8.8.4.4", 10, 8)
+	withoutMetric := testNode("without-metric", "hk", "1.1.1.1", 1000, 0)
+	withoutMetric.MetricCapturedAt = nil
+	snapshot.Nodes = []SnapshotNode{withoutMetric, withMetric}
+	server := testServer(t, snapshot)
+	server.Scheduler = NewScheduler()
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected node with fresh metrics before missing metric fallback, got %s", got)
+	}
+}
+
 func TestResolveGSLBMatchesECSCountryPools(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.Routes = []SnapshotRoute{

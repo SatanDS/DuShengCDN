@@ -91,6 +91,7 @@ go run . --port 3000 --log-dir ./logs
 | `AuthoritativeDNSListenAddr`（保留） | 内置权威 DNS 监听地址；当前查询面使用独立 DNS Worker | `:53` |
 | `AuthoritativeDNSDefaultTTL` | 权威 DNS 模式下 `0/1` TTL 映射值 | `30` |
 | `AuthoritativeDNSSnapshotMaxAge` | DNS Worker 最后有效快照最大使用时间 | `300` |
+| `GSLBMetricFreshnessSeconds` | Server 生成 GSLB 调度快照和模拟诊断时接受的节点负载指标最大年龄；超过该窗口的 `node_metric_snapshots` 不参与 `load_aware` 评分 | `120` |
 
 说明：
 
@@ -101,6 +102,7 @@ go run . --port 3000 --log-dir ./logs
 * 第三方登录不再通过 `GitHubOAuthEnabled`、`GitHubClientId`、`GitHubClientSecret` 作为主配置入口；这些旧 Option 仅用于升级时迁移默认 GitHub 认证源。
 * 微信登录旧 Option 保留为兼容字段，但管理端不再提供微信登录配置入口。
 * Turnstile 旧 Option 与后端校验能力保留，已有配置仍会生效。
+* `GSLBMetricFreshnessSeconds` 只影响负载感知调度输入的新鲜度；没有新鲜指标的节点不会被直接剔除，但在 `load_aware` 策略中仅作为有指标候选不足时的兜底目标。
 
 ## OpenResty 参数
 

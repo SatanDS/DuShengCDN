@@ -528,6 +528,120 @@ func TestSelectGSLBDNSTargetsSkipsOverloadedNode(t *testing.T) {
 	}
 }
 
+func TestSelectGSLBDNSTargetsPrefersFreshMetricsForLoadAware(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldFreshness := common.GSLBMetricFreshnessSeconds
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBMetricFreshnessSeconds = 120
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBMetricFreshnessSeconds = oldFreshness
+	})
+
+	now := time.Now()
+	withMetric := &model.Node{
+		NodeID:          "node-with-metric",
+		Name:            "with-metric",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          10,
+		AgentToken:      "token-with-metric",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now.Add(-time.Second),
+	}
+	withoutMetric := &model.Node{
+		NodeID:          "node-without-metric",
+		Name:            "without-metric",
+		IP:              "1.1.1.1",
+		PoolName:        "hk",
+		PublicIPs:       `["1.1.1.1"]`,
+		Weight:          1000,
+		AgentToken:      "token-without-metric",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}
+	for _, node := range []*model.Node{withMetric, withoutMetric} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:               withMetric.NodeID,
+		CapturedAt:           now,
+		OpenrestyConnections: 8,
+		CPUUsagePercent:      12,
+		MemoryUsedBytes:      30,
+		MemoryTotalBytes:     100,
+	}).Insert(); err != nil {
+		t.Fatalf("insert fresh metrics: %v", err)
+	}
+
+	policy := defaultGSLBPolicy("hk", 1, "load_aware", 60)
+	rawPolicy, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("marshal policy: %v", err)
+	}
+	route := &model.ProxyRoute{
+		ID:              102,
+		NodePool:        "hk",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "load_aware",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      string(rawPolicy),
+	}
+
+	selection, err := selectGSLBDNSTargets(route, "A")
+	if err != nil {
+		t.Fatalf("select gslb targets: %v", err)
+	}
+	if len(selection.Targets) != 1 || selection.Targets[0] != "8.8.4.4" {
+		t.Fatalf("expected fresh metric node before missing metric fallback, got %#v", selection.Targets)
+	}
+}
+
+func TestLatestNodeMetricSnapshotsUsesConfiguredFreshness(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldFreshness := common.GSLBMetricFreshnessSeconds
+	common.GSLBMetricFreshnessSeconds = 60
+	t.Cleanup(func() {
+		common.GSLBMetricFreshnessSeconds = oldFreshness
+	})
+
+	now := time.Now()
+	fresh := &model.NodeMetricSnapshot{
+		NodeID:               "node-fresh",
+		CapturedAt:           now.Add(-30 * time.Second),
+		OpenrestyConnections: 3,
+	}
+	stale := &model.NodeMetricSnapshot{
+		NodeID:               "node-stale",
+		CapturedAt:           now.Add(-2 * time.Minute),
+		OpenrestyConnections: 1,
+	}
+	for _, snapshot := range []*model.NodeMetricSnapshot{fresh, stale} {
+		if err := snapshot.Insert(); err != nil {
+			t.Fatalf("insert metric snapshot: %v", err)
+		}
+	}
+
+	metrics := latestNodeMetricSnapshots()
+	if _, ok := metrics["node-fresh"]; !ok {
+		t.Fatalf("expected fresh metric to be included, got %#v", metrics)
+	}
+	if _, ok := metrics["node-stale"]; ok {
+		t.Fatalf("expected stale metric to be excluded, got %#v", metrics)
+	}
+}
+
 func TestSelectGSLBDNSTargetsKeepsPreviousTargetsDuringCooldown(t *testing.T) {
 	setupServiceTestDB(t)
 

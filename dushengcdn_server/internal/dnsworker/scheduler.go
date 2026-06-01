@@ -457,6 +457,9 @@ func sortCandidates(candidates []targetCandidate, strategy string) {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left := candidates[i]
 		right := candidates[j]
+		if strategy == "load_aware" && left.HasMetric != right.HasMetric {
+			return left.HasMetric
+		}
 		if strategy == "weighted" || strategy == "load_aware" {
 			if left.Score != right.Score {
 				return left.Score > right.Score
@@ -637,8 +640,23 @@ func selectCandidateBySpread(candidates []targetCandidate, strategy string, key 
 	best := targetCandidate{}
 	bestScore := math.Inf(1)
 	found := false
+	hasFreshMetricCandidate := false
+	if normalizeStrategy(strategy) == "load_aware" {
+		for _, candidate := range candidates {
+			if _, ok := used[candidate.Content]; ok {
+				continue
+			}
+			if candidate.HasMetric {
+				hasFreshMetricCandidate = true
+				break
+			}
+		}
+	}
 	for _, candidate := range candidates {
 		if _, ok := used[candidate.Content]; ok {
+			continue
+		}
+		if hasFreshMetricCandidate && !candidate.HasMetric {
 			continue
 		}
 		weight := spreadCandidateWeight(candidate, strategy)

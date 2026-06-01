@@ -218,6 +218,7 @@ type DNSGSLBSimulationNodeView struct {
 	Selected             bool       `json:"selected"`
 	Reasons              []string   `json:"reasons"`
 	HasMetric            bool       `json:"has_metric"`
+	MetricCapturedAt     *time.Time `json:"metric_captured_at,omitempty"`
 	OpenrestyConnections int64      `json:"openresty_connections"`
 	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
 	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
@@ -1430,7 +1431,10 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 	openrestyConnections := int64(0)
 	cpuUsage := float64(0)
 	memoryUsage := float64(0)
+	var metricCapturedAt *time.Time
 	if metric != nil {
+		capturedAt := metric.CapturedAt
+		metricCapturedAt = &capturedAt
 		openrestyConnections = metric.OpenrestyConnections
 		cpuUsage = metric.CPUUsagePercent
 		memoryUsage = nodeMetricMemoryUsagePercent(metric)
@@ -1451,6 +1455,9 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 		len(candidateTargets) > 0
 	if eligible {
 		reasons = append(reasons, "可参与当前调度")
+		if normalizeDNSScheduleMode(policy.Strategy) == "load_aware" && !hasMetric {
+			reasons = append(reasons, "暂无新鲜负载指标，仅作为兜底候选")
+		}
 	}
 	score := float64(0)
 	if poolMatched {
@@ -1483,6 +1490,7 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 		Selected:             len(selected) > 0,
 		Reasons:              dedupeStrings(reasons),
 		HasMetric:            hasMetric,
+		MetricCapturedAt:     metricCapturedAt,
 		OpenrestyConnections: openrestyConnections,
 		CPUUsagePercent:      cpuUsage,
 		MemoryUsagePercent:   memoryUsage,

@@ -126,6 +126,7 @@ const defaultOperationFields = {
     'error timeout updating http_500 http_502 http_503 http_504',
   AuthoritativeDNSDefaultTTL: '30',
   AuthoritativeDNSSnapshotMaxAge: '300',
+  GSLBMetricFreshnessSeconds: '120',
   GlobalApiRateLimitNum: '300',
   GlobalApiRateLimitDuration: '180',
   GlobalWebRateLimitNum: '300',
@@ -454,6 +455,8 @@ export function SettingsPage() {
       AuthoritativeDNSDefaultTTL: optionMap.AuthoritativeDNSDefaultTTL ?? '30',
       AuthoritativeDNSSnapshotMaxAge:
         optionMap.AuthoritativeDNSSnapshotMaxAge ?? '300',
+      GSLBMetricFreshnessSeconds:
+        optionMap.GSLBMetricFreshnessSeconds ?? '120',
       GlobalApiRateLimitNum: optionMap.GlobalApiRateLimitNum ?? '300',
       GlobalApiRateLimitDuration: optionMap.GlobalApiRateLimitDuration ?? '180',
       GlobalWebRateLimitNum: optionMap.GlobalWebRateLimitNum ?? '300',
@@ -1367,6 +1370,10 @@ export function SettingsPage() {
                           operationFields.AuthoritativeDNSSnapshotMaxAge,
                           10,
                         );
+                        const metricFreshness = Number.parseInt(
+                          operationFields.GSLBMetricFreshnessSeconds,
+                          10,
+                        );
 
                         if (
                           Number.isNaN(defaultTtl) ||
@@ -1385,6 +1392,14 @@ export function SettingsPage() {
                             '快照最大年龄必须为大于 0 的整数秒。',
                           );
                         }
+                        if (
+                          Number.isNaN(metricFreshness) ||
+                          metricFreshness <= 0
+                        ) {
+                          throw new Error(
+                            'GSLB 指标新鲜度必须为大于 0 的整数秒。',
+                          );
+                        }
 
                         await saveOptionEntries(
                           [
@@ -1392,6 +1407,10 @@ export function SettingsPage() {
                             [
                               'AuthoritativeDNSSnapshotMaxAge',
                               String(snapshotMaxAge),
+                            ],
+                            [
+                              'GSLBMetricFreshnessSeconds',
+                              String(metricFreshness),
                             ],
                           ],
                           '权威 DNS 参数已保存。',
@@ -1408,7 +1427,7 @@ export function SettingsPage() {
                 </PrimaryButton>
               }
             >
-              <div className="grid gap-5 md:grid-cols-2">
+              <div className="grid gap-5 md:grid-cols-3">
                 <ResourceField label="默认 TTL（秒）">
                   <ResourceInput
                     type="number"
@@ -1429,6 +1448,18 @@ export function SettingsPage() {
                       setOperationFields((previous) => ({
                         ...previous,
                         AuthoritativeDNSSnapshotMaxAge: event.target.value,
+                      }))
+                    }
+                  />
+                </ResourceField>
+                <ResourceField label="GSLB 指标新鲜度（秒）">
+                  <ResourceInput
+                    type="number"
+                    value={operationFields.GSLBMetricFreshnessSeconds}
+                    onChange={(event) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        GSLBMetricFreshnessSeconds: event.target.value,
                       }))
                     }
                   />

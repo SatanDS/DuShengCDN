@@ -145,6 +145,7 @@ export interface DNSGSLBSimulationNode {
   selected: boolean;
   reasons: string[];
   has_metric: boolean;
+  metric_captured_at?: string | null;
   openresty_connections: number;
   cpu_usage_percent: number;
   memory_usage_percent: number;

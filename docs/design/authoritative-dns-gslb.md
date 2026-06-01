@@ -25,7 +25,7 @@
 需要解决的能力：
 
 * 每次 DNS 查询都能按来源上下文实时选点，而不是等待后台巡检改 Cloudflare 记录。
-* 支持 HK、EU 等多个节点池按来源 CIDR、国家代码、节点池权重、节点负载和健康状态调度；自建权威 DNS 查询面可对不同来源桶执行稳定加权分流。
+* 支持 HK、EU 等多个节点池按来源 CIDR、国家代码、节点池权重、节点新鲜负载指标和健康状态调度；自建权威 DNS 查询面可对不同来源桶执行稳定加权分流。
 * 复用现有 `proxy_routes.gslb_policy`、`nodes.public_ips`、节点权重、排空状态和观测快照。
 * Cloudflare 自动 DNS 继续保留，作为托管 DNS 同步模式；自建权威 DNS 作为新的实时调度模式。
 * DNS 查询服务必须能独立部署多实例，避免管理端故障直接导致权威 DNS 不可用。
@@ -222,7 +222,7 @@ TTL 规则：
 * 使用 `github.com/miekg/dns` 实现 UDP/TCP 53 监听。
 * DNS Worker 从 Server 拉取只读调度快照，写入本地缓存并在内存中构建 Zone、记录和站点索引。
 * 支持 `SOA`、`NS`、静态记录和网站 `A`/`AAAA` 动态 GSLB 回答。
-* 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、来源分流桶、节点权重、OpenResty 健康、排空、调度开关、最大连接数、最大 CPU 使用率和最大内存使用率选点。
+* 在 Worker 内复用同等 GSLB 策略语义，按节点池、池权重、来源分流桶、节点权重、OpenResty 健康、排空、调度开关、新鲜负载指标、最大连接数、最大 CPU 使用率和最大内存使用率选点；`load_aware` 会优先选择有新鲜指标的候选，缺失指标的节点仅作为兜底。
 * 支持 EDNS Client Subnet 来源识别；节点池策略可按来源 CIDR 优先命中，也可在配置本地 MaxMind Country MMDB 后按国家代码命中节点池，否则回退到 `global` 作用域。
 * 防抖状态按 `route_id + record_type + source_scope` 保存在 Worker 内存中。
 * 支持按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，避免异常递归解析器或放大流量压垮查询面。
