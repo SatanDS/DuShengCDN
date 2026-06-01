@@ -61,6 +61,9 @@ type SnapshotRoute struct {
 	GSLBPolicy     GSLBPolicy `json:"gslb_policy"`
 	CurrentTargets []string   `json:"current_targets"`
 	TargetError    string     `json:"target_error,omitempty"`
+	DDOSActive     bool       `json:"ddos_active,omitempty"`
+	DDOSProvider   string     `json:"ddos_provider,omitempty"`
+	DDOSTarget     string     `json:"ddos_target,omitempty"`
 }
 
 type SnapshotNode struct {

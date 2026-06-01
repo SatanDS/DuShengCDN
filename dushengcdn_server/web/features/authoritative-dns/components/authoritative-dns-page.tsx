@@ -390,11 +390,11 @@ function isAddressRecordType(type: DNSRecordType) {
 }
 
 function getRecordValueLabel(type: DNSRecordType) {
-  switch (type) {
-    case 'A':
-      return 'IPv4 地址';
-    case 'AAAA':
-      return 'IPv6 地址';
+	switch (type) {
+	case 'A':
+		return 'IP 地址';
+	case 'AAAA':
+		return 'IP 地址';
     case 'MX':
       return '邮件服务器';
     case 'CNAME':
@@ -409,15 +409,15 @@ function getRecordValueLabel(type: DNSRecordType) {
 }
 
 function getRecordValueHint(type: DNSRecordType) {
-  switch (type) {
-    case 'A':
-      return '每个输入框填写一个 IPv4 地址，可点 + 增加多个地址。';
-    case 'AAAA':
-      return '每个输入框填写一个 IPv6 地址，可点 + 增加多个地址。';
-    case 'CNAME':
-      return '填写目标域名，同名下不要再添加其它记录。';
-    case 'MX':
-      return '填写邮件服务器域名，并设置优先级。';
+	switch (type) {
+	case 'A':
+		return '这里填写 IPv4，一个输入框一个 IP；点 + 可继续添加，保存时会创建多条 A 记录。';
+	case 'AAAA':
+		return '这里填写 IPv6，一个输入框一个 IP；点 + 可继续添加，保存时会创建多条 AAAA 记录。';
+	case 'CNAME':
+		return '填写目标域名，同名下不要再添加其它记录。';
+	case 'MX':
+		return '记录值填写邮件服务器域名；MX 优先级数字越小越优先，例如 10 会早于 20。';
     case 'NS':
       return '填写权威 NS 域名。';
     case 'SOA':
@@ -4054,7 +4054,11 @@ function RecordEditorModal({
           </ResourceField>
           <ResourceField
             label="MX 优先级"
-            hint="数字越小优先级越高；同一域名有多个 MX 时，邮件会优先投递到较小数值的服务器。"
+            hint={
+              recordType === 'MX'
+                ? '只对 MX 生效；同一域名有多个 MX 时，邮件会先投递到数字更小的服务器，常见主服务器填 10，备用服务器填 20。'
+                : '仅 MX 记录需要填写优先级，其它记录会自动保存为 0。'
+            }
           >
             <ResourceInput
               type="number"

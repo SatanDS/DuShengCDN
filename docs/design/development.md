@@ -164,6 +164,7 @@ tests/
 * `proxy_routes` 继续允许保存一个或多个源站地址用于负载均衡，但不引入独立 `origin_pool`。
 * `proxy_routes.node_pool` 只保存网站绑定的默认节点池名称，用于自动 DNS 选点和缓存运行时操作，不得演变成按节点分组的配置版本。
 * `proxy_routes.gslb_policy` 只保存站点级 DNS 调度策略，可引用多个节点池用于 GSLB 选点；它不能用于生成按节点池拆分的 OpenResty 配置版本。
+* `proxy_routes.ddos_protection_provider` 和 `proxy_routes.ddos_protection_target` 只保存攻击期自动 DNS 覆盖策略，不能永久改写用户正常 DNS 记录内容，也不能改变 OpenResty 发布模型。攻击期应暂停 GSLB；恢复后继续接受固定记录、默认节点池或 GSLB 策略。
 * `gslb_scheduling_states` 只保存运行时 DNS 调度状态和防抖信息，不参与配置版本快照。
 * 自建权威 DNS 阶段允许新增 `dns_zones`、`dns_records`、`dns_workers`、`dns_query_rollups`、`dns_worker_node_probes` 等 DNS 基础与观测对象；这些对象只服务权威 DNS 查询、Worker 快照、主动探测和观测聚合，不得承载 OpenResty 反向代理配置。
 * DNS Worker 使用 Server 下发的只读快照回答查询，查询路径不得访问数据库、不得调用外部 GeoIP HTTP API、不得执行远程命令。

@@ -2785,6 +2785,58 @@ const docTemplate = `{
                 }
             }
         },
+        "service.AgentDNSProbeReport": {
+            "type": "object",
+            "properties": {
+                "checked_at_unix": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "public_address": {
+                    "type": "string"
+                },
+                "query_name": {
+                    "type": "string"
+                },
+                "query_type": {
+                    "type": "string"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.AgentDNSProbeResult"
+                    }
+                },
+                "worker_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.AgentDNSProbeResult": {
+            "type": "object",
+            "properties": {
+                "answer_count": {
+                    "type": "integer"
+                },
+                "duration_ms": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "network": {
+                    "type": "string"
+                },
+                "rcode": {
+                    "type": "string"
+                },
+                "reachable": {
+                    "type": "boolean"
+                }
+            }
+        },
         "service.AgentNodeAccessLog": {
             "type": "object",
             "properties": {
@@ -2901,6 +2953,12 @@ const docTemplate = `{
                 },
                 "current_version": {
                     "type": "string"
+                },
+                "dns_probe_results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.AgentDNSProbeReport"
+                    }
                 },
                 "health_events": {
                     "type": "array",
@@ -3219,6 +3277,12 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "source_cidrs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "weight": {
                     "type": "integer"
                 }
@@ -3283,6 +3347,12 @@ const docTemplate = `{
                 "ddos_protection_mode": {
                     "type": "string"
                 },
+                "ddos_protection_provider": {
+                    "type": "string"
+                },
+                "ddos_protection_target": {
+                    "type": "string"
+                },
                 "dns_account_id": {
                     "type": "integer"
                 },
@@ -3291,6 +3361,9 @@ const docTemplate = `{
                 },
                 "dns_auto_target": {
                     "type": "boolean"
+                },
+                "dns_provider_mode": {
+                    "type": "string"
                 },
                 "dns_record_content": {
                     "type": "string"
@@ -3312,6 +3385,9 @@ const docTemplate = `{
                 },
                 "dns_zone_id": {
                     "type": "string"
+                },
+                "dns_zone_id_ref": {
+                    "type": "integer"
                 },
                 "domain": {
                     "type": "string"

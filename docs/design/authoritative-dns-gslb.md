@@ -48,6 +48,8 @@
 | 部署要求 | 需要 Cloudflare API Token | 需要将域名 NS 委派到 DuShengCDN DNS 节点 |
 | 高可用要求 | Cloudflare 承担权威 DNS 可用性 | 用户至少部署 2 个 DuShengCDN DNS 节点 |
 
+DDoS 自动防护只在 DNS 同步/回答层临时覆盖入口目标。Cloudflare 自动 DNS 模式下，攻击期可暂停 GSLB 并切到 Cloudflare 橙云或自定义清洗节点/IP 池；指标恢复后回到保存的固定记录、默认节点池或 GSLB 策略。自建权威 DNS 模式不支持直接开启 Cloudflare 橙云，若需要攻击期切到自有清洗入口，应使用自定义清洗池并由 DNS Worker 快照临时关闭 GSLB、回答清洗池 IP。
+
 ## 组件形态
 
 新增一个轻量权威 DNS 运行角色，建议命名为 `dushengcdn_dns`。它可以先作为 `dushengcdn_server` 的内置子进程启动，后续拆成独立二进制；无论部署形态如何，职责边界保持一致。

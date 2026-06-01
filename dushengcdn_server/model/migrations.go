@@ -1756,6 +1756,24 @@ func validateDatabaseSchemaV24(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV25 adds DDoS protection provider and target fields to proxy_routes.
+func migrateV25(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV25(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV24(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{"ddos_protection_provider", "ddos_protection_target"} {
+		if !db.Migrator().HasColumn(&ProxyRoute{}, column) {
+			return fmt.Errorf("column proxy_routes.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1781,6 +1799,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 21, toVersion: 22, migrate: migrateV22, validate: validateDatabaseSchemaV22},
 		{fromVersion: 22, toVersion: 23, migrate: migrateV23, validate: validateDatabaseSchemaV23},
 		{fromVersion: 23, toVersion: 24, migrate: migrateV24, validate: validateDatabaseSchemaV24},
+		{fromVersion: 24, toVersion: 25, migrate: migrateV25, validate: validateDatabaseSchemaV25},
 	}
 }
 
@@ -1869,7 +1888,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV24(db, backend); err != nil {
+	if err := validateDatabaseSchemaV25(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

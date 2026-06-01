@@ -159,6 +159,8 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
     dns_record_ids: {},
     cloudflare_proxied: false,
     ddos_protection_mode: 'off',
+    ddos_protection_provider: 'cloudflare',
+    ddos_protection_target: '',
     dns_last_sync_status: '',
     dns_last_sync_message: '',
     dns_last_synced_at: null,
@@ -382,6 +384,9 @@ describe('Proxy route website pages', () => {
             dns_record_ids: {},
             cloudflare_proxied: payload.cloudflare_proxied ?? false,
             ddos_protection_mode: payload.ddos_protection_mode ?? 'off',
+            ddos_protection_provider:
+              payload.ddos_protection_provider ?? 'cloudflare',
+            ddos_protection_target: payload.ddos_protection_target ?? '',
             dns_last_sync_status: '',
             dns_last_sync_message: '',
             dns_last_synced_at: null,
@@ -532,7 +537,9 @@ describe('Proxy route website pages', () => {
     });
     await user.selectOptions(within(dialog).getByLabelText(/DNS 账号/), '7');
     await user.click(
-      within(dialog).getByRole('checkbox', { name: /开启 Cloudflare 代理/ }),
+      within(dialog).getByRole('checkbox', {
+        name: /常态开启 Cloudflare 代理/,
+      }),
     );
     await user.selectOptions(
       within(dialog).getByLabelText(/DDoS 防护模式/),
@@ -562,6 +569,8 @@ describe('Proxy route website pages', () => {
       dns_auto_target: true,
       cloudflare_proxied: true,
       ddos_protection_mode: 'auto',
+      ddos_protection_provider: 'cloudflare',
+      ddos_protection_target: '7',
     });
   });
 
@@ -1045,6 +1054,8 @@ describe('Proxy route website pages', () => {
                   dns_account_id: payload.dns_account_id,
                   cloudflare_proxied: payload.cloudflare_proxied,
                   ddos_protection_mode: payload.ddos_protection_mode,
+                  ddos_protection_provider: payload.ddos_protection_provider,
+                  ddos_protection_target: payload.ddos_protection_target,
                 }),
               }),
             ),
@@ -1143,7 +1154,222 @@ describe('Proxy route website pages', () => {
       dns_auto_target: true,
       cloudflare_proxied: false,
       ddos_protection_mode: 'off',
+      ddos_protection_provider: 'cloudflare',
+      ddos_protection_target: '',
     });
+  });
+
+  it('saves custom DDoS protection target from automatic DNS config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+    const dnsRoute = buildRoute({
+      dns_auto_sync: true,
+      dns_account_id: 7,
+      dns_auto_target: true,
+      dns_provider_mode: 'cloudflare',
+      ddos_protection_mode: 'off',
+      ddos_protection_provider: 'cloudflare',
+      ddos_protection_target: '',
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  ...dnsRoute,
+                  ddos_protection_mode: payload.ddos_protection_mode,
+                  ddos_protection_provider: payload.ddos_protection_provider,
+                  ddos_protection_target: payload.ddos_protection_target,
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: dnsRoute,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-accounts/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [{ id: 7, name: 'cf-main', type: 'cloudflare' }],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/nodes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  { id: 1, pool_name: 'default' },
+                  { id: 2, pool_name: 'anti-ddos' },
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/dns-zones/') ||
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="dns" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: '自动 DNS' }),
+    ).toBeInTheDocument();
+
+    await user.selectOptions(
+      await screen.findByLabelText('DDoS 防护模式'),
+      'auto',
+    );
+    await user.selectOptions(screen.getByLabelText('防护提供方'), 'custom');
+    await user.selectOptions(screen.getByLabelText('清洗节点/IP池'), 'anti-ddos');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-dns-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing dns save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      ddos_protection_mode: 'auto',
+      ddos_protection_provider: 'custom',
+      ddos_protection_target: 'anti-ddos',
+    });
+  });
+
+  it('explains automatic DNS scheduling semantics on config page', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  dns_auto_sync: true,
+                  dns_account_id: 7,
+                  dns_auto_target: true,
+                  dns_schedule_mode: 'healthy',
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-accounts/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [{ id: 7, name: 'cf-main', type: 'cloudflare' }],
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/dns-zones/') ||
+          url.includes('/nodes/') ||
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="dns" />,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: '自动 DNS' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/健康优先只看节点是否在线、OpenResty 是否健康/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: '健康优先（冷却防抖）' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/DNS A\/AAAA 目标由下方多个节点池策略决定/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/DDoS 自动防护只在攻击期间临时覆盖解析目标/),
+    ).toBeInTheDocument();
   });
 
   it('saves WAF settings from config page', async () => {

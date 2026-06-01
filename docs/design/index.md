@@ -37,7 +37,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 | HTTPS/TLS | 托管证书与域名资产，并按域名绑定证书 |
 | 基础观测 | 聚合节点请求、缓存命中、回源错误、资源快照、健康事件和访问分析 |
 | 节点管理 | 节点状态、令牌体系、节点池、公网 IP 池、调度权重、部署与更新链路 |
-| 自动 DNS / GSLB 调度 | 支持 Cloudflare A/AAAA 多目标同步；可按单节点池健康状态和权重选点，也可启用站点级 GSLB 策略在多个节点池之间按来源 CIDR、国家代码、权重、负载评分和防抖状态选择在线公网 IP |
+| 自动 DNS / GSLB 调度 | 支持 Cloudflare A/AAAA 多目标同步；可按默认节点池健康状态和权重选点，也可启用站点级 GSLB 策略在多个节点池之间按来源 CIDR、国家代码、权重、负载评分和防抖状态选择在线公网 IP；DDoS 自动防护可在攻击期暂停 GSLB 并临时切换到 Cloudflare 橙云或自定义清洗节点/IP 池 |
 | 缓存运行时操作 | 支持按网站向目标节点池下发缓存清理与基础预热指令 |
 | 管理端前端 | 基于 Next.js 的正式管理端 |
 | 认证源登录 | 支持以认证源形式配置 GitHub 与标准 OIDC 登录入口，并允许第三方账号绑定已有本地用户 |
@@ -63,7 +63,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 | 配置变更审查 | 发布前查看预览或 diff，发布后保留不可变历史 |
 | 快速回滚 | 重新激活旧版本，让 Agent 拉取并应用 |
 | 证书托管 | 为不同域名绑定 TLS 证书 |
-| 智能 DNS 切换 | 节点离线、OpenResty 异常或超过 GSLB 负载阈值时，自动 DNS 可切换到其它在线公网 IP；启用 GSLB 时可跨多个节点池调度 |
+| 智能 DNS 切换 | 节点离线、OpenResty 异常或超过 GSLB 负载阈值时，自动 DNS 可切换到其它在线公网 IP；启用 GSLB 时可跨多个节点池调度；遇到 DDoS 阈值触发时可临时暂停 GSLB 并切到 Cloudflare 或自有清洗池 |
 | 实时入口调度 | 自建权威 DNS 可让域名 NS 委派到 DuShengCDN DNS Worker，由查询时来源、地区和节点负载决定返回的边缘 IP |
 | 缓存闭环 | 配置缓存策略后，可在管理端清理缓存、预热首页并查看缓存命中与回源指标 |
 | 基础观测 | 查看节点状态、请求聚合、缓存命中、回源错误、访问分析和健康事件 |
@@ -153,8 +153,9 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 * 回滚通过重新激活旧版本实现。
 * `nodes` 只承载控制面状态与低频摘要，不承载高频观测事实。
 * `nodes` 可以保存节点池、公网 IP 池、权重、调度开关与排空状态，用于自动 DNS 和运行时操作选点。
-* `proxy_routes.node_pool` 记录网站绑定的目标节点池；该字段不改变全局单激活版本模型，只影响 DNS 目标选择和运行时缓存指令的下发范围。
+* `proxy_routes.node_pool` 记录网站绑定的默认目标节点池；该字段不改变全局单激活版本模型，只影响未启用 GSLB 时的 DNS 目标选择、DDoS Cloudflare 防护期的默认回退池，以及运行时缓存指令的下发范围。
 * `proxy_routes.gslb_policy` 是站点级 DNS 调度策略，允许记录多个节点池、池权重、DNS TTL、负载阈值、来源识别接口和防抖参数；它只影响运行时 DNS 目标选择，不拆分配置版本。
+* `proxy_routes.ddos_protection_provider` 和 `proxy_routes.ddos_protection_target` 只描述攻击期临时 DNS 覆盖目标。攻击期 GSLB 暂停，Cloudflare 提供方强制橙云并回到默认节点池，自定义提供方解析到指定节点/IP 池；指标恢复后重新接受正常固定记录、默认节点池或 GSLB 调度。
 * `gslb_scheduling_states` 保存最近一次 GSLB 评估的目标、期望目标和切换时间，用于避免 DNS 记录在短时间内频繁抖动。
 * 当前 Cloudflare DNS 同步模式是周期性重算 A/AAAA 记录，受 DNS TTL 与递归解析缓存影响；逐查询按来源实时返回不同 IP 的能力由独立 DNS Worker 实时回答权威 DNS 查询，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)。
 * 自建权威 DNS 只影响 DNS 答案和调度状态，不改变 OpenResty 配置版本模型，不让 `proxy_routes.gslb_policy` 演变成按节点池拆分的配置版本。

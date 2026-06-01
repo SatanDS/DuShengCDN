@@ -17,16 +17,17 @@ import (
 )
 
 const (
-	cloudflareAPIBaseURL           = "https://api.cloudflare.com/client/v4"
-	cloudflareDefaultRecordTTL     = 1
-	cloudflareDNSProviderType      = "cloudflare"
-	DNSRecordSyncStatusSuccess     = "success"
-	DNSRecordSyncStatusFailed      = "failed"
-	DDOSProtectionModeOff          = "off"
-	DDOSProtectionModeManual       = "manual"
-	DDOSProtectionModeAuto         = "auto"
-	defaultCloudflareHTTPTimeout   = 15 * time.Second
-	defaultCloudflareSyncUserAgent = "DuShengCDN/CloudflareDNS"
+	cloudflareAPIBaseURL             = "https://api.cloudflare.com/client/v4"
+	cloudflareDefaultRecordTTL       = 1
+	cloudflareDNSProviderType        = "cloudflare"
+	DNSRecordSyncStatusSuccess       = "success"
+	DNSRecordSyncStatusFailed        = "failed"
+	DDOSProtectionModeOff            = "off"
+	DDOSProtectionModeAuto           = "auto"
+	DDOSProtectionProviderCloudflare = "cloudflare"
+	DDOSProtectionProviderCustom     = "custom"
+	defaultCloudflareHTTPTimeout     = 15 * time.Second
+	defaultCloudflareSyncUserAgent   = "DuShengCDN/CloudflareDNS"
 )
 
 type CloudflareCredentials struct {

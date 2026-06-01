@@ -48,7 +48,7 @@
 * 网站配置详情页提供自动 DNS、缓存策略、PoW、WAF、地区限制和认证配置分区
 * TLS 证书、域名资产、节点凭证与版本状态管理
 * 节点池、公网 IP 池、权重调度、排空模式与 Cloudflare 多目标自动 DNS / GSLB 多节点池调度
-* Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换、GSLB 防抖状态与 DDoS 自动切换橙云
+* Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换、GSLB 防抖状态与 DDoS 自动切换 Cloudflare/自定义清洗池
 * 自建权威 DNS 控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、查询限速、UDP 响应截断保护、NS 委派检查、Glue 提示、Cloudflare 迁移向导、逐查询实时 GSLB、来源 CIDR/国家代码匹配、稳定权重分流桶、当前调度状态、查询趋势、来源作用域分布、Worker GeoIP 状态、Worker 查询延迟/可用性、按需 Worker 探测健康状态和快照一致性观测
 * 站点级缓存策略、缓存清理、首页预热、缓存命中与回源健康统计
 * Agent 安装环境检测、Release 二进制下载、自动更新与删除节点联动卸载
@@ -187,14 +187,15 @@ proxy_set_header Connection "upgrade";
 4. 选择 Cloudflare DNS 账号，记录类型通常选择 `A`；IPv6 节点选择 `AAAA`。
 5. `记录内容` 留空时，系统会自动选择该节点池中的在线公网 IP，并把 `自动选择在线节点 IP` 打开。
 6. 如需跨 HK、EU 等多个节点池分流，在「自动 DNS」分区启用 `GSLB 多节点池调度`，点击 `+` 逐行添加节点池、权重、可选国家代码和来源 CIDR，例如池名 `hk`、权重 `80`、国家代码 `HK,TW`、来源 CIDR `203.0.113.0/24`。来源 CIDR 会优先于国家代码匹配。
-7. 如需隐藏源站或抗攻击，可开启 `Cloudflare 代理`；如需自动切换橙云，将 `DDoS 防护模式` 设置为 `自动`。
+7. 如需正常状态也隐藏源站，可开启 `常态开启 Cloudflare 代理`；如需攻击期自动切换，将 `DDoS 防护模式` 设为 `自动`，再选择 `Cloudflare` 或 `自定义清洗池`。
 
 自动 DNS 行为：
 
 * 创建网站时会立即向 Cloudflare 创建或更新 DNS 记录。
 * 后台每 1 分钟巡检一次已开启自动 DNS 的规则。
 * 开启 `自动选择在线节点 IP` 后，节点离线、OpenResty 不健康、节点被排空、关闭调度或节点公网 IP 池没有对应 A/AAAA 地址时会跳过该节点。
-* 自动 DNS 可以按健康时间、节点权重或负载感知评分选择，并支持同步多个 A/AAAA 目标。
+* 网站配置里的节点池是默认承载池：未启用 GSLB 时自动 DNS 从这里选公网 IP，缓存清理/预热也下发到这里。启用 GSLB 后，DNS A/AAAA 目标改由 GSLB 多节点池策略决定，默认节点池仍作为运行时操作范围和兜底池。
+* 自动 DNS 可以按“健康优先（冷却防抖）”、节点权重或负载感知评分选择，并支持同步多个 A/AAAA 目标。健康优先只判断在线、OpenResty 健康、调度开关、排空状态和最近心跳；CPU、内存、连接数只属于负载感知。
 * GSLB 模式可绑定多个节点池，按来源 CIDR、国家代码、池权重、节点权重、OpenResty 连接数、CPU、内存和负载阈值选择 DNS 目标；网站配置里可维护最大连接数、最大 CPU 使用率和最大内存使用率。
 * 自建权威 DNS 模式下，`weighted` / `load_aware` 会按来源 IP/ECS 生成稳定分流桶，所以 HK 池权重 80、EU 池权重 20 这类配置会在不同来源桶之间形成接近 8:2 的 DNS 答案分布；Cloudflare 模式只同步一组静态记录，不具备逐查询来源分流。
 * GSLB 会记录最近一次实际目标和期望目标，旧目标仍健康且冷却时间未到时不会反复切换。
@@ -204,11 +205,12 @@ proxy_set_header Connection "upgrade";
 * 多域名规则默认会同步规则里的所有域名；单域名规则可在详情页手动指定记录名称。
 * 删除规则时，如果该规则曾由 DuShengCDN 创建 DNS 记录，会尝试同步删除对应 Cloudflare DNS 记录。
 
-DDoS 自动切换橙云：
+DDoS 自动防护：
 
-* `DDoS 防护模式` 设为 `自动` 后，系统会按最近 5 分钟请求聚合判断是否需要打开 Cloudflare 代理。
+* `DDoS 防护模式` 设为 `自动` 后，系统会按最近 5 分钟请求聚合判断是否进入攻击期。
 * 默认请求量阈值为 `20000`，默认错误率阈值为 `30%`。
-* 达到任一阈值后，后台巡检会把该规则的 Cloudflare DNS 记录切换为橙云代理。
+* 防护提供方选 `Cloudflare` 时，攻击期会暂停 GSLB，多 A/AAAA 目标临时回到网站默认节点池，并强制同步 Cloudflare 橙云；指标恢复正常后，下一轮巡检回到原来的固定记录、默认节点池或 GSLB 策略，并恢复 `常态开启 Cloudflare 代理` 的设置。
+* 防护提供方选 `自定义清洗池` 时，攻击期会暂停 GSLB，只把 DNS 解析到指定节点/IP 池里的在线公网 IP，并关闭 Cloudflare 橙云代理，适合切到自有抗 D 清洗入口；指标恢复正常后自动回到正常调度。
 * 阈值可在管理端设置项中调整：`CloudflareDDoSRequestThreshold` 和 `CloudflareDDoSErrorRateThreshold`。
 
 注意：Cloudflare 自动 DNS 只负责 DNS 记录与橙云状态，不会替代发布流程。反向代理配置修改后仍需发布并激活版本，Agent 才会拉取并应用 OpenResty 配置。

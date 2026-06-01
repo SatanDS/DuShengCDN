@@ -288,7 +288,9 @@ type DNSAutomationValues = {
   gslb_max_memory_percent: number;
   gslb_cooldown_seconds: number;
   cloudflare_proxied: boolean;
-  ddos_protection_mode: 'off' | 'manual' | 'auto';
+  ddos_protection_mode: 'off' | 'auto';
+  ddos_protection_provider: 'cloudflare' | 'custom';
+  ddos_protection_target: string;
 };
 
 type GSLBPoolRow = {
@@ -301,6 +303,23 @@ type GSLBPoolRow = {
 
 const dnsTTLHint =
   'Cloudflare 模式下 0/1 表示自动 TTL，2-29 秒会在保存时提升到 30 秒；权威 DNS 模式下 0/1 映射为默认 30 秒，最高 86400 秒。';
+const dnsScheduleModeHints: Record<
+  DNSAutomationValues['dns_schedule_mode'],
+  string
+> = {
+  healthy:
+    '健康优先只看节点是否在线、OpenResty 是否健康、是否允许调度和最近心跳时间；旧目标仍健康且处于冷却期时会保持不动，不使用 CPU/内存评分。',
+  weighted:
+    '权重优先会先过滤健康候选，再按节点池权重和节点权重排序；同分时参考最近心跳时间。',
+  load_aware:
+    '负载感知会在健康候选中使用新鲜连接数、CPU、内存指标评分，并可按阈值跳过过载节点。',
+};
+const autoDNSNodePoolHint =
+  '反向代理节点池是站点默认承载池：自动 DNS 未启用 GSLB 时从这里选公网 IP，缓存清理/预热也下发到这里。启用 GSLB 后，DNS A/AAAA 返回目标改由下方多节点池策略决定；默认节点池仍保留为运行时操作范围和兜底池。';
+const autoDNSRecordContentHint =
+  '固定 IP 时可用逗号、空格或换行填写多个地址。开启自动选择或 GSLB 后由系统从节点公网 IP 池生成。';
+const ddosProtectionModeHint =
+  '关闭时不做自动防护；自动时最近 5 分钟请求量或错误率超过阈值后暂停 GSLB，并临时切到所选防护目标，指标恢复后回到正常调度。';
 const gslbPoolActionButtonClassName = 'h-11 w-11 shrink-0 rounded-2xl px-0';
 const gslbPoolRemoveButtonClassName =
   'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] hover:border-[var(--status-danger-border)] hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger-foreground)] disabled:border-[var(--border-default)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--foreground-muted)]';
@@ -772,7 +791,7 @@ function ReverseProxySection({
 
         <ResourceField
           label="节点池"
-          hint="自动 DNS 会从该节点池选择公网 IP，缓存运行时操作也会下发到该池在线节点。"
+          hint={autoDNSNodePoolHint}
           error={form.formState.errors.node_pool?.message}
           container="div"
         >
@@ -834,6 +853,8 @@ export function DNSAutomationSection({
   dnsAccounts,
   dnsZones = [],
   dnsZonesLoading = false,
+  nodePoolOptions = [],
+  nodePoolsLoading = false,
   saving,
   onSave,
   formId = 'proxy-route-dns-form',
@@ -843,6 +864,8 @@ export function DNSAutomationSection({
   dnsAccounts: DnsAccountItem[];
   dnsZones?: DNSZoneItem[];
   dnsZonesLoading?: boolean;
+  nodePoolOptions?: string[];
+  nodePoolsLoading?: boolean;
   saving: boolean;
   onSave: SaveHandler;
 } & ConfigSectionPresentationProps) {
@@ -874,6 +897,11 @@ export function DNSAutomationSection({
         route.gslb_policy?.debounce?.cooldown_seconds || 60,
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
+      ddos_protection_provider:
+        route.ddos_protection_provider || 'cloudflare',
+      ddos_protection_target:
+        route.ddos_protection_target ||
+        (route.dns_account_id ? String(route.dns_account_id) : ''),
     },
   });
 
@@ -905,6 +933,11 @@ export function DNSAutomationSection({
         route.gslb_policy?.debounce?.cooldown_seconds || 60,
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
+      ddos_protection_provider:
+        route.ddos_protection_provider || 'cloudflare',
+      ddos_protection_target:
+        route.ddos_protection_target ||
+        (route.dns_account_id ? String(route.dns_account_id) : ''),
     });
   }, [form, route]);
 
@@ -914,6 +947,23 @@ export function DNSAutomationSection({
   const recordType = form.watch('dns_record_type');
   const autoTarget = form.watch('dns_auto_target');
   const gslbEnabled = form.watch('gslb_enabled');
+  const dnsScheduleMode = form.watch('dns_schedule_mode');
+  const ddosProtectionMode = form.watch('ddos_protection_mode');
+  const ddosProtectionProvider = form.watch('ddos_protection_provider');
+  const ddosAutoEnabled = ddosProtectionMode === 'auto' && !isAuthoritativeMode;
+  const ddosControlsEnabled = autoSyncEnabled && ddosAutoEnabled;
+  const cloudflareAccounts = useMemo(
+    () => dnsAccounts.filter((account) => account.type === 'cloudflare'),
+    [dnsAccounts],
+  );
+  const ddosTargetOptions = useMemo(
+    () =>
+      buildNodePoolOptions(
+        nodePoolOptions.map((poolName) => ({ pool_name: poolName })),
+        route.ddos_protection_target || route.node_pool,
+      ),
+    [nodePoolOptions, route.ddos_protection_target, route.node_pool],
+  );
 
   return (
     <ConfigSectionShell
@@ -933,6 +983,27 @@ export function DNSAutomationSection({
             route.gslb_policy || buildDefaultGSLBPolicy(route.node_pool);
           const gslbPools = parseGSLBPoolRows(values.gslb_pool_rows);
           const authoritativeMode = values.dns_provider_mode === 'authoritative';
+          const ddosAuto =
+            !authoritativeMode && values.ddos_protection_mode === 'auto';
+          const ddosTarget =
+            ddosAuto && values.ddos_protection_provider === 'cloudflare'
+              ? values.ddos_protection_target ||
+                values.dns_account_id ||
+                (route.dns_account_id ? String(route.dns_account_id) : '')
+              : ddosAuto && values.ddos_protection_provider === 'custom'
+                ? values.ddos_protection_target.trim()
+                : '';
+          if (
+            ddosAuto &&
+            values.ddos_protection_provider === 'custom' &&
+            ddosTarget === ''
+          ) {
+            form.setError('ddos_protection_target', {
+              type: 'manual',
+              message: '请选择清洗节点/IP池',
+            });
+            return;
+          }
           onSave(
             buildPayloadFromRoute(route, {
               dns_provider_mode: values.dns_provider_mode,
@@ -991,6 +1062,10 @@ export function DNSAutomationSection({
               ddos_protection_mode: authoritativeMode
                 ? 'off'
                 : values.ddos_protection_mode,
+              ddos_protection_provider: authoritativeMode
+                ? 'cloudflare'
+                : values.ddos_protection_provider,
+              ddos_protection_target: authoritativeMode ? '' : ddosTarget,
             }),
             {
               message: authoritativeMode
@@ -1017,6 +1092,12 @@ export function DNSAutomationSection({
                     shouldDirty: true,
                   });
                   form.setValue('ddos_protection_mode', 'off', {
+                    shouldDirty: true,
+                  });
+                  form.setValue('ddos_protection_provider', 'cloudflare', {
+                    shouldDirty: true,
+                  });
+                  form.setValue('ddos_protection_target', '', {
                     shouldDirty: true,
                   });
                 }
@@ -1057,9 +1138,17 @@ export function DNSAutomationSection({
             label="启用 Cloudflare 自动 DNS"
             description="开启后会为当前规则域名创建或更新 Cloudflare DNS 记录。"
             checked={autoSyncEnabled}
-            onChange={(checked) =>
-              form.setValue('dns_auto_sync', checked, { shouldDirty: true })
-            }
+            onChange={(checked) => {
+              form.setValue('dns_auto_sync', checked, { shouldDirty: true });
+              if (!checked) {
+                form.setValue('ddos_protection_mode', 'off', {
+                  shouldDirty: true,
+                });
+                form.setValue('ddos_protection_target', '', {
+                  shouldDirty: true,
+                });
+              }
+            }}
           />
         )}
 
@@ -1076,16 +1165,28 @@ export function DNSAutomationSection({
             >
               <ResourceSelect
                 disabled={!autoSyncEnabled}
-                {...form.register('dns_account_id')}
+                {...form.register('dns_account_id', {
+                  onChange: (event) => {
+                    if (
+                      form.getValues('ddos_protection_provider') ===
+                        'cloudflare' &&
+                      !form.getValues('ddos_protection_target')
+                    ) {
+                      form.setValue(
+                        'ddos_protection_target',
+                        event.target.value,
+                        { shouldDirty: true },
+                      );
+                    }
+                  },
+                })}
               >
                 <option value="">请选择 DNS 账号</option>
-                {dnsAccounts
-                  .filter((account) => account.type === 'cloudflare')
-                  .map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
+                {cloudflareAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
               </ResourceSelect>
             </ResourceField>
 
@@ -1157,15 +1258,15 @@ export function DNSAutomationSection({
             hint={
               recordType === 'CNAME'
                 ? 'CNAME 必须手动填写目标域名。'
-                : '启用自动选择时，系统会使用节点池中的在线公网 IP；关闭后可固定多个 A/AAAA 内容。'
+                : autoDNSRecordContentHint
             }
           >
-            <ResourceInput
+            <ResourceTextarea
               disabled={!autoSyncEnabled || autoTarget}
               placeholder={
                 recordType === 'CNAME'
                   ? 'target.example.com'
-                  : '留空自动选择，或填写多个 IP'
+                  : '留空自动选择，或每行填写一个 IP'
               }
               {...form.register('dns_record_content')}
             />
@@ -1203,13 +1304,13 @@ export function DNSAutomationSection({
 
             <ResourceField
               label="调度模式"
-              hint="负载感知会结合连接数、CPU 和内存指标进行评分。"
+              hint={dnsScheduleModeHints[dnsScheduleMode]}
             >
               <ResourceSelect
                 disabled={!autoSyncEnabled || !autoTarget}
                 {...form.register('dns_schedule_mode')}
               >
-                <option value="healthy">按健康时间</option>
+                <option value="healthy">健康优先（冷却防抖）</option>
                 <option value="weighted">按权重优先</option>
                 <option value="load_aware">负载感知</option>
               </ResourceSelect>
@@ -1233,7 +1334,7 @@ export function DNSAutomationSection({
           <div className="space-y-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
             <ToggleField
               label="启用 GSLB 多节点池调度"
-              description="开启后自动 DNS 会按多个节点池、权重和负载评分选择 A/AAAA 目标。"
+              description="开启后 DNS A/AAAA 目标由下方多个节点池策略决定；反向代理节点池仍负责缓存运行时操作和默认兜底。"
               checked={gslbEnabled}
               disabled={!autoSyncEnabled}
               onChange={(checked) => {
@@ -1253,7 +1354,7 @@ export function DNSAutomationSection({
               <>
                 <ResourceField
                   label="节点池权重"
-                  hint="国家代码和来源 CIDR 可用逗号、空格或分号分隔；CIDR 会优先于国家代码匹配。"
+                  hint="池名填写已有节点池；国家代码使用 ISO 两位码，可逗号分隔，例如 HK,TW，留空表示全局兜底。来源 CIDR 会优先于国家代码匹配。"
                   container="div"
                 >
                   <Controller
@@ -1460,10 +1561,10 @@ export function DNSAutomationSection({
         ) : null}
 
         {!isAuthoritativeMode ? (
-          <div className="grid gap-5 md:grid-cols-2">
+          <div className="space-y-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
             <ToggleField
-              label="开启 Cloudflare 代理"
-              description="开启后 Cloudflare DNS 记录会切到橙云，用于隐藏源站和抗攻击。"
+              label="常态开启 Cloudflare 代理"
+              description="开启后正常状态下也会同步橙云。DDoS 自动防护只在攻击期间临时覆盖解析目标，恢复后回到这里的常态设置。"
               checked={form.watch('cloudflare_proxied')}
               disabled={!autoSyncEnabled}
               onChange={(checked) =>
@@ -1473,19 +1574,110 @@ export function DNSAutomationSection({
               }
             />
 
-            <ResourceField
-              label="DDoS 防护模式"
-              hint="自动模式会在 5 分钟请求量或错误率超过阈值时打开橙云。"
-            >
-              <ResourceSelect
-                disabled={!autoSyncEnabled}
-                {...form.register('ddos_protection_mode')}
+            <div className="grid gap-5 md:grid-cols-3">
+              <ResourceField label="DDoS 防护模式" hint={ddosProtectionModeHint}>
+                <ResourceSelect
+                  aria-label="DDoS 防护模式"
+                  disabled={!autoSyncEnabled}
+                  {...form.register('ddos_protection_mode', {
+                    onChange: (event) => {
+                      const mode = event.target
+                        .value as DNSAutomationValues['ddos_protection_mode'];
+                      if (mode === 'off') {
+                        form.setValue('ddos_protection_target', '', {
+                          shouldDirty: true,
+                        });
+                      } else if (!form.getValues('ddos_protection_target')) {
+                        form.setValue(
+                          'ddos_protection_target',
+                          form.getValues('dns_account_id') ||
+                            (route.dns_account_id
+                              ? String(route.dns_account_id)
+                              : ''),
+                          { shouldDirty: true },
+                        );
+                      }
+                    },
+                  })}
+                >
+                  <option value="off">关闭</option>
+                  <option value="auto">自动</option>
+                </ResourceSelect>
+              </ResourceField>
+
+              <ResourceField
+                label="防护提供方"
+                hint="Cloudflare 会在攻击期同步橙云；自定义会把 DNS 目标切到指定清洗节点/IP 池。"
               >
-                <option value="off">关闭</option>
-                <option value="manual">手动</option>
-                <option value="auto">自动</option>
-              </ResourceSelect>
-            </ResourceField>
+                <ResourceSelect
+                  aria-label="防护提供方"
+                  disabled={!ddosControlsEnabled}
+                  {...form.register('ddos_protection_provider', {
+                    onChange: (event) => {
+                      const provider = event.target
+                        .value as DNSAutomationValues['ddos_protection_provider'];
+                      form.setValue(
+                        'ddos_protection_target',
+                        provider === 'cloudflare'
+                          ? form.getValues('dns_account_id') ||
+                              (route.dns_account_id
+                                ? String(route.dns_account_id)
+                                : '')
+                          : route.ddos_protection_target || route.node_pool,
+                        { shouldDirty: true },
+                      );
+                    },
+                  })}
+                >
+                  <option value="cloudflare">Cloudflare</option>
+                  <option value="custom">自定义清洗池</option>
+                </ResourceSelect>
+              </ResourceField>
+
+              <ResourceField
+                label={
+                  ddosProtectionProvider === 'custom'
+                    ? '清洗节点/IP池'
+                    : 'Cloudflare 账号'
+                }
+                hint={
+                  ddosProtectionProvider === 'custom'
+                    ? '攻击期只返回该池内在线且可调度的公网 IP，并暂停 GSLB 多节点池调度。'
+                    : '攻击期使用该账号同步记录并开启橙云；留空时使用上方自动解析账号。'
+                }
+                error={form.formState.errors.ddos_protection_target?.message}
+              >
+                {ddosProtectionProvider === 'custom' ? (
+                  <ResourceSelect
+                    aria-label="清洗节点/IP池"
+                    disabled={!ddosControlsEnabled || nodePoolsLoading}
+                    {...form.register('ddos_protection_target')}
+                  >
+                    <option value="">
+                      {nodePoolsLoading ? '正在加载节点池...' : '请选择清洗池'}
+                    </option>
+                    {ddosTargetOptions.map((poolName) => (
+                      <option key={poolName} value={poolName}>
+                        {poolName}
+                      </option>
+                    ))}
+                  </ResourceSelect>
+                ) : (
+                  <ResourceSelect
+                    aria-label="DDoS Cloudflare 账号"
+                    disabled={!ddosControlsEnabled}
+                    {...form.register('ddos_protection_target')}
+                  >
+                    <option value="">使用上方账号</option>
+                    {cloudflareAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </ResourceSelect>
+                )}
+              </ResourceField>
+            </div>
           </div>
         ) : null}
 
@@ -2580,7 +2772,7 @@ export function ProxyRouteConfigPage({
   const nodesQuery = useQuery({
     queryKey: ['nodes'],
     queryFn: getNodes,
-    enabled: currentSection === 'proxy',
+    enabled: currentSection === 'proxy' || currentSection === 'dns',
   });
   const managedDomainsQuery = useQuery({
     queryKey: ['managed-domains'],
@@ -2810,6 +3002,8 @@ export function ProxyRouteConfigPage({
               dnsAccounts={dnsAccounts}
               dnsZones={dnsZones}
               dnsZonesLoading={dnsZonesQuery.isLoading}
+              nodePoolOptions={nodePoolOptions}
+              nodePoolsLoading={nodesQuery.isLoading}
               saving={saveMutation.isPending}
               onSave={(payload, context) =>
                 saveMutation.mutate({ payload, context })

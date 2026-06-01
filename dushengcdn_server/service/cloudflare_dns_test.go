@@ -178,6 +178,93 @@ func TestShouldEnableCloudflareProxyForDDOSErrorRate(t *testing.T) {
 	}
 }
 
+func TestEffectiveCloudflareProxiedForDDOSProviders(t *testing.T) {
+	route := &model.ProxyRoute{
+		CloudflareProxied:      false,
+		DDOSProtectionProvider: DDOSProtectionProviderCloudflare,
+	}
+	if !effectiveCloudflareProxied(route, true) {
+		t.Fatal("expected Cloudflare DDoS provider to force proxied records")
+	}
+
+	route.CloudflareProxied = true
+	route.DDOSProtectionProvider = DDOSProtectionProviderCustom
+	if effectiveCloudflareProxied(route, true) {
+		t.Fatal("expected custom DDoS provider to disable Cloudflare proxy during override")
+	}
+
+	if !effectiveCloudflareProxied(route, false) {
+		t.Fatal("expected normal sync to keep configured Cloudflare proxy state")
+	}
+}
+
+func TestSelectProxyRouteDDOSProtectionTargetsUsesCustomPool(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	now := time.Now()
+	nodes := []*model.Node{
+		{
+			NodeID:          "node-default",
+			Name:            "default",
+			IP:              "8.8.8.8",
+			PoolName:        "default",
+			PublicIPs:       `["8.8.8.8"]`,
+			AgentToken:      "token-default",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-clean",
+			Name:            "clean",
+			IP:              "1.1.1.1",
+			PoolName:        "anti-ddos",
+			PublicIPs:       `["1.1.1.1"]`,
+			AgentToken:      "token-clean",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+
+	route := &model.ProxyRoute{
+		NodePool:               "default",
+		DDOSProtectionTarget:   "anti-ddos",
+		DNSTargetCount:         1,
+		DNSScheduleMode:        "healthy",
+		DNSTTL:                 60,
+		DDOSProtectionProvider: DDOSProtectionProviderCustom,
+		DDOSProtectionMode:     DDOSProtectionModeAuto,
+		DNSRecordType:          "A",
+		DNSProviderMode:        DNSProviderModeCloudflare,
+		CloudflareProxied:      true,
+	}
+
+	selection, err := selectProxyRouteDDOSProtectionTargets(route, "A")
+	if err != nil {
+		t.Fatalf("select custom ddos targets: %v", err)
+	}
+	if len(selection.Targets) != 1 || selection.Targets[0] != "1.1.1.1" {
+		t.Fatalf("expected custom pool target, got %#v", selection.Targets)
+	}
+	if selection.GSLB {
+		t.Fatal("expected DDoS override to pause GSLB")
+	}
+}
+
 func setCloudflareDDoSThresholdsForTest(t *testing.T, requestThreshold string, errorRateThreshold string) {
 	t.Helper()
 

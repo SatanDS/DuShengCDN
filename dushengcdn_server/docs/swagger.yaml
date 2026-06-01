@@ -51,6 +51,40 @@ definitions:
       window_started_at_unix:
         type: integer
     type: object
+  service.AgentDNSProbeReport:
+    properties:
+      checked_at_unix:
+        type: integer
+      name:
+        type: string
+      public_address:
+        type: string
+      query_name:
+        type: string
+      query_type:
+        type: string
+      results:
+        items:
+          $ref: '#/definitions/service.AgentDNSProbeResult'
+        type: array
+      worker_id:
+        type: string
+    type: object
+  service.AgentDNSProbeResult:
+    properties:
+      answer_count:
+        type: integer
+      duration_ms:
+        type: integer
+      error:
+        type: string
+      network:
+        type: string
+      rcode:
+        type: string
+      reachable:
+        type: boolean
+    type: object
   service.AgentNodeAccessLog:
     properties:
       host:
@@ -128,6 +162,10 @@ definitions:
         type: array
       current_version:
         type: string
+      dns_probe_results:
+        items:
+          $ref: '#/definitions/service.AgentDNSProbeReport'
+        type: array
       health_events:
         items:
           $ref: '#/definitions/service.AgentNodeHealthEvent'
@@ -336,6 +374,10 @@ definitions:
         type: boolean
       name:
         type: string
+      source_cidrs:
+        items:
+          type: string
+        type: array
       weight:
         type: integer
     type: object
@@ -378,12 +420,18 @@ definitions:
         type: array
       ddos_protection_mode:
         type: string
+      ddos_protection_provider:
+        type: string
+      ddos_protection_target:
+        type: string
       dns_account_id:
         type: integer
       dns_auto_sync:
         type: boolean
       dns_auto_target:
         type: boolean
+      dns_provider_mode:
+        type: string
       dns_record_content:
         type: string
       dns_record_name:
@@ -398,6 +446,8 @@ definitions:
         type: integer
       dns_zone_id:
         type: string
+      dns_zone_id_ref:
+        type: integer
       domain:
         type: string
       domain_cert_ids:

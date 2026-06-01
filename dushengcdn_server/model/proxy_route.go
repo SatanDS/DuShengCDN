@@ -53,6 +53,8 @@ type ProxyRoute struct {
 	DNSRecordIDs               string     `json:"dns_record_ids" gorm:"type:text;not null;default:'{}'"`
 	CloudflareProxied          bool       `json:"cloudflare_proxied" gorm:"not null;default:false"`
 	DDOSProtectionMode         string     `json:"ddos_protection_mode" gorm:"size:16;not null;default:'off'"`
+	DDOSProtectionProvider     string     `json:"ddos_protection_provider" gorm:"size:32;not null;default:'cloudflare'"`
+	DDOSProtectionTarget       string     `json:"ddos_protection_target" gorm:"size:128;not null;default:''"`
 	DNSLastSyncStatus          string     `json:"dns_last_sync_status" gorm:"size:16;not null;default:''"`
 	DNSLastSyncMessage         string     `json:"dns_last_sync_message" gorm:"type:text"`
 	DNSLastSyncedAt            *time.Time `json:"dns_last_synced_at"`
@@ -147,6 +149,8 @@ func (route *ProxyRoute) Update() error {
 		"dns_record_ids":               route.DNSRecordIDs,
 		"cloudflare_proxied":           route.CloudflareProxied,
 		"ddos_protection_mode":         route.DDOSProtectionMode,
+		"ddos_protection_provider":     route.DDOSProtectionProvider,
+		"ddos_protection_target":       route.DDOSProtectionTarget,
 		"dns_last_sync_status":         route.DNSLastSyncStatus,
 		"dns_last_sync_message":        route.DNSLastSyncMessage,
 		"dns_last_synced_at":           route.DNSLastSyncedAt,

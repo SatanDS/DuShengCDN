@@ -126,7 +126,9 @@ export interface ProxyRouteItem {
   gslb_policy: ProxyRouteGSLBPolicy;
   dns_record_ids: Record<string, string>;
   cloudflare_proxied: boolean;
-  ddos_protection_mode: 'off' | 'manual' | 'auto';
+  ddos_protection_mode: 'off' | 'auto';
+  ddos_protection_provider: 'cloudflare' | 'custom';
+  ddos_protection_target: string;
   dns_last_sync_status: string;
   dns_last_sync_message: string;
   dns_last_synced_at?: string | null;
@@ -189,7 +191,9 @@ export interface ProxyRouteMutationPayload {
   gslb_enabled?: boolean;
   gslb_policy?: ProxyRouteGSLBPolicy;
   cloudflare_proxied?: boolean;
-  ddos_protection_mode?: 'off' | 'manual' | 'auto';
+  ddos_protection_mode?: 'off' | 'auto';
+  ddos_protection_provider?: 'cloudflare' | 'custom';
+  ddos_protection_target?: string;
   remark: string;
 }
 

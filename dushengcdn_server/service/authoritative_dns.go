@@ -516,6 +516,9 @@ type AuthoritativeDNSSnapshotRoute struct {
 	GSLBPolicy     ProxyRouteGSLBPolicy `json:"gslb_policy"`
 	CurrentTargets []string             `json:"current_targets"`
 	TargetError    string               `json:"target_error,omitempty"`
+	DDOSActive     bool                 `json:"ddos_active,omitempty"`
+	DDOSProvider   string               `json:"ddos_provider,omitempty"`
+	DDOSTarget     string               `json:"ddos_target,omitempty"`
 }
 
 type AuthoritativeDNSSnapshotNode struct {
@@ -804,6 +807,8 @@ func SwitchProxyRouteToAuthoritativeDNS(id uint, input AuthoritativeDNSMigration
 	route.DNSTTL = normalizeDNSTTL(route.DNSTTL)
 	route.CloudflareProxied = false
 	route.DDOSProtectionMode = DDOSProtectionModeOff
+	route.DDOSProtectionProvider = DDOSProtectionProviderCloudflare
+	route.DDOSProtectionTarget = ""
 	route.DNSLastSyncStatus = DNSRecordSyncStatusSuccess
 	route.DNSLastSyncMessage = fmt.Sprintf("已切换到自建权威 DNS Zone %s；请在注册商确认 NS 委派。", zone.Name)
 	route.DNSLastSyncedAt = &now
@@ -822,6 +827,8 @@ func SwitchProxyRouteToAuthoritativeDNS(id uint, input AuthoritativeDNSMigration
 		"dns_ttl",
 		"cloudflare_proxied",
 		"ddos_protection_mode",
+		"ddos_protection_provider",
+		"ddos_protection_target",
 		"dns_last_sync_status",
 		"dns_last_sync_message",
 		"dns_last_synced_at",
@@ -2571,6 +2578,9 @@ func snapshotAuthoritativeRoutes() ([]AuthoritativeDNSSnapshotRoute, error) {
 				return nil, err
 			}
 		}
+		ddosActive := routeDDOSProtectionActive(route) &&
+			normalizeDDOSProtectionProvider(route.DDOSProtectionProvider) == DDOSProtectionProviderCustom
+		effectiveGSLBEnabled := route.GSLBEnabled && !ddosActive
 		item := AuthoritativeDNSSnapshotRoute{
 			ID:           route.ID,
 			SiteName:     normalizeProxyRouteSiteNameInput(route, route.SiteName, route.Domain),
@@ -2581,10 +2591,20 @@ func snapshotAuthoritativeRoutes() ([]AuthoritativeDNSSnapshotRoute, error) {
 			TargetCount:  normalizeDNSTargetCount(route.DNSTargetCount),
 			ScheduleMode: normalizeDNSScheduleMode(route.DNSScheduleMode),
 			TTL:          normalizeAuthoritativeRouteTTL(route.DNSTTL),
-			GSLBEnabled:  route.GSLBEnabled,
+			GSLBEnabled:  effectiveGSLBEnabled,
 			GSLBPolicy:   policy,
+			DDOSActive:   ddosActive,
+			DDOSProvider: normalizeDDOSProtectionProvider(route.DDOSProtectionProvider),
+			DDOSTarget:   normalizeNodePoolName(route.DDOSProtectionTarget),
 		}
-		selection, selectErr := selectProxyRouteDNSTargetsWithOptions(route, recordType, authoritativeDNSSchedulingOptions())
+		selectRoute := route
+		if ddosActive {
+			selectRouteCopy := *route
+			selectRouteCopy.GSLBEnabled = false
+			selectRouteCopy.NodePool = normalizeNodePoolName(route.DDOSProtectionTarget)
+			selectRoute = &selectRouteCopy
+		}
+		selection, selectErr := selectProxyRouteDNSTargetsWithOptions(selectRoute, recordType, authoritativeDNSSchedulingOptions())
 		if selectErr != nil {
 			item.TargetError = selectErr.Error()
 		} else {
@@ -2761,6 +2781,9 @@ func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *d
 			GSLBPolicy:     convertAuthoritativeGSLBPolicyToWorker(route.GSLBPolicy),
 			CurrentTargets: append([]string(nil), route.CurrentTargets...),
 			TargetError:    route.TargetError,
+			DDOSActive:     route.DDOSActive,
+			DDOSProvider:   route.DDOSProvider,
+			DDOSTarget:     route.DDOSTarget,
 		})
 	}
 	for _, node := range snapshot.Nodes {

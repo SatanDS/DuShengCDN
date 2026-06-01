@@ -375,6 +375,8 @@ export function buildPayloadFromRoute(
       route.gslb_policy || buildDefaultGSLBPolicy(route.node_pool || 'default'),
     cloudflare_proxied: route.cloudflare_proxied,
     ddos_protection_mode: route.ddos_protection_mode,
+    ddos_protection_provider: route.ddos_protection_provider || 'cloudflare',
+    ddos_protection_target: route.ddos_protection_target || '',
     ...overrides,
   };
 }
