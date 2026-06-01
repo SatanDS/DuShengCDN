@@ -1990,7 +1990,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 	}
 	view.targetCount = normalizeDNSTargetCount(route.DNSTargetCount)
 	view.strategy = normalizeDNSScheduleMode(route.DNSScheduleMode)
-	policy := ProxyRouteGSLBPolicy{}
+	policy := defaultGSLBPolicy(route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, route.DNSTTL)
 	if route.GSLBEnabled {
 		decodedPolicy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
 		if err != nil {
@@ -2005,7 +2005,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 	}
 	selection, err := selectProxyRouteDNSTargetsWithOptions(route, recordType, authoritativeDNSSchedulingOptions())
 	if err != nil {
-		return view, fmt.Errorf("当前节点池/GSLB 无法返回 %s 边缘 IP，请检查节点池、公网 IP、节点在线状态、OpenResty 健康、GSLB 负载阈值和 Agent 探测调度门槛：%w", recordType, err)
+		return view, formatAuthoritativeDNSTargetPrecheckError("当前节点池/GSLB", recordType, err, policy, GSLBSourceContext{}, authoritativeDNSSchedulingOptions(), true)
 	}
 	targets, err := normalizeDNSRecordContents(recordType, selection.Targets)
 	if err != nil {
@@ -2023,7 +2023,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 		for _, source := range authoritativeDNSTargetPrecheckSources(policy) {
 			selection, err := selectGSLBDNSTargetsWithOptions(route, recordType, source.source, authoritativeDNSSchedulingOptions())
 			if err != nil {
-				blockers = append(blockers, fmt.Sprintf("%s 无法返回 %s 边缘 IP：%v", source.label, recordType, err))
+				blockers = append(blockers, formatAuthoritativeDNSTargetPrecheckError(source.label, recordType, err, policy, source.source, authoritativeDNSSchedulingOptions(), false).Error())
 				continue
 			}
 			targets, err := normalizeDNSRecordContents(recordType, selection.Targets)
@@ -2044,6 +2044,104 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 		}
 	}
 	return view, nil
+}
+
+func formatAuthoritativeDNSTargetPrecheckError(label string, recordType string, err error, policy ProxyRouteGSLBPolicy, source GSLBSourceContext, options gslbDNSSchedulingOptions, includeChecklist bool) error {
+	message := fmt.Sprintf("%s 无法返回 %s 边缘 IP", label, recordType)
+	if includeChecklist {
+		message += "，请检查节点池、公网 IP、节点在线状态、OpenResty 健康、GSLB 负载阈值和 Agent 探测调度门槛"
+	}
+	if detail := summarizeAuthoritativeDNSTargetPrecheckDiagnostics(recordType, policy, source, options); detail != "" {
+		message += "；诊断：" + detail
+	}
+	return fmt.Errorf("%s：%w", message, err)
+}
+
+func summarizeAuthoritativeDNSTargetPrecheckDiagnostics(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext, options gslbDNSSchedulingOptions) string {
+	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, convertAuthoritativeGSLBPolicyToWorker(policy), source, nil, options.RequireHealthyDNSProbe)
+	matchedPoolLabels := []string{}
+	matchedPoolNames := []string{}
+	matchedPools := map[string]struct{}{}
+	for _, pool := range diagnostics.pools {
+		if !pool.Matched {
+			continue
+		}
+		matchedPools[pool.Name] = struct{}{}
+		matchedPoolNames = append(matchedPoolNames, pool.Name)
+		label := pool.Name
+		if pool.Reason != "" && pool.Reason != "参与全局调度" {
+			label += "（" + pool.Reason + "）"
+		}
+		matchedPoolLabels = append(matchedPoolLabels, label)
+	}
+	nodeDetails := summarizeAuthoritativeDNSTargetPrecheckNodes(diagnostics.nodes, matchedPools)
+	if len(nodeDetails) == 0 {
+		if len(matchedPoolNames) > 0 {
+			return "匹配节点池 " + strings.Join(matchedPoolNames, "、") + " 未找到可诊断节点"
+		}
+		return "没有启用的 GSLB 节点池"
+	}
+	parts := []string{}
+	if len(matchedPoolLabels) > 0 {
+		parts = append(parts, "匹配节点池 "+strings.Join(matchedPoolLabels, "、"))
+	}
+	parts = append(parts, nodeDetails...)
+	return strings.Join(parts, "；")
+}
+
+func summarizeAuthoritativeDNSTargetPrecheckNodes(nodes []DNSGSLBSimulationNodeView, matchedPools map[string]struct{}) []string {
+	details := []string{}
+	omitted := 0
+	for _, node := range nodes {
+		if len(matchedPools) > 0 {
+			if _, ok := matchedPools[node.PoolName]; !ok {
+				continue
+			}
+		}
+		reasons := compactAuthoritativeDNSTargetPrecheckNodeReasons(node)
+		if len(reasons) == 0 {
+			continue
+		}
+		if len(details) >= 3 {
+			omitted++
+			continue
+		}
+		details = append(details, fmt.Sprintf("节点 %s：%s", authoritativeDNSTargetPrecheckNodeLabel(node), strings.Join(reasons, "、")))
+	}
+	if omitted > 0 {
+		details = append(details, fmt.Sprintf("另有 %d 个节点被排除", omitted))
+	}
+	return details
+}
+
+func compactAuthoritativeDNSTargetPrecheckNodeReasons(node DNSGSLBSimulationNodeView) []string {
+	reasons := []string{}
+	for _, reason := range node.Reasons {
+		reason = strings.TrimSpace(reason)
+		if reason == "" || reason == "节点池未匹配当前来源" || reason == "可参与当前调度" {
+			continue
+		}
+		reasons = append(reasons, reason)
+		if len(reasons) >= 2 {
+			break
+		}
+	}
+	if len(reasons) == 0 && !node.Eligible {
+		reasons = append(reasons, "未满足当前调度条件")
+	}
+	return dedupeStrings(reasons)
+}
+
+func authoritativeDNSTargetPrecheckNodeLabel(node DNSGSLBSimulationNodeView) string {
+	nodeID := strings.TrimSpace(node.NodeID)
+	name := strings.TrimSpace(node.Name)
+	if nodeID == "" {
+		return name
+	}
+	if name != "" && name != nodeID {
+		return nodeID + "/" + name
+	}
+	return nodeID
 }
 
 func authoritativeDNSSchedulingOptions() gslbDNSSchedulingOptions {

@@ -1013,6 +1013,69 @@ func TestUpdateProxyRouteAuthoritativeRejectsSourceSpecificNoTargets(t *testing.
 	}
 }
 
+func TestPrecheckAuthoritativeRouteDNSTargetsIncludesNodeDiagnostics(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hot",
+		Name:            "hot",
+		IP:              "2001:4860:4860::8888",
+		PoolName:        "hk",
+		PublicIPs:       `["2001:4860:4860::8888"]`,
+		Weight:          100,
+		AgentToken:      "token-hot",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	policy := defaultGSLBPolicy("hk", 1, "load_aware", 30)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 100, Enabled: true},
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "load_aware",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+
+	_, err := precheckAuthoritativeRouteDNSTargets(route, "A")
+	if err == nil {
+		t.Fatal("expected no-target precheck error")
+	}
+	for _, fragment := range []string{
+		"当前节点池/GSLB 无法返回 A 边缘 IP",
+		"诊断：匹配节点池 hk",
+		"节点 node-hot/hot：缺少 IPv4 公网 IP",
+	} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("expected precheck error to contain %q, got %v", fragment, err)
+		}
+	}
+}
+
 func TestListAuthoritativeDNSMigrationCandidatesReportsStaticRecordConflict(t *testing.T) {
 	setupServiceTestDB(t)
 
