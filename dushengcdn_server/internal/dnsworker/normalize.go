@@ -149,6 +149,13 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 			},
 		}
 	}
+	hasExplicitEnabledPool := false
+	for _, pool := range policy.Pools {
+		if pool.Enabled {
+			hasExplicitEnabledPool = true
+			break
+		}
+	}
 	for i := range policy.Pools {
 		policy.Pools[i].Name = normalizeNodePoolName(policy.Pools[i].Name)
 		policy.Pools[i].Weight = normalizeWeight(policy.Pools[i].Weight)
@@ -158,7 +165,9 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 		if len(policy.Pools[i].SourceCIDRs) > 0 {
 			policy.Pools[i].SourceCIDRs = normalizeCIDRList(policy.Pools[i].SourceCIDRs)
 		}
-		policy.Pools[i].Enabled = true
+		if !hasExplicitEnabledPool {
+			policy.Pools[i].Enabled = true
+		}
 	}
 	return policy
 }
