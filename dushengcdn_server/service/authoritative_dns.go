@@ -2076,8 +2076,12 @@ func summarizeAuthoritativeDNSTargetPrecheckDiagnostics(recordType string, polic
 	}
 	nodeDetails := summarizeAuthoritativeDNSTargetPrecheckNodes(diagnostics.nodes, matchedPools)
 	if len(nodeDetails) == 0 {
-		if len(matchedPoolNames) > 0 {
-			return "匹配节点池 " + strings.Join(matchedPoolNames, "、") + " 未找到可诊断节点"
+		poolLabels := matchedPoolLabels
+		if len(poolLabels) == 0 {
+			poolLabels = matchedPoolNames
+		}
+		if len(poolLabels) > 0 {
+			return "匹配节点池 " + strings.Join(poolLabels, "、") + " 没有节点"
 		}
 		return "没有启用的 GSLB 节点池"
 	}

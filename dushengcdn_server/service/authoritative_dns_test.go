@@ -1011,6 +1011,9 @@ func TestUpdateProxyRouteAuthoritativeRejectsSourceSpecificNoTargets(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "来源国家 DE 无法返回 A 边缘 IP") {
 		t.Fatalf("expected DE source target error, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "诊断：匹配节点池 eu（匹配来源国家 DE） 没有节点") {
+		t.Fatalf("expected DE source diagnostic to explain empty matched pool, got %v", err)
+	}
 }
 
 func TestPrecheckAuthoritativeRouteDNSTargetsIncludesNodeDiagnostics(t *testing.T) {
