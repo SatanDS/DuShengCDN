@@ -29,6 +29,8 @@ docker compose logs -n 200 dushengcdn
 
 源码运行时查看终端输出。
 
+使用 `scripts/install-server.sh` 部署或升级时，脚本会在 `docker compose up` 后确认 `dushengcdn` 服务是否仍在运行；如果服务启动后退出，会自动打印最近日志，并对 PostgreSQL 密码/DSN、数据库连接和端口占用这几类常见错误给出提示。
+
 2. 检查端口占用：
 
 ```bash

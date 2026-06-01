@@ -246,6 +246,46 @@ compose_run() {
   "${COMPOSE_CMD[@]}" "$@"
 }
 
+collect_server_logs() {
+  compose_run logs --no-color --tail=120 dushengcdn 2>/dev/null || true
+}
+
+diagnose_server_logs() {
+  local logs="$1"
+
+  if printf '%s\n' "$logs" | grep -Eiq 'password authentication failed|SASL authentication failed'; then
+    warn "Server logs look like PostgreSQL authentication failed."
+    warn "Check POSTGRES_PASSWORD and DSN in ${ENV_FILE}; they must match the password stored in the existing postgres-data directory."
+    warn "If this happened after upgrading an old source deployment, see docs/guide/troubleshooting.md#server-无法启动."
+  fi
+  if printf '%s\n' "$logs" | grep -Eiq 'connection refused|no such host|failed to connect|database.*(connect|open|init)'; then
+    warn "Server logs include database connection errors. Check DSN, PostgreSQL health, and compose service names."
+  fi
+  if printf '%s\n' "$logs" | grep -Eiq 'address already in use|bind:.*in use'; then
+    warn "Server logs include a port binding conflict. Check DUSHENGCDN_HTTP_PORT in ${ENV_FILE} and host port usage."
+  fi
+}
+
+ensure_server_running() {
+  local running_services logs
+
+  running_services="$(compose_run ps --status running --services 2>/dev/null || true)"
+  if printf '%s\n' "$running_services" | grep -Fxq "dushengcdn"; then
+    return
+  fi
+
+  warn "DuShengCDN Server service is not running after Docker Compose start."
+  logs="$(collect_server_logs)"
+  if [[ -n "$logs" ]]; then
+    warn "recent dushengcdn logs:"
+    printf '%s\n' "$logs" >&2
+    diagnose_server_logs "$logs"
+  else
+    warn "could not read dushengcdn logs from Docker Compose."
+  fi
+  die "server service did not stay running. Fix the issue above and rerun scripts/install-server.sh."
+}
+
 dns_worker_already_installed() {
   DNS_WORKER_FOUND_REASON=""
 
@@ -391,6 +431,7 @@ fi
 log "Starting DuShengCDN Server with Docker Compose..."
 compose_run up -d --build
 compose_run ps
+ensure_server_running
 
 if [[ "$INSTALL_DNS_WORKER" != "true" ]]; then
   log "DNS Worker installation skipped."

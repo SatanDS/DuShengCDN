@@ -11,7 +11,7 @@
 | Server Compose 本地参数隔离 | 已提供 `dushengcdn_server/.env.example`，`dushengcdn_server/docker-compose.yaml` 已改为读取 `.env` 变量；后续继续观察用户升级是否还会直接改仓库模板 | 文档说明可执行；源码 Compose 更新时不需要修改仓库内 `docker-compose.yaml` |
 | 文档构建进入 CI 或本地一键验证 | 已新增 `.github/workflows/docs-ci.yml`，在 `docs/**` 或该 workflow 变化时安装依赖并执行 `pnpm build`；本地开发文档也补充了同样命令 | GitHub Actions `Docs CI` 通过；本地 `cd docs && pnpm install --frozen-lockfile && pnpm build` 通过 |
 | 升级后旧 Agent 兼容窗口 | Server 已兼容旧全局 `AGENT_TOKEN` 的 HTTP 心跳、配置拉取和应用日志上报；旧 Token 只允许绑定已有 `node_id` 且不覆盖专属 Token 节点 | `go test ./...` 覆盖旧 Agent 兼容用例；排障文档说明旧 Token 迁移路径 |
-| 面板与同机 DNS Worker 一体化部署 | 已新增 `scripts/install-server.sh`；全新部署首次创建 `.env` 时自动生成数据库密码、`SESSION_SECRET` 和 `DSN`，升级旧源码部署且已有 `postgres-data` 时保留旧默认数据库密码/DSN 以避免认证失败；启动面板后默认自动探测公网 IP、创建 `DNS服务响应端` Worker 并安装 DNS Worker；安装前会检查本机已有 Worker、同名 Docker 容器和 systemd unit 文件，避免覆盖 | `bash -n scripts/install-server.sh`、`scripts/install-server.sh --help`、全新 `.env` 生成回归、已有 `postgres-data` 时保留数据库凭据回归、go/前端/文档构建通过；文档已说明 `--skip-dns-worker` 与 `--force-dns-worker-reinstall` |
+| 面板与同机 DNS Worker 一体化部署 | 已新增 `scripts/install-server.sh`；全新部署首次创建 `.env` 时自动生成数据库密码、`SESSION_SECRET` 和 `DSN`，升级旧源码部署且已有 `postgres-data` 时保留旧默认数据库密码/DSN 以避免认证失败；启动面板后默认自动探测公网 IP、创建 `DNS服务响应端` Worker 并安装 DNS Worker；安装前会检查本机已有 Worker、同名 Docker 容器和 systemd unit 文件，避免覆盖；Compose 启动后会确认 `dushengcdn` 服务处于 running，不运行时打印最近日志并提示数据库密码/DSN、连接或端口占用方向 | `bash -n scripts/install-server.sh`、`scripts/install-server.sh --help`、全新 `.env` 生成回归、已有 `postgres-data` 时保留数据库凭据回归、服务未 running 时日志诊断回归、go/前端/文档构建通过；文档已说明 `--skip-dns-worker` 与 `--force-dns-worker-reinstall` |
 
 ## 中优先级
 
