@@ -179,6 +179,73 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDNSSnapshotIgnoresInvalidGSLBPolicyWhenDisabled(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = false
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     false,
+		GSLBPolicy:      "{not-json",
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	snapshot, err := GetAuthoritativeDNSSnapshot(nil)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+	if len(snapshot.Routes) != 1 || len(snapshot.Routes[0].CurrentTargets) != 1 || snapshot.Routes[0].CurrentTargets[0] != "8.8.4.4" {
+		t.Fatalf("expected non-GSLB authoritative route to ignore invalid stored GSLB policy, got %+v", snapshot.Routes)
+	}
+	if snapshot.Routes[0].GSLBEnabled {
+		t.Fatalf("expected route to remain non-GSLB in snapshot, got %+v", snapshot.Routes[0])
+	}
+}
+
 func TestAuthoritativeDNSSnapshotProbeSchedulingFiltersTargets(t *testing.T) {
 	setupServiceTestDB(t)
 

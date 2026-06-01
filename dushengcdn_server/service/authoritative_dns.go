@@ -2409,11 +2409,14 @@ func snapshotAuthoritativeRoutes() ([]AuthoritativeDNSSnapshotRoute, error) {
 		if err != nil {
 			return nil, err
 		}
-		policy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
-		if err != nil {
-			return nil, err
-		}
 		recordType := normalizeDNSRecordType(route.DNSRecordType)
+		policy := defaultGSLBPolicy(route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, route.DNSTTL)
+		if route.GSLBEnabled {
+			policy, err = decodeStoredGSLBPolicy(route.GSLBPolicy)
+			if err != nil {
+				return nil, err
+			}
+		}
 		item := AuthoritativeDNSSnapshotRoute{
 			ID:           route.ID,
 			SiteName:     normalizeProxyRouteSiteNameInput(route, route.SiteName, route.Domain),
