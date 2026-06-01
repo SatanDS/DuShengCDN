@@ -915,7 +915,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	zoneCounts := map[uint]int64{}
 	routeCounts := map[uint]int64{}
 	sourceScopeCounts := map[string]int64{}
-	trendPoints := initDNSObservabilityTrendPoints(windowEnd, hours)
+	trendPoints := initDNSObservabilityTrendPoints(windowStart, windowEnd, hours)
 	windowRollups := make([]model.DNSQueryRollup, 0, len(rollups))
 
 	for _, rollup := range rollups {
@@ -3277,13 +3277,13 @@ func buildDNSObservabilityCounters(counts map[string]int64, labels map[string]st
 	return items
 }
 
-func initDNSObservabilityTrendPoints(windowEnd time.Time, hours int) []DNSObservabilityTrendPointView {
+func initDNSObservabilityTrendPoints(windowStart time.Time, windowEnd time.Time, hours int) []DNSObservabilityTrendPointView {
 	if hours <= 0 {
 		hours = 24
 	}
+	start := windowStart.UTC().Truncate(time.Hour)
 	end := windowEnd.UTC().Truncate(time.Hour)
-	start := end.Add(-time.Duration(hours-1) * time.Hour)
-	points := make([]DNSObservabilityTrendPointView, 0, hours)
+	points := make([]DNSObservabilityTrendPointView, 0, hours+1)
 	for bucket := start; !bucket.After(end); bucket = bucket.Add(time.Hour) {
 		points = append(points, DNSObservabilityTrendPointView{
 			BucketStartedAt: bucket,

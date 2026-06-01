@@ -1891,12 +1891,11 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	assertCounter(t, summary.SourceScopeBreakdown, "country:HK", "country:HK", 80)
 	assertCounter(t, summary.SourceScopeBreakdown, "country:DE", "country:DE", 5)
 	assertCounter(t, summary.SourceScopeBreakdown, "global", "global", 2)
-	if len(summary.TrendPoints) != 1 {
-		t.Fatalf("expected one trend point for one-hour window, got %+v", summary.TrendPoints)
-	}
-	trend := summary.TrendPoints[0]
-	if trend.QueryCount != 87 || trend.ServfailQueries != 2 || trend.NXDomainQueries != 5 || trend.DynamicQueries != 82 {
-		t.Fatalf("unexpected trend point: %+v", trend)
+	if trendTotalQueries(summary.TrendPoints) != 87 ||
+		trendTotalServfailQueries(summary.TrendPoints) != 2 ||
+		trendTotalNXDomainQueries(summary.TrendPoints) != 5 ||
+		trendTotalDynamicQueries(summary.TrendPoints) != 82 {
+		t.Fatalf("unexpected trend points: %+v", summary.TrendPoints)
 	}
 	if summary.SnapshotConsistency.Status != dnsSnapshotDivergent {
 		t.Fatalf("expected divergent snapshot status, got %+v", summary.SnapshotConsistency)
@@ -2064,6 +2063,42 @@ func TestAuthoritativeDNSObservabilityIncludesOverlappingRollupWindow(t *testing
 	}
 	if summary.LastRollupAt == nil || !summary.LastRollupAt.Equal(overlapEnd) {
 		t.Fatalf("expected last rollup at %s, got %+v", overlapEnd, summary.LastRollupAt)
+	}
+}
+
+func TestAuthoritativeDNSObservabilityTrendCoversRollingWindowStartHour(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Minute)
+	rollupStart := now.Add(-55 * time.Minute)
+	if err := (&model.DNSQueryRollup{
+		WindowStart:     rollupStart,
+		WindowMinutes:   1,
+		WorkerID:        worker.WorkerID,
+		QName:           "early.example.com",
+		QType:           "A",
+		RCode:           "NOERROR",
+		QueryCount:      7,
+		TotalDurationMs: 70,
+		MaxDurationMs:   10,
+		TargetSummary:   `{"8.8.4.4":7}`,
+	}).Insert(); err != nil {
+		t.Fatalf("insert rollup: %v", err)
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.TotalQueries != 7 {
+		t.Fatalf("expected rollup to be counted, got %+v", summary)
+	}
+	if trendTotalQueries(summary.TrendPoints) != 7 {
+		t.Fatalf("expected trend to cover rolling window start hour, got %+v", summary.TrendPoints)
 	}
 }
 
@@ -3262,6 +3297,38 @@ func assertCounter(t *testing.T, counters []DNSObservabilityCounterView, key str
 		}
 	}
 	t.Fatalf("missing counter %s in %+v", key, counters)
+}
+
+func trendTotalQueries(points []DNSObservabilityTrendPointView) int64 {
+	var total int64
+	for _, point := range points {
+		total += point.QueryCount
+	}
+	return total
+}
+
+func trendTotalServfailQueries(points []DNSObservabilityTrendPointView) int64 {
+	var total int64
+	for _, point := range points {
+		total += point.ServfailQueries
+	}
+	return total
+}
+
+func trendTotalNXDomainQueries(points []DNSObservabilityTrendPointView) int64 {
+	var total int64
+	for _, point := range points {
+		total += point.NXDomainQueries
+	}
+	return total
+}
+
+func trendTotalDynamicQueries(points []DNSObservabilityTrendPointView) int64 {
+	var total int64
+	for _, point := range points {
+		total += point.DynamicQueries
+	}
+	return total
 }
 
 func assertSimulationPool(t *testing.T, pools []DNSGSLBSimulationPoolView, name string, matched bool) {
