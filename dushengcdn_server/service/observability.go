@@ -320,9 +320,13 @@ func persistNodeMetricSnapshot(tx *gorm.DB, nodeID string, snapshot *AgentNodeMe
 	if snapshot == nil {
 		return nil
 	}
+	capturedAt := timeFromUnix(snapshot.CapturedAtUnix, reportedAt)
+	if capturedAt.After(reportedAt.UTC()) {
+		capturedAt = reportedAt.UTC()
+	}
 	record := &model.NodeMetricSnapshot{
 		NodeID:               nodeID,
-		CapturedAt:           timeFromUnix(snapshot.CapturedAtUnix, reportedAt),
+		CapturedAt:           capturedAt,
 		CPUUsagePercent:      snapshot.CPUUsagePercent,
 		MemoryUsedBytes:      snapshot.MemoryUsedBytes,
 		MemoryTotalBytes:     snapshot.MemoryTotalBytes,

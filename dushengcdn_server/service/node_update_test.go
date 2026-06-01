@@ -951,6 +951,53 @@ func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	}
 }
 
+func TestHeartbeatNodeClampsFutureMetricSnapshotTime(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:       "node-future-metric",
+		Name:         "future-metric-edge",
+		IP:           "10.0.0.41",
+		AgentToken:   "token-future-metric",
+		AgentVersion: "v0.6.0",
+		Status:       NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+
+	before := time.Now().UTC()
+	futureCapturedAt := before.Add(time.Hour)
+	_, err := HeartbeatNode(node, AgentNodePayload{
+		NodeID:       node.NodeID,
+		Name:         node.Name,
+		IP:           node.IP,
+		AgentVersion: node.AgentVersion,
+		Snapshot: &AgentNodeMetricSnapshot{
+			CapturedAtUnix:       futureCapturedAt.Unix(),
+			CPUUsagePercent:      42,
+			MemoryUsedBytes:      512,
+			MemoryTotalBytes:     1024,
+			OpenrestyConnections: 12,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected heartbeat to succeed: %v", err)
+	}
+	after := time.Now().UTC()
+
+	snapshots, err := model.ListNodeMetricSnapshots(node.NodeID, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("expected node snapshots query to succeed: %v", err)
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("expected one metric snapshot, got %+v", snapshots)
+	}
+	if snapshots[0].CapturedAt.Before(before) || snapshots[0].CapturedAt.After(after) {
+		t.Fatalf("expected future metric captured_at to be clamped to heartbeat time, got %v outside [%v, %v]", snapshots[0].CapturedAt, before, after)
+	}
+}
+
 func TestHeartbeatNodePersistsBufferedObservabilityPayload(t *testing.T) {
 	setupServiceTestDB(t)
 	withFakeAccessLogGeoProvider(t, &geoip.GeoInfo{

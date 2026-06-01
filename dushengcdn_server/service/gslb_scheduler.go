@@ -270,13 +270,17 @@ func latestNodeMetricSnapshots() map[string]*model.NodeMetricSnapshot {
 	if freshness <= 0 {
 		freshness = 120 * time.Second
 	}
-	rows, err := model.ListMetricSnapshotsSince(time.Now().Add(-freshness))
+	now := time.Now()
+	rows, err := model.ListMetricSnapshotsSince(now.Add(-freshness))
 	if err != nil {
 		return map[string]*model.NodeMetricSnapshot{}
 	}
 	result := make(map[string]*model.NodeMetricSnapshot, len(rows))
 	for _, row := range rows {
 		if row == nil || strings.TrimSpace(row.NodeID) == "" {
+			continue
+		}
+		if row.CapturedAt.After(now) {
 			continue
 		}
 		if _, ok := result[row.NodeID]; ok {

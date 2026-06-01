@@ -642,6 +642,39 @@ func TestLatestNodeMetricSnapshotsUsesConfiguredFreshness(t *testing.T) {
 	}
 }
 
+func TestLatestNodeMetricSnapshotsIgnoresFutureMetrics(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldFreshness := common.GSLBMetricFreshnessSeconds
+	common.GSLBMetricFreshnessSeconds = 120
+	t.Cleanup(func() {
+		common.GSLBMetricFreshnessSeconds = oldFreshness
+	})
+
+	now := time.Now()
+	fresh := &model.NodeMetricSnapshot{
+		NodeID:               "node-edge",
+		CapturedAt:           now.Add(-30 * time.Second),
+		OpenrestyConnections: 3,
+	}
+	future := &model.NodeMetricSnapshot{
+		NodeID:               "node-edge",
+		CapturedAt:           now.Add(time.Hour),
+		OpenrestyConnections: 1,
+	}
+	for _, snapshot := range []*model.NodeMetricSnapshot{fresh, future} {
+		if err := snapshot.Insert(); err != nil {
+			t.Fatalf("insert metric snapshot: %v", err)
+		}
+	}
+
+	metrics := latestNodeMetricSnapshots()
+	metric := metrics["node-edge"]
+	if metric == nil || metric.CapturedAt.After(now) || metric.OpenrestyConnections != 3 {
+		t.Fatalf("expected future metric to be ignored, got %#v", metric)
+	}
+}
+
 func TestSelectGSLBDNSTargetsKeepsPreviousTargetsDuringCooldown(t *testing.T) {
 	setupServiceTestDB(t)
 
