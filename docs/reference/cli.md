@@ -27,6 +27,30 @@ cd dushengcdn_server
 ./dushengcdn-server --reset-root-password 'replace-with-new-password'
 ```
 
+备份 Server 数据：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/backup-server.sh
+```
+
+常用可选参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--server-dir` | Server compose/source 目录，默认仓库内 `dushengcdn_server` |
+| `--backup-dir` | 备份输出目录，默认 `SERVER_DIR/backups` |
+| `--mode auto|postgres|sqlite` | 备份模式，默认 `auto` |
+| `--compose-file` | Docker Compose 文件，默认 `SERVER_DIR/docker-compose.yaml` |
+| `--env-file` | Compose 环境文件，默认读取 `SERVER_DIR/.env` |
+| `--data-dir` | 需要归档的 Server 数据目录，默认 `SERVER_DIR/dushengcdn-data` |
+| `--sqlite-path` | SQLite 数据库路径，默认按 `.env` 或 `DATA_DIR/dushengcdn.db` 推导 |
+| `--postgres-service` | Compose PostgreSQL 服务名，默认 `postgres` |
+| `--postgres-db` | PostgreSQL 数据库名，默认读取 `.env` 或 `dushengcdn` |
+| `--postgres-user` | PostgreSQL 用户名，默认读取 `.env` 或 `dushengcdn` |
+
+`auto` 模式会优先对可访问的 Compose PostgreSQL 执行 `pg_dump`，否则备份 SQLite 文件，并归档 `dushengcdn-data`。脚本会在备份目录写入 `manifest.txt`，但不会停止、恢复、覆盖或删除生产数据。
+
 测试：
 
 ```bash

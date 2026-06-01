@@ -173,7 +173,7 @@ go run . --port 3000 --log-dir ./logs
 
 ## 自建权威 DNS 部署规划
 
-自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。
+自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。面板本机可以同时部署 DNS Worker，但面板服务本身不会自动监听公网 `53`；创建 Zone、NS 和 Worker Token 后，仍必须单独运行安装脚本、Docker 或源码命令启动 Worker。
 
 Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、Agent 多节点探测通过率/RTT、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，可用于检查实时 GSLB 是否按来源 CIDR、国家代码、来源分流桶、节点池权重、健康状态和负载阈值返回预期边缘 IP。「GSLB 调度状态」展示当前实际目标、期望目标、最近评估时间和防抖冷却状态；「GSLB 调度模拟」还可以在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照返回目标，并解释节点池匹配、候选节点、跳过节点和原因；即使没有可返回目标，模拟也会保留节点诊断和无目标原因，便于上线前定位节点池、健康状态、公网 IP、负载阈值或探测门槛问题。这里的 Worker 查询延迟是 Worker 本地处理真实 DNS 查询的耗时；Agent 多节点探测 RTT 表示各边缘节点到 Worker NS 的主动探测耗时，默认只用于观测与排障；设置页「权威 DNS 运行参数」启用 Agent 探测调度门槛后，无新鲜成功探测的边缘节点不会进入自建权威 DNS GSLB 候选。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Worker 快照一致性会显示快照版本和最近拉取时间，迁移向导会要求公网可达 Worker 均持有未过期且版本一致的快照。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
 
@@ -196,6 +196,8 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 ```
 
 脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，让国家代码节点池匹配开箱可用；下载失败不会阻断安装，Worker 会继续按来源 CIDR 或 `global` 作用域运行。
+
+如果 Server 面板和 DNS Worker 部署在同一台机器，`--server-url` 可以使用容器或宿主机可访问的面板地址；`--listen` 建议显式写公网地址，例如 `--listen 203.0.113.10:53`，避免只想对公网提供权威 DNS 时和本机回环 DNS 服务混淆。
 
 可选参数：
 
@@ -438,7 +440,22 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 
 ## 备份与恢复
 
-升级前至少备份数据库和上传目录。PostgreSQL Compose 部署示例：
+升级前至少备份数据库和上传目录。源码部署可以直接使用仓库内的备份脚本：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/backup-server.sh
+```
+
+脚本默认读取 `dushengcdn_server/.env`，在 `auto` 模式下优先对可访问的 Compose PostgreSQL 执行 `pg_dump`，否则备份 SQLite 文件，并同时归档 `dushengcdn-data` 目录。输出目录默认为 `dushengcdn_server/backups/<timestamp>/`，其中包含数据库备份、数据目录归档和 `manifest.txt`。也可以显式指定目录和模式：
+
+```bash
+bash scripts/backup-server.sh \
+  --server-dir /opt/dushengcdn/dushengcdn_server \
+  --mode auto
+```
+
+脚本只创建备份文件，不会停止、恢复、覆盖或删除生产数据。手工 PostgreSQL Compose 备份示例：
 
 ```bash
 cd /opt/dushengcdn/dushengcdn_server

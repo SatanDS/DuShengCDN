@@ -16,7 +16,7 @@
 
 | 项目 | 当前状态 | 验收证据 |
 | --- | --- | --- |
-| 备份恢复脚本或管理端备份提示 | 文档已给出 PostgreSQL/SQLite 命令，但仍依赖人工复制执行 | 提供脚本或管理端提示入口，并验证备份文件可用于恢复 |
+| 备份恢复脚本或管理端备份提示 | 已新增 `scripts/backup-server.sh`，支持 PostgreSQL Compose 与 SQLite 备份，并在部署、升级、完整教程和 CLI 参考中补充用法；恢复仍保持人工停 Server 后执行 | `bash -n scripts/backup-server.sh` 通过；SQLite 试跑生成数据库备份、数据目录归档和 `manifest.txt` |
 | root 密码重置端到端 CLI 回归 | 已新增 `dushengcdn_server/reset_root_cli_test.go`，通过 `go run . --reset-root-password ...` 覆盖创建 root、拒绝旧密码、以及重置被禁用/降级 root 的完整命令入口 | `cd dushengcdn_server && go test . -run TestResetRootPasswordCLI -count=1` 和 `go test ./...` 通过 |
 | 网站配置分区前端测试补强 | 网站配置页承载自动 DNS、缓存、WAF、PoW、地区限制等高频能力 | 为关键分区补加载态、保存成功、保存失败和空态测试 |
 | 权威 DNS 调度评分增强 | 当前 Agent 多点探测默认只用于观测；启用门槛后参与候选过滤和同等候选排序 | 如扩展 RTT、丢包、区域覆盖评分，先更新 `docs/design/authoritative-dns-gslb.md`，再补 Worker/Server/前端测试 |

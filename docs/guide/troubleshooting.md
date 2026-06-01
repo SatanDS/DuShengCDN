@@ -261,6 +261,23 @@ curl -Iv https://your-domain
 4. 「Worker 快照一致性」应显示公网可达 Worker 都持有未超过 `AuthoritativeDNSSnapshotMaxAge` 的调度快照，且版本一致；若快照为空、过期或版本不一致，检查 Worker 到 Server 的 HTTPS 访问、Token、心跳日志和快照拉取错误。
 5. 「GSLB 模拟复测」通常应返回目标 IP；若无目标，打开模拟节点诊断，检查节点是否在线、OpenResty 是否健康、公网 IP 池、节点池、排空模式、GSLB 权重、负载阈值和探测门槛原因。
 
+如果注册商已经配置 NS/Glue，但 `dig @PUBLIC_IP example.com SOA` 提示 `connection refused`、`no servers could be reached`，或面板委派检查仍提示上游无法访问权威服务器：
+
+1. 在 DNS Worker 主机执行 `systemctl status dushengcdn-dns-worker`。如果提示 `Unit dushengcdn-dns-worker.service could not be found`，说明只配置了面板 Zone/注册商 NS，还没有部署 DNS Worker。
+2. 查看 `ss -lntup | grep ':53'` 和 `ss -lnuap | grep ':53'`。只看到 `systemd-resolved` 监听 `127.0.0.53` 或 `127.0.0.54` 不代表公网 `53` 已经有权威 DNS 服务；公网地址仍可能没有任何进程监听。
+3. 在左侧「权威 DNS」创建 DNS Worker Token 后，在 Worker 主机运行安装脚本；如果 Worker 和面板在同一台机器，可使用面板本机可访问地址作为 `--server-url`，并用 `--listen PUBLIC_IP:53` 绑定公网地址。
+4. 安装后执行 `systemctl status dushengcdn-dns-worker`、`journalctl -u dushengcdn-dns-worker -n 100 --no-pager`，确认服务已启动且没有 Token、Server URL 或快照拉取错误。
+5. 确认服务器防火墙、云安全组或上游网络同时放行 UDP `53` 和 TCP `53`，再执行 `dig @PUBLIC_IP example.com SOA` 和 `dig @PUBLIC_IP example.com NS`。
+6. 如果使用 `ns1.example.com` / `ns2.example.com` 这类位于同一 Zone 内的 NS，注册商还必须配置 Glue/主机记录，把这些 NS 名称指向 Worker 公网 IP。
+
+如果 `dig @PUBLIC_IP example.com SOA` 和 `NS` 已返回 `NOERROR`，但业务域名的 `A`/`AAAA` 仍没有返回目标，或 Worker 日志里的快照显示 `routes=0`：
+
+1. 这说明 DNS Worker 已经能回答 Zone 基础记录，但当前快照里还没有绑定到自建权威 DNS 的网站动态路由。
+2. 到网站详情「自动 DNS」把 `DNS 模式` 切换为 `自建权威 DNS`，并选择对应 Zone；也可以在「权威 DNS」的「迁移向导」里对候选站点执行一键切换。
+3. 确认网站至少有一个域名落在该 Zone 下，且没有同名静态 `CNAME` 或启用的同名静态 `A`/`AAAA` 与动态记录冲突。
+4. 切换后等待 DNS Worker 下一次心跳/快照拉取，或重启 Worker，再查看日志里的 `routes` 数量是否增加。
+5. 使用「GSLB 调度模拟」检查该站点的 A/AAAA 是否能返回边缘 IP；如果无目标，继续按节点池、公网 IP、在线状态、OpenResty 健康、排空模式、负载阈值和 Agent 探测门槛排查。
+
 如果保存 Zone 静态记录、网站配置或迁移向导切换时提示“静态记录冲突”：
 
 1. 到左侧「权威 DNS」进入对应 Zone，检查是否已有同名启用的静态 `A`、`AAAA` 或 `CNAME`。

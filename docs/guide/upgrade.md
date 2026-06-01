@@ -94,7 +94,14 @@ journalctl -u dushengcdn-agent -n 100 --no-pager
 
 ## 备份与恢复
 
-升级前至少备份数据库和上传目录。
+升级前至少备份数据库和上传目录。源码部署可以直接使用仓库内的备份脚本：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/backup-server.sh
+```
+
+脚本默认读取 `dushengcdn_server/.env`，在 `auto` 模式下优先备份可访问的 Compose PostgreSQL，否则备份 SQLite 文件，并同时归档 `dushengcdn-data` 目录。备份文件会写入 `dushengcdn_server/backups/<timestamp>/`，并生成 `manifest.txt` 记录模式、路径和校验信息。脚本只创建备份，不会停止、恢复、覆盖或删除生产数据。
 
 PostgreSQL Compose 部署：
 
