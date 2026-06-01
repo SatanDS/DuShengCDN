@@ -256,7 +256,8 @@ curl -Iv https://your-domain
 1. 「网站 DNS 模式」应显示已绑定目标 Zone；若失败，回到网站详情的「自动 DNS」确认 DNS 模式和 Zone。
 2. 「Zone 委派检查」应为已匹配；若部分匹配、不匹配或提示 Glue，登录注册商补齐 NS 或 Glue/主机记录。
 3. 「Worker 公网探测」至少应有一个在线 Worker UDP/TCP `53` 可达；若失败，检查 Worker 公网地址、防火墙、端口映射和安全组。
-4. 「GSLB 模拟复测」应返回目标 IP；若无目标，检查节点是否在线、OpenResty 是否健康、公网 IP 池、节点池、排空模式、GSLB 权重和负载阈值。
+4. 「Worker 快照一致性」至少应有一个在线 Worker 持有未超过 `AuthoritativeDNSSnapshotMaxAge` 的调度快照；若快照为空或过期，检查 Worker 到 Server 的 HTTPS 访问、Token、心跳日志和快照拉取错误。
+5. 「GSLB 模拟复测」应返回目标 IP；若无目标，检查节点是否在线、OpenResty 是否健康、公网 IP 池、节点池、排空模式、GSLB 权重和负载阈值。
 
 如果保存 Zone 静态记录、网站配置或迁移向导切换时提示“静态记录冲突”：
 
@@ -283,6 +284,14 @@ curl -Iv https://your-domain
 3. 在 DNS Worker 列表点击「探测」，确认 UDP 和 TCP `53` 都可达；只通过其中一个协议时仍不视为可迁移/可启用。
 4. 检查 Worker 服务器防火墙、云安全组、NAT 和端口映射是否同时放行 UDP `53` 与 TCP `53`。
 5. 如果最近一次探测显示过期，重新点击「探测」后再保存网站或执行一键切换。
+
+如果迁移向导、一键切换或网站详情保存时提示“在线 DNS Worker 尚未拉取未过期的调度快照”或“没有同时满足公网可达和快照未过期的 DNS Worker”：
+
+1. 先确认至少一个 Worker 在列表中为在线，并且最近一次公网 UDP/TCP `53` 探测为健康。
+2. 查看「Worker 快照一致性」，确认 `last_snapshot_version` 不为空，`last_snapshot_at` 没有超过 `AuthoritativeDNSSnapshotMaxAge`。
+3. 在 Worker 服务器查看服务日志，重点检查 Token 无效、Server URL 不可达、HTTPS 证书校验失败、快照接口返回错误等信息。
+4. 确认 Worker 使用的 Token 是左侧「权威 DNS」中创建的 DNS Worker Token，不是 Agent Token 或登录密码。
+5. 修复后等待下一次 Worker 心跳/快照拉取，或重启 Worker，再刷新迁移向导或重新保存网站。
 
 如果「Worker 可用性」里 Server 侧公网探测正常，但「Agent 多节点探测」异常：
 

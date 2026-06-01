@@ -240,6 +240,8 @@ type AuthoritativeDNSMigrationCandidateView struct {
 	TotalWorkerCount           int      `json:"total_worker_count"`
 	OnlineWorkerCount          int      `json:"online_worker_count"`
 	PublicReachableWorkerCount int      `json:"public_reachable_worker_count"`
+	FreshSnapshotWorkerCount   int      `json:"fresh_snapshot_worker_count"`
+	ReadyWorkerCount           int      `json:"ready_worker_count"`
 	Ready                      bool     `json:"ready"`
 	Blockers                   []string `json:"blockers"`
 	Warnings                   []string `json:"warnings"`
@@ -1747,6 +1749,15 @@ type authoritativeDNSMigrationWorkerStatsView struct {
 	total           int
 	online          int
 	publicReachable int
+	freshSnapshot   int
+	ready           int
+}
+
+type authoritativeDNSWorkerReadiness struct {
+	online          bool
+	publicReachable bool
+	freshSnapshot   bool
+	ready           bool
 }
 
 type authoritativeDNSTargetPrecheckView struct {
@@ -1770,14 +1781,20 @@ func authoritativeDNSMigrationWorkerStats() (authoritativeDNSMigrationWorkerStat
 	}
 	stats := authoritativeDNSMigrationWorkerStatsView{total: len(workers)}
 	now := time.Now().UTC()
+	snapshotMaxAge := authoritativeDNSSnapshotMaxAge()
 	for _, worker := range workers {
-		if worker == nil || normalizeDNSWorkerStatus(worker.Status) != dnsWorkerStatusOnline {
-			continue
+		readiness := evaluateAuthoritativeDNSWorkerReadiness(now, snapshotMaxAge, worker)
+		if readiness.online {
+			stats.online++
 		}
-		stats.online++
-		probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, decodeDNSWorkerProbeResults(worker.LastProbeResult))
-		if probeState.healthy {
+		if readiness.publicReachable {
 			stats.publicReachable++
+		}
+		if readiness.freshSnapshot {
+			stats.freshSnapshot++
+		}
+		if readiness.ready {
+			stats.ready++
 		}
 	}
 	return stats, nil
@@ -1802,6 +1819,8 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 		TotalWorkerCount:           workerStats.total,
 		OnlineWorkerCount:          workerStats.online,
 		PublicReachableWorkerCount: workerStats.publicReachable,
+		FreshSnapshotWorkerCount:   workerStats.freshSnapshot,
+		ReadyWorkerCount:           workerStats.ready,
 		Blockers:                   []string{},
 		Warnings:                   []string{},
 	}
@@ -1831,6 +1850,10 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 		candidate.Blockers = append(candidate.Blockers, "没有在线 DNS Worker")
 	} else if workerStats.publicReachable == 0 {
 		candidate.Blockers = append(candidate.Blockers, "在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测")
+	} else if workerStats.freshSnapshot == 0 {
+		candidate.Blockers = append(candidate.Blockers, "在线 DNS Worker 尚未拉取未过期的调度快照")
+	} else if workerStats.ready == 0 {
+		candidate.Blockers = append(candidate.Blockers, "没有同时满足公网可达和快照未过期的 DNS Worker")
 	}
 	if !route.GSLBEnabled {
 		candidate.Warnings = append(candidate.Warnings, "未启用 GSLB，多节点池实时分流不会生效")
@@ -1840,6 +1863,9 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 	}
 	if workerStats.online > workerStats.publicReachable {
 		candidate.Warnings = append(candidate.Warnings, "部分在线 Worker 未通过最新公网探测，迁移前建议逐个点击「探测」")
+	}
+	if workerStats.online > workerStats.freshSnapshot {
+		candidate.Warnings = append(candidate.Warnings, "部分在线 Worker 尚未拉取未过期快照，请确认快照同步正常")
 	}
 	if !route.DNSAutoSync {
 		candidate.Warnings = append(candidate.Warnings, "当前未启用 Cloudflare 自动 DNS，请确认是否仍需要迁移")
@@ -2152,30 +2178,45 @@ func resolveAuthoritativeMigrationZone(zoneIDRef *uint, domains []string) (*mode
 }
 
 func validateAuthoritativeDNSReadyWorkers() error {
-	workers, err := model.ListDNSWorkers()
+	stats, err := authoritativeDNSMigrationWorkerStats()
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	onlineCount := 0
-	healthyProbeCount := 0
-	for _, worker := range workers {
-		if worker == nil || normalizeDNSWorkerStatus(worker.Status) != dnsWorkerStatusOnline {
-			continue
-		}
-		onlineCount++
-		probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, decodeDNSWorkerProbeResults(worker.LastProbeResult))
-		if probeState.healthy {
-			healthyProbeCount++
-		}
-	}
-	if onlineCount == 0 {
+	if stats.online == 0 {
 		return errors.New("没有在线 DNS Worker")
 	}
-	if healthyProbeCount == 0 {
+	if stats.publicReachable == 0 {
 		return errors.New("在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测")
 	}
+	if stats.freshSnapshot == 0 {
+		return errors.New("在线 DNS Worker 尚未拉取未过期的调度快照")
+	}
+	if stats.ready == 0 {
+		return errors.New("没有同时满足公网可达和快照未过期的 DNS Worker")
+	}
 	return nil
+}
+
+func evaluateAuthoritativeDNSWorkerReadiness(now time.Time, snapshotMaxAge time.Duration, worker *model.DNSWorker) authoritativeDNSWorkerReadiness {
+	if worker == nil || normalizeDNSWorkerStatus(worker.Status) != dnsWorkerStatusOnline {
+		return authoritativeDNSWorkerReadiness{}
+	}
+	readiness := authoritativeDNSWorkerReadiness{online: true}
+	probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, decodeDNSWorkerProbeResults(worker.LastProbeResult))
+	readiness.publicReachable = probeState.healthy
+	readiness.freshSnapshot = hasFreshAuthoritativeDNSWorkerSnapshot(now, snapshotMaxAge, worker)
+	readiness.ready = readiness.publicReachable && readiness.freshSnapshot
+	return readiness
+}
+
+func hasFreshAuthoritativeDNSWorkerSnapshot(now time.Time, snapshotMaxAge time.Duration, worker *model.DNSWorker) bool {
+	if worker == nil || worker.LastSnapshotAt == nil || strings.TrimSpace(worker.LastSnapshotVersion) == "" {
+		return false
+	}
+	if snapshotMaxAge <= 0 {
+		snapshotMaxAge = defaultDNSSnapshotMaxAge
+	}
+	return now.Sub(worker.LastSnapshotAt.UTC()) <= snapshotMaxAge
 }
 
 func buildDNSGSLBSchedulingStateView(state *model.GSLBSchedulingState, route *model.ProxyRoute) DNSGSLBSchedulingStateView {

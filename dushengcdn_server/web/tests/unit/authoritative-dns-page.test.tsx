@@ -547,6 +547,8 @@ describe('Authoritative DNS page', () => {
                     total_worker_count: 1,
                     online_worker_count: 1,
                     public_reachable_worker_count: 1,
+                    fresh_snapshot_worker_count: 1,
+                    ready_worker_count: 1,
                     ready: true,
                     blockers: [],
                     warnings: ['生产环境建议至少部署 2 个 DNS Worker'],

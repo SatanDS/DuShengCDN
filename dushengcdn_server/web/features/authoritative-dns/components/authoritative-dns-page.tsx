@@ -2642,6 +2642,10 @@ function DNSMigrationGuidePanel({
                           label="公网可达 Worker"
                           value={`${candidate.public_reachable_worker_count} / ${candidate.online_worker_count}`}
                         />
+                        <InfoTile
+                          label="快照就绪 Worker"
+                          value={`${candidate.ready_worker_count} / ${candidate.online_worker_count}`}
+                        />
                       </div>
                       {candidate.blockers.length > 0 ? (
                         <CheckList
@@ -2652,7 +2656,7 @@ function DNSMigrationGuidePanel({
                       ) : (
                         <InlineMessage
                           tone="success"
-                          message="Zone、域名归属、在线 Worker 和公网 UDP/TCP 53 探测已满足切换条件。"
+                          message="Zone、域名归属、公网 UDP/TCP 53 探测和 Worker 调度快照已满足切换条件。"
                         />
                       )}
                       {candidate.warnings.length > 0 ? (

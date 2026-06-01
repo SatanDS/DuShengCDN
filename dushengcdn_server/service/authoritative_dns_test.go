@@ -359,6 +359,60 @@ func TestCreateProxyRouteAuthoritativeRequiresReadyDNSWorker(t *testing.T) {
 	}
 }
 
+func TestCreateProxyRouteAuthoritativeRequiresFreshDNSWorkerSnapshot(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	worker := createProbeHealthyDNSWorker(t, now)
+	worker.LastSnapshotVersion = "stale-snapshot"
+	staleSnapshotAt := now.Add(-(defaultDNSSnapshotMaxAge + time.Minute))
+	worker.LastSnapshotAt = &staleSnapshotAt
+	if err := worker.Update(); err != nil {
+		t.Fatalf("update stale worker snapshot: %v", err)
+	}
+
+	_, err = CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err == nil || !strings.Contains(err.Error(), "调度快照") {
+		t.Fatalf("expected stale DNS Worker snapshot error, got %v", err)
+	}
+}
+
 func TestCreateProxyRouteAuthoritativeAllowsReadyDNSWorker(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -524,6 +578,8 @@ func TestListAuthoritativeDNSMigrationCandidatesReportsStaticRecordConflict(t *t
 	workerModel.Status = dnsWorkerStatusOnline
 	workerModel.LastSeenAt = &checkedAt
 	workerModel.LastProbeAt = &checkedAt
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &checkedAt
 	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
 	if err := workerModel.Update(); err != nil {
 		t.Fatalf("update worker readiness: %v", err)
@@ -540,7 +596,7 @@ func TestListAuthoritativeDNSMigrationCandidatesReportsStaticRecordConflict(t *t
 	if candidate.Ready {
 		t.Fatalf("expected candidate to be blocked by static record conflict: %+v", candidate)
 	}
-	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 1 {
+	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 1 || candidate.ReadyWorkerCount != 1 {
 		t.Fatalf("unexpected candidate metadata: %+v", candidate)
 	}
 	if !containsStringWith(candidate.Blockers, "静态记录") {
@@ -587,6 +643,8 @@ func TestListAuthoritativeDNSMigrationCandidatesReportsNoAvailableGSLBTargets(t 
 	workerModel.Status = dnsWorkerStatusOnline
 	workerModel.LastSeenAt = &checkedAt
 	workerModel.LastProbeAt = &checkedAt
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &checkedAt
 	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
 	if err := workerModel.Update(); err != nil {
 		t.Fatalf("update worker readiness: %v", err)
@@ -603,11 +661,81 @@ func TestListAuthoritativeDNSMigrationCandidatesReportsNoAvailableGSLBTargets(t 
 	if candidate.Ready {
 		t.Fatalf("expected candidate to be blocked by missing GSLB targets: %+v", candidate)
 	}
-	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 1 {
+	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 1 || candidate.ReadyWorkerCount != 1 {
 		t.Fatalf("unexpected candidate metadata: %+v", candidate)
 	}
 	if !containsStringWith(candidate.Blockers, "无法返回 A 边缘 IP") {
 		t.Fatalf("expected missing target blocker, got %+v", candidate.Blockers)
+	}
+}
+
+func TestListAuthoritativeDNSMigrationCandidatesRequiresFreshWorkerSnapshot(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSAutoSync:     true,
+		DNSProviderMode: DNSProviderModeCloudflare,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 60)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	createProbeHealthyDNSWorker(t, now)
+
+	candidates, err := ListAuthoritativeDNSMigrationCandidates()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSMigrationCandidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected one migration candidate, got %+v", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.Ready {
+		t.Fatalf("expected candidate to be blocked by missing fresh snapshot: %+v", candidate)
+	}
+	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 1 || candidate.FreshSnapshotWorkerCount != 0 || candidate.ReadyWorkerCount != 0 {
+		t.Fatalf("unexpected candidate metadata: %+v", candidate)
+	}
+	if !containsStringWith(candidate.Blockers, "调度快照") {
+		t.Fatalf("expected snapshot blocker, got %+v", candidate.Blockers)
 	}
 }
 
@@ -676,6 +804,8 @@ func TestListAuthoritativeDNSMigrationCandidatesChecksSourceSpecificGSLBTargets(
 	workerModel.Status = dnsWorkerStatusOnline
 	workerModel.LastSeenAt = &now
 	workerModel.LastProbeAt = &now
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &now
 	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
 	if err := workerModel.Update(); err != nil {
 		t.Fatalf("update worker readiness: %v", err)
@@ -751,6 +881,8 @@ func TestSwitchProxyRouteToAuthoritativeDNSRequiresReadyWorker(t *testing.T) {
 	workerModel.LastSeenAt = &checkedAt
 	workerModel.LastProbeAt = &checkedAt
 	workerModel.LastProbeQuery = "example.com. SOA"
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &checkedAt
 	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
 	if err := workerModel.Update(); err != nil {
 		t.Fatalf("update worker readiness: %v", err)
@@ -836,6 +968,8 @@ func TestSwitchProxyRouteToAuthoritativeDNSRejectsStaticRecordConflict(t *testin
 	workerModel.LastSeenAt = &checkedAt
 	workerModel.LastProbeAt = &checkedAt
 	workerModel.LastProbeQuery = "example.com. SOA"
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &checkedAt
 	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
 	if err := workerModel.Update(); err != nil {
 		t.Fatalf("update worker readiness: %v", err)
@@ -886,6 +1020,8 @@ func TestSwitchProxyRouteToAuthoritativeDNSRejectsNoAvailableGSLBTargets(t *test
 	workerModel.LastSeenAt = &checkedAt
 	workerModel.LastProbeAt = &checkedAt
 	workerModel.LastProbeQuery = "example.com. SOA"
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &checkedAt
 	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
 	if err := workerModel.Update(); err != nil {
 		t.Fatalf("update worker readiness: %v", err)
@@ -1870,6 +2006,18 @@ func ptrUint(value uint) *uint {
 }
 
 func createReadyDNSWorker(t *testing.T, checkedAt time.Time) *model.DNSWorker {
+	t.Helper()
+	workerModel := createProbeHealthyDNSWorker(t, checkedAt)
+	checkedAt = checkedAt.UTC()
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &checkedAt
+	if err := workerModel.Update(); err != nil {
+		t.Fatalf("update worker snapshot readiness: %v", err)
+	}
+	return workerModel
+}
+
+func createProbeHealthyDNSWorker(t *testing.T, checkedAt time.Time) *model.DNSWorker {
 	t.Helper()
 	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1", PublicAddress: "ns1.example.net"})
 	if err != nil {

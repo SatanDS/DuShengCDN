@@ -203,6 +203,8 @@ export interface AuthoritativeDNSMigrationCandidate {
   total_worker_count: number;
   online_worker_count: number;
   public_reachable_worker_count: number;
+  fresh_snapshot_worker_count: number;
+  ready_worker_count: number;
   ready: boolean;
   blockers: string[];
   warnings: string[];
