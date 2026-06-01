@@ -135,7 +135,17 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolPolicy, error) {
 	result := make([]ProxyRouteGSLBPoolPolicy, 0, len(input))
 	seen := make(map[string]int, len(input))
+	hasExplicitEnabledPool := false
 	for _, pool := range input {
+		if pool.Enabled {
+			hasExplicitEnabledPool = true
+			break
+		}
+	}
+	for _, pool := range input {
+		if hasExplicitEnabledPool && !pool.Enabled {
+			continue
+		}
 		name := normalizeNodePoolName(pool.Name)
 		if name == "" {
 			continue
