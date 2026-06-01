@@ -388,6 +388,95 @@ func TestListAuthoritativeDNSMigrationCandidatesReportsNoAvailableGSLBTargets(t 
 	}
 }
 
+func TestListAuthoritativeDNSMigrationCandidatesChecksSourceSpecificGSLBTargets(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 60)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 80, Countries: []string{"HK"}, Enabled: true},
+		{Name: "eu", Weight: 20, Countries: []string{"DE"}, Enabled: true},
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSAutoSync:     true,
+		DNSProviderMode: DNSProviderModeCloudflare,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1", PublicAddress: "ns1.example.net"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	workerModel.Status = dnsWorkerStatusOnline
+	workerModel.LastSeenAt = &now
+	workerModel.LastProbeAt = &now
+	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
+	if err := workerModel.Update(); err != nil {
+		t.Fatalf("update worker readiness: %v", err)
+	}
+
+	candidates, err := ListAuthoritativeDNSMigrationCandidates()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSMigrationCandidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected one migration candidate, got %+v", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.Ready {
+		t.Fatalf("expected candidate to be blocked by DE source pool: %+v", candidate)
+	}
+	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID {
+		t.Fatalf("unexpected candidate zone metadata: %+v", candidate)
+	}
+	if !containsStringWith(candidate.Blockers, "来源国家 DE 无法返回 A 边缘 IP") {
+		t.Fatalf("expected DE source blocker, got %+v", candidate.Blockers)
+	}
+}
+
 func TestSwitchProxyRouteToAuthoritativeDNSRequiresReadyWorker(t *testing.T) {
 	setupServiceTestDB(t)
 

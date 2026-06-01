@@ -1754,6 +1754,13 @@ type authoritativeDNSTargetPrecheckView struct {
 	targetCount int
 	recordType  string
 	strategy    string
+	warnings    []string
+}
+
+type authoritativeDNSTargetPrecheckSource struct {
+	label  string
+	key    string
+	source GSLBSourceContext
 }
 
 func authoritativeDNSMigrationWorkerStats() (authoritativeDNSMigrationWorkerStatsView, error) {
@@ -1818,9 +1825,8 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 	targetPrecheck, targetErr := precheckAuthoritativeRouteDNSTargets(route, recordType)
 	if targetErr != nil {
 		candidate.Blockers = append(candidate.Blockers, targetErr.Error())
-	} else if targetPrecheck.targetCount > len(targetPrecheck.targets) {
-		candidate.Warnings = append(candidate.Warnings, fmt.Sprintf("当前只能返回 %d / %d 个 %s 边缘 IP，请检查节点池容量", len(targetPrecheck.targets), targetPrecheck.targetCount, targetPrecheck.recordType))
 	}
+	candidate.Warnings = append(candidate.Warnings, targetPrecheck.warnings...)
 	if workerStats.online == 0 {
 		candidate.Blockers = append(candidate.Blockers, "没有在线 DNS Worker")
 	} else if workerStats.publicReachable == 0 {
@@ -1873,6 +1879,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 		targetCount: 1,
 		recordType:  normalizeDNSRecordType(recordType),
 		strategy:    "healthy",
+		warnings:    []string{},
 	}
 	if route == nil {
 		return view, errors.New("网站配置不存在")
@@ -1884,12 +1891,13 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 	}
 	view.targetCount = normalizeDNSTargetCount(route.DNSTargetCount)
 	view.strategy = normalizeDNSScheduleMode(route.DNSScheduleMode)
+	policy := ProxyRouteGSLBPolicy{}
 	if route.GSLBEnabled {
-		policy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
+		decodedPolicy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
 		if err != nil {
 			return view, err
 		}
-		policy, err = normalizeGSLBPolicy(policy, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, route.DNSTTL)
+		policy, err = normalizeGSLBPolicy(decodedPolicy, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, route.DNSTTL)
 		if err != nil {
 			return view, err
 		}
@@ -1908,7 +1916,104 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 		return view, fmt.Errorf("当前节点池/GSLB 没有可用于 %s 记录的边缘 IP", recordType)
 	}
 	view.targets = targets
+	if view.targetCount > len(targets) {
+		view.warnings = append(view.warnings, fmt.Sprintf("global 当前只能返回 %d / %d 个 %s 边缘 IP，请检查节点池容量", len(targets), view.targetCount, view.recordType))
+	}
+	if route.GSLBEnabled {
+		blockers := []string{}
+		for _, source := range authoritativeDNSTargetPrecheckSources(policy) {
+			selection, err := selectGSLBDNSTargetsForSource(route, recordType, source.source)
+			if err != nil {
+				blockers = append(blockers, fmt.Sprintf("%s 无法返回 %s 边缘 IP：%v", source.label, recordType, err))
+				continue
+			}
+			targets, err := normalizeDNSRecordContents(recordType, selection.Targets)
+			if err != nil {
+				blockers = append(blockers, fmt.Sprintf("%s 返回的 %s 边缘 IP 无效：%v", source.label, recordType, err))
+				continue
+			}
+			if len(targets) == 0 {
+				blockers = append(blockers, fmt.Sprintf("%s 没有可用于 %s 记录的边缘 IP", source.label, recordType))
+				continue
+			}
+			if view.targetCount > len(targets) {
+				view.warnings = append(view.warnings, fmt.Sprintf("%s 当前只能返回 %d / %d 个 %s 边缘 IP，请检查匹配节点池容量", source.label, len(targets), view.targetCount, recordType))
+			}
+		}
+		if len(blockers) > 0 {
+			return view, errors.New(strings.Join(blockers, "；"))
+		}
+	}
 	return view, nil
+}
+
+func authoritativeDNSTargetPrecheckSources(policy ProxyRouteGSLBPolicy) []authoritativeDNSTargetPrecheckSource {
+	sources := make([]authoritativeDNSTargetPrecheckSource, 0)
+	seen := map[string]struct{}{}
+	appendSource := func(source authoritativeDNSTargetPrecheckSource) {
+		if strings.TrimSpace(source.key) == "" {
+			return
+		}
+		if _, ok := seen[source.key]; ok {
+			return
+		}
+		seen[source.key] = struct{}{}
+		sources = append(sources, source)
+	}
+	for _, pool := range policy.Pools {
+		if !pool.Enabled {
+			continue
+		}
+		for _, value := range pool.SourceCIDRs {
+			cidr, ok := normalizeGSLBCIDR(value)
+			if !ok {
+				continue
+			}
+			sourceIP := sampleIPForGSLBCIDR(cidr)
+			if sourceIP == "" {
+				continue
+			}
+			appendSource(authoritativeDNSTargetPrecheckSource{
+				label:  "来源网段 " + cidr,
+				key:    "cidr:" + cidr,
+				source: GSLBSourceContext{IP: sourceIP},
+			})
+		}
+		for _, value := range pool.Countries {
+			country := strings.ToUpper(strings.TrimSpace(value))
+			if country == "" || !proxyRouteRegionCountryPattern.MatchString(country) {
+				continue
+			}
+			appendSource(authoritativeDNSTargetPrecheckSource{
+				label:  "来源国家 " + country,
+				key:    "country:" + country,
+				source: GSLBSourceContext{Country: country},
+			})
+		}
+	}
+	sort.SliceStable(sources, func(i, j int) bool {
+		return sources[i].key < sources[j].key
+	})
+	return sources
+}
+
+func sampleIPForGSLBCIDR(raw string) string {
+	cidr, ok := normalizeGSLBCIDR(raw)
+	if !ok {
+		return ""
+	}
+	ip, network, err := net.ParseCIDR(cidr)
+	if err != nil || network == nil {
+		return ""
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+	}
+	network.IP = ip.Mask(network.Mask)
+	if ipv4 := network.IP.To4(); ipv4 != nil {
+		return ipv4.String()
+	}
+	return network.IP.String()
 }
 
 func buildDNSZoneView(zone *model.DNSZone, includeRecords bool) (*DNSZoneView, error) {

@@ -4,7 +4,7 @@
 
 本文是自建权威 DNS 与实时 GSLB 的设计基线。它把“后台同步 DNS 记录”升级为“逐次 DNS 查询实时调度”的目标纳入产品边界，但不改变现有 OpenResty 配置发布、Agent 同步和回滚模型。
 
-当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。DNS Worker 查询面已经提供按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，超限查询返回 `REFUSED`，超大 UDP 响应设置 TC 位让递归解析器回退 TCP。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、复用在线 Agent 节点的 Worker 多点 UDP/TCP 53 可达性与 RTT 探测、Worker GeoIP 国家库加载状态、来源作用域分布、GSLB 调度状态、GSLB 调度模拟、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、`cidr:203.0.113.0/24` / `country:HK` / `country:DE` / `global|bucket:42` 等来源作用域、当前实际目标、期望目标、防抖冷却状态、注册商 NS 匹配状态、Glue 提示、当前快照按来源模拟返回目标以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态；迁移候选和一键切换会复用服务端选点逻辑预检当前节点池或 GSLB 策略是否能返回至少一个 A/AAAA 边缘 IP，避免切换后动态记录只能返回 `SERVFAIL`。
+当前实现状态：Server 控制面已经具备 Zone、静态记录、DNS Worker Token、Worker 心跳/聚合上报、只读调度快照 API，以及 `proxy_routes.dns_provider_mode` / `dns_zone_id_ref` 和 `gslb_scheduling_states.scope_key` 数据基础。DNS Worker MVP 已提供独立 `cmd/dns-worker` 运行入口，可监听 UDP/TCP `53`、拉取并缓存只读快照、回答静态 DNS 记录，并对权威模式站点的 `A`/`AAAA` 查询实时执行 GSLB 选点。DNS Worker 查询面已经提供按来源 IP 的基础 QPS 限制和 UDP 响应大小保护，超限查询返回 `REFUSED`，超大 UDP 响应设置 TC 位让递归解析器回退 TCP。管理端已经接入 DNS 查询聚合观测、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性告警、Server 侧 Worker 公网 UDP/TCP 53 探测健康状态、复用在线 Agent 节点的 Worker 多点 UDP/TCP 53 可达性与 RTT 探测、Worker GeoIP 国家库加载状态、来源作用域分布、GSLB 调度状态、GSLB 调度模拟、Zone 委派检查和 Cloudflare 到自建权威 DNS 的迁移向导，可查看查询量、返回码、Worker/Zone/站点维度、返回目标分布、`cidr:203.0.113.0/24` / `country:HK` / `country:DE` / `global|bucket:42` 等来源作用域、当前实际目标、期望目标、防抖冷却状态、注册商 NS 匹配状态、Glue 提示、当前快照按来源模拟返回目标以及待迁移网站的 Zone/Worker/GSLB/公网探测准备状态；迁移候选和一键切换会复用服务端选点逻辑预检当前节点池或 GSLB 策略是否能返回至少一个 A/AAAA 边缘 IP，并对策略中显式配置的来源国家和来源 CIDR 逐项预演，避免某个来源作用域在切换后只能返回 `SERVFAIL`。
 
 ## 目标能力
 
@@ -159,7 +159,7 @@ route_id + record_type + source_scope
 * 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，并展示匹配节点池、候选节点、被跳过节点与原因，不改变真实调度状态。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
-* 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否至少一个在线 Worker 通过公网 UDP/TCP 53 探测、是否存在同名静态 A/AAAA/CNAME 冲突、当前节点池或 GSLB 策略是否能选出可用边缘 IP、是否已启用站点 GSLB，并可对满足条件的站点一键切换到自建权威 DNS；切换成功后会自动刷新网站 DNS 模式、执行 Zone 委派检查、探测在线 Worker 公网 UDP/TCP 53，并按当前快照执行 global 与来源国家 GSLB 模拟，切换后仍需在注册商确认 NS 委派。
+* 「权威 DNS」页面提供迁移向导，可列出 Cloudflare 模式网站候选，检查域名是否完整落在某个已启用 Zone 下、是否存在在线 Worker、是否至少一个在线 Worker 通过公网 UDP/TCP 53 探测、是否存在同名静态 A/AAAA/CNAME 冲突、当前节点池或 GSLB 策略是否能选出可用边缘 IP、策略里声明的来源国家和来源 CIDR 是否都有可用边缘 IP、是否已启用站点 GSLB，并可对满足条件的站点一键切换到自建权威 DNS；切换成功后会自动刷新网站 DNS 模式、执行 Zone 委派检查、探测在线 Worker 公网 UDP/TCP 53，并按当前快照执行 global 与来源国家 GSLB 模拟，切换后仍需在注册商确认 NS 委派。
 * GSLB 节点池策略继续放在网站配置里，权威 DNS 只负责实时执行策略。
 
 迁移体验约束：
@@ -265,6 +265,6 @@ TTL 规则：
 第三阶段完成时：
 
 * 管理端能展示 DNS Worker 在线状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、查询延迟、可用率、错误率、错误码、来源作用域、返回目标、GSLB 模拟诊断、按需 Worker 探测和委派检查。
-* 管理端能在「权威 DNS」迁移向导里列出 Cloudflare 模式站点候选，检查 Zone、在线 Worker、公网 UDP/TCP 53 探测、同名静态记录冲突、可用边缘 IP、GSLB 与回滚提示，并对满足条件的站点执行一键切换。
+* 管理端能在「权威 DNS」迁移向导里列出 Cloudflare 模式站点候选，检查 Zone、在线 Worker、公网 UDP/TCP 53 探测、同名静态记录冲突、global 和显式来源作用域的可用边缘 IP、GSLB 与回滚提示，并对满足条件的站点执行一键切换。
 * 文档能指导用户从 Cloudflare 模式迁移到自建权威 DNS，并说明回滚方式。
 * 生产部署建议明确要求至少两个 DNS Worker 和 UDP/TCP 53 防火墙放行。
