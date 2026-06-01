@@ -1211,6 +1211,74 @@ func TestListAuthoritativeDNSMigrationCandidatesReportsStaticRecordConflict(t *t
 	}
 }
 
+func TestListAuthoritativeDNSMigrationCandidatesReportsWildcardStaticRecordConflict(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "api", Type: "A", Value: "203.0.113.10"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "wildcard-site",
+		Domain:          "*.example.com",
+		Domains:         `["*.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSAutoSync:     true,
+		DNSProviderMode: DNSProviderModeCloudflare,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 60)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1", PublicAddress: "ns1.example.net"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	checkedAt := time.Now().UTC()
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	workerModel.Status = dnsWorkerStatusOnline
+	workerModel.LastSeenAt = &checkedAt
+	workerModel.LastProbeAt = &checkedAt
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &checkedAt
+	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
+	if err := workerModel.Update(); err != nil {
+		t.Fatalf("update worker readiness: %v", err)
+	}
+
+	candidates, err := ListAuthoritativeDNSMigrationCandidates()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSMigrationCandidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected one migration candidate, got %+v", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.Ready {
+		t.Fatalf("expected wildcard candidate to be blocked by static record conflict: %+v", candidate)
+	}
+	if candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID || candidate.PublicReachableWorkerCount != 1 || candidate.ReadyWorkerCount != 1 {
+		t.Fatalf("unexpected candidate metadata: %+v", candidate)
+	}
+	if !containsStringWith(candidate.Blockers, "静态记录") {
+		t.Fatalf("expected wildcard static record blocker, got %+v", candidate.Blockers)
+	}
+}
+
 func TestListAuthoritativeDNSMigrationCandidatesReportsNoAvailableGSLBTargets(t *testing.T) {
 	setupServiceTestDB(t)
 
