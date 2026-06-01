@@ -1923,6 +1923,73 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDNSWorkerHealthIgnoresUnknownWorkerRollups(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	windowStart := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Minute)
+	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status: "online",
+		Rollups: []DNSQueryRollupInput{
+			{
+				WindowStart:     windowStart,
+				WindowMinutes:   1,
+				QName:           "www.example.com",
+				QType:           "A",
+				RCode:           "NOERROR",
+				QueryCount:      10,
+				TotalDurationMs: 100,
+				MaxDurationMs:   20,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if err := (&model.DNSQueryRollup{
+		WindowStart:     windowStart,
+		WindowMinutes:   1,
+		WorkerID:        "stale-worker",
+		QName:           "www.example.com",
+		QType:           "A",
+		RCode:           "SERVFAIL",
+		QueryCount:      90,
+		TotalDurationMs: 9000,
+		MaxDurationMs:   5000,
+		TargetSummary:   `{}`,
+	}).Insert(); err != nil {
+		t.Fatalf("insert stale worker rollup: %v", err)
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.TotalQueries != 100 || summary.ErrorQueries != 90 {
+		t.Fatalf("expected observability totals to retain historical rollups, got %+v", summary)
+	}
+	assertCounter(t, summary.WorkerBreakdown, "stale-worker", "stale-worker", 90)
+	if summary.WorkerHealth.TotalWorkerCount != 1 || len(summary.WorkerHealth.Workers) != 1 {
+		t.Fatalf("unexpected worker health workers: %+v", summary.WorkerHealth)
+	}
+	if summary.WorkerHealth.MaxLatencyMs != 20 || summary.WorkerHealth.AverageLatencyMs != 10 || summary.WorkerHealth.ErrorRatePercent != 0 {
+		t.Fatalf("worker health should ignore unknown worker rollups: %+v", summary.WorkerHealth)
+	}
+	if summary.WorkerHealth.Workers[0].WorkerID != authenticated.WorkerID ||
+		summary.WorkerHealth.Workers[0].QueryCount != 10 ||
+		summary.WorkerHealth.Workers[0].ErrorQueries != 0 ||
+		summary.WorkerHealth.Workers[0].MaxLatencyMs != 20 {
+		t.Fatalf("unexpected current worker health: %+v", summary.WorkerHealth.Workers)
+	}
+}
+
 func TestAuthoritativeDNSZoneDelegationCheckMatchedWithGlueHint(t *testing.T) {
 	setupServiceTestDB(t)
 	restoreDNSLookupNS(t, func(name string) ([]*net.NS, error) {

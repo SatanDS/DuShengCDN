@@ -3454,6 +3454,17 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 	}
 
 	statsByWorker := map[string]*dnsWorkerHealthStats{}
+	currentWorkerIDs := make(map[string]struct{}, len(workers))
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		workerID := strings.TrimSpace(worker.WorkerID)
+		if workerID == "" {
+			continue
+		}
+		currentWorkerIDs[workerID] = struct{}{}
+	}
 	var totalQueries int64
 	var totalErrors int64
 	var totalDurationMs int64
@@ -3461,6 +3472,9 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 	for _, rollup := range rollups {
 		workerID := strings.TrimSpace(rollup.WorkerID)
 		if workerID == "" || rollup.QueryCount <= 0 {
+			continue
+		}
+		if _, ok := currentWorkerIDs[workerID]; !ok {
 			continue
 		}
 		stats := statsByWorker[workerID]
