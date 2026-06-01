@@ -1257,11 +1257,18 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 	targets, ttl, sourceScope, err := scheduler.Select(workerSnapshot, workerRoute, recordType, source, fresh)
 	if err != nil {
 		if errors.Is(err, dnsworker.ErrDNSProbeThresholdNotSatisfied) {
-			return nil, fmt.Errorf("Agent 探测未达到调度门槛，当前来源没有可用于 %s 记录的边缘节点", recordType)
+			return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, nil, ttl, sourceScope, "Agent 探测未达到调度门槛，当前来源没有可用于 "+recordType+" 记录的边缘节点。请查看下方节点原因确认是未探测、探测过期还是 UDP/TCP 53 未同时可达。"), nil
 		}
 		return nil, err
 	}
 
+	return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, targets, ttl, sourceScope, ""), nil
+}
+
+func buildDNSGSLBSimulationView(snapshot *AuthoritativeDNSSnapshot, workerRoute *dnsworker.SnapshotRoute, qname string, recordType string, sourceIP string, country string, targets []string, ttl int, sourceScope string, messagePrefix string) *DNSGSLBSimulationView {
+	if targets == nil {
+		targets = []string{}
+	}
 	policy := workerRoute.GSLBPolicy
 	if !workerRoute.GSLBEnabled {
 		policy.Strategy = workerRoute.ScheduleMode
@@ -1276,6 +1283,9 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 	}
 	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, policy, GSLBSourceContext{IP: sourceIP, Country: country}, targets)
 	message := "模拟结果来自当前 Server 生成的权威 DNS 快照，不会写入真实调度防抖状态。"
+	if strings.TrimSpace(messagePrefix) != "" {
+		message = strings.TrimSpace(messagePrefix) + " " + message
+	}
 	if sourceScope == defaultGSLBScopeKey && country == "" {
 		message += " 未指定国家代码时使用 global 作用域。"
 	}
@@ -1297,7 +1307,7 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 		Message:         message,
 		MatchedPools:    diagnostics.pools,
 		Nodes:           diagnostics.nodes,
-	}, nil
+	}
 }
 
 func authoritativeRouteHasDomain(route *dnsworker.SnapshotRoute, qname string) bool {

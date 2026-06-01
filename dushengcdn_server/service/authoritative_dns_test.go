@@ -2338,11 +2338,18 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 		Country:      "DE",
 	})
 	common.GSLBProbeSchedulingEnabled = oldProbeScheduling
-	if err == nil {
-		t.Fatalf("expected DE simulation to fail without healthy Agent probe when probe scheduling is enabled, got %+v", probeFiltered)
+	if err != nil {
+		t.Fatalf("expected DE simulation to return diagnostics when probe scheduling filters candidates, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "Agent 探测未达到调度门槛") {
-		t.Fatalf("expected no target error when probe scheduling filters DE node, got %v", err)
+	if probeFiltered == nil || len(probeFiltered.Targets) != 0 || !strings.Contains(probeFiltered.Message, "Agent 探测未达到调度门槛") {
+		t.Fatalf("expected no-target diagnostic result when probe scheduling filters DE node, got %+v", probeFiltered)
+	}
+	if probeFiltered.Targets == nil {
+		t.Fatal("expected no-target diagnostic result to expose an empty targets array")
+	}
+	assertSimulationNodeReasonContains(t, probeFiltered.Nodes, "node-eu", "尚未收到新鲜成功探测")
+	if diagnostic := findSimulationNode(probeFiltered.Nodes, "node-eu"); diagnostic == nil || diagnostic.Eligible || diagnostic.Selected {
+		t.Fatalf("expected DE node to be visible but ineligible after probe threshold filtering, got %+v", diagnostic)
 	}
 	if diagnostic := findSimulationNode(hk.Nodes, "node-eu"); diagnostic != nil && containsString(diagnostic.Reasons, "Agent 探测未达到调度门槛") {
 		t.Fatalf("expected probe threshold reason to stay hidden while option is disabled, got %+v", diagnostic.Reasons)
