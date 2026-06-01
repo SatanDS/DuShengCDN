@@ -204,6 +204,8 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 
 `scripts/diagnose-server.sh` 用于源码 Compose 面板访问排障。它同样读取 `SERVER_DIR/.env`，按 `DUSHENGCDN_HTTP_PORT` 推导默认 `SERVER_URL`，并只读输出 Compose 状态、`/api/status` 检查、端口监听和最近日志，不会修改配置或重启服务。
 
+`scripts/diagnose-dns-worker.sh` 用于 DNS Worker 主机排障。它读取 `INSTALL_DIR/dns-worker.env`，只读检查 systemd 服务、安装目录、监听端口、快照、GeoIP、最近日志，并可通过 `--public-ip` 和 `--zone` 执行 UDP/TCP SOA/NS 查询，不会修改配置或重启服务。
+
 | 参数 | 作用 | 默认值 |
 | --- | --- | --- |
 | `--server-dir` | Server compose/source 目录 | 仓库内 `dushengcdn_server` |

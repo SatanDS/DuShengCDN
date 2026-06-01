@@ -250,6 +250,15 @@ Open **Authoritative DNS** -> migration wizard and check the post-switch retest:
 
 If `dig @PUBLIC_IP example.com SOA` or `dig @PUBLIC_IP example.com NS` says `connection refused` or `no servers could be reached`:
 
+First run the read-only diagnostic helper on the DNS Worker host:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com
+```
+
+The helper checks `dushengcdn-dns-worker.service`, the install directory, `dns-worker.env`, listeners, snapshot file, GeoIP file, and recent logs. When `--public-ip` and `--zone` are provided, it also runs UDP/TCP SOA/NS queries. It does not restart services or edit configuration.
+
 1. Run `systemctl status dushengcdn-dns-worker`. `Unit dushengcdn-dns-worker.service could not be found` means the panel Zone/registrar NS may exist, but no DNS Worker is deployed on that host.
 2. Run `ss -lntup | grep ':53'` and `ss -lnuap | grep ':53'`. Seeing only `systemd-resolved` on `127.0.0.53` or `127.0.0.54` does not mean public port `53` has an authoritative service.
 3. Create a DNS Worker Token under **Authoritative DNS**, then install the Worker. If Worker and Server run on the same host, use a Server URL reachable from that host and bind the public address with `--listen PUBLIC_IP:53`.

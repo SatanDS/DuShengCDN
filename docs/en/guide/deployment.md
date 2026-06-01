@@ -318,6 +318,15 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --listen 203.0.113.10:53
 ```
 
+After installation, run a read-only diagnosis on the Worker host:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com
+```
+
+The script checks the systemd service, install directory, env file, listeners, snapshot, GeoIP file, logs, and UDP/TCP SOA/NS query results.
+
 Docker example:
 
 ```bash

@@ -135,6 +135,28 @@ docker compose up -d
 
 恢复脚本会优先校验 `manifest.txt` 中的 SHA-256 信息，默认拒绝在 Compose `dushengcdn` 服务仍运行时恢复，并在覆盖前备份当前数据库和数据目录。
 
+诊断 DNS Worker：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-dns-worker.sh --public-ip 203.0.113.10 --zone example.com
+```
+
+常用可选参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--install-dir` | DNS Worker 安装目录，默认 `/opt/dushengcdn-dns-worker` |
+| `--service-name` | systemd 服务名，默认 `dushengcdn-dns-worker` |
+| `--env-file` | DNS Worker 环境文件，默认 `INSTALL_DIR/dns-worker.env` |
+| `--public-ip` | 用于 `dig` 查询的 Worker 公网 IP |
+| `--zone` | 配合 `--public-ip` 查询 SOA/NS 的 Zone |
+| `--dns-port` | DNS 查询和监听端口，默认从监听地址解析或使用 `53` |
+| `--log-tail` | 打印的 journal 日志行数，默认 `120` |
+| `--skip-logs` | 不打印 journal 日志 |
+
+该脚本只读检查 systemd 服务、安装目录、环境文件、监听端口、快照、GeoIP、日志和 UDP/TCP SOA/NS 查询结果，不会重启服务或修改配置。
+
 测试：
 
 ```bash

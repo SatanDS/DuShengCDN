@@ -58,6 +58,8 @@ The repository also provides `examples/compose/` templates for image-based Serve
 
 `scripts/diagnose-server.sh` diagnoses source Compose panel access issues. It also reads `SERVER_DIR/.env`, derives the default `SERVER_URL` from `DUSHENGCDN_HTTP_PORT`, and prints Compose state, `/api/status` checks, port listeners, and recent logs without editing configuration or restarting services.
 
+`scripts/diagnose-dns-worker.sh` diagnoses DNS Worker hosts. It reads `INSTALL_DIR/dns-worker.env`, checks the systemd service, install directory, listeners, snapshot, GeoIP file, and recent logs, and can run UDP/TCP SOA/NS queries when `--public-ip` and `--zone` are provided. It does not edit configuration or restart services.
+
 Before automatic Worker creation, the script checks for an existing `dushengcdn-dns-worker.service`, systemd unit file, install directory, env file, same-name Docker container, Worker process, or DuShengCDN process listening on port `53`. If one is found, Worker creation and installation are skipped unless forced.
 
 | Option | Purpose | Default |

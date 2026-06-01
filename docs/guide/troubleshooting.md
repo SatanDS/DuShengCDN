@@ -290,6 +290,15 @@ curl -Iv https://your-domain
 
 如果注册商已经配置 NS/Glue，但 `dig @PUBLIC_IP example.com SOA` 提示 `connection refused`、`no servers could be reached`，或面板委派检查仍提示上游无法访问权威服务器：
 
+先在 DNS Worker 主机运行只读诊断脚本：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com
+```
+
+脚本会检查 `dushengcdn-dns-worker.service`、安装目录、`dns-worker.env`、监听端口、快照文件、GeoIP 文件和最近日志，并在提供 `--public-ip` / `--zone` 后执行 UDP/TCP SOA/NS 查询。脚本不会重启服务或修改配置。
+
 1. 在 DNS Worker 主机执行 `systemctl status dushengcdn-dns-worker`。如果提示 `Unit dushengcdn-dns-worker.service could not be found`，说明只配置了面板 Zone/注册商 NS，还没有部署 DNS Worker。
 2. 查看 `ss -lntup | grep ':53'` 和 `ss -lnuap | grep ':53'`。只看到 `systemd-resolved` 监听 `127.0.0.53` 或 `127.0.0.54` 不代表公网 `53` 已经有权威 DNS 服务；公网地址仍可能没有任何进程监听。
 3. 在左侧「权威 DNS」创建 DNS Worker Token 后，在 Worker 主机运行安装脚本；如果 Worker 和面板在同一台机器，可使用面板本机可访问地址作为 `--server-url`，并用 `--listen PUBLIC_IP:53` 绑定公网地址。

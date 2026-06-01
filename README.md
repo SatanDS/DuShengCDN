@@ -287,6 +287,13 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 如果 Worker 和面板在同一台机器，`--server-url` 可以使用面板本机可访问地址，`--listen` 建议显式绑定公网地址，例如 `--listen 203.0.113.10:53`。安装后用 `systemctl status dushengcdn-dns-worker`、`ss -lntup | grep ':53'`、`ss -lnuap | grep ':53'` 和 `dig @PUBLIC_IP example.com SOA` 验证。
 
+也可以在 Worker 主机运行只读诊断脚本，一次性检查服务、监听、快照、日志和 SOA/NS 查询：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com
+```
+
 Docker 运行示例也可继续使用：
 
 ```bash

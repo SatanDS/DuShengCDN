@@ -127,6 +127,28 @@ Common restore options:
 | `--force` | Continue when Server running-state protection is not applicable |
 | `--yes` | Confirm overwrite, required |
 
+Diagnose DNS Worker:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/diagnose-dns-worker.sh --public-ip 203.0.113.10 --zone example.com
+```
+
+Common options:
+
+| Option | Description |
+| --- | --- |
+| `--install-dir` | DNS Worker install directory, default `/opt/dushengcdn-dns-worker` |
+| `--service-name` | systemd service name, default `dushengcdn-dns-worker` |
+| `--env-file` | DNS Worker env file, default `INSTALL_DIR/dns-worker.env` |
+| `--public-ip` | Worker public IP used by `dig` checks |
+| `--zone` | Zone used for SOA/NS checks with `--public-ip` |
+| `--dns-port` | DNS query/listener port, default parsed listen port or `53` |
+| `--log-tail` | Number of journal lines to print, default `120` |
+| `--skip-logs` | Do not print journal logs |
+
+The script is read-only. It checks the systemd service, install directory, env file, listeners, snapshot, GeoIP file, logs, and UDP/TCP SOA/NS query results without restarting services or editing configuration.
+
 Test:
 
 ```bash
