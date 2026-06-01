@@ -2298,7 +2298,11 @@ func hasFreshAuthoritativeDNSWorkerSnapshot(now time.Time, snapshotMaxAge time.D
 	if snapshotMaxAge <= 0 {
 		snapshotMaxAge = defaultDNSSnapshotMaxAge
 	}
-	return now.Sub(worker.LastSnapshotAt.UTC()) <= snapshotMaxAge
+	snapshotAt := normalizeDNSWorkerSnapshotAt(worker.LastSnapshotAt, now, worker.UpdatedAt, worker.CreatedAt)
+	if snapshotAt == nil {
+		return false
+	}
+	return now.Sub(snapshotAt.UTC()) <= snapshotMaxAge
 }
 
 func buildDNSGSLBSchedulingStateView(state *model.GSLBSchedulingState, route *model.ProxyRoute) DNSGSLBSchedulingStateView {
@@ -4259,14 +4263,25 @@ func normalizeDNSWorkerStatus(raw string) string {
 	}
 }
 
-func normalizeDNSWorkerSnapshotAt(snapshotAt *time.Time, now time.Time) *time.Time {
+func normalizeDNSWorkerSnapshotAt(snapshotAt *time.Time, now time.Time, fallbacks ...time.Time) *time.Time {
 	if snapshotAt == nil {
 		return nil
 	}
+	normalizedNow := now.UTC()
 	normalized := snapshotAt.UTC()
-	if normalized.After(now.UTC()) {
-		normalized = now.UTC()
+	if !normalized.After(normalizedNow) {
+		return &normalized
 	}
+	for _, fallback := range fallbacks {
+		if fallback.IsZero() {
+			continue
+		}
+		normalized = fallback.UTC()
+		if !normalized.After(normalizedNow) {
+			return &normalized
+		}
+	}
+	normalized = normalizedNow
 	return &normalized
 }
 
