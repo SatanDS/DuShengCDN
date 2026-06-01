@@ -169,6 +169,10 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 		workerSnapshot.SchedulingStates[0].SelectedTargets[0] != "8.8.4.4" {
 		t.Fatalf("unexpected worker scheduling states: %+v", workerSnapshot.SchedulingStates)
 	}
+	if workerSnapshot.SchedulingStates[0].LastChangedAt == nil ||
+		!workerSnapshot.SchedulingStates[0].LastChangedAt.Equal(lastChangedAt) {
+		t.Fatalf("unexpected worker scheduling state time: %+v", workerSnapshot.SchedulingStates[0])
+	}
 
 	var reloadedWorker model.DNSWorker
 	if err := model.DB.First(&reloadedWorker, authenticated.ID).Error; err != nil {
@@ -176,6 +180,102 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	}
 	if reloadedWorker.LastSnapshotVersion != snapshot.SnapshotVersion || reloadedWorker.LastSnapshotAt == nil {
 		t.Fatalf("expected worker snapshot metadata to be updated, got %+v", reloadedWorker)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotClampsFutureSchedulingStateTime(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = false
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	futureChangedAt := now.Add(time.Hour)
+	evaluatedAt := now.Add(-30 * time.Second)
+	if err := model.DB.Create(&model.GSLBSchedulingState{
+		ProxyRouteID:    route.ID,
+		DNSRecordType:   "A",
+		ScopeKey:        "global",
+		SelectedTargets: `["8.8.4.4"]`,
+		DesiredTargets:  `["8.8.4.4"]`,
+		LastChangedAt:   &futureChangedAt,
+		LastEvaluatedAt: &evaluatedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert future gslb state: %v", err)
+	}
+
+	snapshot, err := GetAuthoritativeDNSSnapshot(authenticated)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+	if len(snapshot.SchedulingStates) != 1 {
+		t.Fatalf("expected one scheduling state in snapshot, got %+v", snapshot.SchedulingStates)
+	}
+	state := snapshot.SchedulingStates[0]
+	if state.LastChangedAt == nil || !state.LastChangedAt.Equal(evaluatedAt) {
+		t.Fatalf("expected snapshot scheduling time to use non-future fallback, got %+v", state)
+	}
+	workerSnapshot := convertAuthoritativeSnapshotToWorker(snapshot)
+	if len(workerSnapshot.SchedulingStates) != 1 ||
+		workerSnapshot.SchedulingStates[0].LastChangedAt == nil ||
+		!workerSnapshot.SchedulingStates[0].LastChangedAt.Equal(evaluatedAt) {
+		t.Fatalf("expected worker snapshot scheduling time to be clamped, got %+v", workerSnapshot.SchedulingStates)
 	}
 }
 

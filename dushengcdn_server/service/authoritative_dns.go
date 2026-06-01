@@ -2528,6 +2528,7 @@ func snapshotGSLBSchedulingStates(routes []AuthoritativeDNSSnapshotRoute) ([]Aut
 		Find(&states).Error; err != nil {
 		return nil, err
 	}
+	now := time.Now().UTC()
 	result := make([]AuthoritativeDNSSnapshotSchedulingState, 0, len(states))
 	for _, state := range states {
 		if state == nil || state.ProxyRouteID == 0 {
@@ -2558,7 +2559,7 @@ func snapshotGSLBSchedulingStates(routes []AuthoritativeDNSSnapshotRoute) ([]Aut
 			ScopeKey:        normalizeDNSSourceScope(state.ScopeKey),
 			SelectedTargets: selectedTargets,
 			DesiredTargets:  desiredTargets,
-			LastChangedAt:   state.LastChangedAt,
+			LastChangedAt:   normalizeGSLBSchedulingStateChangedAt(state.LastChangedAt, now, state.LastEvaluatedAt, &state.UpdatedAt, &state.CreatedAt),
 		})
 	}
 	return result, nil
@@ -2852,7 +2853,7 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 		}
 		routeRecordTypes[route.ID] = recordType
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	for _, input := range inputs {
 		expectedType, ok := routeRecordTypes[input.RouteID]
 		if !ok {
@@ -2874,11 +2875,8 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 				desiredTargets = []string{}
 			}
 		}
-		lastChangedAt := input.LastChangedAt
+		lastChangedAt := normalizeGSLBSchedulingStateChangedAt(input.LastChangedAt, now)
 		if lastChangedAt == nil || lastChangedAt.IsZero() {
-			lastChangedAt = &now
-		}
-		if lastChangedAt.After(now) {
 			lastChangedAt = &now
 		}
 		if err := upsertDNSWorkerSchedulingState(input.RouteID, recordType, scopeKey, selectedTargets, desiredTargets, *lastChangedAt, now); err != nil {
@@ -2901,11 +2899,14 @@ func upsertDNSWorkerSchedulingState(routeID uint, recordType string, scopeKey st
 	} else if err != nil {
 		return err
 	}
-	if state.LastChangedAt != nil && state.LastChangedAt.After(lastChangedAt) {
-		return nil
-	}
 	changedAt := lastChangedAt.UTC()
 	evaluated := evaluatedAt.UTC()
+	if state.LastChangedAt != nil {
+		existingChangedAt := state.LastChangedAt.UTC()
+		if !existingChangedAt.After(evaluated) && existingChangedAt.After(changedAt) {
+			return nil
+		}
+	}
 	state.DNSRecordType = recordType
 	state.ScopeKey = scopeKey
 	state.SelectedTargets = encodeGSLBTargetList(selectedTargets)
@@ -2914,6 +2915,28 @@ func upsertDNSWorkerSchedulingState(routeID uint, recordType string, scopeKey st
 	state.LastChangedAt = &changedAt
 	state.LastEvaluatedAt = &evaluated
 	return model.DB.Save(&state).Error
+}
+
+func normalizeGSLBSchedulingStateChangedAt(changedAt *time.Time, now time.Time, fallbacks ...*time.Time) *time.Time {
+	if changedAt == nil {
+		return nil
+	}
+	normalizedNow := now.UTC()
+	normalized := changedAt.UTC()
+	if !normalized.After(normalizedNow) {
+		return &normalized
+	}
+	for _, fallback := range fallbacks {
+		if fallback == nil || fallback.IsZero() {
+			continue
+		}
+		normalized = fallback.UTC()
+		if !normalized.After(normalizedNow) {
+			return &normalized
+		}
+	}
+	normalized = normalizedNow
+	return &normalized
 }
 
 func normalizeDNSSourceScope(raw string) string {
