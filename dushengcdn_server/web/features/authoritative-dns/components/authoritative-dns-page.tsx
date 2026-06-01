@@ -613,6 +613,37 @@ function getSnapshotConsistencyMessage(
   return '';
 }
 
+function shouldShowNoAuthoritativeRoutesNotice({
+  zones,
+  workers,
+  routes,
+  routesLoading,
+  routesError,
+}: {
+  zones: DNSZoneItem[];
+  workers: DNSWorkerItem[];
+  routes: ProxyRouteItem[];
+  routesLoading: boolean;
+  routesError: boolean;
+}) {
+  if (routesLoading || routesError) {
+    return false;
+  }
+  const hasEnabledZone = zones.some((zone) => zone.enabled);
+  const hasReadyWorker = workers.some(
+    (worker) =>
+      worker.status === 'online' &&
+      Boolean(worker.last_snapshot_version || worker.last_snapshot_at),
+  );
+  const hasAuthoritativeRoute = routes.some(
+    (route) =>
+      route.enabled &&
+      route.dns_provider_mode === 'authoritative' &&
+      route.dns_zone_id_ref != null,
+  );
+  return hasEnabledZone && hasReadyWorker && !hasAuthoritativeRoute;
+}
+
 function getSchedulingStateStatusLabel(status: DNSGSLBSchedulingStateStatus) {
   switch (status) {
     case 'active':
@@ -751,6 +782,13 @@ export function AuthoritativeDNSPage() {
         .filter((route) => route.enabled || route.gslb_enabled),
     [proxyRoutes],
   );
+  const showNoAuthoritativeRoutesNotice = shouldShowNoAuthoritativeRoutesNotice({
+    zones,
+    workers,
+    routes: proxyRoutes,
+    routesLoading: proxyRoutesQuery.isLoading,
+    routesError: proxyRoutesQuery.isError,
+  });
   const selectedZone = useMemo(
     () => zones.find((zone) => zone.id === selectedZoneId) ?? zones[0] ?? null,
     [selectedZoneId, zones],
@@ -1283,6 +1321,13 @@ export function AuthoritativeDNSPage() {
             </div>
           </AppCard>
         </div>
+
+        {showNoAuthoritativeRoutesNotice ? (
+          <InlineMessage
+            tone="warning"
+            message="DNS Worker 已能拉取快照，但当前没有启用的网站绑定到自建权威 DNS Zone。此时 Worker 只能回答 Zone 的 SOA/NS 和静态记录；业务域名的 A/AAAA 动态调度需要到网站详情「自动 DNS」切换为自建权威 DNS 并选择对应 Zone，或使用迁移向导一键切换。"
+          />
+        ) : null}
 
         <DNSObservabilityPanel
           summary={observability}

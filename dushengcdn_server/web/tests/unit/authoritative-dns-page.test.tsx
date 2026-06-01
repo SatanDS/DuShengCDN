@@ -1474,4 +1474,151 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('Worker 可用性')).toBeInTheDocument();
     expect(screen.getByText('暂无 DNS Worker。')).toBeInTheDocument();
   });
+
+  it('warns when workers are ready but no site is bound to authoritative DNS', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes('/dns-zones/1/records')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/observability')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: null,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/scheduling-states')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  checked_at: '2026-06-01T12:00:00Z',
+                  total: 0,
+                  states: [],
+                },
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/migration-candidates')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    id: 1,
+                    name: 'satandu.com',
+                    soa_email: 'hostmaster@satandu.com',
+                    primary_ns: 'ns1.satandu.com',
+                    name_servers: ['ns1.satandu.com', 'ns2.satandu.com'],
+                    default_ttl: 30,
+                    serial: 1780323564,
+                    enabled: true,
+                    record_count: 0,
+                    created_at: '2026-06-01T12:00:00Z',
+                    updated_at: '2026-06-01T12:00:00Z',
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    id: 1,
+                    worker_id: 'dns-worker-main',
+                    name: 'panel-worker',
+                    public_address: '145.239.140.145',
+                    version: 'afb0ace',
+                    status: 'online',
+                    last_snapshot_version: 'snapshot-zone-only',
+                    last_snapshot_at: '2026-06-01T12:00:00Z',
+                    last_seen_at: '2026-06-01T12:00:10Z',
+                    last_error: '',
+                    geoip_enabled: false,
+                    geoip_database_path: '',
+                    geoip_last_error: '',
+                    last_probe_at: '2026-06-01T12:00:20Z',
+                    last_probe_query: 'satandu.com. SOA',
+                    last_probe_results: [],
+                    probe_status: 'healthy',
+                    probe_healthy: true,
+                    probe_age_seconds: 10,
+                    probe_message: 'UDP/TCP 53 均可达',
+                    created_at: '2026-06-01T12:00:00Z',
+                    updated_at: '2026-06-01T12:00:00Z',
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(<AuthoritativeDNSPage />);
+
+    expect(
+      await screen.findByText(/DNS Worker 已能拉取快照/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/只能回答 Zone 的 SOA\/NS 和静态记录/)).toBeInTheDocument();
+    expect(screen.getByText(/业务域名的 A\/AAAA 动态调度需要/)).toBeInTheDocument();
+    expect(screen.getByText('暂无权威 DNS 站点')).toBeInTheDocument();
+  });
 });
