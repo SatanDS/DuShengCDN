@@ -6,7 +6,10 @@ import next from 'next';
 const port = Number.parseInt(process.env.PORT ?? '3001', 10);
 const hostname = process.env.HOSTNAME || '127.0.0.1';
 const backendBaseUrl = new URL(
-  (process.env.NEXT_DEV_BACKEND_URL || 'http://127.0.0.1:3000').replace(/\/+$/, ''),
+  (process.env.NEXT_DEV_BACKEND_URL || 'http://127.0.0.1:3000').replace(
+    /\/+$/,
+    '',
+  ),
 );
 
 const app = next({
@@ -55,11 +58,19 @@ function writeProxyError(res, error) {
 
 function proxyHttpRequest(req, res) {
   const targetUrl = new URL(req.url || '/', backendBaseUrl);
-  const requestImpl = targetUrl.protocol === 'https:' ? https.request : http.request;
-  const proxyReq = requestImpl(createProxyRequestOptions(req, targetUrl), (proxyRes) => {
-    res.writeHead(proxyRes.statusCode || 502, proxyRes.statusMessage, proxyRes.headers);
-    proxyRes.pipe(res);
-  });
+  const requestImpl =
+    targetUrl.protocol === 'https:' ? https.request : http.request;
+  const proxyReq = requestImpl(
+    createProxyRequestOptions(req, targetUrl),
+    (proxyRes) => {
+      res.writeHead(
+        proxyRes.statusCode || 502,
+        proxyRes.statusMessage,
+        proxyRes.headers,
+      );
+      proxyRes.pipe(res);
+    },
+  );
 
   proxyReq.on('error', (error) => {
     if (!res.headersSent) {
@@ -92,7 +103,8 @@ function formatUpgradeResponseHeaders(statusCode, statusMessage, headers) {
 
 function proxyWebSocketUpgrade(req, socket, head) {
   const targetUrl = new URL(req.url || '/', backendBaseUrl);
-  const requestImpl = targetUrl.protocol === 'https:' ? https.request : http.request;
+  const requestImpl =
+    targetUrl.protocol === 'https:' ? https.request : http.request;
   const proxyReq = requestImpl(createProxyRequestOptions(req, targetUrl));
 
   proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
@@ -147,6 +159,53 @@ const server = http.createServer((req, res) => {
   handle(req, res);
 });
 
+const sockets = new Set();
+
+function closeOpenSockets() {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+}
+
+let shuttingDown = false;
+
+function shutdown(signal) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+
+  console.log(`Received ${signal}, shutting down DuShengCDN web dev server`);
+
+  server.close(async (error) => {
+    if (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
+
+    if (typeof app.close === 'function') {
+      try {
+        await app.close();
+      } catch (closeError) {
+        console.error(closeError);
+        process.exitCode = 1;
+      }
+    }
+
+    process.exit(process.exitCode || 0);
+  });
+
+  setTimeout(closeOpenSockets, 1_000).unref();
+  setTimeout(() => process.exit(process.exitCode || 0), 5_000).unref();
+}
+
+server.on('connection', (socket) => {
+  sockets.add(socket);
+  socket.on('close', () => {
+    sockets.delete(socket);
+  });
+});
+
 server.on('upgrade', (req, socket, head) => {
   if (isApiRequest(req.url)) {
     proxyWebSocketUpgrade(req, socket, head);
@@ -155,7 +214,15 @@ server.on('upgrade', (req, socket, head) => {
   handleUpgrade(req, socket, head);
 });
 
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGHUP', () => shutdown('SIGHUP'));
+
 server.listen(port, hostname, () => {
-  console.log(`DuShengCDN web dev server listening on http://${hostname}:${port}`);
-  console.log(`Proxying /api/* and websocket upgrades to ${backendBaseUrl.href}`);
+  console.log(
+    `DuShengCDN web dev server listening on http://${hostname}:${port}`,
+  );
+  console.log(
+    `Proxying /api/* and websocket upgrades to ${backendBaseUrl.href}`,
+  );
 });

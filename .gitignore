@@ -48,6 +48,7 @@ go.work.sum
 .DS_Store
 .codex-cache
 /.gomodcache/
+/dushengcdn_server/web/ms-playwright/
 *.mmdb
 
 *-source
