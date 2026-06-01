@@ -3303,6 +3303,18 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 		t.Fatalf("expected hot node simulation to include metric captured time, got %+v", hot)
 	}
 
+	global, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB global: %v", err)
+	}
+	if global.SourceScope != defaultGSLBScopeKey || !strings.Contains(global.Message, "未指定国家代码时使用全局作用域") {
+		t.Fatalf("expected global simulation message to explain fallback scope, got %+v", global)
+	}
+
 	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
 	common.GSLBProbeSchedulingEnabled = true
 	probeFiltered, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{

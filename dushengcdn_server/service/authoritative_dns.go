@@ -1299,7 +1299,7 @@ func buildDNSGSLBSimulationView(snapshot *AuthoritativeDNSSnapshot, workerRoute 
 		message = strings.TrimSpace(messagePrefix) + " " + message
 	}
 	if sourceScope == defaultGSLBScopeKey && country == "" {
-		message += " 未指定国家代码时使用 global 作用域。"
+		message += " 未指定国家代码时使用全局作用域。"
 	}
 	return &DNSGSLBSimulationView{
 		ProxyRouteID:    workerRoute.ID,
@@ -2016,7 +2016,7 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 	}
 	view.targets = targets
 	if view.targetCount > len(targets) {
-		view.warnings = append(view.warnings, fmt.Sprintf("global 当前只能返回 %d / %d 个 %s 边缘 IP，请检查节点池容量", len(targets), view.targetCount, view.recordType))
+		view.warnings = append(view.warnings, fmt.Sprintf("全局当前只能返回 %d / %d 个 %s 边缘 IP，请检查节点池容量", len(targets), view.targetCount, view.recordType))
 	}
 	if route.GSLBEnabled {
 		blockers := []string{}
