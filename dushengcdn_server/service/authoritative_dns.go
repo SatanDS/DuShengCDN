@@ -1449,7 +1449,7 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 	candidateTargets, ipReasons := filterDNSGSLBSimulationTargets(publicIPs, recordType)
 	reasons = append(reasons, ipReasons...)
 	if requireHealthyDNSProbe && !dnsWorkerNodeProbeStatsSchedulable(probeStats) {
-		reasons = append(reasons, "Agent 探测未达到调度门槛")
+		reasons = append(reasons, dnsWorkerNodeProbeThresholdReason(probeStats))
 	}
 	hasMetric := metric != nil
 	openrestyConnections := int64(0)
@@ -3417,6 +3417,9 @@ type dnsWorkerHealthStats struct {
 type dnsWorkerNodeProbeStats struct {
 	totalCount        int
 	healthyCount      int
+	partialCount      int
+	failedCount       int
+	unknownCount      int
 	staleCount        int
 	totalAverageRTTMs float64
 	averageSamples    int
@@ -3624,11 +3627,17 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 		}
 		probeState := evaluateDNSWorkerNodeProbeState(now, probe)
 		stats.totalCount++
-		if probeState.status == dnsWorkerProbeStale {
-			stats.staleCount++
-		}
-		if probeState.healthy {
+		switch probeState.status {
+		case dnsWorkerProbeHealthy:
 			stats.healthyCount++
+		case dnsWorkerProbePartial:
+			stats.partialCount++
+		case dnsWorkerProbeFailed:
+			stats.failedCount++
+		case dnsWorkerProbeStale:
+			stats.staleCount++
+		case dnsWorkerProbeUnknown:
+			stats.unknownCount++
 		}
 		if probeState.status != dnsWorkerProbeStale && probe.AverageRTTMs > 0 {
 			stats.totalAverageRTTMs += probe.AverageRTTMs
@@ -3686,11 +3695,17 @@ func buildDNSWorkerNodeProbeStatsByNode(now time.Time) map[string]*dnsWorkerNode
 		}
 		probeState := evaluateDNSWorkerNodeProbeState(now, probe)
 		stats.totalCount++
-		if probeState.status == dnsWorkerProbeStale {
-			stats.staleCount++
-		}
-		if probeState.healthy {
+		switch probeState.status {
+		case dnsWorkerProbeHealthy:
 			stats.healthyCount++
+		case dnsWorkerProbePartial:
+			stats.partialCount++
+		case dnsWorkerProbeFailed:
+			stats.failedCount++
+		case dnsWorkerProbeStale:
+			stats.staleCount++
+		case dnsWorkerProbeUnknown:
+			stats.unknownCount++
 		}
 		if probeState.status != dnsWorkerProbeStale && probe.AverageRTTMs > 0 {
 			stats.totalAverageRTTMs += probe.AverageRTTMs
@@ -3740,9 +3755,15 @@ func summarizeDNSWorkerNodeProbeStats(stats *dnsWorkerNodeProbeStats) dnsWorkerN
 	case stats.healthyCount > 0:
 		summary.status = dnsWorkerProbePartial
 		summary.message = fmt.Sprintf("该节点到 DNS Worker 多点探测部分可达（%d/%d）", stats.healthyCount, freshCount)
-	default:
+	case stats.partialCount > 0:
+		summary.status = dnsWorkerProbePartial
+		summary.message = fmt.Sprintf("该节点到 DNS Worker 多点探测 UDP/TCP 53 未同时可达（0/%d）", freshCount)
+	case stats.failedCount > 0:
 		summary.status = dnsWorkerProbeFailed
 		summary.message = fmt.Sprintf("该节点到 DNS Worker 多点探测均失败（0/%d）", freshCount)
+	default:
+		summary.status = dnsWorkerProbeUnknown
+		summary.message = "尚未收到该节点的 DNS Worker 多点探测结果"
 	}
 	if stats.staleCount > 0 && freshCount > 0 {
 		summary.message += fmt.Sprintf("，另有 %d 个过期", stats.staleCount)
@@ -3755,6 +3776,20 @@ func dnsWorkerNodeProbeStatsSchedulable(stats *dnsWorkerNodeProbeStats) bool {
 		return false
 	}
 	return stats.healthyCount > 0 && stats.totalCount > stats.staleCount
+}
+
+func dnsWorkerNodeProbeThresholdReason(stats *dnsWorkerNodeProbeStats) string {
+	summary := summarizeDNSWorkerNodeProbeStats(stats)
+	switch summary.status {
+	case dnsWorkerProbeStale:
+		return "Agent 探测未达到调度门槛：探测结果已过期"
+	case dnsWorkerProbePartial:
+		return "Agent 探测未达到调度门槛：UDP/TCP 53 未同时可达"
+	case dnsWorkerProbeFailed:
+		return "Agent 探测未达到调度门槛：UDP/TCP 53 探测均失败"
+	default:
+		return "Agent 探测未达到调度门槛：尚未收到新鲜成功探测"
+	}
 }
 
 func evaluateDNSWorkerNodeProbeState(now time.Time, probe *model.DNSWorkerNodeProbe) dnsWorkerProbeState {

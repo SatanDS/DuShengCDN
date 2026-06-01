@@ -2512,6 +2512,206 @@ func TestSimulateAuthoritativeDNSGSLBProbeSchedulingPrefersLowerRTT(t *testing.T
 	}
 }
 
+func TestSimulateAuthoritativeDNSGSLBProbeSchedulingExplainsThresholdReasons(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = true
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	now := time.Now()
+	for _, node := range []*model.Node{
+		{
+			NodeID:          "node-healthy",
+			Name:            "healthy",
+			IP:              "8.8.4.4",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.4.4"]`,
+			Weight:          100,
+			AgentToken:      "token-healthy",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-unprobed",
+			Name:            "unprobed",
+			IP:              "1.0.0.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.0.0.1"]`,
+			Weight:          100,
+			AgentToken:      "token-unprobed",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-time.Second),
+		},
+		{
+			NodeID:          "node-stale",
+			Name:            "stale",
+			IP:              "9.9.9.9",
+			PoolName:        "hk",
+			PublicIPs:       `["9.9.9.9"]`,
+			Weight:          100,
+			AgentToken:      "token-stale",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-2 * time.Second),
+		},
+		{
+			NodeID:          "node-partial",
+			Name:            "partial",
+			IP:              "1.1.1.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          100,
+			AgentToken:      "token-partial",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-3 * time.Second),
+		},
+		{
+			NodeID:          "node-failed",
+			Name:            "failed",
+			IP:              "8.8.8.8",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.8.8"]`,
+			Weight:          100,
+			AgentToken:      "token-failed",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-4 * time.Second),
+		},
+	} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node %s: %v", node.NodeID, err)
+		}
+	}
+	healthyResults := []AgentDNSProbeResult{
+		{Network: "UDP", Reachable: true, DurationMs: 11, RCode: "NOERROR", AnswerCount: 1},
+		{Network: "TCP", Reachable: true, DurationMs: 13, RCode: "NOERROR", AnswerCount: 1},
+	}
+	persistHeartbeatObservability("node-healthy", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{{
+			WorkerID:      worker.WorkerID,
+			PublicAddress: "ns1.example.net",
+			QueryName:     "example.com.",
+			QueryType:     "SOA",
+			CheckedAtUnix: now.Unix(),
+			Results:       healthyResults,
+		}},
+	}, now)
+	staleCheckedAt := now.Add(-defaultDNSWorkerNodeProbeMaxAge - time.Minute)
+	persistHeartbeatObservability("node-stale", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{{
+			WorkerID:      worker.WorkerID,
+			PublicAddress: "ns1.example.net",
+			QueryName:     "example.com.",
+			QueryType:     "SOA",
+			CheckedAtUnix: staleCheckedAt.Unix(),
+			Results:       healthyResults,
+		}},
+	}, now)
+	persistHeartbeatObservability("node-partial", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{{
+			WorkerID:      worker.WorkerID,
+			PublicAddress: "ns1.example.net",
+			QueryName:     "example.com.",
+			QueryType:     "SOA",
+			CheckedAtUnix: now.Unix(),
+			Results: []AgentDNSProbeResult{
+				{Network: "UDP", Reachable: true, DurationMs: 10, RCode: "NOERROR", AnswerCount: 1},
+				{Network: "TCP", Reachable: false, Error: "tcp timeout"},
+			},
+		}},
+	}, now)
+	persistHeartbeatObservability("node-failed", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{{
+			WorkerID:      worker.WorkerID,
+			PublicAddress: "ns1.example.net",
+			QueryName:     "example.com.",
+			QueryType:     "SOA",
+			CheckedAtUnix: now.Unix(),
+			Results: []AgentDNSProbeResult{
+				{Network: "UDP", Reachable: false, Error: "udp timeout"},
+				{Network: "TCP", Reachable: false, Error: "tcp timeout"},
+			},
+		}},
+	}, now)
+
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 30)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 100, Enabled: true},
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	simulation, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB: %v", err)
+	}
+	assertSimulationNode(t, simulation.Nodes, "node-healthy", true, true, "可参与当前调度")
+	assertSimulationNodeReasonContains(t, simulation.Nodes, "node-unprobed", "尚未收到新鲜成功探测")
+	assertSimulationNodeReasonContains(t, simulation.Nodes, "node-stale", "探测结果已过期")
+	assertSimulationNodeReasonContains(t, simulation.Nodes, "node-partial", "UDP/TCP 53 未同时可达")
+	assertSimulationNodeReasonContains(t, simulation.Nodes, "node-failed", "UDP/TCP 53 探测均失败")
+	if unprobed := findSimulationNode(simulation.Nodes, "node-unprobed"); unprobed == nil || unprobed.NodeProbeStatus != dnsWorkerProbeUnknown {
+		t.Fatalf("expected unprobed node to expose unknown probe status, got %+v", unprobed)
+	}
+	if stale := findSimulationNode(simulation.Nodes, "node-stale"); stale == nil || stale.NodeProbeStatus != dnsWorkerProbeStale || stale.NodeProbeStaleCount != 1 {
+		t.Fatalf("expected stale node to expose stale probe status, got %+v", stale)
+	}
+	if partial := findSimulationNode(simulation.Nodes, "node-partial"); partial == nil || partial.NodeProbeStatus != dnsWorkerProbePartial || partial.NodeProbeHealthyCount != 0 {
+		t.Fatalf("expected partial node to expose partial probe status, got %+v", partial)
+	}
+	if failed := findSimulationNode(simulation.Nodes, "node-failed"); failed == nil || failed.NodeProbeStatus != dnsWorkerProbeFailed || failed.NodeProbeHealthyCount != 0 {
+		t.Fatalf("expected failed node to expose failed probe status, got %+v", failed)
+	}
+}
+
 func TestDNSWorkerProbeStateClassifiesFailedPartialAndStale(t *testing.T) {
 	now := time.Date(2026, 5, 31, 8, 0, 0, 0, time.UTC)
 
@@ -2694,6 +2894,17 @@ func assertSimulationNode(t *testing.T, nodes []DNSGSLBSimulationNodeView, nodeI
 		}
 	}
 	t.Fatalf("missing reason %q for node %s: %+v", reason, nodeID, node.Reasons)
+}
+
+func assertSimulationNodeReasonContains(t *testing.T, nodes []DNSGSLBSimulationNodeView, nodeID string, reasonFragment string) {
+	t.Helper()
+	node := findSimulationNode(nodes, nodeID)
+	if node == nil {
+		t.Fatalf("missing simulation node %s in %+v", nodeID, nodes)
+	}
+	if !containsStringWith(node.Reasons, reasonFragment) {
+		t.Fatalf("missing reason containing %q for node %s: %+v", reasonFragment, nodeID, node.Reasons)
+	}
 }
 
 func findSimulationNode(nodes []DNSGSLBSimulationNodeView, nodeID string) *DNSGSLBSimulationNodeView {
