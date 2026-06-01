@@ -149,6 +149,30 @@ Common options:
 
 The script is read-only. It checks the systemd service, install directory, env file, listeners, snapshot, GeoIP file, logs, and UDP/TCP SOA/NS query results without restarting services or editing configuration.
 
+Verify same-host authoritative DNS deployment end to end:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/verify-authoritative-dns.sh --public-ip 203.0.113.10 --zone example.com
+```
+
+Common options:
+
+| Option | Description |
+| --- | --- |
+| `--public-ip` | DNS Worker public IP, required |
+| `--zone` | Zone queried for SOA/NS, required |
+| `--server-dir` | Server compose/source directory, default repository `dushengcdn_server` |
+| `--compose-file` | Docker Compose file, default `SERVER_DIR/docker-compose.yaml` |
+| `--env-file` | Compose env file, default `SERVER_DIR/.env` |
+| `--server-url` | Server URL to check, default `http://127.0.0.1:DUSHENGCDN_HTTP_PORT` |
+| `--dns-worker-install-dir` | DNS Worker install directory, default `/opt/dushengcdn-dns-worker` |
+| `--dns-worker-service` | DNS Worker systemd service name, default `dushengcdn-dns-worker` |
+| `--dns-port` | DNS query/listener port, default parsed Worker listen port or `53` |
+| `--skip-logs` | Do not print service logs |
+
+The script is read-only and follows the production checklist: Server Compose, `/api/status`, DNS Worker systemd state, install files, DNS listener, snapshot file, and UDP/TCP SOA/NS queries.
+
 Test:
 
 ```bash

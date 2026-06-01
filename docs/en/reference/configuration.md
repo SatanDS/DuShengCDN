@@ -60,6 +60,8 @@ The repository also provides `examples/compose/` templates for image-based Serve
 
 `scripts/diagnose-dns-worker.sh` diagnoses DNS Worker hosts. It reads `INSTALL_DIR/dns-worker.env`, checks the systemd service, install directory, listeners, snapshot, GeoIP file, and recent logs, and can run UDP/TCP SOA/NS queries when `--public-ip` and `--zone` are provided. It does not edit configuration or restart services.
 
+`scripts/verify-authoritative-dns.sh` verifies same-host panel + DNS Worker deployments before production use. It reads the Server `.env` and Worker `dns-worker.env`, then checks Server Compose, `/api/status`, DNS Worker systemd state, install files, listeners, snapshot file, and UDP/TCP SOA/NS responses from `PUBLIC_IP`.
+
 Before automatic Worker creation, the script checks for an existing `dushengcdn-dns-worker.service`, systemd unit file, install directory, env file, same-name Docker container, Worker process, or DuShengCDN process listening on port `53`. If one is found, Worker creation and installation are skipped unless forced.
 
 | Option | Purpose | Default |

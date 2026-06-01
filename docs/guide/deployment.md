@@ -244,6 +244,14 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 如果 Server 面板和 DNS Worker 部署在同一台机器，`--server-url` 可以使用容器或宿主机可访问的面板地址；`--listen` 建议显式写公网地址，例如 `--listen 203.0.113.10:53`，避免只想对公网提供权威 DNS 时和本机回环 DNS 服务混淆。
 安装后可在 Worker 主机运行 `bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com`，一次性检查 systemd 服务、安装目录、环境文件、监听端口、快照、GeoIP、日志和 UDP/TCP SOA/NS 查询结果。
+全新部署或迁移前验收时，可在面板/Worker 同机部署主机运行闭环验证脚本：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.com
+```
+
+该脚本会只读检查 Server Compose、`/api/status`、DNS Worker systemd 服务、安装文件、`:53` 监听、快照文件，以及对 `PUBLIC_IP` 的 UDP/TCP SOA/NS 查询；全部通过后再继续注册商 NS 切换或生产流量迁移。
 
 可选参数：
 

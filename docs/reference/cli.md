@@ -157,6 +157,30 @@ bash scripts/diagnose-dns-worker.sh --public-ip 203.0.113.10 --zone example.com
 
 该脚本只读检查 systemd 服务、安装目录、环境文件、监听端口、快照、GeoIP、日志和 UDP/TCP SOA/NS 查询结果，不会重启服务或修改配置。
 
+权威 DNS 同机部署闭环验收：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/verify-authoritative-dns.sh --public-ip 203.0.113.10 --zone example.com
+```
+
+常用可选参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--public-ip` | DNS Worker 公网 IP，必填 |
+| `--zone` | 要查询 SOA/NS 的 Zone，必填 |
+| `--server-dir` | Server compose/source 目录，默认仓库内 `dushengcdn_server` |
+| `--compose-file` | Docker Compose 文件，默认 `SERVER_DIR/docker-compose.yaml` |
+| `--env-file` | Compose 环境文件，默认 `SERVER_DIR/.env` |
+| `--server-url` | 要检查的 Server 地址，默认 `http://127.0.0.1:DUSHENGCDN_HTTP_PORT` |
+| `--dns-worker-install-dir` | DNS Worker 安装目录，默认 `/opt/dushengcdn-dns-worker` |
+| `--dns-worker-service` | DNS Worker systemd 服务名，默认 `dushengcdn-dns-worker` |
+| `--dns-port` | DNS 查询和监听端口，默认从 Worker 监听地址解析或使用 `53` |
+| `--skip-logs` | 不打印服务日志 |
+
+该脚本只读执行上线验收顺序：Server Compose、`/api/status`、DNS Worker systemd、安装文件、DNS 监听、快照文件和 UDP/TCP SOA/NS 查询。
+
 测试：
 
 ```bash

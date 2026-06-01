@@ -294,6 +294,13 @@ cd /opt/dushengcdn
 bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com
 ```
 
+面板和 DNS Worker 同机部署时，正式切换 NS 前可运行闭环验收脚本：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.com
+```
+
 Docker 运行示例也可继续使用：
 
 ```bash

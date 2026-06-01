@@ -258,6 +258,12 @@ bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com
 ```
 
 The helper checks `dushengcdn-dns-worker.service`, the install directory, `dns-worker.env`, listeners, snapshot file, GeoIP file, and recent logs. When `--public-ip` and `--zone` are provided, it also runs UDP/TCP SOA/NS queries. It does not restart services or edit configuration.
+If the panel and DNS Worker run on the same host and you want the full pre-production checklist, run:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.com
+```
 
 1. Run `systemctl status dushengcdn-dns-worker`. `Unit dushengcdn-dns-worker.service could not be found` means the panel Zone/registrar NS may exist, but no DNS Worker is deployed on that host.
 2. Run `ss -lntup | grep ':53'` and `ss -lnuap | grep ':53'`. Seeing only `systemd-resolved` on `127.0.0.53` or `127.0.0.54` does not mean public port `53` has an authoritative service.

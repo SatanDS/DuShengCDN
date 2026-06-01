@@ -298,6 +298,12 @@ bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com
 ```
 
 脚本会检查 `dushengcdn-dns-worker.service`、安装目录、`dns-worker.env`、监听端口、快照文件、GeoIP 文件和最近日志，并在提供 `--public-ip` / `--zone` 后执行 UDP/TCP SOA/NS 查询。脚本不会重启服务或修改配置。
+如果面板和 DNS Worker 在同一台主机，想一次性按上线验收顺序检查 Server 与 Worker，可运行：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.com
+```
 
 1. 在 DNS Worker 主机执行 `systemctl status dushengcdn-dns-worker`。如果提示 `Unit dushengcdn-dns-worker.service could not be found`，说明只配置了面板 Zone/注册商 NS，还没有部署 DNS Worker。
 2. 查看 `ss -lntup | grep ':53'` 和 `ss -lnuap | grep ':53'`。只看到 `systemd-resolved` 监听 `127.0.0.53` 或 `127.0.0.54` 不代表公网 `53` 已经有权威 DNS 服务；公网地址仍可能没有任何进程监听。

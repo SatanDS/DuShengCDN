@@ -327,6 +327,15 @@ bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com
 
 The script checks the systemd service, install directory, env file, listeners, snapshot, GeoIP file, logs, and UDP/TCP SOA/NS query results.
 
+For a same-host panel + Worker deployment, run the end-to-end read-only verification before switching registrar NS or production traffic:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.com
+```
+
+It checks Server Compose, `/api/status`, DNS Worker systemd state, install files, the DNS listener, snapshot file, and UDP/TCP SOA/NS responses from `PUBLIC_IP`.
+
 Docker example:
 
 ```bash

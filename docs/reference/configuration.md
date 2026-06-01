@@ -206,6 +206,8 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 
 `scripts/diagnose-dns-worker.sh` 用于 DNS Worker 主机排障。它读取 `INSTALL_DIR/dns-worker.env`，只读检查 systemd 服务、安装目录、监听端口、快照、GeoIP、最近日志，并可通过 `--public-ip` 和 `--zone` 执行 UDP/TCP SOA/NS 查询，不会修改配置或重启服务。
 
+`scripts/verify-authoritative-dns.sh` 用于面板和 DNS Worker 同机部署的上线前闭环验收。它读取 Server `.env` 与 Worker `dns-worker.env`，按顺序检查 Server Compose、`/api/status`、DNS Worker systemd、安装文件、监听端口、快照文件，以及 `PUBLIC_IP` 的 UDP/TCP SOA/NS 查询。
+
 | 参数 | 作用 | 默认值 |
 | --- | --- | --- |
 | `--server-dir` | Server compose/source 目录 | 仓库内 `dushengcdn_server` |
