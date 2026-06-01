@@ -1,11 +1,13 @@
 import { cn } from '@/lib/utils/cn';
 
-type InlineMessageTone = 'info' | 'success' | 'danger';
+type InlineMessageTone = 'info' | 'success' | 'warning' | 'danger';
 
 const toneClasses: Record<InlineMessageTone, string> = {
   info: 'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info-foreground)]',
   success:
     'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success-foreground)]',
+  warning:
+    'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning-foreground)]',
   danger:
     'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger-foreground)]',
 };

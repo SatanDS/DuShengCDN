@@ -464,6 +464,10 @@ function formatSourceScopeBaseLabel(value: string) {
   return text;
 }
 
+function isProbeSchedulingGateMessage(message: string) {
+  return message.includes('Agent 探测未达到调度门槛');
+}
+
 function formatDurationSeconds(value: number) {
   if (value <= 0) {
     return '—';
@@ -2413,7 +2417,14 @@ function GSLBSimulationPanel({
                   {formatDateTime(result.snapshot_at)}
                 </p>
                 {result.message ? (
-                  <InlineMessage tone="info" message={result.message} />
+                  <InlineMessage
+                    tone={
+                      isProbeSchedulingGateMessage(result.message)
+                        ? 'warning'
+                        : 'info'
+                    }
+                    message={result.message}
+                  />
                 ) : null}
                 <GSLBSimulationDiagnostics result={result} />
               </div>

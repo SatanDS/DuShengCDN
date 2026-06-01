@@ -589,6 +589,76 @@ describe('Authoritative DNS page', () => {
               ),
             );
           }
+          if (payload.country === 'JP') {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  success: true,
+                  message: '',
+                  data: {
+                    proxy_route_id: 92,
+                    site_name: 'authoritative-site',
+                    qname: 'api.example.com',
+                    record_type: 'A',
+                    country: 'JP',
+                    source_ip: '',
+                    source_scope: 'country:JP',
+                    ttl: 30,
+                    targets: [],
+                    target_count: 0,
+                    strategy: 'weighted',
+                    gslb_enabled: true,
+                    snapshot_version: 'snapshot-probe-gate',
+                    snapshot_at: '2026-05-31T08:29:00Z',
+                    message:
+                      'Agent 探测未达到调度门槛，当前来源没有可用于 A 记录的边缘节点。请查看下方节点原因确认是未探测、探测过期还是 UDP/TCP 53 未同时可达。',
+                    matched_pools: [
+                      {
+                        name: 'jp',
+                        weight: 100,
+                        countries: ['JP'],
+                        matched: true,
+                        reason: '匹配来源国家 JP',
+                      },
+                    ],
+                    nodes: [
+                      {
+                        node_id: 'node-jp-stale',
+                        name: 'jp-stale',
+                        pool_name: 'jp',
+                        status: 'online',
+                        openresty_status: 'healthy',
+                        scheduling_enabled: true,
+                        drain_mode: false,
+                        last_seen_at: '2026-05-31T08:28:00Z',
+                        public_ips: ['203.0.113.90'],
+                        candidate_targets: ['203.0.113.90'],
+                        selected_targets: [],
+                        eligible: false,
+                        selected: false,
+                        reasons: ['Agent 探测未达到调度门槛：探测结果已过期'],
+                        has_metric: true,
+                        metric_captured_at: '2026-05-31T08:28:10Z',
+                        openresty_connections: 7,
+                        cpu_usage_percent: 11,
+                        memory_usage_percent: 22,
+                        score: 0,
+                        node_probe_status: 'stale',
+                        node_probe_message:
+                          'Agent 多节点探测结果超过 5 分钟未刷新',
+                        node_probe_checked_count: 1,
+                        node_probe_healthy_count: 0,
+                        node_probe_stale_count: 1,
+                        node_probe_healthy_percent: 0,
+                        node_probe_average_rtt_ms: 42,
+                        node_probe_max_rtt_ms: 70,
+                      },
+                    ],
+                  },
+                }),
+              ),
+            );
+          }
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -1139,6 +1209,21 @@ describe('Authoritative DNS page', () => {
       screen.getByText('匹配来源 CIDR 203.0.113.0/24'),
     ).toBeInTheDocument();
     expect(screen.getByText('cidr-edge')).toBeInTheDocument();
+    await user.clear(screen.getByPlaceholderText('203.0.113.10'));
+    await user.type(screen.getByPlaceholderText('HK'), 'JP');
+    await user.click(screen.getByRole('button', { name: '模拟调度' }));
+    await waitFor(() => {
+      expect(screen.getByText(/snapshot-probe-gate/)).toBeInTheDocument();
+    });
+    expect(screen.getByText('当前没有可返回目标。')).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/Agent 探测未达到调度门槛/).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText('jp-stale')).toBeInTheDocument();
+    expect(
+      screen.getByText('Agent 探测未达到调度门槛：探测结果已过期'),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('1 个过期').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: '检查委派' }));
     expect(await screen.findByText('部分匹配')).toBeInTheDocument();
