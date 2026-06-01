@@ -214,6 +214,9 @@ func normalizeAgentDNSProbeResults(results []AgentDNSProbeResult) []AgentDNSProb
 		if result.DurationMs < 0 {
 			result.DurationMs = 0
 		}
+		if result.AnswerCount < 0 {
+			result.AnswerCount = 0
+		}
 		result.RCode = strings.ToUpper(strings.TrimSpace(result.RCode))
 		result.Error = truncateForDatabase(result.Error, 1024)
 		cleaned = append(cleaned, result)

@@ -2425,7 +2425,7 @@ func TestAgentDNSProbeResultsPersistToWorkerHealth(t *testing.T) {
 				CheckedAtUnix: now.Unix(),
 				Results: []AgentDNSProbeResult{
 					{Network: "UDP", Reachable: true, DurationMs: 11, RCode: "NOERROR", AnswerCount: 1},
-					{Network: "TCP", Reachable: true, DurationMs: 17, RCode: "NOERROR", AnswerCount: 1},
+					{Network: "TCP", Reachable: true, DurationMs: 17, RCode: "NOERROR", AnswerCount: -3},
 				},
 			},
 		},
@@ -2440,6 +2440,10 @@ func TestAgentDNSProbeResultsPersistToWorkerHealth(t *testing.T) {
 	}
 	if probes[0].AverageRTTMs != 14 || probes[0].MaxRTTMs != 17 || probes[0].FailureSamples != 0 {
 		t.Fatalf("unexpected probe stats: %+v", probes[0])
+	}
+	persistedResults := decodeDNSWorkerProbeResults(probes[0].ResultsJSON)
+	if len(persistedResults) != 2 || persistedResults[1].AnswerCount != 0 {
+		t.Fatalf("expected negative answer count to be normalized, got %+v", persistedResults)
 	}
 
 	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
@@ -2457,7 +2461,7 @@ func TestAgentDNSProbeResultsPersistToWorkerHealth(t *testing.T) {
 		t.Fatalf("expected node probe in worker health item: %+v", summary.WorkerHealth.Workers)
 	}
 	nodeProbe := summary.WorkerHealth.Workers[0].NodeProbes[0]
-	if nodeProbe.NodeName != "hk-edge-1" || nodeProbe.PoolName != "HK" || !nodeProbe.Healthy || len(nodeProbe.Results) != 2 {
+	if nodeProbe.NodeName != "hk-edge-1" || nodeProbe.PoolName != "HK" || !nodeProbe.Healthy || len(nodeProbe.Results) != 2 || nodeProbe.Results[1].AnswerCount != 0 {
 		t.Fatalf("unexpected node probe view: %+v", nodeProbe)
 	}
 }
