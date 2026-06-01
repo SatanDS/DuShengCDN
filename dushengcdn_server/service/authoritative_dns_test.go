@@ -603,6 +603,45 @@ func TestCreateAuthoritativeDNSRecordRejectsDynamicRouteConflict(t *testing.T) {
 	}
 }
 
+func TestCreateAuthoritativeDNSRecordRejectsWildcardDynamicRouteConflict(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "wildcard-site",
+		Domain:          "*.example.com",
+		Domains:         `["*.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "api", Type: "A", Value: "203.0.113.10"}); err == nil || !strings.Contains(err.Error(), "动态") {
+		t.Fatalf("expected wildcard dynamic A conflict, got %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "api", Type: "CNAME", Value: "alias.example.com"}); err == nil || !strings.Contains(err.Error(), "冲突") {
+		t.Fatalf("expected wildcard CNAME conflict, got %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "deep.api.example.com", Type: "A", Value: "203.0.113.11"}); err != nil {
+		t.Fatalf("expected deep subdomain to stay outside single-level wildcard conflict: %v", err)
+	}
+}
+
 func TestCreateProxyRouteAuthoritativeRejectsStaticRecordConflict(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -625,6 +664,31 @@ func TestCreateProxyRouteAuthoritativeRejectsStaticRecordConflict(t *testing.T) 
 	})
 	if err == nil || !strings.Contains(err.Error(), "静态记录") {
 		t.Fatalf("expected static record conflict, got %v", err)
+	}
+}
+
+func TestCreateProxyRouteAuthoritativeRejectsWildcardStaticRecordConflict(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "api", Type: "A", Value: "203.0.113.10"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+	}
+
+	_, err = CreateProxyRoute(ProxyRouteInput{
+		Domain:          "*.example.com",
+		OriginURL:       "https://origin.internal",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTTL:          30,
+	})
+	if err == nil || !strings.Contains(err.Error(), "静态记录") {
+		t.Fatalf("expected wildcard static record conflict, got %v", err)
 	}
 }
 
@@ -1749,6 +1813,59 @@ func TestSwitchProxyRouteToAuthoritativeDNSRejectsStaticRecordConflict(t *testin
 
 	if _, err := SwitchProxyRouteToAuthoritativeDNS(route.ID, AuthoritativeDNSMigrationInput{DNSZoneIDRef: &zone.ID}); err == nil || !strings.Contains(err.Error(), "静态记录") {
 		t.Fatalf("expected static record conflict, got %v", err)
+	}
+}
+
+func TestSwitchProxyRouteToAuthoritativeDNSRejectsWildcardStaticRecordConflict(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "api", Type: "A", Value: "203.0.113.10"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "wildcard-site",
+		Domain:          "*.example.com",
+		Domains:         `["*.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeCloudflare,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 60)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1", PublicAddress: "ns1.example.net"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	checkedAt := time.Now().UTC()
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	workerModel.Status = dnsWorkerStatusOnline
+	workerModel.LastSeenAt = &checkedAt
+	workerModel.LastProbeAt = &checkedAt
+	workerModel.LastProbeQuery = "example.com. SOA"
+	workerModel.LastSnapshotVersion = "snapshot-a"
+	workerModel.LastSnapshotAt = &checkedAt
+	workerModel.LastProbeResult = `[{"network":"UDP","reachable":true,"duration_ms":11,"rcode":"NOERROR","answer_count":1},{"network":"TCP","reachable":true,"duration_ms":14,"rcode":"NOERROR","answer_count":1}]`
+	if err := workerModel.Update(); err != nil {
+		t.Fatalf("update worker readiness: %v", err)
+	}
+
+	if _, err := SwitchProxyRouteToAuthoritativeDNS(route.ID, AuthoritativeDNSMigrationInput{DNSZoneIDRef: &zone.ID}); err == nil || !strings.Contains(err.Error(), "静态记录") {
+		t.Fatalf("expected wildcard static record conflict, got %v", err)
 	}
 }
 

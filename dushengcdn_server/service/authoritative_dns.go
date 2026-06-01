@@ -1782,7 +1782,7 @@ func validateAuthoritativeDNSRecordDynamicConflicts(record *model.DNSRecord) err
 			return fmt.Errorf("existing authoritative route %d domains are invalid: %w", route.ID, err)
 		}
 		for _, domain := range domains {
-			if normalizeDNSRecordName(domain) == normalizeDNSRecordName(record.Name) {
+			if authoritativeDomainMatchesQName(domain, record.Name) {
 				return fmt.Errorf("静态 DNS 记录 %s %s 与权威 DNS 网站 %s 的动态 %s 记录冲突", record.Name, recordType, route.SiteName, routeType)
 			}
 		}
@@ -1798,14 +1798,14 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 	if recordType != "A" && recordType != "AAAA" {
 		return errors.New("authoritative DNS mode only supports A/AAAA dynamic records")
 	}
-	domainSet := make(map[string]struct{}, len(domains))
+	normalizedDomains := make([]string, 0, len(domains))
 	for _, domain := range domains {
 		normalized := normalizeDNSRecordName(domain)
 		if normalized != "" {
-			domainSet[normalized] = struct{}{}
+			normalizedDomains = append(normalizedDomains, normalized)
 		}
 	}
-	if len(domainSet) == 0 {
+	if len(normalizedDomains) == 0 {
 		return nil
 	}
 	records, err := model.ListDNSRecordsByZoneID(zoneID)
@@ -1816,7 +1816,7 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 		if record == nil || !record.Enabled {
 			continue
 		}
-		if _, ok := domainSet[normalizeDNSRecordName(record.Name)]; !ok {
+		if !authoritativeDomainsMatchRecordName(normalizedDomains, record.Name) {
 			continue
 		}
 		staticType := strings.ToUpper(strings.TrimSpace(record.Type))
@@ -1826,6 +1826,15 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 		return fmt.Errorf("权威 DNS 网站的动态 %s 记录与 Zone 中已有静态记录 %s %s 冲突，请先删除或禁用该静态记录", recordType, record.Name, staticType)
 	}
 	return nil
+}
+
+func authoritativeDomainsMatchRecordName(domains []string, recordName string) bool {
+	for _, domain := range domains {
+		if authoritativeDomainMatchesQName(domain, recordName) {
+			return true
+		}
+	}
+	return false
 }
 
 type authoritativeDNSMigrationWorkerStatsView struct {
