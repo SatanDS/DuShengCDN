@@ -3586,6 +3586,108 @@ func TestSimulateAuthoritativeDNSGSLBNoAvailableTargetReturnsDiagnostics(t *test
 	assertSimulationNode(t, simulation.Nodes, "node-hot", false, false, "节点负载超过 GSLB 阈值")
 }
 
+func TestSimulateAuthoritativeDNSGSLBLoadAwareMarksMissingMetricsAsFallback(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now()
+	for _, node := range []*model.Node{
+		{
+			NodeID:          "node-metric",
+			Name:            "metric",
+			IP:              "8.8.4.4",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.4.4"]`,
+			Weight:          100,
+			AgentToken:      "token-metric",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-no-metric",
+			Name:            "no-metric",
+			IP:              "1.1.1.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          100,
+			AgentToken:      "token-no-metric",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now.Add(-time.Second),
+		},
+	} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node %s: %v", node.NodeID, err)
+		}
+	}
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:               "node-metric",
+		CapturedAt:           now,
+		CPUUsagePercent:      30,
+		MemoryUsedBytes:      30,
+		MemoryTotalBytes:     100,
+		OpenrestyConnections: 20,
+	}).Insert(); err != nil {
+		t.Fatalf("insert metric: %v", err)
+	}
+
+	policy := defaultGSLBPolicy("hk", 1, "load_aware", 30)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 100, Enabled: true},
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "load_aware",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	simulation, err := SimulateAuthoritativeDNSGSLB(DNSGSLBSimulationInput{
+		ProxyRouteID: route.ID,
+		QName:        "www.example.com",
+		RecordType:   "A",
+		SourceIP:     "203.0.113.10",
+	})
+	if err != nil {
+		t.Fatalf("SimulateAuthoritativeDNSGSLB: %v", err)
+	}
+	if len(simulation.Targets) != 1 || simulation.Targets[0] != "8.8.4.4" {
+		t.Fatalf("expected load-aware simulation to select fresh metric target, got %+v", simulation.Targets)
+	}
+	assertSimulationNode(t, simulation.Nodes, "node-metric", true, true, "可参与当前调度")
+	assertSimulationNode(t, simulation.Nodes, "node-no-metric", true, false, "暂无新鲜负载指标，仅作为兜底候选")
+	if node := findSimulationNode(simulation.Nodes, "node-no-metric"); node == nil || node.HasMetric || node.MetricCapturedAt != nil {
+		t.Fatalf("expected missing metric node to stay visible without metric timestamp, got %+v", node)
+	}
+}
+
 func TestSimulateAuthoritativeDNSGSLBProbeSchedulingExplainsThresholdReasons(t *testing.T) {
 	setupServiceTestDB(t)
 
