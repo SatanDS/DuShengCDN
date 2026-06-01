@@ -422,6 +422,44 @@ function formatLatencyMs(value: number) {
   return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)} ms`;
 }
 
+function formatSourceScopeLabel(value: string) {
+  const text = value.trim();
+  if (!text) {
+    return '全局';
+  }
+  const parts = text
+    .split('|')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const base = parts[0] ?? 'global';
+  const bucket = parts.find((item) =>
+    item.toLowerCase().startsWith('bucket:'),
+  );
+  const baseLabel = formatSourceScopeBaseLabel(base);
+  if (!bucket) {
+    return baseLabel;
+  }
+  const bucketValue = bucket.split(':')[1]?.trim();
+  return bucketValue ? `${baseLabel} / 分流桶 ${bucketValue}` : baseLabel;
+}
+
+function formatSourceScopeBaseLabel(value: string) {
+  const text = value.trim();
+  const lower = text.toLowerCase();
+  if (lower === 'global') {
+    return '全局';
+  }
+  if (lower.startsWith('country:')) {
+    const country = text.slice(text.indexOf(':') + 1).trim().toUpperCase();
+    return country ? `国家 ${country}` : text;
+  }
+  if (lower.startsWith('cidr:')) {
+    const cidr = text.slice(text.indexOf(':') + 1).trim();
+    return cidr ? `网段 ${cidr}` : text;
+  }
+  return text;
+}
+
 function formatDurationSeconds(value: number) {
   if (value <= 0) {
     return '—';
@@ -2122,7 +2160,11 @@ function GSLBSchedulingStateCard({ state }: { state: DNSGSLBSchedulingState }) {
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <InfoTile label="来源作用域/分流桶" value={state.scope_key} />
+        <InfoTile
+          label="来源作用域/分流桶"
+          value={formatSourceScopeLabel(state.scope_key)}
+          helper={state.scope_key}
+        />
         <InfoTile
           label="最近评估"
           value={formatRelativeTime(state.last_evaluated_at)}
@@ -2316,7 +2358,11 @@ function GSLBSimulationPanel({
               <div className="mt-4 space-y-4">
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <InfoTile label="站点" value={result.site_name || '—'} />
-                  <InfoTile label="作用域/分流桶" value={result.source_scope} />
+                  <InfoTile
+                    label="作用域/分流桶"
+                    value={formatSourceScopeLabel(result.source_scope)}
+                    helper={result.source_scope}
+                  />
                   <InfoTile label="TTL" value={`${result.ttl} 秒`} />
                   <InfoTile
                     label="策略"
@@ -2900,7 +2946,7 @@ function MigrationRecheckPanel({ result }: { result: MigrationRecheckResult }) {
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-sm font-medium text-[var(--foreground-primary)]">
-                    {simulation.source_scope}
+                    {formatSourceScopeLabel(simulation.source_scope)}
                   </span>
                   <StatusBadge
                     label={simulation.targets.length > 0 ? '有目标' : '无目标'}
@@ -3057,6 +3103,7 @@ function DNSObservabilityPanel({
           items={summary.source_scope_breakdown}
           total={summary.total_queries}
           emptyText="暂无来源作用域分布。"
+          formatLabel={(item) => formatSourceScopeLabel(item.key || item.label)}
         />
       </div>
     </AppCard>
@@ -3478,11 +3525,13 @@ function CounterList({
   items,
   total,
   emptyText = '暂无数据。',
+  formatLabel,
 }: {
   title: string;
   items: DNSObservabilityCounterItem[];
   total: number;
   emptyText?: string;
+  formatLabel?: (item: DNSObservabilityCounterItem) => string;
 }) {
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4">
@@ -3502,7 +3551,7 @@ function CounterList({
               <div key={`${title}-${item.key}`} className="space-y-1">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="min-w-0 truncate text-[var(--foreground-primary)]">
-                    {item.label}
+                    {formatLabel ? formatLabel(item) : item.label}
                   </span>
                   <span className="shrink-0 text-[var(--foreground-secondary)]">
                     {formatCount(item.count)}

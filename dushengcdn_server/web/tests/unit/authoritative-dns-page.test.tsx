@@ -952,7 +952,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
     expect(screen.getByText('edge-site')).toBeInTheDocument();
     expect(screen.getByText('来源作用域')).toBeInTheDocument();
-    expect(screen.getByText('country:HK')).toBeInTheDocument();
+    expect(screen.getByText('国家 HK')).toBeInTheDocument();
     expect(await screen.findByText('查询趋势')).toBeInTheDocument();
     expect(screen.getByText('快照不一致')).toBeInTheDocument();
     expect(
@@ -977,7 +977,7 @@ describe('Authoritative DNS page', () => {
     await waitFor(() => {
       expect(screen.getAllByText('8.8.4.4').length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText('country:HK').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('国家 HK').length).toBeGreaterThan(0);
     expect(screen.getByText(/snapshot-c/)).toBeInTheDocument();
     expect(screen.getByText('节点池匹配')).toBeInTheDocument();
     expect(screen.getByText('节点诊断')).toBeInTheDocument();
@@ -1003,6 +1003,7 @@ describe('Authoritative DNS page', () => {
     expect(
       screen.getByText(/当前来源没有可用于 A 记录的边缘节点/),
     ).toBeInTheDocument();
+    expect(screen.getAllByText('国家 DE').length).toBeGreaterThan(0);
     expect(screen.getByText(/snapshot-d/)).toBeInTheDocument();
     expect(screen.getByText('eu-hot')).toBeInTheDocument();
     expect(screen.getAllByText('节点负载超过 GSLB 阈值').length).toBeGreaterThan(
@@ -1049,7 +1050,7 @@ describe('Authoritative DNS page', () => {
       screen.getByText(/1 \/ 1 个在线 Worker UDP\/TCP 53 可达/),
     ).toBeInTheDocument();
     expect(screen.getByText(/已完成 3 组模拟/)).toBeInTheDocument();
-    expect(screen.getByText('global')).toBeInTheDocument();
+    expect(screen.getByText('全局')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^DNS Worker/ }));
     await waitFor(() => {
