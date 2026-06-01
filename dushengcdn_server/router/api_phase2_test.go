@@ -862,6 +862,129 @@ func TestPhase2GlobalDiscoveryRegistration(t *testing.T) {
 	}
 }
 
+func TestPhase2LegacyGlobalAgentTokenKeepsExistingNodeOnline(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	adminToken := prepareRootToken(t)
+	createRouteAndPublishVersion(t, engine, adminToken)
+
+	legacyNode := &model.Node{
+		NodeID:          "legacy-node-1",
+		Name:            "legacy-edge-1",
+		IP:              "10.0.0.18",
+		AgentToken:      "",
+		AgentVersion:    "0.1.0",
+		NginxVersion:    "1.25.5",
+		OpenrestyStatus: service.OpenrestyStatusUnknown,
+		Status:          service.NodeStatusOffline,
+		LastSeenAt:      time.Now().Add(-common.NodeOfflineThreshold - time.Minute),
+	}
+	if err := legacyNode.Insert(); err != nil {
+		t.Fatalf("failed to seed legacy node: %v", err)
+	}
+
+	heartbeatPayload := map[string]any{
+		"node_id":          legacyNode.NodeID,
+		"name":             "legacy-edge-1",
+		"ip":               "10.0.0.19",
+		"agent_version":    "0.1.1",
+		"nginx_version":    "1.25.5",
+		"openresty_status": service.OpenrestyStatusHealthy,
+		"current_version":  "",
+		"last_error":       "",
+	}
+	rawHeartbeatPayload, err := json.Marshal(heartbeatPayload)
+	if err != nil {
+		t.Fatalf("failed to marshal heartbeat payload: %v", err)
+	}
+	heartbeatReq := httptest.NewRequest(http.MethodPost, "/api/agent/nodes/heartbeat", bytes.NewReader(rawHeartbeatPayload))
+	heartbeatReq.Header.Set("Content-Type", "application/json")
+	heartbeatReq.Header.Set("X-Agent-Token", common.AgentToken)
+	heartbeatRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(heartbeatRecorder, heartbeatReq)
+	if heartbeatRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected legacy heartbeat status %d: %s", heartbeatRecorder.Code, heartbeatRecorder.Body.String())
+	}
+	var heartbeatResp struct {
+		Success       bool                      `json:"success"`
+		Message       string                    `json:"message"`
+		Data          model.Node                `json:"data"`
+		AgentSettings service.AgentSettings     `json:"agent_settings"`
+		ActiveConfig  *service.ActiveConfigMeta `json:"active_config"`
+	}
+	if err = json.Unmarshal(heartbeatRecorder.Body.Bytes(), &heartbeatResp); err != nil {
+		t.Fatalf("failed to decode legacy heartbeat response: %v", err)
+	}
+	if !heartbeatResp.Success {
+		t.Fatalf("expected legacy heartbeat success, got %s", heartbeatResp.Message)
+	}
+	if heartbeatResp.Data.NodeID != legacyNode.NodeID || heartbeatResp.Data.AgentVersion != "0.1.1" {
+		t.Fatalf("expected legacy heartbeat to update existing node, got %+v", heartbeatResp.Data)
+	}
+	if heartbeatResp.AgentSettings.WebsocketUpgradeEnabled {
+		t.Fatal("expected legacy global token heartbeat to keep websocket upgrade disabled")
+	}
+	if heartbeatResp.ActiveConfig == nil || heartbeatResp.ActiveConfig.Version == "" {
+		t.Fatal("expected legacy heartbeat response to include active config summary")
+	}
+
+	activeConfigResp := performAgentJSONRequestWithToken(t, engine, common.AgentToken, http.MethodGet, "/api/agent/config-versions/active", nil)
+	var activeConfig service.AgentConfigResponse
+	decodeResponseData(t, activeConfigResp, &activeConfig)
+	if activeConfig.Version == "" || activeConfig.Checksum == "" {
+		t.Fatal("expected legacy global token to fetch active config")
+	}
+
+	applyResp := performAgentJSONRequestWithToken(t, engine, common.AgentToken, http.MethodPost, "/api/agent/apply-logs", map[string]any{
+		"node_id": legacyNode.NodeID,
+		"version": activeConfig.Version,
+		"result":  service.ApplyResultOK,
+		"message": "legacy apply ok",
+	})
+	var applyLog model.ApplyLog
+	decodeResponseData(t, applyResp, &applyLog)
+	if applyLog.NodeID != legacyNode.NodeID || applyLog.Result != service.ApplyResultOK {
+		t.Fatalf("expected legacy apply log to bind existing node, got %+v", applyLog)
+	}
+
+	protectedNode := &model.Node{
+		NodeID:          "dedicated-node-1",
+		Name:            "dedicated-edge-1",
+		IP:              "10.0.0.20",
+		AgentToken:      "dedicated-token",
+		AgentVersion:    "0.2.0",
+		NginxVersion:    "1.25.5",
+		OpenrestyStatus: service.OpenrestyStatusUnknown,
+		Status:          service.NodeStatusOnline,
+		LastSeenAt:      time.Now(),
+	}
+	if err = protectedNode.Insert(); err != nil {
+		t.Fatalf("failed to seed dedicated node: %v", err)
+	}
+	deniedPayload, err := json.Marshal(map[string]any{
+		"node_id":       protectedNode.NodeID,
+		"ip":            "10.0.0.21",
+		"agent_version": "0.2.1",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal denied payload: %v", err)
+	}
+	deniedReq := httptest.NewRequest(http.MethodPost, "/api/agent/nodes/heartbeat", bytes.NewReader(deniedPayload))
+	deniedReq.Header.Set("Content-Type", "application/json")
+	deniedReq.Header.Set("X-Agent-Token", common.AgentToken)
+	deniedRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(deniedRecorder, deniedReq)
+	if deniedRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected legacy global token to be rejected for dedicated node, got %d", deniedRecorder.Code)
+	}
+}
+
 func performAgentJSONRequestWithToken(t *testing.T, engine http.Handler, token string, method string, path string, body any) apiResponse {
 	return performAgentJSONRequestWithTokenAndRemote(t, engine, token, method, path, body, "")
 }

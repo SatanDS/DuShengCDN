@@ -257,6 +257,31 @@ func AuthenticateAgentToken(token string) (*model.Node, error) {
 	return authenticateAgentTokenWithCache(token)
 }
 
+func IsLegacyGlobalAgentToken(token string) bool {
+	token = strings.TrimSpace(token)
+	legacyToken := strings.TrimSpace(common.AgentToken)
+	return token != "" && legacyToken != "" && token == legacyToken
+}
+
+func AuthenticateLegacyAgentTokenForNode(token string, nodeID string) (*model.Node, error) {
+	if !IsLegacyGlobalAgentToken(token) {
+		return nil, errors.New("旧版全局 Agent Token 无效")
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return nil, errors.New("缺少 node_id")
+	}
+	node, err := model.GetNodeByNodeID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	nodeAgentToken := strings.TrimSpace(node.AgentToken)
+	if nodeAgentToken != "" && nodeAgentToken != strings.TrimSpace(common.AgentToken) {
+		return nil, errors.New("节点已切换为专属 Agent Token")
+	}
+	return node, nil
+}
+
 func ValidateDiscoveryToken(token string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {

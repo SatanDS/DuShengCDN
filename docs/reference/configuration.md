@@ -68,6 +68,7 @@ go run . --port 3000 --log-dir ./logs
 * 当目标 PostgreSQL 数据库为空且本地 `SQLITE_PATH` 文件存在时，Server 启动阶段会自动迁移 SQLite 数据，并在日志中输出按表迁移进度。
 * `SESSION_SECRET` 生产环境必须显式配置。
 * `REDIS_CONN_STRING` 未配置时，相关能力回退为进程内实现。
+* `AGENT_TOKEN` 仅用于升级兼容旧版 Agent。新部署应使用 Discovery Token 首次注册，或使用节点详情里的专属 `agent_token`；旧全局 Token 请求必须携带已存在的 `node_id`，且不能覆盖已经切换为专属 Token 的节点。
 
 ## 运行时 Option
 

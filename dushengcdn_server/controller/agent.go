@@ -77,6 +77,9 @@ func AgentHeartbeat(c *gin.Context) {
 		respondFailure(c, err.Error())
 		return
 	}
+	if legacy, _ := c.Get("legacy_agent_token"); legacy == true && node.AgentSettings != nil {
+		node.AgentSettings.WebsocketUpgradeEnabled = false
+	}
 	respondSuccessWithExtras(c, node.Node, gin.H{
 		"agent_settings": node.AgentSettings,
 		"active_config":  node.ActiveConfig,

@@ -164,6 +164,8 @@ sed -n '1,160p' /opt/dushengcdn-agent/agent.json
 
 如果日志提示 Token 无效，重新在管理端准备 Token 并更新 `agent.json`，然后重启。日志中出现 `Agent authentication failed` 时，优先核对 `agent_token` / `discovery_token` 或 `DUSHENGCDN_AGENT_TOKEN` / `DUSHENGCDN_DISCOVERY_TOKEN`；首次注册应使用 Discovery Token，注册后心跳、拉取配置和 WebSocket 应使用节点专属 Agent Token。日志中出现 `request to Server URL ... failed` 时，优先核对 `server_url`、DNS 解析、防火墙和证书信任。
 
+如果是升级 Server/面板后，升级前已经部署的旧 Agent 全部离线，先确认 Server 进程或容器仍然配置了旧版 `AGENT_TOKEN`。旧 Agent 可能还在使用这个全局 Token 上报心跳；Server 会兼容这类请求，但要求心跳或应用日志 payload 中携带已存在的 `node_id`，并且该节点尚未切换为新的节点专属 Agent Token。兼容成功后节点会恢复 HTTP 心跳、配置拉取和应用日志上报；建议后续在节点详情复制新的节点专属安装/配置命令，逐步把旧 Agent 配置迁移到专属 Token。
+
 ```bash
 systemctl restart dushengcdn-agent
 ```
