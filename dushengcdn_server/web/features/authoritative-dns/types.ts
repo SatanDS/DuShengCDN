@@ -187,6 +187,27 @@ export interface DNSGSLBSchedulingState {
   updated_at: string;
 }
 
+export interface AuthoritativeDNSMigrationCandidate {
+  proxy_route_id: number;
+  site_name: string;
+  primary_domain: string;
+  domains: string[];
+  enabled: boolean;
+  dns_auto_sync: boolean;
+  dns_provider_mode: 'cloudflare' | 'authoritative';
+  dns_record_type: 'A' | 'AAAA' | 'CNAME';
+  gslb_enabled: boolean;
+  matching_zone_id?: number | null;
+  matching_zone_name: string;
+  matching_zone_enabled: boolean;
+  total_worker_count: number;
+  online_worker_count: number;
+  public_reachable_worker_count: number;
+  ready: boolean;
+  blockers: string[];
+  warnings: string[];
+}
+
 export interface DNSObservabilityCounterItem {
   key: string;
   label: string;

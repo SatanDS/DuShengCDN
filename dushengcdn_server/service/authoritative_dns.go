@@ -224,6 +224,27 @@ type DNSGSLBSimulationNodeView struct {
 	Score                float64    `json:"score"`
 }
 
+type AuthoritativeDNSMigrationCandidateView struct {
+	ProxyRouteID               uint     `json:"proxy_route_id"`
+	SiteName                   string   `json:"site_name"`
+	PrimaryDomain              string   `json:"primary_domain"`
+	Domains                    []string `json:"domains"`
+	Enabled                    bool     `json:"enabled"`
+	DNSAutoSync                bool     `json:"dns_auto_sync"`
+	DNSProviderMode            string   `json:"dns_provider_mode"`
+	DNSRecordType              string   `json:"dns_record_type"`
+	GSLBEnabled                bool     `json:"gslb_enabled"`
+	MatchingZoneID             *uint    `json:"matching_zone_id"`
+	MatchingZoneName           string   `json:"matching_zone_name"`
+	MatchingZoneEnabled        bool     `json:"matching_zone_enabled"`
+	TotalWorkerCount           int      `json:"total_worker_count"`
+	OnlineWorkerCount          int      `json:"online_worker_count"`
+	PublicReachableWorkerCount int      `json:"public_reachable_worker_count"`
+	Ready                      bool     `json:"ready"`
+	Blockers                   []string `json:"blockers"`
+	Warnings                   []string `json:"warnings"`
+}
+
 type DNSWorkerProbeView struct {
 	WorkerID      string                     `json:"worker_id"`
 	Name          string                     `json:"name"`
@@ -658,6 +679,45 @@ func DeleteAuthoritativeDNSRecord(id uint) error {
 		return err
 	}
 	return bumpDNSZoneSerial(zoneID)
+}
+
+func ListAuthoritativeDNSMigrationCandidates() ([]AuthoritativeDNSMigrationCandidateView, error) {
+	routes, err := model.ListProxyRoutes()
+	if err != nil {
+		return nil, err
+	}
+	zones, err := model.ListDNSZones()
+	if err != nil {
+		return nil, err
+	}
+	workerStats, err := authoritativeDNSMigrationWorkerStats()
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]AuthoritativeDNSMigrationCandidateView, 0, len(routes))
+	for _, route := range routes {
+		if route == nil || normalizeDNSProviderMode(route.DNSProviderMode) == DNSProviderModeAuthoritative {
+			continue
+		}
+		if !route.Enabled && !route.DNSAutoSync && !route.GSLBEnabled {
+			continue
+		}
+		candidate, err := buildAuthoritativeDNSMigrationCandidate(route, zones, workerStats)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Ready != candidates[j].Ready {
+			return candidates[i].Ready
+		}
+		if candidates[i].SiteName != candidates[j].SiteName {
+			return candidates[i].SiteName < candidates[j].SiteName
+		}
+		return candidates[i].ProxyRouteID < candidates[j].ProxyRouteID
+	})
+	return candidates, nil
 }
 
 func ListAuthoritativeDNSWorkers() ([]DNSWorkerView, error) {
@@ -1678,6 +1738,118 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 		return fmt.Errorf("权威 DNS 网站的动态 %s 记录与 Zone 中已有静态记录 %s %s 冲突，请先删除或禁用该静态记录", recordType, record.Name, staticType)
 	}
 	return nil
+}
+
+type authoritativeDNSMigrationWorkerStatsView struct {
+	total           int
+	online          int
+	publicReachable int
+}
+
+func authoritativeDNSMigrationWorkerStats() (authoritativeDNSMigrationWorkerStatsView, error) {
+	workers, err := model.ListDNSWorkers()
+	if err != nil {
+		return authoritativeDNSMigrationWorkerStatsView{}, err
+	}
+	stats := authoritativeDNSMigrationWorkerStatsView{total: len(workers)}
+	now := time.Now().UTC()
+	for _, worker := range workers {
+		if worker == nil || normalizeDNSWorkerStatus(worker.Status) != dnsWorkerStatusOnline {
+			continue
+		}
+		stats.online++
+		probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, decodeDNSWorkerProbeResults(worker.LastProbeResult))
+		if probeState.healthy {
+			stats.publicReachable++
+		}
+	}
+	return stats, nil
+}
+
+func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*model.DNSZone, workerStats authoritativeDNSMigrationWorkerStatsView) (AuthoritativeDNSMigrationCandidateView, error) {
+	domains, err := decodeStoredDomains(route.Domains, route.Domain)
+	if err != nil {
+		return AuthoritativeDNSMigrationCandidateView{}, err
+	}
+	recordType := normalizeDNSRecordType(route.DNSRecordType)
+	candidate := AuthoritativeDNSMigrationCandidateView{
+		ProxyRouteID:               route.ID,
+		SiteName:                   normalizeProxyRouteSiteNameInput(route, route.SiteName, route.Domain),
+		PrimaryDomain:              route.Domain,
+		Domains:                    domains,
+		Enabled:                    route.Enabled,
+		DNSAutoSync:                route.DNSAutoSync,
+		DNSProviderMode:            normalizeDNSProviderMode(route.DNSProviderMode),
+		DNSRecordType:              recordType,
+		GSLBEnabled:                route.GSLBEnabled,
+		TotalWorkerCount:           workerStats.total,
+		OnlineWorkerCount:          workerStats.online,
+		PublicReachableWorkerCount: workerStats.publicReachable,
+		Blockers:                   []string{},
+		Warnings:                   []string{},
+	}
+	zone := bestAuthoritativeZoneForDomains(zones, domains)
+	if zone != nil {
+		zoneID := zone.ID
+		candidate.MatchingZoneID = &zoneID
+		candidate.MatchingZoneName = zone.Name
+		candidate.MatchingZoneEnabled = zone.Enabled
+	}
+	if len(domains) == 0 {
+		candidate.Blockers = append(candidate.Blockers, "网站未配置域名")
+	}
+	if zone == nil {
+		candidate.Blockers = append(candidate.Blockers, "没有匹配的网站 Zone")
+	} else if !zone.Enabled {
+		candidate.Blockers = append(candidate.Blockers, "匹配 Zone 已停用")
+	} else if err := validateAuthoritativeProxyRouteStaticRecordConflicts(zone.ID, domains, recordType, route.Enabled); err != nil {
+		candidate.Blockers = append(candidate.Blockers, err.Error())
+	}
+	if workerStats.online == 0 {
+		candidate.Blockers = append(candidate.Blockers, "没有在线 DNS Worker")
+	} else if workerStats.publicReachable == 0 {
+		candidate.Blockers = append(candidate.Blockers, "在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测")
+	}
+	if !route.GSLBEnabled {
+		candidate.Warnings = append(candidate.Warnings, "未启用 GSLB，多节点池实时分流不会生效")
+	}
+	if workerStats.total < 2 {
+		candidate.Warnings = append(candidate.Warnings, "生产环境建议至少部署 2 个 DNS Worker")
+	}
+	if workerStats.online > workerStats.publicReachable {
+		candidate.Warnings = append(candidate.Warnings, "部分在线 Worker 未通过最新公网探测，迁移前建议逐个点击「探测」")
+	}
+	if !route.DNSAutoSync {
+		candidate.Warnings = append(candidate.Warnings, "当前未启用 Cloudflare 自动 DNS，请确认是否仍需要迁移")
+	}
+	candidate.Ready = len(candidate.Blockers) == 0
+	return candidate, nil
+}
+
+func bestAuthoritativeZoneForDomains(zones []*model.DNSZone, domains []string) *model.DNSZone {
+	if len(domains) == 0 {
+		return nil
+	}
+	var best *model.DNSZone
+	for _, zone := range zones {
+		if zone == nil {
+			continue
+		}
+		matched := true
+		for _, domain := range domains {
+			if !domainBelongsToZone(domain, zone.Name) {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if best == nil || len(normalizeDNSRecordName(zone.Name)) > len(normalizeDNSRecordName(best.Name)) {
+			best = zone
+		}
+	}
+	return best
 }
 
 func buildDNSZoneView(zone *model.DNSZone, includeRecords bool) (*DNSZoneView, error) {

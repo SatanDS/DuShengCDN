@@ -265,6 +265,8 @@ curl -Iv https://your-domain
 3. 如果想保留静态解析，不要把该网站切换到自建权威 DNS 动态模式，或改用另一个不冲突的域名。
 4. `TXT`、`MX`、`NS`、`SOA` 等其它类型记录不属于该冲突范围，可继续保留。
 
+迁移向导会在候选列表提前展示这类阻断项；如果列表显示“需处理”，先处理阻断项，再重新刷新候选或点击迁移向导。
+
 如果「Worker 可用性」里 Server 侧公网探测正常，但「Agent 多节点探测」异常：
 
 1. 确认对应 Agent 节点可以直接访问 DNS Worker 公网地址的 UDP/TCP `53`，例如在节点上执行 `dig @ns1.example.net example.com SOA`。

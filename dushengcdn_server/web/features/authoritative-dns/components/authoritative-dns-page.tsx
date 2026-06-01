@@ -24,6 +24,7 @@ import {
   deleteDNSWorker,
   deleteDNSZone,
   getDNSGSLBSchedulingStates,
+  getDNSMigrationCandidates,
   getDNSObservability,
   getDNSWorkers,
   getDNSZoneRecords,
@@ -34,6 +35,7 @@ import {
   updateDNSZone,
 } from '@/features/authoritative-dns/api/authoritative-dns';
 import type {
+  AuthoritativeDNSMigrationCandidate,
   DNSGSLBSimulationPayload,
   DNSGSLBSimulationResult,
   DNSGSLBSchedulingState,
@@ -180,37 +182,9 @@ function linesFromText(value: string) {
     .filter(Boolean);
 }
 
-function normalizeDNSName(value: string) {
-  return value.trim().toLowerCase().replace(/\.$/, '');
-}
-
-function domainBelongsToZone(domain: string, zoneName: string) {
-  const normalizedDomain = normalizeDNSName(domain);
-  const normalizedZoneName = normalizeDNSName(zoneName);
-  return (
-    normalizedDomain === normalizedZoneName ||
-    normalizedDomain.endsWith(`.${normalizedZoneName}`)
-  );
-}
-
 function getRouteDomains(route: ProxyRouteItem) {
   const domains = route.domains?.length ? route.domains : [route.domain];
   return domains.map((domain) => domain.trim()).filter(Boolean);
-}
-
-function findMatchingZone(route: ProxyRouteItem, zones: DNSZoneItem[]) {
-  const domains = getRouteDomains(route);
-  if (domains.length === 0) {
-    return null;
-  }
-
-  return (
-    zones
-      .filter((zone) =>
-        domains.every((domain) => domainBelongsToZone(domain, zone.name)),
-      )
-      .sort((left, right) => right.name.length - left.name.length)[0] ?? null
-  );
 }
 
 function getRouteDetailHref(route: ProxyRouteItem) {
@@ -248,6 +222,12 @@ function getDefaultSimulationQName(route?: ProxyRouteItem | null) {
 
 function getRouteRecordType(route?: ProxyRouteItem | null): 'A' | 'AAAA' {
   return route?.dns_record_type === 'AAAA' ? 'AAAA' : 'A';
+}
+
+function getCandidateRecordType(
+  candidate: AuthoritativeDNSMigrationCandidate,
+): 'A' | 'AAAA' {
+  return candidate.dns_record_type === 'AAAA' ? 'AAAA' : 'A';
 }
 
 function createMigrationRecheckResult(
@@ -690,9 +670,17 @@ export function AuthoritativeDNSPage() {
     queryKey: ['authoritative-dns', 'scheduling-states'],
     queryFn: getDNSGSLBSchedulingStates,
   });
+  const migrationCandidatesQuery = useQuery({
+    queryKey: ['authoritative-dns', 'migration-candidates'],
+    queryFn: getDNSMigrationCandidates,
+  });
 
   const zones = useMemo(() => zonesQuery.data ?? [], [zonesQuery.data]);
   const workers = useMemo(() => workersQuery.data ?? [], [workersQuery.data]);
+  const migrationCandidates = useMemo(
+    () => migrationCandidatesQuery.data ?? [],
+    [migrationCandidatesQuery.data],
+  );
   const proxyRoutes = useMemo(
     () => proxyRoutesQuery.data ?? [],
     [proxyRoutesQuery.data],
@@ -817,6 +805,9 @@ export function AuthoritativeDNSPage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
         queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'migration-candidates'],
+        }),
+        queryClient.invalidateQueries({
           queryKey: ['authoritative-dns', 'scheduling-states'],
         }),
       ]);
@@ -827,10 +818,7 @@ export function AuthoritativeDNSPage() {
     },
   });
 
-  async function runMigrationRecheck(
-    route: ProxyRouteItem,
-    zone: DNSZoneItem,
-  ) {
+  async function runMigrationRecheck(route: ProxyRouteItem, zone: DNSZoneItem) {
     let result = updateMigrationRecheckStep(
       createMigrationRecheckResult(route, zone),
       'mode',
@@ -959,9 +947,10 @@ export function AuthoritativeDNSPage() {
             ...nextWorkerProbeResults,
           }));
         }
-        const healthyProbeCount = successfulWorkerProbes.filter((probe) =>
-          probe.results.length > 0 &&
-          probe.results.every((probeResult) => probeResult.reachable),
+        const healthyProbeCount = successfulWorkerProbes.filter(
+          (probe) =>
+            probe.results.length > 0 &&
+            probe.results.every((probeResult) => probeResult.reachable),
         ).length;
         result = {
           ...result,
@@ -1354,13 +1343,18 @@ export function AuthoritativeDNSPage() {
         ) : (
           <DNSMigrationGuidePanel
             routes={proxyRoutes}
+            migrationCandidates={migrationCandidates}
             zones={zones}
             workers={workers}
-            routesLoading={proxyRoutesQuery.isLoading}
+            routesLoading={
+              proxyRoutesQuery.isLoading || migrationCandidatesQuery.isLoading
+            }
             routesError={
               proxyRoutesQuery.isError
                 ? getErrorMessage(proxyRoutesQuery.error)
-                : ''
+                : migrationCandidatesQuery.isError
+                  ? getErrorMessage(migrationCandidatesQuery.error)
+                  : ''
             }
             switchingRouteId={
               switchAuthoritativeMutation.isPending
@@ -1891,7 +1885,9 @@ function WorkersPanel({
                       variant="info"
                     />
                     <StatusBadge
-                      label={worker.geoip_enabled ? 'GeoIP 已加载' : 'GeoIP 未加载'}
+                      label={
+                        worker.geoip_enabled ? 'GeoIP 已加载' : 'GeoIP 未加载'
+                      }
                       variant={worker.geoip_enabled ? 'success' : 'warning'}
                     />
                   </div>
@@ -2506,6 +2502,7 @@ function GSLBSimulationPoolCard({
 
 function DNSMigrationGuidePanel({
   routes,
+  migrationCandidates,
   zones,
   workers,
   routesLoading,
@@ -2516,6 +2513,7 @@ function DNSMigrationGuidePanel({
   onSwitchAuthoritative,
 }: {
   routes: ProxyRouteItem[];
+  migrationCandidates: AuthoritativeDNSMigrationCandidate[];
   zones: DNSZoneItem[];
   workers: DNSWorkerItem[];
   routesLoading: boolean;
@@ -2530,40 +2528,16 @@ function DNSMigrationGuidePanel({
   const publicReachableWorkers = onlineWorkers.filter(
     (worker) => worker.probe_healthy,
   );
-  const candidates = routes
-    .filter((route) => route.dns_provider_mode !== 'authoritative')
-    .filter(
-      (route) => route.enabled || route.dns_auto_sync || route.gslb_enabled,
-    )
-    .map((route) => {
-      const matchingZone = findMatchingZone(route, zones);
-      const blockers = [
-        getRouteDomains(route).length === 0 ? '网站未配置域名' : '',
-        !matchingZone ? '没有匹配的网站 Zone' : '',
-        matchingZone && !matchingZone.enabled ? '匹配 Zone 已停用' : '',
-        onlineWorkers.length === 0 ? '没有在线 DNS Worker' : '',
-        onlineWorkers.length > 0 && publicReachableWorkers.length === 0
-          ? '在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测'
-          : '',
-      ].filter(Boolean);
-      const warnings = [
-        !route.gslb_enabled ? '未启用 GSLB，多节点池实时分流不会生效' : '',
-        workers.length < 2 ? '生产环境建议至少部署 2 个 DNS Worker' : '',
-        onlineWorkers.length > publicReachableWorkers.length
-          ? '部分在线 Worker 未通过最新公网探测，迁移前建议逐个点击「探测」'
-          : '',
-        route.dns_auto_sync
-          ? ''
-          : '当前未启用 Cloudflare 自动 DNS，请确认是否仍需要迁移',
-      ].filter(Boolean);
-
-      return {
-        route,
-        matchingZone,
-        blockers,
-        warnings,
-      };
-    });
+  const routeById = new Map(routes.map((route) => [route.id, route]));
+  const zoneById = new Map(zones.map((zone) => [zone.id, zone]));
+  const candidates = migrationCandidates.map((candidate) => ({
+    candidate,
+    route: routeById.get(candidate.proxy_route_id) ?? null,
+    matchingZone:
+      candidate.matching_zone_id != null
+        ? (zoneById.get(candidate.matching_zone_id) ?? null)
+        : null,
+  }));
   const authoritativeRoutes = routes.filter(
     (route) => route.dns_provider_mode === 'authoritative',
   );
@@ -2613,19 +2587,20 @@ function DNSMigrationGuidePanel({
               description="当前网站配置已经没有 Cloudflare 同步候选，或仍未创建网站配置。"
             />
           ) : (
-            candidates.map(({ route, matchingZone, blockers, warnings }) => {
-              const ready = blockers.length === 0;
-              const routeDomains = getRouteDomains(route);
+            candidates.map(({ candidate, route, matchingZone }) => {
+              const ready = candidate.ready && Boolean(route && matchingZone);
+              const routeDomains =
+                candidate.domains ?? (route ? getRouteDomains(route) : []);
               return (
                 <div
-                  key={route.id}
+                  key={candidate.proxy_route_id}
                   className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
                 >
                   <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                     <div className="min-w-0 space-y-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-base font-semibold break-all text-[var(--foreground-primary)]">
-                          {route.site_name || route.primary_domain}
+                          {candidate.site_name || candidate.primary_domain}
                         </h3>
                         <StatusBadge
                           label={ready ? '可切换' : '需处理'}
@@ -2633,13 +2608,13 @@ function DNSMigrationGuidePanel({
                         />
                         <StatusBadge
                           label={
-                            route.dns_auto_sync
+                            candidate.dns_auto_sync
                               ? 'Cloudflare 自动 DNS'
                               : 'Cloudflare 模式'
                           }
-                          variant={route.dns_auto_sync ? 'info' : 'warning'}
+                          variant={candidate.dns_auto_sync ? 'info' : 'warning'}
                         />
-                        {route.gslb_enabled ? (
+                        {candidate.gslb_enabled ? (
                           <StatusBadge label="GSLB 已启用" variant="success" />
                         ) : null}
                       </div>
@@ -2650,28 +2625,28 @@ function DNSMigrationGuidePanel({
                         <InfoTile
                           label="匹配 Zone"
                           value={
-                            matchingZone
-                              ? `匹配 Zone ${matchingZone.name}`
+                            candidate.matching_zone_name
+                              ? `匹配 Zone ${candidate.matching_zone_name}`
                               : '未匹配'
                           }
                         />
                         <InfoTile
                           label="当前节点池"
-                          value={getGSLBDescription(route)}
+                          value={route ? getGSLBDescription(route) : '—'}
                         />
                         <InfoTile
                           label="记录类型"
-                          value={route.dns_record_type || 'A'}
+                          value={getCandidateRecordType(candidate)}
                         />
                         <InfoTile
                           label="公网可达 Worker"
-                          value={`${publicReachableWorkers.length} / ${onlineWorkers.length}`}
+                          value={`${candidate.public_reachable_worker_count} / ${candidate.online_worker_count}`}
                         />
                       </div>
-                      {blockers.length > 0 ? (
+                      {candidate.blockers.length > 0 ? (
                         <CheckList
                           title="阻断项"
-                          items={blockers}
+                          items={candidate.blockers}
                           tone="danger"
                         />
                       ) : (
@@ -2680,34 +2655,40 @@ function DNSMigrationGuidePanel({
                           message="Zone、域名归属、在线 Worker 和公网 UDP/TCP 53 探测已满足切换条件。"
                         />
                       )}
-                      {warnings.length > 0 ? (
+                      {candidate.warnings.length > 0 ? (
                         <CheckList
                           title="建议项"
-                          items={warnings}
+                          items={candidate.warnings}
                           tone="info"
                         />
                       ) : null}
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2 md:justify-end">
-                      {matchingZone ? (
+                      {matchingZone && route ? (
                         <PrimaryButton
                           type="button"
                           disabled={
                             !ready ||
-                            switchingRouteId === route.id ||
-                            recheckingRouteId === route.id
+                            switchingRouteId === candidate.proxy_route_id ||
+                            recheckingRouteId === candidate.proxy_route_id
                           }
-                          onClick={() => onSwitchAuthoritative(route, matchingZone)}
+                          onClick={() =>
+                            onSwitchAuthoritative(route, matchingZone)
+                          }
                         >
-                          {switchingRouteId === route.id
+                          {switchingRouteId === candidate.proxy_route_id
                             ? '切换中...'
-                            : recheckingRouteId === route.id
+                            : recheckingRouteId === candidate.proxy_route_id
                               ? '复测中...'
                               : '一键切换'}
                         </PrimaryButton>
                       ) : null}
                       <a
-                        href={getRouteDetailHref(route)}
+                        href={
+                          route
+                            ? getRouteDetailHref(route)
+                            : `${proxyRouteDetailPath}?id=${candidate.proxy_route_id}`
+                        }
                         className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
                       >
                         去网站详情
@@ -2758,11 +2739,7 @@ function DNSMigrationGuidePanel({
   );
 }
 
-function MigrationRecheckPanel({
-  result,
-}: {
-  result: MigrationRecheckResult;
-}) {
+function MigrationRecheckPanel({ result }: { result: MigrationRecheckResult }) {
   const healthyProbeCount = result.workerProbes.filter(
     (probe) =>
       probe.results.length > 0 &&
@@ -2874,9 +2851,7 @@ function MigrationRecheckPanel({
                     {simulation.source_scope}
                   </span>
                   <StatusBadge
-                    label={
-                      simulation.targets.length > 0 ? '有目标' : '无目标'
-                    }
+                    label={simulation.targets.length > 0 ? '有目标' : '无目标'}
                     variant={
                       simulation.targets.length > 0 ? 'success' : 'danger'
                     }
@@ -3260,7 +3235,8 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
                       {probe.node_name || probe.node_id}
                     </p>
                     <p className="mt-1 text-[11px] text-[var(--foreground-muted)]">
-                      {probe.pool_name || 'default'} · {formatRelativeTime(probe.checked_at)}
+                      {probe.pool_name || 'default'} ·{' '}
+                      {formatRelativeTime(probe.checked_at)}
                     </p>
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
@@ -3278,7 +3254,9 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
                   <span>平均 {formatLatencyMs(probe.average_rtt_ms)}</span>
                   <span>最大 {formatLatencyMs(probe.max_rtt_ms)}</span>
                   {probe.probe_age_seconds > 0 ? (
-                    <span>{formatDurationSeconds(probe.probe_age_seconds)}前</span>
+                    <span>
+                      {formatDurationSeconds(probe.probe_age_seconds)}前
+                    </span>
                   ) : null}
                   {probe.results.map((result) => (
                     <StatusBadge

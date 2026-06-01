@@ -271,7 +271,8 @@ describe('Authoritative DNS page', () => {
                             healthy: false,
                             probe_status: 'stale',
                             probe_age_seconds: 4200,
-                            probe_message: 'Agent 多节点探测结果超过 5 分钟未刷新',
+                            probe_message:
+                              'Agent 多节点探测结果超过 5 分钟未刷新',
                             average_rtt_ms: 41,
                             max_rtt_ms: 70,
                             last_error: 'TCP 53 探测失败',
@@ -518,6 +519,39 @@ describe('Authoritative DNS page', () => {
                     },
                   ],
                 },
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-workers/migration-candidates')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    proxy_route_id: 91,
+                    site_name: 'edge-site',
+                    primary_domain: 'www.example.com',
+                    domains: ['www.example.com'],
+                    enabled: true,
+                    dns_auto_sync: true,
+                    dns_provider_mode: 'cloudflare',
+                    dns_record_type: 'A',
+                    gslb_enabled: true,
+                    matching_zone_id: 1,
+                    matching_zone_name: 'example.com',
+                    matching_zone_enabled: true,
+                    total_worker_count: 1,
+                    online_worker_count: 1,
+                    public_reachable_worker_count: 1,
+                    ready: true,
+                    blockers: [],
+                    warnings: ['生产环境建议至少部署 2 个 DNS Worker'],
+                  },
+                ],
               }),
             ),
           );
@@ -873,11 +907,11 @@ describe('Authoritative DNS page', () => {
     const switchDialog = await screen.findByRole('dialog', {
       name: '切换到权威 DNS',
     });
-    await user.click(within(switchDialog).getByRole('button', { name: '切换' }));
+    await user.click(
+      within(switchDialog).getByRole('button', { name: '切换' }),
+    );
     await waitFor(() => {
-      expect(
-        screen.getByText(/“edge-site”切换后复测完成/),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/“edge-site”切换后复测完成/)).toBeInTheDocument();
     });
     expect(screen.getByText('切换后复测')).toBeInTheDocument();
     expect(screen.getByText('网站 DNS 模式')).toBeInTheDocument();
@@ -886,7 +920,9 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('GSLB 模拟复测')).toBeInTheDocument();
     expect(screen.getByText('需要确认')).toBeInTheDocument();
     expect(screen.getByText(/当前委派状态：部分匹配/)).toBeInTheDocument();
-    expect(screen.getByText(/1 \/ 1 个在线 Worker UDP\/TCP 53 可达/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 \/ 1 个在线 Worker UDP\/TCP 53 可达/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/已完成 3 组模拟/)).toBeInTheDocument();
     expect(screen.getByText('global')).toBeInTheDocument();
 

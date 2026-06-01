@@ -165,6 +165,15 @@ func GetDNSGSLBSchedulingStates(c *gin.Context) {
 	respondSuccess(c, states)
 }
 
+func GetDNSMigrationCandidates(c *gin.Context) {
+	candidates, err := service.ListAuthoritativeDNSMigrationCandidates()
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, candidates)
+}
+
 func CheckDNSZoneDelegation(c *gin.Context) {
 	id, ok := parseUintParam(c, "id")
 	if !ok {

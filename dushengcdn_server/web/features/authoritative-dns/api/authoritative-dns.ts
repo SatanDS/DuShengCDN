@@ -1,6 +1,7 @@
 import { apiRequest } from '@/lib/api/client';
 
 import type {
+  AuthoritativeDNSMigrationCandidate,
   DNSGSLBSimulationPayload,
   DNSGSLBSimulationResult,
   DNSGSLBSchedulingStates,
@@ -90,6 +91,12 @@ export function getDNSObservability(hours = 24) {
 
 export function getDNSGSLBSchedulingStates() {
   return apiRequest<DNSGSLBSchedulingStates>('/dns-workers/scheduling-states');
+}
+
+export function getDNSMigrationCandidates() {
+  return apiRequest<AuthoritativeDNSMigrationCandidate[]>(
+    '/dns-workers/migration-candidates',
+  );
 }
 
 export function createDNSWorker(payload: DNSWorkerMutationPayload) {
