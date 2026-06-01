@@ -1443,6 +1443,108 @@ describe('Proxy route website pages', () => {
     });
   });
 
+  it('saves Basic Auth settings from config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  basic_auth_enabled: payload.basic_auth_enabled,
+                  basic_auth_username: payload.basic_auth_username,
+                  basic_auth_password: payload.basic_auth_password,
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  basic_auth_enabled: false,
+                  basic_auth_username: '',
+                  basic_auth_password: '',
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="auth" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: '认证配置' }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('checkbox', { name: /启用 Basic Auth 鉴权/ }),
+    );
+    await user.type(screen.getByPlaceholderText('admin'), ' edge-admin ');
+    await user.type(screen.getByPlaceholderText('secret123'), ' edge-secret ');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-auth-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing Basic Auth save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      basic_auth_enabled: true,
+      basic_auth_username: 'edge-admin',
+      basic_auth_password: 'edge-secret',
+    });
+  });
+
   it('saves region restriction settings from config page', async () => {
     const updateRequests: Array<Record<string, unknown>> = [];
 
