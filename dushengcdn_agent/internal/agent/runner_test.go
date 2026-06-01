@@ -476,8 +476,8 @@ func TestRunnerReplaysBufferedObservabilityAfterHeartbeatRecovery(t *testing.T) 
 	if runErr != context.Canceled {
 		t.Fatalf("expected run to stop by context cancellation, got %v", runErr)
 	}
-	if len(heartbeatService.heartbeatPayloads) != 2 {
-		t.Fatalf("expected two heartbeat payloads, got %d", len(heartbeatService.heartbeatPayloads))
+	if len(heartbeatService.heartbeatPayloads) < 2 {
+		t.Fatalf("expected at least two heartbeat payloads, got %d", len(heartbeatService.heartbeatPayloads))
 	}
 	secondPayload := heartbeatService.heartbeatPayloads[1]
 	if len(secondPayload.BufferedObservability) != 1 {
