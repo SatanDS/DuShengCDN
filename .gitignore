@@ -2,6 +2,8 @@
 .corepack/
 .npm-cache/
 .pnpm-store/
+/.go-cache/
+/.gomod-cache/
 .gocache*
 .idea
 .vscode

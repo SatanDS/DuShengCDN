@@ -93,7 +93,8 @@ function sidebarReference(): DefaultTheme.SidebarItem[] {
         { text: '命令与脚本', link: 'cli' },
         { text: 'API 约定', link: 'api' },
         { text: '仓库结构', link: 'repository' },
-        { text: '项目审计报告', link: 'audit-report' }
+        { text: '项目审计报告', link: 'audit-report' },
+        { text: '后续完善清单', link: 'maintenance-backlog' }
       ]
     }
   ]

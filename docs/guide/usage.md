@@ -207,7 +207,7 @@ HTTPS 按域名绑定证书，而不是按整个网站统一强制启用。
 ## 推荐实践
 
 * 生产环境显式配置 `SESSION_SECRET`，并优先使用 PostgreSQL。
-* 修改端口、DSN、Token、密码等本地部署参数时，记录到独立部署文档或 Compose override，避免后续 `git pull` 被本地 `docker-compose.yaml` 修改阻塞。
+* 修改端口、DSN、Token、密码等本地部署参数时，优先写入 `dushengcdn_server/.env` 或 Compose override，避免后续 `git pull` 被本地 `docker-compose.yaml` 修改阻塞。
 * 升级前备份数据库和上传目录，升级后确认 Server 日志、节点状态、应用记录和当前激活版本。
 * 修改网站配置后先看预览或 diff，再发布。
 * 每次发布后检查节点详情与应用记录。

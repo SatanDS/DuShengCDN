@@ -11,4 +11,5 @@
 | [API 约定](./api.md) | 管理端 API 与 Agent API 的响应结构、鉴权和路径约定 |
 | [仓库结构](./repository.md) | `dushengcdn_server`、`dushengcdn_agent`、`dushengcdn_server/web` 与 `docs` 的职责 |
 | [项目审计报告](./audit-report.md) | 当前架构审计结论、已修复问题、验证命令和后续运维建议 |
+| [后续完善清单](./maintenance-backlog.md) | 当前未完成补强方向、优先级和验收证据 |
 | [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md) | 实时 DNS 调度的目标、架构、数据模型、部署和后续增强 |

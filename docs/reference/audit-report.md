@@ -116,7 +116,7 @@ go run . --reset-root-password 'new-password-123'
 | 优先级 | 建议 | 原因 |
 | --- | --- | --- |
 | 高 | 为 docs 构建加入依赖安装检查或 CI 验证 | 避免文档站新增页面后链接或构建问题漏出 |
-| 高 | 为 Server Compose 提供 `.env.example` 或 override 示例 | 减少用户直接改仓库模板造成升级冲突 |
+| 高 | 为 Server Compose 提供 `.env.example` 或 override 示例 | 已提供 `dushengcdn_server/.env.example` 并让 Compose 读取 `.env` 变量；后续可继续补 override 场景 |
 | 中 | 增加备份恢复脚本或管理端备份提示 | 当前已有命令文档，但仍依赖人工执行 |
 | 中 | 对 root 重置命令补充端到端 CLI 测试 | 当前模型层已覆盖，CLI 行为可进一步回归 |
 | 中 | 为前端网站配置各分区补更细的单测 | 站点配置页承载功能最多，回归价值高 |

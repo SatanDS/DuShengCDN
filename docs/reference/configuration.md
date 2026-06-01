@@ -30,6 +30,7 @@ Agent 支持：
 | 一键安装 DNS Worker 环境文件 | `/opt/dushengcdn-dns-worker/dns-worker.env` | 安装脚本默认生成，包含 Server 地址、Worker Token、监听地址和快照路径 |
 | 一键安装 DNS Worker 数据目录 | `/opt/dushengcdn-dns-worker/data` | 安装脚本默认生成，用于保存快照缓存和可选 Country MMDB |
 | Agent 数据目录 | 配置文件所在目录下的 `data` | 可通过 `data_dir` 修改 |
+| 源码 Compose Server 环境文件 | `dushengcdn_server/.env` | 可从 `dushengcdn_server/.env.example` 复制，保存端口、数据库密码、`SESSION_SECRET`、DSN 和可选旧版 `AGENT_TOKEN`；真实 `.env` 不提交 |
 
 ## Server 命令行参数
 
@@ -69,6 +70,7 @@ go run . --port 3000 --log-dir ./logs
 * `SESSION_SECRET` 生产环境必须显式配置。
 * `REDIS_CONN_STRING` 未配置时，相关能力回退为进程内实现。
 * `AGENT_TOKEN` 仅用于升级兼容旧版 Agent。新部署应使用 Discovery Token 首次注册，或使用节点详情里的专属 `agent_token`；旧全局 Token 请求必须携带已存在的 `node_id`，且不能覆盖已经切换为专属 Token 的节点。
+* 源码 Compose 部署 Server 时，推荐复制 `dushengcdn_server/.env.example` 为 `.env` 后再修改端口、密码和 DSN，避免直接修改仓库模板导致后续 `git pull` 冲突。
 
 ## 运行时 Option
 
@@ -185,7 +187,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | --- | --- | --- |
 | `DUSHENGCDN_VERSION` | 源码 Compose 构建 Server 或 Agent 镜像时传给 Dockerfile，并写入对应二进制版本 | `dev` |
 
-源码 Compose 更新 Server 时建议使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build`，让顶栏“版本”显示当前运行中的 Git 版本；更新 Agent Compose 时同样设置该变量，节点列表会显示 Agent 上报的 Git 版本。
+源码 Compose 更新 Server 时建议使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build`，让顶栏“版本”显示当前运行中的 Git 版本；更新 Agent Compose 时同样设置该变量，节点列表会显示 Agent 上报的 Git 版本。
 
 ## Agent 环境变量
 

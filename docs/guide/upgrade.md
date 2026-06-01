@@ -17,22 +17,26 @@ cd /opt/dushengcdn
 git fetch origin main
 git pull --ff-only origin main
 cd dushengcdn_server
-DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
+cp -n .env.example .env
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
 ```
 
-如果服务器上的 Compose 文件曾经手动改过端口、密码或 DSN，`git pull --ff-only` 可能被本地改动阻塞。确认没有需要保留的源码修改后，可以先备份本地部署参数，再执行：
+首次使用源码 Compose 模板时，把真实配置写入 `dushengcdn_server/.env`，例如 `DUSHENGCDN_HTTP_PORT`、`POSTGRES_PASSWORD`、`SESSION_SECRET`、`DSN` 和升级兼容旧 Agent 时需要的 `AGENT_TOKEN`。后续升级只拉取仓库模板，`.env` 继续保留在服务器本地。
+
+如果服务器上的 Compose 文件曾经手动改过端口、密码或 DSN，`git pull --ff-only` 可能被本地改动阻塞。确认没有需要保留的源码修改后，可以先把本地部署参数迁移到 `.env`，再执行：
 
 ```bash
 cd /opt/dushengcdn
 git fetch origin main
 git reset --hard origin/main
 cd dushengcdn_server
-DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
+cp -n .env.example .env
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
 ```
 
-为了减少后续冲突，建议把本地端口映射、数据库密码、`SESSION_SECRET` 和 DSN 保存到独立部署记录或 Compose override 中，而不是长期直接改仓库模板。
+为了减少后续冲突，建议把本地端口映射、数据库密码、`SESSION_SECRET` 和 DSN 保存到 `.env` 或 Compose override 中，而不是长期直接改仓库模板。
 源码 Compose 构建时，`DUSHENGCDN_VERSION` 会写入 Server 或 Agent 二进制；管理端顶栏“版本”显示的是当前运行中的 Server 版本，节点列表显示 Agent 上报的版本。
 
 升级后确认：

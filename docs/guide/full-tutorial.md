@@ -263,18 +263,20 @@ cd /opt/dushengcdn
 git fetch origin main
 git pull --ff-only origin main
 cd dushengcdn_server
-DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
+cp -n .env.example .env
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
 ```
 
-如果本地改过仓库内 Compose 文件导致拉取冲突，先记录端口、DSN、密码和 Token。确认没有需要保留的源码修改后：
+本地端口、DSN、密码、`SESSION_SECRET` 和 Token 建议写入 `dushengcdn_server/.env`，不要直接改仓库内 Compose 模板。如果本地改过仓库内 Compose 文件导致拉取冲突，先记录这些参数并迁移到 `.env`。确认没有需要保留的源码修改后：
 
 ```bash
 cd /opt/dushengcdn
 git fetch origin main
 git reset --hard origin/main
 cd dushengcdn_server
-DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
+cp -n .env.example .env
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
 ```
 

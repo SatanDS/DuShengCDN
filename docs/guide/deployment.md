@@ -118,6 +118,15 @@ docker compose logs -f dushengcdn
 
 首次访问 `http://localhost:3000`，默认账号为 `root` / `123456`。登录后请立即修改默认密码。
 
+如果使用仓库内的源码 Compose 模板部署 Server，先复制环境变量模板：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+cp -n .env.example .env
+```
+
+然后在 `.env` 中修改 `DUSHENGCDN_HTTP_PORT`、`POSTGRES_PASSWORD`、`SESSION_SECRET` 和 `DSN`。后续本地部署参数都保存在 `.env`，不要直接改仓库里的 `docker-compose.yaml`，这样升级时可以继续使用 `git pull --ff-only`。
+
 如果宿主机 `3000` 端口已被占用，可以只改宿主机侧端口，例如：
 
 ```yaml
@@ -376,7 +385,7 @@ Server：
 * Root 用户可在管理端顶栏检查并升级正式版。
 * 如需尝试 preview 版本，可手动检查对应发布。
 * 也可通过上传 Server 二进制的方式执行确认升级。
-* 源码或 Compose 部署时，先提交、备份或保留本地 `docker-compose.yaml` 改动，再拉取新版代码。端口映射、密码、DSN 这类本地部署配置不要直接依赖仓库默认值。
+* 源码或 Compose 部署时，把端口映射、密码、DSN、`SESSION_SECRET` 和旧版 `AGENT_TOKEN` 这类本地部署配置放到 `dushengcdn_server/.env`，不要直接修改仓库里的 `docker-compose.yaml`。
 
 源码目录部署且只想更新面板端时：
 
@@ -385,18 +394,20 @@ cd /opt/dushengcdn
 git fetch origin main
 git pull --ff-only origin main
 cd dushengcdn_server
-DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
+cp -n .env.example .env
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
 ```
 
-如果服务器上曾经直接改过仓库里的 `docker-compose.yaml`，`git pull` 可能提示本地改动会被覆盖。推荐把本地端口、密码、DSN 先记录到独立备份文件或 Compose override，再执行：
+如果服务器上曾经直接改过仓库里的 `docker-compose.yaml`，`git pull` 可能提示本地改动会被覆盖。推荐先把本地端口、密码、DSN、`SESSION_SECRET` 和 Token 迁移到 `dushengcdn_server/.env`，再执行：
 
 ```bash
 cd /opt/dushengcdn
 git fetch origin main
 git reset --hard origin/main
 cd dushengcdn_server
-DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose up -d --build
+cp -n .env.example .env
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
 ```
 
