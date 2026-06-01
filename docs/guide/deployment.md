@@ -67,6 +67,28 @@ DNS Worker（自建权威 DNS 运行角色）：
 
 ## Docker Compose 部署 Server
 
+仓库提供了可复制的 Compose 模板，集中放在 `examples/compose/`：
+
+| 模板 | 用途 |
+| --- | --- |
+| `server.production.yaml` + `server.env.example` | 使用 GHCR 镜像运行 Server + PostgreSQL，适合生产部署 |
+| `server.source.yaml` + `server.env.example` | 从当前仓库源码构建 Server，适合源码部署和升级验证 |
+| `server.override.example.yaml` | 演示覆盖宿主机端口、数据目录和日志等级 |
+| `agent.yaml` + `agent.env.example` | Docker Compose 方式部署 Agent |
+| `dns-worker.yaml` + `dns-worker.env.example` | Docker Compose 方式部署 DNS Worker |
+
+例如使用镜像模板部署 Server：
+
+```bash
+mkdir -p /opt/dushengcdn-compose
+cd /opt/dushengcdn-compose
+curl -fsSLO https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examples/compose/server.production.yaml
+curl -fsSLo .env https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examples/compose/server.env.example
+vi .env
+docker compose --env-file .env -f server.production.yaml up -d
+docker compose --env-file .env -f server.production.yaml ps
+```
+
 创建 `docker-compose.yml`：
 
 ```yaml

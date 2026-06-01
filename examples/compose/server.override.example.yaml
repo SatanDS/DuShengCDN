@@ -1,0 +1,12 @@
+services:
+  postgres:
+    volumes:
+      - /srv/dushengcdn/postgres-data:/var/lib/postgresql/data
+
+  dushengcdn:
+    ports:
+      - "0.0.0.0:3010:3000"
+    environment:
+      LOG_LEVEL: info
+    volumes:
+      - /srv/dushengcdn/data:/data

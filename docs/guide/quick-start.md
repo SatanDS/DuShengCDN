@@ -26,6 +26,19 @@ Agent 统一通过 OpenResty 二进制控制运行时。本地部署需要节点
 
 ## 1. 启动 Server
 
+最快可以使用仓库提供的 Compose 模板：
+
+```bash
+mkdir -p /opt/dushengcdn-compose
+cd /opt/dushengcdn-compose
+curl -fsSLO https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examples/compose/server.production.yaml
+curl -fsSLo .env https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examples/compose/server.env.example
+vi .env
+docker compose --env-file .env -f server.production.yaml up -d
+```
+
+下面是同等内容的最小内联示例。
+
 在空目录中创建 `docker-compose.yml`：
 
 ```yaml

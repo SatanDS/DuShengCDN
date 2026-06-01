@@ -28,7 +28,7 @@
 | 项目 | 当前状态 | 验收证据 |
 | --- | --- | --- |
 | 英文文档同步中文新增内容 | 中文文档优先覆盖主要使用路径，英文页面存在滞后 | 英文 `docs/en/**` 与中文关键部署、升级、排障内容一致 |
-| 示例 Compose 细化 | 已有 Server、Agent、DNS Worker Compose 模板 | 按不同部署场景补充最小生产模板、源码构建模板和 override 示例 |
+| 示例 Compose 细化 | 已新增 `examples/compose/`，包含 Server 镜像生产模板、Server 源码构建模板、override 示例、Agent 模板、DNS Worker 模板和对应 `.env.example`；部署、快速开始、CLI 和配置参考已补充入口 | `docker compose --env-file ... config` 可解析 Server/Agent/DNS Worker 示例；文档构建通过 |
 
 ## 维护规则
 

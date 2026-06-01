@@ -191,6 +191,13 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 
 源码 Compose 更新 Server 时建议使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build`，让顶栏“版本”显示当前运行中的 Git 版本；更新 Agent Compose 时同样设置该变量，节点列表会显示 Agent 上报的 Git 版本。
 
+仓库的 `examples/compose/` 提供了镜像生产部署、源码构建、override、Agent 和 DNS Worker 模板。`examples/compose/server.env.example` 额外支持：
+
+| 变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `DUSHENGCDN_REPO_DIR` | `server.source.yaml` 源码构建时的仓库根目录 | `../..` |
+| `DUSHENGCDN_HTTP_BIND` | `server.production.yaml` / `server.source.yaml` 暴露管理端时绑定的宿主机地址 | `127.0.0.1` |
+
 ## 一体化部署脚本参数
 
 `scripts/install-server.sh` 用于源码 Compose 面板部署，并默认自动部署同机 DNS Worker。脚本会在 `.env` 不存在时从 `.env.example` 创建环境文件；全新部署会自动生成 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和匹配的 `DSN`。如果检测到已有 `dushengcdn_server/postgres-data`，脚本会保留 `.env.example` 中的数据库密码和 DSN，只生成 `SESSION_SECRET`，避免升级旧源码部署时旧 PostgreSQL 数据目录认证失败；已有 `.env` 不会被覆盖。脚本会先检查本地是否已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、安装目录、环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时默认跳过 Worker 自动创建和安装。

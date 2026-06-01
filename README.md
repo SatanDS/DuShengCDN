@@ -100,6 +100,8 @@ docker compose up -d
 
 访问地址：`http://localhost:3000`
 
+更多可复制的 Compose 模板放在 `examples/compose/`：包括 GHCR 镜像生产部署、源码构建部署、端口/数据目录 override、Agent 和 DNS Worker。生产部署推荐从这些模板复制到独立目录后改 `.env`，不要直接修改仓库内 Compose 文件。
+
 源码 Compose 部署时，也可以在仓库根目录使用一体化脚本启动面板并默认安装同机 DNS Worker。脚本会在首次部署时自动生成 `.env` 里的数据库密码、`SESSION_SECRET` 和 `DSN`；如果升级旧源码部署且检测到已有 `dushengcdn_server/postgres-data`，会保留 `.env.example` 中的数据库密码和 DSN，避免旧 PostgreSQL 数据目录因密码不一致导致面板打不开。脚本会先检查本机是否已部署 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动安装，避免覆盖现有配置。
 
 ```bash

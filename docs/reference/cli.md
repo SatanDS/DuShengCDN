@@ -47,6 +47,16 @@ bash scripts/install-server.sh --public-ip 203.0.113.10
 
 脚本默认先检查本机是否已有 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、安装目录、环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动创建和安装。只部署面板可加 `--skip-dns-worker`，确认要覆盖本机 Worker 配置时再加 `--force-dns-worker-reinstall`。
 
+Compose 模板：
+
+| 模板 | 说明 |
+| --- | --- |
+| `examples/compose/server.production.yaml` | GHCR 镜像版 Server + PostgreSQL |
+| `examples/compose/server.source.yaml` | 源码构建版 Server + PostgreSQL |
+| `examples/compose/server.override.example.yaml` | 端口、数据目录和日志等级 override 示例 |
+| `examples/compose/agent.yaml` | Agent Docker Compose 模板 |
+| `examples/compose/dns-worker.yaml` | DNS Worker Docker Compose 模板 |
+
 备份 Server 数据：
 
 ```bash

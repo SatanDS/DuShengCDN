@@ -1,0 +1,22 @@
+services:
+  dushengcdn-agent:
+    image: ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:-latest}
+    container_name: dushengcdn-agent
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:18081:18081"
+    volumes:
+      - agent-data:/data
+    environment:
+      DUSHENGCDN_SERVER_URL: ${DUSHENGCDN_SERVER_URL:?set DUSHENGCDN_SERVER_URL in .env}
+      DUSHENGCDN_AGENT_TOKEN: ${DUSHENGCDN_AGENT_TOKEN:?set DUSHENGCDN_AGENT_TOKEN in .env}
+      DUSHENGCDN_GEOIP_LOOKUP_API_URL: ${DUSHENGCDN_GEOIP_LOOKUP_API_URL:-}
+      DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN: ${DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  agent-data:
