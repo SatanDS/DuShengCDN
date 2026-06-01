@@ -1622,6 +1622,52 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerHeartbeatNormalizesInconsistentRollupDurations(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	windowStart := time.Now().UTC().Truncate(time.Minute)
+	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status: "online",
+		Rollups: []DNSQueryRollupInput{
+			{
+				WindowStart:     windowStart,
+				WindowMinutes:   1,
+				QName:           "www.example.com",
+				QType:           "A",
+				RCode:           "NOERROR",
+				QueryCount:      4,
+				TotalDurationMs: 10,
+				MaxDurationMs:   30,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	var rollup model.DNSQueryRollup
+	if err := model.DB.Where("worker_id = ?", authenticated.WorkerID).First(&rollup).Error; err != nil {
+		t.Fatalf("load rollup: %v", err)
+	}
+	if rollup.TotalDurationMs != 30 || rollup.MaxDurationMs != 30 {
+		t.Fatalf("expected total duration to be at least max duration, got %+v", rollup)
+	}
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.WorkerHealth.Workers[0].AverageLatencyMs != 7.5 || summary.WorkerHealth.Workers[0].MaxLatencyMs != 30 {
+		t.Fatalf("unexpected normalized worker latency: %+v", summary.WorkerHealth.Workers[0])
+	}
+}
+
 func TestDNSWorkerHeartbeatPersistsSchedulingStates(t *testing.T) {
 	setupServiceTestDB(t)
 

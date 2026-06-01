@@ -2789,6 +2789,7 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 		if err != nil {
 			return err
 		}
+		totalDurationMs, maxDurationMs := normalizeDNSRollupDurations(input.TotalDurationMs, input.MaxDurationMs)
 		rollup := &model.DNSQueryRollup{
 			WindowStart:     input.WindowStart,
 			WindowMinutes:   normalizeDNSRollupWindow(input.WindowMinutes),
@@ -2800,8 +2801,8 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 			QType:           normalizeAuthoritativeDNSRecordTypeOrDefault(input.QType),
 			RCode:           normalizeDNSRCode(input.RCode),
 			QueryCount:      input.QueryCount,
-			TotalDurationMs: normalizeDNSDurationMs(input.TotalDurationMs),
-			MaxDurationMs:   normalizeDNSDurationMs(input.MaxDurationMs),
+			TotalDurationMs: totalDurationMs,
+			MaxDurationMs:   maxDurationMs,
 			TargetSummary:   string(targetSummaryJSON),
 		}
 		if rollup.WindowStart.IsZero() {
@@ -2993,6 +2994,15 @@ func normalizeDNSDurationMs(value int64) int64 {
 		return 0
 	}
 	return value
+}
+
+func normalizeDNSRollupDurations(totalDurationMs int64, maxDurationMs int64) (int64, int64) {
+	total := normalizeDNSDurationMs(totalDurationMs)
+	maximum := normalizeDNSDurationMs(maxDurationMs)
+	if total < maximum {
+		total = maximum
+	}
+	return total, maximum
 }
 
 func decodeDNSWorkerProbeResults(raw string) []DNSWorkerProbeResultView {
