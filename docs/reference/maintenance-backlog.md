@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | 备份恢复脚本或管理端备份提示 | 已新增 `scripts/backup-server.sh` 和 `scripts/restore-server.sh`；备份支持 PostgreSQL Compose 与 SQLite，恢复会校验 manifest、要求 `--yes`、默认阻止运行中 Server 覆盖，并在恢复前生成当前数据安全备份；部署、升级、完整教程和 CLI 参考已补充用法 | `bash -n scripts/backup-server.sh`、`bash -n scripts/restore-server.sh`、`scripts/restore-server.sh --help` 通过；SQLite 备份/恢复试跑能生成数据库备份、数据目录归档、恢复前安全备份和 `manifest.txt` |
 | root 密码重置端到端 CLI 回归 | 已新增 `dushengcdn_server/reset_root_cli_test.go`，通过 `go run . --reset-root-password ...` 覆盖创建 root、拒绝旧密码、以及重置被禁用/降级 root 的完整命令入口 | `cd dushengcdn_server && go test . -run TestResetRootPasswordCLI -count=1` 和 `go test ./...` 通过 |
-| 网站配置分区前端测试补强 | 已覆盖列表入口、分区展开、创建网站、域名、反向代理节点池、自动 DNS/GSLB、权威 DNS、WAF、PoW、Basic Auth 和地区限制保存回归；后续可继续补缓存保存失败和加载态 | `cd dushengcdn_server/web && pnpm test -- tests/unit/proxy-routes-page.test.tsx` 通过 |
+| 网站配置分区前端测试补强 | 已覆盖列表入口、分区展开、创建网站、域名、反向代理节点池、自动 DNS/GSLB、权威 DNS、缓存保存失败/加载态、WAF、PoW、Basic Auth 和地区限制保存回归 | `cd dushengcdn_server/web && pnpm test -- tests/unit/proxy-routes-page.test.tsx` 通过 |
 | 权威 DNS 调度评分增强 | 当前 Agent 多点探测默认只用于观测；启用门槛后参与候选过滤和同等候选排序 | 如扩展 RTT、丢包、区域覆盖评分，先更新 `docs/design/authoritative-dns-gslb.md`，再补 Worker/Server/前端测试 |
 | 权威 DNS 新手部署闭环实机验证 | 一体化脚本已覆盖自动创建 Worker Token 和本机安装路径，但尚未在真实 Linux 服务器上完成从空目录到 `dig @PUBLIC_IP zone SOA` 的端到端演练 | 在 Debian/Ubuntu 空机执行 `bash scripts/install-server.sh --public-ip PUBLIC_IP`，确认 `docker compose ps`、`systemctl status dushengcdn-dns-worker`、`ss -lntup/ss -lnuap :53` 和 `dig @PUBLIC_IP example.com SOA` 均符合预期 |
 

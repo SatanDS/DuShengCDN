@@ -1642,4 +1642,155 @@ describe('Proxy route website pages', () => {
       region_restriction_countries: ['CN', 'US'],
     });
   });
+
+  it('shows loading state while cache config dependencies are loading', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes('/proxy-routes/9')) {
+          return new Promise<Response>(() => undefined);
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="cache" />,
+    );
+
+    expect(
+      document.querySelector('.animate-pulse'),
+    ).toBeInstanceOf(HTMLElement);
+    expect(screen.queryByText('缓存')).not.toBeInTheDocument();
+  });
+
+  it('keeps cache save pending state visible and shows server failure toast', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+    let rejectUpdate: ((reason?: unknown) => void) | undefined;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return new Promise<Response>((_resolve, reject) => {
+            rejectUpdate = reject;
+          });
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  cache_enabled: true,
+                  cache_policy: 'path_prefix',
+                  cache_rule_list: ['/assets'],
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="cache" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: '缓存' }),
+    ).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole('combobox'), 'path_exact');
+    const cacheForm = document.querySelector('#proxy-route-cache-form');
+    const rulesInput = cacheForm?.querySelector('textarea');
+    expect(rulesInput).toBeInstanceOf(HTMLTextAreaElement);
+    if (!rulesInput) {
+      throw new Error('missing cache rules input');
+    }
+    await user.clear(rulesInput);
+    await user.type(rulesInput, '/index.html');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-cache-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing cache save button');
+    }
+
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+      expect(saveButton).toHaveTextContent('保存中...');
+      expect(saveButton).toBeDisabled();
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      cache_enabled: true,
+      cache_policy: 'path_exact',
+      cache_rules: ['/index.html'],
+    });
+
+    rejectUpdate?.(new Error('缓存策略保存失败：节点池不可用'));
+
+    expect(
+      await screen.findByText('缓存策略保存失败：节点池不可用'),
+    ).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(saveButton).toHaveTextContent('保存');
+      expect(saveButton).not.toBeDisabled();
+    });
+  });
 });
