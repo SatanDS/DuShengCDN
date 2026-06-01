@@ -50,7 +50,7 @@ Options:
 Behavior:
   1. Creates dushengcdn_server/.env from .env.example when .env does not exist
      and fills SESSION_SECRET plus first-install database secrets with generated values
-  2. Starts or updates Server with Docker Compose
+  2. Starts or updates Server with Docker Compose and checks /api/status
   3. When DNS Worker is enabled, checks whether a local Worker is already deployed
   4. If no local Worker is found, detects public IP, creates a DNS Worker Token, and runs install-dns-worker.sh
 EOF
@@ -266,6 +266,10 @@ diagnose_server_logs() {
   fi
 }
 
+server_status_url() {
+  printf '%s/api/status' "${SERVER_URL%/}"
+}
+
 ensure_server_running() {
   local running_services logs
 
@@ -284,6 +288,43 @@ ensure_server_running() {
     warn "could not read dushengcdn logs from Docker Compose."
   fi
   die "server service did not stay running. Fix the issue above and rerun scripts/install-server.sh."
+}
+
+check_server_http_health() {
+  local status_url response logs attempt
+
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl was not found; skipping HTTP health check for DuShengCDN Server."
+    warn "After the script finishes, verify the panel with: curl -I $(server_status_url)"
+    return
+  fi
+
+  status_url="$(server_status_url)"
+  log "Checking DuShengCDN Server HTTP health at ${status_url}..."
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if response="$(curl -fsS --max-time 5 "$status_url" 2>&1)" &&
+      printf '%s\n' "$response" | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
+      return
+    fi
+    sleep 2
+  done
+
+  warn "DuShengCDN Server service is running, but ${status_url} did not return a healthy API response."
+  if [[ -n "${response:-}" ]]; then
+    warn "last HTTP health check output:"
+    printf '%s\n' "$response" >&2
+  fi
+  logs="$(collect_server_logs)"
+  if [[ -n "$logs" ]]; then
+    warn "recent dushengcdn logs:"
+    printf '%s\n' "$logs" >&2
+    diagnose_server_logs "$logs"
+  else
+    warn "could not read dushengcdn logs from Docker Compose."
+  fi
+  warn "For source Compose deployments, the default host panel port is DUSHENGCDN_HTTP_PORT=3010 while the container listens on 3000."
+  warn "If you use Nginx, Nginx Proxy Manager, Baota, or another reverse proxy, point its upstream to the host port in ${ENV_FILE}."
+  die "server HTTP health check failed. Fix the issue above and rerun scripts/install-server.sh."
 }
 
 dns_worker_already_installed() {
@@ -432,6 +473,7 @@ log "Starting DuShengCDN Server with Docker Compose..."
 compose_run up -d --build
 compose_run ps
 ensure_server_running
+check_server_http_health
 
 if [[ "$INSTALL_DNS_WORKER" != "true" ]]; then
   log "DNS Worker installation skipped."

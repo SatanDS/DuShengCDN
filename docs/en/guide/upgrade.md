@@ -43,7 +43,7 @@ cd /opt/dushengcdn
 bash scripts/install-server.sh
 ```
 
-When `.env` is missing, the script creates it from `.env.example`. A fresh install gets generated database credentials and `SESSION_SECRET`. If an existing `dushengcdn_server/postgres-data` directory is detected, it preserves the default database password and DSN copied from `.env.example` and only generates `SESSION_SECRET`, avoiding PostgreSQL authentication failures against existing data. The script also checks that the `dushengcdn` Compose service remains running after startup and prints recent logs plus likely causes for PostgreSQL auth, database connection, or port binding failures.
+When `.env` is missing, the script creates it from `.env.example`. A fresh install gets generated database credentials and `SESSION_SECRET`. If an existing `dushengcdn_server/postgres-data` directory is detected, it preserves the default database password and DSN copied from `.env.example` and only generates `SESSION_SECRET`, avoiding PostgreSQL authentication failures against existing data. The script also checks that the `dushengcdn` Compose service remains running after startup and verifies `SERVER_URL/api/status`; failures print recent logs plus likely causes for PostgreSQL auth, database connection, port binding, host-port, or reverse-proxy upstream issues.
 
 After upgrading, confirm:
 

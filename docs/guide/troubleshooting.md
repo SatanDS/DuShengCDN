@@ -29,7 +29,7 @@ docker compose logs -n 200 dushengcdn
 
 源码运行时查看终端输出。
 
-使用 `scripts/install-server.sh` 部署或升级时，脚本会在 `docker compose up` 后确认 `dushengcdn` 服务是否仍在运行；如果服务启动后退出，会自动打印最近日志，并对 PostgreSQL 密码/DSN、数据库连接和端口占用这几类常见错误给出提示。
+使用 `scripts/install-server.sh` 部署或升级时，脚本会在 `docker compose up` 后确认 `dushengcdn` 服务是否仍在运行，并访问 `SERVER_URL/api/status` 做 HTTP 健康检查；如果服务启动后退出或 HTTP 检查失败，会自动打印最近日志，并对 PostgreSQL 密码/DSN、数据库连接、端口占用、宿主机端口和反向代理上游端口这几类常见错误给出提示。
 
 2. 检查端口占用：
 
@@ -75,10 +75,13 @@ docker compose --env-file .env logs --tail=100 dushengcdn
 
 ## 管理端打不开或空白
 
-1. 确认 Server 正在监听：
+1. 确认 Server 正在监听。源码 Compose 默认宿主机端口是 `.env` 中的 `DUSHENGCDN_HTTP_PORT=3010`，不是容器内监听的 `3000`：
 
 ```bash
-curl -I http://127.0.0.1:3000
+cd /opt/dushengcdn/dushengcdn_server
+panel_port="$(grep -E '^DUSHENGCDN_HTTP_PORT=' .env | tail -n1 | cut -d= -f2-)"
+curl -I "http://127.0.0.1:${panel_port:-3010}/api/status"
+curl -I http://127.0.0.1:3000/api/status
 ```
 
 2. 如果是源码运行，确认已经构建前端静态产物：
@@ -88,7 +91,7 @@ cd dushengcdn_server/web
 pnpm build
 ```
 
-3. 检查浏览器访问地址是否与反向代理配置一致。
+3. 检查浏览器访问地址是否与反向代理配置一致。Nginx、Nginx Proxy Manager 或宝塔的上游端口应填写宿主机映射端口，例如默认源码 Compose 是 `3010`；只有直接暴露 `3000:3000` 时才填 `3000`。
 
 4. 如果通过前端开发服务器访问，确认后端代理地址：
 

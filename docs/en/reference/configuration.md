@@ -54,7 +54,7 @@ The repository also provides `examples/compose/` templates for image-based Serve
 
 ## Integrated Server Installer Options
 
-`scripts/install-server.sh` deploys the source Compose Server and, by default, a same-host DNS Worker. When `.env` is missing, it creates it from `.env.example`; fresh installs generate `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `DSN`. If an existing `dushengcdn_server/postgres-data` directory is detected, it preserves the default database password/DSN copied from `.env.example` and only generates `SESSION_SECRET`, avoiding PostgreSQL authentication failures against existing data. Existing `.env` files are not overwritten.
+`scripts/install-server.sh` deploys the source Compose Server and, by default, a same-host DNS Worker. When `.env` is missing, it creates it from `.env.example`; fresh installs generate `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `DSN`. If an existing `dushengcdn_server/postgres-data` directory is detected, it preserves the default database password/DSN copied from `.env.example` and only generates `SESSION_SECRET`, avoiding PostgreSQL authentication failures against existing data. Existing `.env` files are not overwritten. After `docker compose up`, the script verifies that the `dushengcdn` service stays running and checks `SERVER_URL/api/status`; if the HTTP check fails, it prints recent logs and hints for database authentication, port mapping, and reverse-proxy upstream port issues.
 
 Before automatic Worker creation, the script checks for an existing `dushengcdn-dns-worker.service`, systemd unit file, install directory, env file, same-name Docker container, Worker process, or DuShengCDN process listening on port `53`. If one is found, Worker creation and installation are skipped unless forced.
 

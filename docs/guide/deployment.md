@@ -158,7 +158,7 @@ ports:
 
 此时浏览器访问 `http://localhost:3010`，容器内部仍监听 `3000`。
 
-也可以在仓库根目录使用一体化部署脚本。脚本会在 `.env` 不存在时从 `.env.example` 创建环境文件；全新部署会自动生成 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和匹配的 `DSN`。如果升级旧源码部署且已存在 `dushengcdn_server/postgres-data`，脚本会保留 `.env.example` 中的数据库密码和 DSN，只生成 `SESSION_SECRET`，避免旧 PostgreSQL 数据目录因密码不一致导致面板连不上数据库。默认还会在面板本机自动部署 DNS Worker：部署前先检查本机是否已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时会跳过自动创建和安装，避免覆盖现有 Worker。没有发现本地 Worker 时，脚本会自动探测公网 IPv4，在 Server 中创建名为 `DNS服务响应端` 的 DNS Worker，拿到 Token 后调用 `scripts/install-dns-worker.sh` 监听 `PUBLIC_IP:53`。
+也可以在仓库根目录使用一体化部署脚本。脚本会在 `.env` 不存在时从 `.env.example` 创建环境文件；全新部署会自动生成 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和匹配的 `DSN`。如果升级旧源码部署且已存在 `dushengcdn_server/postgres-data`，脚本会保留 `.env.example` 中的数据库密码和 DSN，只生成 `SESSION_SECRET`，避免旧 PostgreSQL 数据目录因密码不一致导致面板连不上数据库。`docker compose up` 后，脚本会先确认 `dushengcdn` 服务仍在运行，再访问 `SERVER_URL/api/status` 做 HTTP 健康检查；检查失败时会打印最近日志，并提示数据库认证、端口映射和反向代理上游端口等常见原因。源码 Compose 默认宿主机访问端口是 `.env` 中的 `DUSHENGCDN_HTTP_PORT=3010`，容器内仍监听 `3000`。默认还会在面板本机自动部署 DNS Worker：部署前先检查本机是否已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时会跳过自动创建和安装，避免覆盖现有 Worker。没有发现本地 Worker 时，脚本会自动探测公网 IPv4，在 Server 中创建名为 `DNS服务响应端` 的 DNS Worker，拿到 Token 后调用 `scripts/install-dns-worker.sh` 监听 `PUBLIC_IP:53`。
 
 ```bash
 cd /opt/dushengcdn
@@ -444,7 +444,11 @@ cd dushengcdn_server
 cp -n .env.example .env
 DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
+panel_port="$(grep -E '^DUSHENGCDN_HTTP_PORT=' .env | tail -n1 | cut -d= -f2-)"
+curl -I "http://127.0.0.1:${panel_port:-3010}/api/status"
 ```
+
+如果使用 Nginx、Nginx Proxy Manager、宝塔或其它反向代理对外提供 HTTPS，升级后也要确认反代上游端口指向 `.env` 中的宿主机端口；源码 Compose 默认是 `3010`，不是容器内的 `3000`。
 
 如果服务器上曾经直接改过仓库里的 `docker-compose.yaml`，`git pull` 可能提示本地改动会被覆盖。推荐先把本地端口、密码、DSN、`SESSION_SECRET` 和 Token 迁移到 `dushengcdn_server/.env`，再执行：
 

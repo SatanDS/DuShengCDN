@@ -190,7 +190,7 @@ cd /opt/dushengcdn
 bash scripts/install-server.sh
 ```
 
-When `.env` does not exist, the script creates it from `.env.example`. A fresh install gets generated `POSTGRES_PASSWORD`, `SESSION_SECRET`, and a matching `DSN`. If an older source deployment already has `dushengcdn_server/postgres-data`, the script preserves the default database password and DSN from `.env.example` and only generates `SESSION_SECRET`, avoiding a password mismatch with the existing PostgreSQL data directory.
+When `.env` does not exist, the script creates it from `.env.example`. A fresh install gets generated `POSTGRES_PASSWORD`, `SESSION_SECRET`, and a matching `DSN`. If an older source deployment already has `dushengcdn_server/postgres-data`, the script preserves the default database password and DSN from `.env.example` and only generates `SESSION_SECRET`, avoiding a password mismatch with the existing PostgreSQL data directory. After `docker compose up`, the script verifies that the `dushengcdn` service stays running and checks `SERVER_URL/api/status`; if the HTTP check fails, it prints recent logs and hints for database authentication, port mapping, and reverse-proxy upstream port issues. Source Compose defaults to host port `DUSHENGCDN_HTTP_PORT=3010` while the container still listens on `3000`.
 
 The integrated installer also deploys a same-host DNS Worker by default. It first checks whether a local Worker already exists by looking for `dushengcdn-dns-worker.service`, unit files, `/opt/dushengcdn-dns-worker`, the Worker env file, a same-name Docker container, a Worker process, or a DuShengCDN process listening on port `53`. If found, it skips automatic Worker creation and installation.
 

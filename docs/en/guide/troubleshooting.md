@@ -29,7 +29,7 @@ docker compose logs -n 200 dushengcdn
 
 For source runs, check terminal output.
 
-When deployed or upgraded with `scripts/install-server.sh`, the script verifies that the `dushengcdn` Compose service is still running after `docker compose up`. If it exits, the script prints recent logs and hints for common PostgreSQL password/DSN, database connection, and port binding failures.
+When deployed or upgraded with `scripts/install-server.sh`, the script verifies that the `dushengcdn` Compose service is still running after `docker compose up` and checks `SERVER_URL/api/status`. If the service exits or the HTTP check fails, the script prints recent logs and hints for common PostgreSQL password/DSN, database connection, port binding, host-port, and reverse-proxy upstream failures.
 
 2. Check port usage:
 
@@ -73,10 +73,13 @@ If you had manually set a different PostgreSQL password, replace `replace-with-s
 
 ## UI Does Not Open or Is Blank
 
-1. Confirm that the Server responds:
+1. Confirm that the Server responds. Source Compose defaults to the host port from `.env` (`DUSHENGCDN_HTTP_PORT=3010`), while the container listens on `3000`:
 
 ```bash
-curl -I http://127.0.0.1:3000
+cd /opt/dushengcdn/dushengcdn_server
+panel_port="$(grep -E '^DUSHENGCDN_HTTP_PORT=' .env | tail -n1 | cut -d= -f2-)"
+curl -I "http://127.0.0.1:${panel_port:-3010}/api/status"
+curl -I http://127.0.0.1:3000/api/status
 ```
 
 2. For source runs, confirm frontend static assets were built:
@@ -86,7 +89,7 @@ cd dushengcdn_server/web
 pnpm build
 ```
 
-3. Check whether the browser URL matches your reverse proxy setup.
+3. Check whether the browser URL matches your reverse proxy setup. Nginx, Nginx Proxy Manager, Baota, or another reverse proxy should point to the host-mapped port, for example `3010` for the default source Compose deployment; use `3000` only when you explicitly expose `3000:3000`.
 
 4. If using the frontend dev server, confirm backend proxy configuration:
 
