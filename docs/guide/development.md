@@ -172,8 +172,12 @@ Docs：
 
 ```bash
 cd docs
+corepack enable
+pnpm install --frozen-lockfile
 pnpm build
 ```
+
+GitHub Actions 里的 `Docs CI` 会在 `docs/**` 或文档构建 workflow 变化时执行同样的安装与 `pnpm build`，用于检查新增页面、侧边栏和 VitePress 构建是否仍然有效。
 
 ## 构建
 
