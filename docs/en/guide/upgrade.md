@@ -10,6 +10,41 @@ Root users can check and upgrade the Server stable version from the top bar of t
 
 To try a preview version, you can manually check the corresponding release. It is recommended to prioritize the stable version in production environments.
 
+For source directory + Docker Compose deployments, use `.env` for local deployment values:
+
+```bash
+cd /opt/dushengcdn
+git fetch origin main
+git pull --ff-only origin main
+cd dushengcdn_server
+cp -n .env.example .env
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
+docker compose ps
+```
+
+Store `DUSHENGCDN_HTTP_PORT`, `POSTGRES_PASSWORD`, `SESSION_SECRET`, `DSN`, and any legacy `AGENT_TOKEN` in `dushengcdn_server/.env`. Do not keep editing the tracked `docker-compose.yaml`; otherwise future `git pull --ff-only` can be blocked by local changes.
+
+If old local Compose edits block the pull, first record host ports, passwords, DSN, `SESSION_SECRET`, and tokens. After confirming there are no source changes to keep:
+
+```bash
+cd /opt/dushengcdn
+git fetch origin main
+git reset --hard origin/main
+cd dushengcdn_server
+cp -n .env.example .env
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
+docker compose ps
+```
+
+The integrated installer can also be used for source Compose upgrades:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/install-server.sh
+```
+
+When `.env` is missing, the script creates it from `.env.example`. A fresh install gets generated database credentials and `SESSION_SECRET`. If an existing `dushengcdn_server/postgres-data` directory is detected, it preserves the default database password and DSN copied from `.env.example` and only generates `SESSION_SECRET`, avoiding PostgreSQL authentication failures against existing data. The script also checks that the `dushengcdn` Compose service remains running after startup and prints recent logs plus likely causes for PostgreSQL auth, database connection, or port binding failures.
+
 After upgrading, confirm:
 
 ```bash
@@ -18,6 +53,16 @@ docker compose logs -n 100 dushengcdn
 ```
 
 If it is a source deployment, confirm that there are no database migration or startup errors in the logs after restarting the Server.
+
+## DNS Worker Upgrade
+
+DNS Worker installations created by the script can be reinstalled or upgraded by rerunning the install command with the same Server URL and Worker Token. The script prefers GitHub Release binaries and verifies matching `.sha256` files; if no release asset exists, it builds from source and embeds the current Git version.
+
+Uninstall DNS Worker:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uninstall-dns-worker.sh | bash
+```
 
 ## Agent Upgrade
 
@@ -62,6 +107,32 @@ The settings page of the management console can maintain the observability data 
 | `DatabaseAutoCleanupRetentionDays` | Automatic cleanup retention days, at least 1 day |
 
 Once enabled, the Server will clean up access logs, metric snapshots, and request reports at 3 AM every day.
+
+## Backup and Restore
+
+Before upgrading, back up the database and the Server data directory. Source deployments can use the repository script:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/backup-server.sh
+```
+
+The script reads `dushengcdn_server/.env` by default. In `auto` mode it backs up reachable Compose PostgreSQL with `pg_dump`; otherwise it backs up SQLite. It also archives `dushengcdn-data` and writes a `manifest.txt` with paths and checksum metadata under `dushengcdn_server/backups/<timestamp>/`.
+
+Restore example for PostgreSQL Compose:
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+cd /opt/dushengcdn
+bash scripts/restore-server.sh \
+  --backup-path dushengcdn_server/backups/20260601-120000 \
+  --yes
+cd dushengcdn_server
+docker compose up -d
+```
+
+The restore script verifies manifest SHA-256 data when possible, refuses to restore while the Compose `dushengcdn` service is still running by default, and creates a pre-restore safety backup of the current database and `dushengcdn-data`.
 
 ## Common Verification Commands
 

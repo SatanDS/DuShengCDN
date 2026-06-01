@@ -44,6 +44,16 @@ Agent:
 | Docker | Required only when running the Agent Docker image |
 | Network | Agent node must reach the Server URL |
 
+DNS Worker, for self-hosted authoritative DNS:
+
+| Item | Requirement |
+| --- | --- |
+| Port | Public UDP `53` and TCP `53` must be open |
+| Count | Run at least two Workers in production and configure multiple NS records at the registrar |
+| Network | Worker must reach the Server over HTTPS to pull read-only snapshots |
+| Data | Worker keeps the last valid snapshot locally with checksum metadata and recoverable GSLB debounce state |
+| Safety | Worker rate-limits queries per source IP and truncates oversized UDP responses so resolvers can retry over TCP |
+
 Recommended production sizing:
 
 | Scenario | Suggested resources |
@@ -55,7 +65,29 @@ Recommended production sizing:
 
 ## Docker Compose Server
 
-Create `docker-compose.yml`:
+Reusable Compose templates live under `examples/compose/`:
+
+| Template | Use Case |
+| --- | --- |
+| `server.production.yaml` + `server.env.example` | Run Server + PostgreSQL from the GHCR image |
+| `server.source.yaml` + `server.env.example` | Build Server from the current source checkout |
+| `server.override.example.yaml` | Override host bind address, port, data directory, and log level |
+| `agent.yaml` + `agent.env.example` | Run Agent with Docker Compose |
+| `dns-worker.yaml` + `dns-worker.env.example` | Run DNS Worker with Docker Compose |
+
+Image-based Server example:
+
+```bash
+mkdir -p /opt/dushengcdn-compose
+cd /opt/dushengcdn-compose
+curl -fsSLO https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examples/compose/server.production.yaml
+curl -fsSLo .env https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examples/compose/server.env.example
+vi .env
+docker compose --env-file .env -f server.production.yaml up -d
+docker compose --env-file .env -f server.production.yaml ps
+```
+
+Or create an inline `docker-compose.yml`:
 
 ```yaml
 services:
@@ -142,7 +174,47 @@ ports:
   - "3010:3000"
 ```
 
+For source Compose deployments, keep local deployment parameters in `dushengcdn_server/.env`:
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+cp -n .env.example .env
+```
+
+Edit `DUSHENGCDN_HTTP_PORT`, `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `DSN` in `.env`. Avoid editing the tracked `docker-compose.yaml`; keeping local values in `.env` lets future `git pull --ff-only` upgrades continue cleanly.
+
+You can also use the integrated installer from the repository root:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/install-server.sh
+```
+
+When `.env` does not exist, the script creates it from `.env.example`. A fresh install gets generated `POSTGRES_PASSWORD`, `SESSION_SECRET`, and a matching `DSN`. If an older source deployment already has `dushengcdn_server/postgres-data`, the script preserves the default database password and DSN from `.env.example` and only generates `SESSION_SECRET`, avoiding a password mismatch with the existing PostgreSQL data directory.
+
+The integrated installer also deploys a same-host DNS Worker by default. It first checks whether a local Worker already exists by looking for `dushengcdn-dns-worker.service`, unit files, `/opt/dushengcdn-dns-worker`, the Worker env file, a same-name Docker container, a Worker process, or a DuShengCDN process listening on port `53`. If found, it skips automatic Worker creation and installation.
+
+Explicit public IP and Server URL:
+
+```bash
+bash scripts/install-server.sh \
+  --server-url http://127.0.0.1:3010 \
+  --public-ip 203.0.113.10
+```
+
+Panel-only install:
+
+```bash
+bash scripts/install-server.sh --skip-dns-worker
+```
+
+Use `--force-dns-worker-reinstall` only when you intentionally want to replace the local Worker configuration.
+
 ## Connect Agent
+
+In production, maintain each node's node pool, public IP pool, scheduling weight, and drain mode from the node detail page. Automatic DNS selects online, healthy public IPs from the site node pool. Site-level GSLB can bind multiple node pools and use pool weight, node load, and debounce settings. Cache purge and warmup commands are still sent to online Agents in the site's default node pool.
+
+Cloudflare DNS mode syncs records in the background; it is not per-query routing. Authoritative DNS mode uses DNS Workers and the latest Server snapshot to answer each DNS query.
 
 With `discovery_token`:
 
@@ -213,6 +285,66 @@ Minimal `agent.json`:
 
 When `openresty_path` is not configured, Agent runs `openresty`.
 
+## Authoritative DNS Worker
+
+The authoritative DNS query plane runs as an independent DNS Worker role. Server manages Zones, static records, and Worker Tokens, exposes read-only snapshots through `GET /api/dns-snapshot`, and receives Worker status through `POST /api/dns-worker-heartbeat`. Worker listens on UDP/TCP `53` and answers from its in-memory snapshot; it does not access the database or call external GeoIP APIs on the query path.
+
+Recommended install script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
+  --server-url https://cdn.example.com \
+  --token YOUR_DNS_WORKER_TOKEN
+```
+
+Defaults:
+
+| Item | Default |
+| --- | --- |
+| Install directory | `/opt/dushengcdn-dns-worker` |
+| Service | `dushengcdn-dns-worker.service` |
+| Listen address | `:53` unless `--listen` is provided |
+| Snapshot cache | `INSTALL_DIR/data/dns-worker-snapshot.json` |
+| Country MMDB | downloaded to `INSTALL_DIR/data/geoip/GeoLite2-Country.mmdb` unless disabled |
+| Query rate limit | `200` queries per second per source IP |
+| UDP response size | `1232` bytes before setting TC and falling back to TCP |
+
+If Server and Worker are on the same host, pass an explicit public bind address when needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
+  --server-url http://127.0.0.1:3000 \
+  --token YOUR_DNS_WORKER_TOKEN \
+  --listen 203.0.113.10:53
+```
+
+Docker example:
+
+```bash
+docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
+  -p 53:53/udp -p 53:53/tcp \
+  -v dushengcdn-dns-worker-data:/data \
+  -e DUSHENGCDN_DNS_WORKER_SERVER_URL=https://cdn.example.com \
+  -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
+  ghcr.io/satands/dushengcdn-dns-worker:latest
+```
+
+For country-code GSLB pools, mount a local MaxMind Country MMDB and set `DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH`. Source CIDR and global scheduling continue to work without GeoIP.
+
+Operational flow:
+
+1. Create a Zone under **Authoritative DNS** and enter the NS names that will be delegated at the registrar.
+2. Create a DNS Worker and copy the Token or install command.
+3. Deploy at least two Workers and configure registrar NS records; add Glue/host records when NS names are inside the same Zone.
+4. Use the migration wizard to verify matching Zone, online Workers, public UDP/TCP `53` reachability, fresh consistent snapshots, and optional site GSLB readiness.
+5. Switch the site **Automatic DNS** mode to **Authoritative DNS** from the wizard or site detail page.
+
+Uninstall Worker:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uninstall-dns-worker.sh | bash
+```
+
 ## Minimal Integration Flow
 
 1. Start Server and sign in.
@@ -273,7 +405,31 @@ The uninstall script stops Agent and removes the systemd service and install dir
 
 ## Backup and Root Password Reset
 
-PostgreSQL Compose backup example:
+Before upgrades, back up the database and the Server data directory. Source deployments can use the repository backup script:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/backup-server.sh
+```
+
+The script reads `dushengcdn_server/.env` by default. In `auto` mode it prefers a reachable Compose PostgreSQL service and runs `pg_dump`; otherwise it backs up SQLite. It also archives `dushengcdn-data` and writes a `manifest.txt` under `dushengcdn_server/backups/<timestamp>/`. It does not stop, restore, overwrite, or delete production data.
+
+Restore example for PostgreSQL Compose:
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose stop dushengcdn
+cd /opt/dushengcdn
+bash scripts/restore-server.sh \
+  --backup-path dushengcdn_server/backups/20260601-120000 \
+  --yes
+cd dushengcdn_server
+docker compose up -d
+```
+
+`restore-server.sh` verifies manifest checksums when available, refuses to restore while the `dushengcdn` service is still running by default, and creates a pre-restore safety backup of the current database and `dushengcdn-data`.
+
+Manual PostgreSQL Compose backup example:
 
 ```bash
 cd /opt/dushengcdn/dushengcdn_server

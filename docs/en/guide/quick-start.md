@@ -9,6 +9,7 @@ The minimal DuShengCDN setup contains:
 | Server | Management UI, management API, Agent API, configuration rendering, release publishing, and state storage |
 | Agent | Runs on proxy nodes, pulls configuration, writes OpenResty files, validates, and reloads |
 | OpenResty | Receives traffic and proxies requests to origins |
+| DNS Worker (optional) | Authoritative DNS query plane that answers A/AAAA records from real-time GSLB snapshots |
 
 Agent controls OpenResty through the OpenResty binary. Local installs need an `openresty` executable on the node; Docker installs can run the Agent image that already includes OpenResty.
 
@@ -16,7 +17,7 @@ Agent controls OpenResty through the OpenResty binary. Local installs need an `o
 
 | Item | Requirement |
 | --- | --- |
-| Docker / Docker Compose | Used to start Server and PostgreSQL; also used if you run the Agent Docker image |
+| Docker / Docker Compose | Used to start Server and PostgreSQL; also used if you run the Agent or DNS Worker Docker image |
 | OpenResty | Required for local Agent installs unless `--openresty-path` points to a custom binary |
 | Reachable ports | Server listens on `3000` by default. Agent nodes must reach the Server URL. |
 | Browser | Used to open the management UI |
@@ -24,6 +25,19 @@ Agent controls OpenResty through the OpenResty binary. Local installs need an `o
 Docker Engine 24+ and Docker Compose v2 are recommended. Older versions may still work, but Compose v2 is the tested command style used by the documentation.
 
 ## 1. Start Server
+
+The fastest production-style path is to use the repository Compose templates:
+
+```bash
+mkdir -p /opt/dushengcdn-compose
+cd /opt/dushengcdn-compose
+curl -fsSLO https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examples/compose/server.production.yaml
+curl -fsSLo .env https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examples/compose/server.env.example
+vi .env
+docker compose --env-file .env -f server.production.yaml up -d
+```
+
+The inline example below is equivalent and useful when you want a single file.
 
 Create `docker-compose.yml` in an empty directory:
 
@@ -66,6 +80,23 @@ Start:
 
 ```bash
 docker compose up -d
+```
+
+If you deploy from a source checkout, you can also run the integrated installer from the repository root:
+
+```bash
+cd /opt/dushengcdn
+bash scripts/install-server.sh --public-ip 203.0.113.10
+```
+
+On first install, the script creates `dushengcdn_server/.env` from `.env.example` and generates `POSTGRES_PASSWORD`, `SESSION_SECRET`, and a matching `DSN`. When upgrading an older source Compose deployment that already has `dushengcdn_server/postgres-data`, it preserves the default database password/DSN from `.env.example` and only generates `SESSION_SECRET`, avoiding PostgreSQL authentication failures against existing data.
+
+By default, the script also tries to deploy a same-host DNS Worker. Before doing so it checks for an existing `dushengcdn-dns-worker.service`, systemd unit file, `/opt/dushengcdn-dns-worker`, Worker env file, same-name Docker container, Worker process, or DuShengCDN process already listening on port `53`. If any of those are found, Worker creation and installation are skipped.
+
+Panel-only install:
+
+```bash
+bash scripts/install-server.sh --skip-dns-worker
 ```
 
 Verify:
@@ -155,7 +186,32 @@ In the management UI:
 
 Version numbers use `YYYYMMDD-NNN`. Historical versions are immutable; rollback reactivates an old version.
 
-## 5. Verify Success
+## 5. Optional: Enable Authoritative DNS
+
+Use this only when you want domains to be delegated to DuShengCDN DNS Workers and answered from real-time GSLB snapshots. The integrated Server installer can create and install a same-host Worker automatically, or you can create a DNS Worker Token in the left sidebar under **Authoritative DNS** and install Workers manually:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
+  --server-url http://your-server:3000 \
+  --token YOUR_DNS_WORKER_TOKEN
+```
+
+The script installs to `/opt/dushengcdn-dns-worker`, creates `dushengcdn-dns-worker.service`, listens on UDP/TCP `53`, stores a local snapshot cache, and downloads a Country MMDB by default for country-code GSLB pools. Docker is also supported:
+
+```bash
+docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
+  -p 53:53/udp -p 53:53/tcp \
+  -v dushengcdn-dns-worker-data:/data \
+  -e DUSHENGCDN_DNS_WORKER_SERVER_URL=http://your-server:3000 \
+  -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
+  -e DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \
+  -e DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232 \
+  ghcr.io/satands/dushengcdn-dns-worker:latest
+```
+
+After the Worker is online, delegate the zone at your registrar, then switch the site detail **Automatic DNS** section to **Authoritative DNS** and select the Zone. Production should run at least two Workers and allow both UDP and TCP `53`.
+
+## 6. Verify Success
 
 In the UI:
 
@@ -181,5 +237,6 @@ journalctl -u dushengcdn-agent -n 100 --no-pager
 | Agent cannot register | Confirm the Agent node can reach `--server-url`, and check whether the token is wrong or expired |
 | Agent is online but does not apply | Confirm the site is enabled and a version was published and activated |
 | OpenResty apply fails | Check apply logs and `journalctl -u dushengcdn-agent`, especially domains, certificates, upstream URLs, and port conflicts |
+| Automatic DNS does not return node IPs | Confirm the site node pool has online nodes, public IPs of the right A/AAAA type, scheduling enabled, and drain mode off |
 
 See [Troubleshooting](./troubleshooting.md) for deeper diagnostics.

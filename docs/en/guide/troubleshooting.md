@@ -15,6 +15,9 @@ Start by locating the failing layer: browser, Server, database, Agent, OpenResty
 | Node does not update after release | Active version, node heartbeat, apply logs |
 | OpenResty apply fails | Apply logs, Agent logs, certificates, upstream URL, port conflicts |
 | No access analytics | OpenResty status, observability port, Agent replay logs |
+| Automatic DNS does not switch | Node pool, public IP pool, scheduling switch, drain mode, Cloudflare Token permissions |
+| Authoritative DNS resolves incorrectly after migration | Migration wizard retest, Zone delegation check, Worker public UDP/TCP 53 probe, Agent multi-node probes, GSLB simulation |
+| Cache operation fails | Agent WebSocket connection, site node pool, OpenResty cache path |
 
 ## Server Does Not Start
 
@@ -25,6 +28,8 @@ docker compose logs -n 200 dushengcdn
 ```
 
 For source runs, check terminal output.
+
+When deployed or upgraded with `scripts/install-server.sh`, the script verifies that the `dushengcdn` Compose service is still running after `docker compose up`. If it exits, the script prints recent logs and hints for common PostgreSQL password/DSN, database connection, and port binding failures.
 
 2. Check port usage:
 
@@ -50,8 +55,21 @@ Common causes:
 | Log or Symptom | Fix |
 | --- | --- |
 | Database connection failed | Check username, password, host, port, database, and `sslmode` in `DSN` |
+| `password authentication failed for user "dushengcdn"` | `POSTGRES_PASSWORD` / `DSN` do not match the password stored in the existing PostgreSQL data directory. If this happened after running `bash scripts/install-server.sh` on an old source deployment, restore the old password and DSN in `.env`, then restart Compose. |
 | SQLite cannot create file | Check that the `SQLITE_PATH` directory exists and is writable |
 | Port is already in use | Change `PORT` or `--port`, or stop the process using the port |
+
+If an old source deployment did not have `.env`, and the first installer run generated a new random database password while `postgres-data` already existed, restore the old default value first:
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=replace-with-strong-password/' .env
+sed -i 's#^DSN=.*#DSN=postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable#' .env
+docker compose --env-file .env up -d --build
+docker compose --env-file .env logs --tail=100 dushengcdn
+```
+
+If you had manually set a different PostgreSQL password, replace `replace-with-strong-password` with the real old password.
 
 ## UI Does Not Open or Is Blank
 
@@ -193,9 +211,86 @@ This usually means the server-side repository copy has local edits in Compose fi
 
 1. Record those local deployment parameters first.
 2. If there are no source changes to keep, run `git fetch origin main && git reset --hard origin/main`.
-3. Reapply local deployment parameters through an external deployment note or Compose override.
+3. Create `dushengcdn_server/.env` from `.env.example` and put real deployment values there.
+4. Start with `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build`.
 
 Port conflicts only require changing the host-side mapping, for example `3010:3000`; the container still listens on `3000`.
+
+## Automatic DNS Does Not Switch Nodes
+
+Check in order:
+
+1. Cloudflare DNS Token has `Zone Read` and `DNS Edit` permissions.
+2. The site has automatic DNS enabled and is bound to the intended node pool.
+3. The target node pool has online nodes and OpenResty is not unhealthy.
+4. Node public IP pools contain addresses matching the record type: IPv4 for `A`, IPv6 for `AAAA`.
+5. Nodes are not disabled for scheduling and are not in drain mode.
+
+## Authoritative DNS Resolves Incorrectly After Migration
+
+Open **Authoritative DNS** -> migration wizard and check the post-switch retest:
+
+1. **Site DNS mode** should show the target Zone. If not, open the site detail **Automatic DNS** section and confirm DNS mode and Zone binding.
+2. **Zone delegation check** should match registrar NS records. If it is partial, mismatched, or mentions Glue, update the registrar NS or host records.
+3. **Worker public probe** should show at least one online Worker reachable over both UDP and TCP `53`.
+4. **Worker snapshot consistency** should show reachable Workers holding a non-expired snapshot under `AuthoritativeDNSSnapshotMaxAge`, with matching versions.
+5. **GSLB simulation** should return target IPs. If it returns no target, inspect node pool, online state, OpenResty health, public IP type, drain mode, GSLB weights, load thresholds, and probe gate reasons.
+
+If `dig @PUBLIC_IP example.com SOA` or `dig @PUBLIC_IP example.com NS` says `connection refused` or `no servers could be reached`:
+
+1. Run `systemctl status dushengcdn-dns-worker`. `Unit dushengcdn-dns-worker.service could not be found` means the panel Zone/registrar NS may exist, but no DNS Worker is deployed on that host.
+2. Run `ss -lntup | grep ':53'` and `ss -lnuap | grep ':53'`. Seeing only `systemd-resolved` on `127.0.0.53` or `127.0.0.54` does not mean public port `53` has an authoritative service.
+3. Create a DNS Worker Token under **Authoritative DNS**, then install the Worker. If Worker and Server run on the same host, use a Server URL reachable from that host and bind the public address with `--listen PUBLIC_IP:53`.
+4. Check `journalctl -u dushengcdn-dns-worker -n 100 --no-pager` for Token, Server URL, or snapshot errors.
+5. Ensure firewall, cloud security group, and upstream network allow both UDP and TCP `53`.
+6. If NS names are inside the same Zone, configure Glue/host records at the registrar.
+
+If SOA/NS return `NOERROR` but site `A`/`AAAA` records have no targets or Worker logs show `routes=0`:
+
+1. The Worker is serving the Zone, but no site is bound to authoritative DNS in the snapshot.
+2. Open site detail -> **Automatic DNS**, switch DNS mode to **Authoritative DNS**, and select the Zone, or use the migration wizard one-click switch.
+3. Confirm the site domain belongs to that Zone and does not conflict with enabled static `A`, `AAAA`, or `CNAME` records.
+4. Wait for the next Worker heartbeat/snapshot pull or restart the Worker, then check that `routes` increases.
+5. Use GSLB simulation to inspect no-target reasons.
+
+If enabling a site or running migration says there is no online DNS Worker, or online Workers have not passed public UDP/TCP `53` probing:
+
+1. Create and deploy at least one DNS Worker with a Worker Token.
+2. Confirm the Worker heartbeat is online and its public address is configured.
+3. Click **Probe** in the DNS Worker list and confirm both UDP and TCP `53` pass.
+4. Re-check firewall, security groups, NAT, and port mapping.
+
+If DNS Worker install fails with port `53` already in use:
+
+1. Run `ss -lntu '( sport = :53 )'` or `lsof -nP -i :53`.
+2. Common conflicts are `systemd-resolved`, `named`, `dnsmasq`, or an existing DNS service.
+3. If the existing service only binds loopback, and the Worker only needs the public address, install with `--listen PUBLIC_IP:53`.
+4. For local development only, use a high port such as `--listen 127.0.0.1:1053` and test with `dig @127.0.0.1 -p 1053 example.com SOA`.
+
+If the migration wizard reports stale or inconsistent Worker snapshots:
+
+1. Confirm at least one Worker is online and the latest public UDP/TCP probe is healthy.
+2. Check snapshot consistency for non-empty matching `last_snapshot_version` and fresh `last_snapshot_at`.
+3. Inspect Worker logs for invalid Token, unreachable Server URL, TLS trust failures, or snapshot API errors.
+4. Confirm the Token is a DNS Worker Token, not an Agent Token or login password.
+5. Restart the Worker or wait for the next heartbeat after fixing the issue.
+
+If Server-side Worker probes pass but Agent multi-node probes fail:
+
+1. Confirm Agent nodes can reach Worker public UDP/TCP `53`, for example `dig @ns1.example.net example.com SOA`.
+2. Check outbound firewalls or provider policies blocking UDP/TCP `53`.
+3. Confirm Agent heartbeat is healthy; probes are reported with heartbeat/status payloads after Server sends probe targets.
+4. If the probe gate is enabled in authoritative DNS runtime settings, failed or stale probes can exclude nodes from authoritative DNS GSLB candidates.
+
+## Cache Purge or Warmup Fails
+
+Cache runtime operations are sent over Agent WebSocket. Check:
+
+1. Target nodes are online and WebSocket is available.
+2. The site is bound to the intended node pool.
+3. Nodes are not in drain mode.
+4. `OpenRestyCachePath` is configured and published.
+5. Agent logs contain `agent cache purge failed` or `agent cache warm failed`.
 
 ## HTTPS Does Not Work
 

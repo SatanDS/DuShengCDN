@@ -27,7 +27,7 @@
 
 | 项目 | 当前状态 | 验收证据 |
 | --- | --- | --- |
-| 英文文档同步中文新增内容 | 中文文档优先覆盖主要使用路径，英文页面存在滞后 | 英文 `docs/en/**` 与中文关键部署、升级、排障内容一致 |
+| 英文文档同步中文新增内容 | 英文 Quick Start、Deployment、Upgrade、Troubleshooting、CLI 和 Configuration 已同步一体化面板/DNS Worker 部署、`.env` 升级保护、示例 Compose、备份恢复脚本和权威 DNS 常见排障；后续只需按新增功能继续增量维护长篇教程与深层设计页 | `cd docs && pnpm build` 通过 |
 | 示例 Compose 细化 | 已新增 `examples/compose/`，包含 Server 镜像生产模板、Server 源码构建模板、override 示例、Agent 模板、DNS Worker 模板和对应 `.env.example`；部署、快速开始、CLI 和配置参考已补充入口 | `docker compose --env-file ... config` 可解析 Server/Agent/DNS Worker 示例；文档构建通过 |
 
 ## 维护规则
