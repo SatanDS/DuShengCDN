@@ -2045,6 +2045,45 @@ func TestAuthoritativeDNSWorkerHealthIgnoresUnknownWorkerRollups(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDNSWorkerHealthNormalizesHistoricalRollupDurations(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	windowStart := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Minute)
+	if err := (&model.DNSQueryRollup{
+		WindowStart:     windowStart,
+		WindowMinutes:   1,
+		WorkerID:        worker.WorkerID,
+		QName:           "www.example.com",
+		QType:           "A",
+		RCode:           "NOERROR",
+		QueryCount:      4,
+		TotalDurationMs: 10,
+		MaxDurationMs:   30,
+		TargetSummary:   `{}`,
+	}).Insert(); err != nil {
+		t.Fatalf("insert historical rollup: %v", err)
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 {
+		t.Fatalf("expected one worker health item, got %+v", summary.WorkerHealth.Workers)
+	}
+	workerHealth := summary.WorkerHealth.Workers[0]
+	if workerHealth.AverageLatencyMs != 7.5 || workerHealth.MaxLatencyMs != 30 {
+		t.Fatalf("expected historical rollup duration normalization, got %+v", workerHealth)
+	}
+	if summary.WorkerHealth.AverageLatencyMs != 7.5 || summary.WorkerHealth.MaxLatencyMs != 30 {
+		t.Fatalf("expected summary duration normalization, got %+v", summary.WorkerHealth)
+	}
+}
+
 func TestAuthoritativeDNSObservabilityIncludesOverlappingRollupWindow(t *testing.T) {
 	setupServiceTestDB(t)
 

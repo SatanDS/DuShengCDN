@@ -3509,14 +3509,14 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			stats.errorQueries += count
 			totalErrors += count
 		}
-		durationMs := normalizeDNSDurationMs(rollup.TotalDurationMs)
+		durationMs, rollupMaxDurationMs := normalizeDNSRollupDurations(rollup.TotalDurationMs, rollup.MaxDurationMs)
 		stats.totalDurationMs += durationMs
 		totalDurationMs += durationMs
-		if rollup.MaxDurationMs > stats.maxDurationMs {
-			stats.maxDurationMs = normalizeDNSDurationMs(rollup.MaxDurationMs)
+		if rollupMaxDurationMs > stats.maxDurationMs {
+			stats.maxDurationMs = rollupMaxDurationMs
 		}
-		if rollup.MaxDurationMs > maxDurationMs {
-			maxDurationMs = normalizeDNSDurationMs(rollup.MaxDurationMs)
+		if rollupMaxDurationMs > maxDurationMs {
+			maxDurationMs = rollupMaxDurationMs
 		}
 	}
 
