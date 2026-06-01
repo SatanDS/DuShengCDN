@@ -2693,6 +2693,58 @@ func TestAgentDNSProbeResultsPersistToWorkerHealth(t *testing.T) {
 	}
 }
 
+func TestAgentDNSProbeFutureCheckedAtIsClampedOnPersist(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now().UTC()
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1-hk",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	node := &model.Node{
+		NodeID:            "node-hk-1",
+		Name:              "hk-edge-1",
+		PoolName:          "HK",
+		AgentToken:        "agent-token",
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		Status:            NodeStatusOnline,
+		LastSeenAt:        now,
+		SchedulingEnabled: true,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	futureCheckedAt := now.Add(time.Hour)
+	persistHeartbeatObservability(node.NodeID, AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{{
+			WorkerID:      worker.WorkerID,
+			PublicAddress: "ns1.example.net",
+			QueryName:     "example.com.",
+			QueryType:     "SOA",
+			CheckedAtUnix: futureCheckedAt.Unix(),
+			Results: []AgentDNSProbeResult{
+				{Network: "UDP", Reachable: true, DurationMs: 11, RCode: "NOERROR", AnswerCount: 1},
+				{Network: "TCP", Reachable: true, DurationMs: 17, RCode: "NOERROR", AnswerCount: 1},
+			},
+		}},
+	}, now)
+
+	probes, err := model.ListDNSWorkerNodeProbes()
+	if err != nil {
+		t.Fatalf("ListDNSWorkerNodeProbes: %v", err)
+	}
+	if len(probes) != 1 {
+		t.Fatalf("expected one node probe, got %+v", probes)
+	}
+	if probes[0].CheckedAt.After(now) {
+		t.Fatalf("expected future checked_at to be clamped to report time, got %v > %v", probes[0].CheckedAt, now)
+	}
+}
+
 func TestAgentDNSProbeSummaryNormalizesHistoricalRTT(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -3574,6 +3626,33 @@ func TestDNSWorkerProbeStateClassifiesFailedPartialAndStale(t *testing.T) {
 	})
 	if stale.status != dnsWorkerProbeStale || stale.healthy {
 		t.Fatalf("unexpected stale probe state: %+v", stale)
+	}
+
+	futureAt := now.Add(time.Hour)
+	future := evaluateDNSWorkerProbeState(now, &futureAt, []DNSWorkerProbeResultView{
+		{Network: "UDP", Reachable: true},
+		{Network: "TCP", Reachable: true},
+	})
+	if !future.healthy || future.status != dnsWorkerProbeHealthy || future.ageSeconds != 0 {
+		t.Fatalf("expected future server probe time to be clamped to current time, got %+v", future)
+	}
+}
+
+func TestDNSWorkerNodeProbeStateClampsHistoricalFutureCheckedAt(t *testing.T) {
+	now := time.Date(2026, 5, 31, 8, 0, 0, 0, time.UTC)
+	futureAt := now.Add(time.Hour)
+	updatedAt := now.Add(-2 * time.Minute)
+	probe := &model.DNSWorkerNodeProbe{
+		CheckedAt:   futureAt,
+		UpdatedAt:   updatedAt,
+		CreatedAt:   updatedAt.Add(-time.Minute),
+		ResultsJSON: `[{"network":"UDP","reachable":true},{"network":"TCP","reachable":true}]`,
+		Healthy:     true,
+	}
+
+	state := evaluateDNSWorkerNodeProbeState(now, probe)
+	if !state.healthy || state.status != dnsWorkerProbeHealthy || state.ageSeconds != int64(now.Sub(updatedAt).Seconds()) {
+		t.Fatalf("expected future node probe checked_at to fall back to updated_at, got %+v", state)
 	}
 }
 

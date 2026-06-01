@@ -170,6 +170,9 @@ func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSP
 		}
 		results := normalizeAgentDNSProbeResults(report.Results)
 		checkedAt := timeFromUnix(report.CheckedAtUnix, reportedAt)
+		if checkedAt.After(reportedAt.UTC()) {
+			checkedAt = reportedAt.UTC()
+		}
 		healthy, averageRTTMs, maxRTTMs, failureSamples, lastError := summarizeAgentDNSProbeResults(results)
 		record := &model.DNSWorkerNodeProbe{
 			WorkerID:       workerID,

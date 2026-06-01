@@ -3069,8 +3069,8 @@ func evaluateDNSWorkerProbeState(now time.Time, checkedAt *time.Time, results []
 			message: "尚未执行公网 UDP/TCP 53 探测",
 		}
 	}
-	checked := checkedAt.UTC()
-	age := now.UTC().Sub(checked)
+	checked := normalizeDNSWorkerCheckedAt(checkedAt, now, time.Time{})
+	age := now.UTC().Sub(checked.UTC())
 	ageSeconds := int64(0)
 	if age > 0 {
 		ageSeconds = int64(age.Seconds())
@@ -3703,6 +3703,7 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 			nodeStatus = computeNodeStatus(node)
 		}
 		probeState := evaluateDNSWorkerNodeProbeState(now, probe)
+		checkedAt := normalizeDNSWorkerCheckedAt(&probe.CheckedAt, now, probe.UpdatedAt, probe.CreatedAt)
 		stats.totalCount++
 		switch probeState.status {
 		case dnsWorkerProbeHealthy:
@@ -3729,7 +3730,7 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 			NodeName:        nodeName,
 			PoolName:        poolName,
 			Status:          nodeStatus,
-			CheckedAt:       probe.CheckedAt,
+			CheckedAt:       checkedAt,
 			Healthy:         probeState.healthy,
 			ProbeStatus:     probeState.status,
 			ProbeAgeSeconds: probeState.ageSeconds,
@@ -3892,7 +3893,7 @@ func evaluateDNSWorkerNodeProbeState(now time.Time, probe *model.DNSWorkerNodePr
 			message: "尚未收到 Agent 多节点探测结果",
 		}
 	}
-	checkedAt := probe.CheckedAt.UTC()
+	checkedAt := normalizeDNSWorkerCheckedAt(&probe.CheckedAt, now, probe.UpdatedAt, probe.CreatedAt)
 	age := now.Sub(checkedAt)
 	ageSeconds := int64(0)
 	if age > 0 {
@@ -4267,6 +4268,27 @@ func normalizeDNSWorkerSnapshotAt(snapshotAt *time.Time, now time.Time) *time.Ti
 		normalized = now.UTC()
 	}
 	return &normalized
+}
+
+func normalizeDNSWorkerCheckedAt(checkedAt *time.Time, now time.Time, fallbacks ...time.Time) time.Time {
+	if checkedAt == nil {
+		return now.UTC()
+	}
+	normalizedNow := now.UTC()
+	normalized := checkedAt.UTC()
+	if !normalized.After(normalizedNow) {
+		return normalized
+	}
+	for _, fallback := range fallbacks {
+		if fallback.IsZero() {
+			continue
+		}
+		normalized = fallback.UTC()
+		if !normalized.After(normalizedNow) {
+			return normalized
+		}
+	}
+	return normalizedNow
 }
 
 func normalizeDNSRollupWindow(value int) int {
