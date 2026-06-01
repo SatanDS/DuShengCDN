@@ -1924,21 +1924,26 @@ func TestDNSWorkerViewsClampHistoricalFutureSnapshotTime(t *testing.T) {
 		t.Fatalf("GetDNSWorkerByID: %v", err)
 	}
 	futureSnapshotAt := time.Now().UTC().Add(time.Hour)
-	workerModel.Status = dnsWorkerStatusOnline
-	workerModel.LastSnapshotVersion = "future-snapshot"
-	workerModel.LastSnapshotAt = &futureSnapshotAt
-	if err := workerModel.Update(); err != nil {
+	fallbackSnapshotAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	if err := model.DB.Model(&model.DNSWorker{}).
+		Where("id = ?", workerModel.ID).
+		Updates(map[string]any{
+			"status":                dnsWorkerStatusOnline,
+			"last_snapshot_version": "future-snapshot",
+			"last_snapshot_at":      futureSnapshotAt,
+			"updated_at":            fallbackSnapshotAt,
+		}).Error; err != nil {
 		t.Fatalf("update worker: %v", err)
 	}
 
 	snapshotSummary := buildDNSWorkerSnapshotConsistency(time.Now().UTC())
-	if snapshotSummary.LatestSnapshotAt == nil || !snapshotSummary.LatestSnapshotAt.Before(futureSnapshotAt) {
-		t.Fatalf("expected snapshot consistency to clamp future snapshot time, got %+v", snapshotSummary)
+	if snapshotSummary.LatestSnapshotAt == nil || !snapshotSummary.LatestSnapshotAt.Equal(fallbackSnapshotAt) {
+		t.Fatalf("expected snapshot consistency to fall back from future snapshot time, got %+v", snapshotSummary)
 	}
 	if len(snapshotSummary.Workers) != 1 ||
 		snapshotSummary.Workers[0].LastSnapshotAt == nil ||
-		!snapshotSummary.Workers[0].LastSnapshotAt.Before(futureSnapshotAt) {
-		t.Fatalf("expected worker snapshot view to clamp future snapshot time, got %+v", snapshotSummary.Workers)
+		!snapshotSummary.Workers[0].LastSnapshotAt.Equal(fallbackSnapshotAt) {
+		t.Fatalf("expected worker snapshot view to fall back from future snapshot time, got %+v", snapshotSummary.Workers)
 	}
 
 	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
@@ -1949,8 +1954,8 @@ func TestDNSWorkerViewsClampHistoricalFutureSnapshotTime(t *testing.T) {
 		t.Fatalf("expected one worker health item, got %+v", summary.WorkerHealth.Workers)
 	}
 	workerHealth := summary.WorkerHealth.Workers[0]
-	if workerHealth.LastSnapshotAt == nil || !workerHealth.LastSnapshotAt.Before(futureSnapshotAt) {
-		t.Fatalf("expected worker health to clamp future snapshot time, got %+v", workerHealth)
+	if workerHealth.LastSnapshotAt == nil || !workerHealth.LastSnapshotAt.Equal(fallbackSnapshotAt) {
+		t.Fatalf("expected worker health to fall back from future snapshot time, got %+v", workerHealth)
 	}
 }
 

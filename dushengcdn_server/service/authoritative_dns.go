@@ -3395,7 +3395,7 @@ func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsisten
 		}
 		status := normalizeDNSWorkerStatus(worker.Status)
 		snapshotVersion := strings.TrimSpace(worker.LastSnapshotVersion)
-		snapshotAt := normalizeDNSWorkerSnapshotAt(worker.LastSnapshotAt, now)
+		snapshotAt := normalizeDNSWorkerSnapshotAt(worker.LastSnapshotAt, now, worker.UpdatedAt, worker.CreatedAt)
 		stale := status == dnsWorkerStatusOnline && (snapshotAt == nil || now.Sub(snapshotAt.UTC()) > snapshotMaxAge)
 		workerName := strings.TrimSpace(worker.Name)
 		if workerName == "" {
@@ -3578,7 +3578,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 		if stats == nil {
 			stats = &dnsWorkerHealthStats{}
 		}
-		snapshotAt := normalizeDNSWorkerSnapshotAt(worker.LastSnapshotAt, now)
+		snapshotAt := normalizeDNSWorkerSnapshotAt(worker.LastSnapshotAt, now, worker.UpdatedAt, worker.CreatedAt)
 		snapshotAgeSeconds := int64(0)
 		if snapshotAt != nil {
 			age := now.Sub(snapshotAt.UTC())
