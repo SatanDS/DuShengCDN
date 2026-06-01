@@ -3,6 +3,8 @@ package service
 import (
 	"strings"
 	"testing"
+
+	"dushengcdn/model"
 )
 
 func TestGetActiveConfigForAgentIncludesPoWConfig(t *testing.T) {
@@ -126,4 +128,38 @@ func TestGetActiveConfigForAgentUsesTenMinutePoWSessionDefault(t *testing.T) {
 		}
 	}
 	t.Fatal("expected agent config to include pow_config.json support file")
+}
+
+func TestBuildAgentDNSProbeTargetsLimitsOnlineWorkers(t *testing.T) {
+	setupServiceTestDB(t)
+
+	if _, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	for i := 0; i < maxAgentDNSProbeTargets+2; i++ {
+		worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+			Name:          strings.Repeat("n", i+1),
+			PublicAddress: "ns.example.net",
+		})
+		if err != nil {
+			t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+		}
+		workerModel, err := model.GetDNSWorkerByID(worker.ID)
+		if err != nil {
+			t.Fatalf("GetDNSWorkerByID: %v", err)
+		}
+		if _, err := RecordDNSWorkerHeartbeat(workerModel, DNSWorkerHeartbeatInput{Status: dnsWorkerStatusOnline}); err != nil {
+			t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+		}
+	}
+
+	targets := buildAgentDNSProbeTargets()
+	if len(targets) != maxAgentDNSProbeTargets {
+		t.Fatalf("expected probe target limit %d, got %+v", maxAgentDNSProbeTargets, targets)
+	}
+	for _, target := range targets {
+		if target.WorkerID == "" || target.PublicAddress == "" || target.QueryName != "example.com." || target.QueryType != "SOA" {
+			t.Fatalf("unexpected target: %+v", target)
+		}
+	}
 }

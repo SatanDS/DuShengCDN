@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"dushengcdn-agent/internal/config"
+	"dushengcdn-agent/internal/dnsprobe"
 	"dushengcdn-agent/internal/observability"
 	"dushengcdn-agent/internal/protocol"
 	"dushengcdn-agent/internal/state"
@@ -77,6 +78,8 @@ type Runner struct {
 	uninstallRequested      bool
 	restartOpenrestyNow     bool
 	websocketUpgradeEnabled bool
+	dnsProbeTargets         []protocol.DNSProbeTarget
+	dnsProbeResults         []protocol.DNSProbeReport
 }
 
 func (r *Runner) Run(ctx context.Context) error {
@@ -173,7 +176,7 @@ func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, start
 		mode = "startup"
 	}
 	slog.Debug("agent heartbeat succeeded", "mode", mode, "node_id", nodeID)
-	changed := r.applySettings(heartbeatResult.AgentSettings)
+	changed := r.applySettings(ctx, heartbeatResult.AgentSettings)
 	if startup {
 		if err = r.SyncService.SyncOnStartup(ctx, heartbeatResult.ActiveConfig); err != nil {
 			r.recordSyncError(err)
@@ -288,7 +291,7 @@ func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WS
 			slog.Debug("agent ws settings decode failed", "error", err)
 			return false, nil
 		}
-		changed := r.applySettings(&settings)
+		changed := r.applySettings(ctx, &settings)
 		r.tryRestartOpenresty(ctx)
 		r.tryAutoUpdate(ctx)
 		if !r.websocketUpgradeEnabled {
@@ -497,7 +500,7 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func (r *Runner) applySettings(settings *protocol.AgentSettings) bool {
+func (r *Runner) applySettings(ctx context.Context, settings *protocol.AgentSettings) bool {
 	if settings == nil {
 		return false
 	}
@@ -520,7 +523,48 @@ func (r *Runner) applySettings(settings *protocol.AgentSettings) bool {
 	r.updateChan = strings.TrimSpace(settings.UpdateChannel)
 	r.updateTag = strings.TrimSpace(settings.UpdateTag)
 	r.restartOpenrestyNow = settings.RestartOpenrestyNow
+	r.dnsProbeTargets = normalizeDNSProbeTargets(settings.DNSProbeTargets)
+	r.refreshDNSProbeResults(ctx)
 	return changed
+}
+
+func (r *Runner) refreshDNSProbeResults(ctx context.Context) {
+	if len(r.dnsProbeTargets) == 0 {
+		r.dnsProbeResults = nil
+		return
+	}
+	r.dnsProbeResults = dnsprobe.ProbeTargets(ctx, r.dnsProbeTargets)
+}
+
+func (r *Runner) consumeDNSProbeResults() []protocol.DNSProbeReport {
+	if len(r.dnsProbeResults) == 0 {
+		return nil
+	}
+	results := r.dnsProbeResults
+	r.dnsProbeResults = nil
+	return results
+}
+
+func normalizeDNSProbeTargets(targets []protocol.DNSProbeTarget) []protocol.DNSProbeTarget {
+	result := make([]protocol.DNSProbeTarget, 0, len(targets))
+	seen := map[string]struct{}{}
+	for _, target := range targets {
+		workerID := strings.TrimSpace(target.WorkerID)
+		if workerID == "" {
+			continue
+		}
+		if _, ok := seen[workerID]; ok {
+			continue
+		}
+		seen[workerID] = struct{}{}
+		target.WorkerID = workerID
+		target.Name = strings.TrimSpace(target.Name)
+		target.PublicAddress = strings.TrimSpace(target.PublicAddress)
+		target.QueryName = strings.TrimSpace(target.QueryName)
+		target.QueryType = strings.TrimSpace(target.QueryType)
+		result = append(result, target)
+	}
+	return result
 }
 
 func (r *Runner) tryRestartOpenresty(ctx context.Context) {
@@ -621,7 +665,7 @@ func (r *Runner) tryRegister(ctx context.Context, nodeID *string) error {
 	if heartbeatResult == nil {
 		heartbeatResult = &protocol.HeartbeatResult{}
 	}
-	r.applySettings(heartbeatResult.AgentSettings)
+	r.applySettings(ctx, heartbeatResult.AgentSettings)
 	if err = r.SyncService.SyncOnStartup(ctx, heartbeatResult.ActiveConfig); err != nil {
 		r.recordSyncError(err)
 		slog.Error("agent post-register startup sync failed", "error", err)
@@ -715,6 +759,7 @@ func (r *Runner) nodePayload(nodeID string) protocol.NodePayload {
 	}
 	metricSnapshot := observability.BuildSnapshot(r.Config, r.StateStore, managedOpenRestyMetrics)
 	healthEvents := observability.BuildHealthEvents(snapshot)
+	dnsProbeResults := r.consumeDNSProbeResults()
 	return protocol.NodePayload{
 		NodeID:           nodeID,
 		Name:             r.Config.NodeName,
@@ -730,6 +775,7 @@ func (r *Runner) nodePayload(nodeID string) protocol.NodePayload {
 		TrafficReport:    trafficReport,
 		AccessLogs:       accessLogs,
 		HealthEvents:     healthEvents,
+		DNSProbeResults:  dnsProbeResults,
 	}
 }
 

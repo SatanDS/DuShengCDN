@@ -487,6 +487,17 @@ function getProbeStatusVariant(status: DNSWorkerProbeStatus) {
   }
 }
 
+function getNodeProbeStatusVariant(status: string) {
+  switch (status) {
+    case 'online':
+      return 'success' as const;
+    case 'pending':
+      return 'warning' as const;
+    default:
+      return 'danger' as const;
+  }
+}
+
 function workerProbeToPanelData(worker: DNSWorkerItem): DNSWorkerProbe | null {
   if (!worker.last_probe_at || worker.last_probe_results.length === 0) {
     return null;
@@ -3064,6 +3075,18 @@ function DNSWorkerHealthPanel({
           value={`${health.probe_healthy_count} / ${health.probe_checked_count || health.total_worker_count}`}
         />
         <InfoTile
+          label="多节点探测通过"
+          value={`${health.node_probe_healthy_count ?? 0} / ${health.node_probe_checked_count ?? 0}`}
+        />
+        <InfoTile
+          label="多节点平均 RTT"
+          value={formatLatencyMs(health.node_probe_average_rtt_ms ?? 0)}
+        />
+        <InfoTile
+          label="多节点最大 RTT"
+          value={formatLatencyMs(health.node_probe_max_rtt_ms ?? 0)}
+        />
+        <InfoTile
           label="平均延迟"
           value={formatLatencyMs(health.average_latency_ms)}
         />
@@ -3145,6 +3168,14 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           label="最近心跳"
           value={formatRelativeTime(worker.last_seen_at)}
         />
+        <InfoTile
+          label="多节点探测"
+          value={`${worker.node_probe_healthy_count ?? 0} / ${worker.node_probe_total_count ?? 0}`}
+        />
+        <InfoTile
+          label="多节点 RTT"
+          value={formatLatencyMs(worker.node_probe_average_rtt_ms ?? 0)}
+        />
       </div>
 
       {worker.last_error ? (
@@ -3185,6 +3216,58 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
               variant={getProbeResultVariant(result)}
             />
           ))}
+        </div>
+      ) : null}
+      {(worker.node_probes ?? []).length > 0 ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs font-medium text-[var(--foreground-primary)]">
+            Agent 多节点探测
+          </p>
+          <div className="grid gap-2">
+            {(worker.node_probes ?? []).map((probe) => (
+              <div
+                key={`${worker.worker_id}-${probe.node_id}`}
+                className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-3 py-2"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium text-[var(--foreground-primary)]">
+                      {probe.node_name || probe.node_id}
+                    </p>
+                    <p className="mt-1 text-[11px] text-[var(--foreground-muted)]">
+                      {probe.pool_name || 'default'} · {formatRelativeTime(probe.checked_at)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <StatusBadge
+                      label={probe.healthy ? '可达' : '异常'}
+                      variant={probe.healthy ? 'success' : 'danger'}
+                    />
+                    <StatusBadge
+                      label={probe.status}
+                      variant={getNodeProbeStatusVariant(probe.status)}
+                    />
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--foreground-secondary)]">
+                  <span>平均 {formatLatencyMs(probe.average_rtt_ms)}</span>
+                  <span>最大 {formatLatencyMs(probe.max_rtt_ms)}</span>
+                  {probe.results.map((result) => (
+                    <StatusBadge
+                      key={`${probe.node_id}-${result.network}`}
+                      label={`${result.network} ${result.reachable ? '可达' : '失败'}`}
+                      variant={getProbeResultVariant(result)}
+                    />
+                  ))}
+                </div>
+                {probe.last_error ? (
+                  <p className="mt-2 text-xs text-[var(--status-danger-foreground)]">
+                    {probe.last_error}
+                  </p>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
     </div>

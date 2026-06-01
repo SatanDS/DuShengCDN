@@ -52,7 +52,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 
 | 能力 | 说明 |
 | --- | --- |
-| 自建权威 DNS / 实时 GSLB 增强 | 已提供 DNS Worker MVP、管理端入口、来源 CIDR/国家代码调度、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Zone 委派检查、迁移向导、Worker 查询延迟/可用性看板和 Server 侧按需 Worker UDP/TCP 探测；后续可补主动多地 RTT 探测，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md) |
+| 自建权威 DNS / 实时 GSLB 增强 | 已提供 DNS Worker MVP、管理端入口、来源 CIDR/国家代码调度、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Zone 委派检查、迁移向导、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测，以及复用在线 Agent 节点的 DNS Worker 多点可达性与 RTT 探测；后续可把主动探测结果纳入调度评分，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md) |
 
 ## 典型使用场景
 
@@ -74,6 +74,11 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 
 * `proxy_routes`
 * `gslb_scheduling_states`
+* `dns_zones`
+* `dns_records`
+* `dns_workers`
+* `dns_query_rollups`
+* `dns_worker_node_probes`
 * `origins`
 * `config_versions`
 * `nodes`
@@ -153,6 +158,7 @@ DuShengCDN 当前不定位为通用日志平台、服务网格、Kubernetes Ingr
 * `gslb_scheduling_states` 保存最近一次 GSLB 评估的目标、期望目标和切换时间，用于避免 DNS 记录在短时间内频繁抖动。
 * 当前 Cloudflare DNS 同步模式是周期性重算 A/AAAA 记录，受 DNS TTL 与递归解析缓存影响；逐查询按来源实时返回不同 IP 的能力由独立 DNS Worker 实时回答权威 DNS 查询，详见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)。
 * 自建权威 DNS 只影响 DNS 答案和调度状态，不改变 OpenResty 配置版本模型，不让 `proxy_routes.gslb_policy` 演变成按节点池拆分的配置版本。
+* `dns_worker_node_probes` 保存在线 Agent 节点主动探测 DNS Worker 公网 UDP/TCP `53` 的最新结果，只作为观测与后续调度评分输入，不参与 OpenResty 配置版本。
 * 指标、趋势和访问分析优先使用服务端聚合结果，而不是前端临时统计。
 * 访问明细只保留受控时间窗口，不演变成通用日志平台。
 

@@ -16,7 +16,7 @@
 | OpenResty 应用失败 | 应用记录、Agent 日志、证书、源站地址、端口占用 |
 | 访问分析无数据 | OpenResty 容器状态、观测端口、Agent 补报日志 |
 | 自动 DNS 不切换 | 节点池、公网 IP 池、调度开关、排空状态、Cloudflare Token 权限 |
-| 权威 DNS 迁移后解析异常 | 迁移向导切换后复测、Zone 委派检查、Worker 公网 UDP/TCP 53 探测、GSLB 模拟结果 |
+| 权威 DNS 迁移后解析异常 | 迁移向导切换后复测、Zone 委派检查、Worker 公网 UDP/TCP 53 探测、Agent 多节点探测、GSLB 模拟结果 |
 | 缓存操作失败 | Agent WebSocket 连接、网站节点池、OpenResty 缓存目录配置 |
 
 ## Server 无法启动
@@ -257,6 +257,13 @@ curl -Iv https://your-domain
 2. 「Zone 委派检查」应为已匹配；若部分匹配、不匹配或提示 Glue，登录注册商补齐 NS 或 Glue/主机记录。
 3. 「Worker 公网探测」至少应有一个在线 Worker UDP/TCP `53` 可达；若失败，检查 Worker 公网地址、防火墙、端口映射和安全组。
 4. 「GSLB 模拟复测」应返回目标 IP；若无目标，检查节点是否在线、OpenResty 是否健康、公网 IP 池、节点池、排空模式、GSLB 权重和负载阈值。
+
+如果「Worker 可用性」里 Server 侧公网探测正常，但「Agent 多节点探测」异常：
+
+1. 确认对应 Agent 节点可以直接访问 DNS Worker 公网地址的 UDP/TCP `53`，例如在节点上执行 `dig @ns1.example.net example.com SOA`。
+2. 检查节点所在机房、云厂商安全组或出站防火墙是否阻断 UDP `53` 或 TCP `53`。
+3. 查看 `journalctl -u dushengcdn-agent -n 200 --no-pager`，确认 Agent 心跳是否正常；Agent 只有在收到 Server 下发的探测目标后，才会在下一次心跳或 WebSocket status 上报结果。
+4. 如果某个 Worker 没有出现在多节点探测中，确认该 Worker 已在线且填写了公网地址；Server 每次只下发少量在线 Worker 目标，避免心跳被大量探测拖慢。
 
 迁移向导不会直接修改注册商 NS。注册商侧 NS 生效还受上级 DNS 缓存和 TTL 影响，调整后可再次执行 Zone 委派检查。
 

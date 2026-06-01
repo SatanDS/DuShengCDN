@@ -22,14 +22,15 @@ type HeartbeatResult struct {
 }
 
 type AgentSettings struct {
-	HeartbeatInterval       int    `json:"heartbeat_interval"`
-	WebsocketUpgradeEnabled bool   `json:"websocket_upgrade_enabled"`
-	AutoUpdate              bool   `json:"auto_update"`
-	UpdateRepo              string `json:"update_repo"`
-	UpdateNow               bool   `json:"update_now"`
-	UpdateChannel           string `json:"update_channel"`
-	UpdateTag               string `json:"update_tag"`
-	RestartOpenrestyNow     bool   `json:"restart_openresty_now"`
+	HeartbeatInterval       int              `json:"heartbeat_interval"`
+	WebsocketUpgradeEnabled bool             `json:"websocket_upgrade_enabled"`
+	AutoUpdate              bool             `json:"auto_update"`
+	UpdateRepo              string           `json:"update_repo"`
+	UpdateNow               bool             `json:"update_now"`
+	UpdateChannel           string           `json:"update_channel"`
+	UpdateTag               string           `json:"update_tag"`
+	RestartOpenrestyNow     bool             `json:"restart_openresty_now"`
+	DNSProbeTargets         []DNSProbeTarget `json:"dns_probe_targets,omitempty"`
 }
 
 const (
@@ -83,6 +84,34 @@ type NodePayload struct {
 	AccessLogs            []NodeAccessLog               `json:"access_logs,omitempty"`
 	BufferedObservability []BufferedObservabilityRecord `json:"buffered_observability,omitempty"`
 	HealthEvents          []NodeHealthEvent             `json:"health_events"`
+	DNSProbeResults       []DNSProbeReport              `json:"dns_probe_results,omitempty"`
+}
+
+type DNSProbeTarget struct {
+	WorkerID      string `json:"worker_id"`
+	Name          string `json:"name"`
+	PublicAddress string `json:"public_address"`
+	QueryName     string `json:"query_name"`
+	QueryType     string `json:"query_type"`
+}
+
+type DNSProbeReport struct {
+	WorkerID      string           `json:"worker_id"`
+	Name          string           `json:"name"`
+	PublicAddress string           `json:"public_address"`
+	QueryName     string           `json:"query_name"`
+	QueryType     string           `json:"query_type"`
+	CheckedAtUnix int64            `json:"checked_at_unix"`
+	Results       []DNSProbeResult `json:"results"`
+}
+
+type DNSProbeResult struct {
+	Network     string `json:"network"`
+	Reachable   bool   `json:"reachable"`
+	DurationMs  int64  `json:"duration_ms"`
+	RCode       string `json:"rcode"`
+	AnswerCount int    `json:"answer_count"`
+	Error       string `json:"error,omitempty"`
 }
 
 type NodeSystemProfile struct {

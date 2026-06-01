@@ -353,43 +353,68 @@ type DNSWorkerSnapshotWorkerView struct {
 }
 
 type DNSWorkerHealthSummaryView struct {
-	CheckedAt           time.Time                 `json:"checked_at"`
-	TotalWorkerCount    int                       `json:"total_worker_count"`
-	OnlineWorkerCount   int                       `json:"online_worker_count"`
-	ProbeHealthyCount   int                       `json:"probe_healthy_count"`
-	ProbeCheckedCount   int                       `json:"probe_checked_count"`
-	ProbeHealthyPercent float64                   `json:"probe_healthy_percent"`
-	AvailabilityPercent float64                   `json:"availability_percent"`
-	AverageLatencyMs    float64                   `json:"average_latency_ms"`
-	MaxLatencyMs        int64                     `json:"max_latency_ms"`
-	ErrorRatePercent    float64                   `json:"error_rate_percent"`
-	Workers             []DNSWorkerHealthItemView `json:"workers"`
+	CheckedAt               time.Time                 `json:"checked_at"`
+	TotalWorkerCount        int                       `json:"total_worker_count"`
+	OnlineWorkerCount       int                       `json:"online_worker_count"`
+	ProbeHealthyCount       int                       `json:"probe_healthy_count"`
+	ProbeCheckedCount       int                       `json:"probe_checked_count"`
+	ProbeHealthyPercent     float64                   `json:"probe_healthy_percent"`
+	NodeProbeHealthyCount   int                       `json:"node_probe_healthy_count"`
+	NodeProbeCheckedCount   int                       `json:"node_probe_checked_count"`
+	NodeProbeHealthyPercent float64                   `json:"node_probe_healthy_percent"`
+	NodeProbeAverageRTTMs   float64                   `json:"node_probe_average_rtt_ms"`
+	NodeProbeMaxRTTMs       int64                     `json:"node_probe_max_rtt_ms"`
+	AvailabilityPercent     float64                   `json:"availability_percent"`
+	AverageLatencyMs        float64                   `json:"average_latency_ms"`
+	MaxLatencyMs            int64                     `json:"max_latency_ms"`
+	ErrorRatePercent        float64                   `json:"error_rate_percent"`
+	Workers                 []DNSWorkerHealthItemView `json:"workers"`
 }
 
 type DNSWorkerHealthItemView struct {
-	WorkerID           string                     `json:"worker_id"`
-	Name               string                     `json:"name"`
-	Status             string                     `json:"status"`
-	PublicAddress      string                     `json:"public_address"`
-	QueryCount         int64                      `json:"query_count"`
-	ErrorQueries       int64                      `json:"error_queries"`
-	ErrorRatePercent   float64                    `json:"error_rate_percent"`
-	AverageLatencyMs   float64                    `json:"average_latency_ms"`
-	MaxLatencyMs       int64                      `json:"max_latency_ms"`
-	LastSeenAt         *time.Time                 `json:"last_seen_at"`
-	LastSnapshotAt     *time.Time                 `json:"last_snapshot_at"`
-	SnapshotAgeSeconds int64                      `json:"snapshot_age_seconds"`
-	SnapshotStale      bool                       `json:"snapshot_stale"`
-	GeoIPEnabled       bool                       `json:"geoip_enabled"`
-	GeoIPDatabasePath  string                     `json:"geoip_database_path"`
-	GeoIPLastError     string                     `json:"geoip_last_error"`
-	LastError          string                     `json:"last_error"`
-	LastProbeAt        *time.Time                 `json:"last_probe_at"`
-	LastProbeResults   []DNSWorkerProbeResultView `json:"last_probe_results"`
-	ProbeStatus        string                     `json:"probe_status"`
-	ProbeHealthy       bool                       `json:"probe_healthy"`
-	ProbeAgeSeconds    int64                      `json:"probe_age_seconds"`
-	ProbeMessage       string                     `json:"probe_message"`
+	WorkerID                string                     `json:"worker_id"`
+	Name                    string                     `json:"name"`
+	Status                  string                     `json:"status"`
+	PublicAddress           string                     `json:"public_address"`
+	QueryCount              int64                      `json:"query_count"`
+	ErrorQueries            int64                      `json:"error_queries"`
+	ErrorRatePercent        float64                    `json:"error_rate_percent"`
+	AverageLatencyMs        float64                    `json:"average_latency_ms"`
+	MaxLatencyMs            int64                      `json:"max_latency_ms"`
+	LastSeenAt              *time.Time                 `json:"last_seen_at"`
+	LastSnapshotAt          *time.Time                 `json:"last_snapshot_at"`
+	SnapshotAgeSeconds      int64                      `json:"snapshot_age_seconds"`
+	SnapshotStale           bool                       `json:"snapshot_stale"`
+	GeoIPEnabled            bool                       `json:"geoip_enabled"`
+	GeoIPDatabasePath       string                     `json:"geoip_database_path"`
+	GeoIPLastError          string                     `json:"geoip_last_error"`
+	LastError               string                     `json:"last_error"`
+	LastProbeAt             *time.Time                 `json:"last_probe_at"`
+	LastProbeResults        []DNSWorkerProbeResultView `json:"last_probe_results"`
+	ProbeStatus             string                     `json:"probe_status"`
+	ProbeHealthy            bool                       `json:"probe_healthy"`
+	ProbeAgeSeconds         int64                      `json:"probe_age_seconds"`
+	ProbeMessage            string                     `json:"probe_message"`
+	NodeProbeTotalCount     int                        `json:"node_probe_total_count"`
+	NodeProbeHealthyCount   int                        `json:"node_probe_healthy_count"`
+	NodeProbeHealthyPercent float64                    `json:"node_probe_healthy_percent"`
+	NodeProbeAverageRTTMs   float64                    `json:"node_probe_average_rtt_ms"`
+	NodeProbeMaxRTTMs       int64                      `json:"node_probe_max_rtt_ms"`
+	NodeProbes              []DNSWorkerNodeProbeView   `json:"node_probes"`
+}
+
+type DNSWorkerNodeProbeView struct {
+	NodeID         string                     `json:"node_id"`
+	NodeName       string                     `json:"node_name"`
+	PoolName       string                     `json:"pool_name"`
+	Status         string                     `json:"status"`
+	CheckedAt      time.Time                  `json:"checked_at"`
+	Healthy        bool                       `json:"healthy"`
+	AverageRTTMs   float64                    `json:"average_rtt_ms"`
+	MaxRTTMs       int64                      `json:"max_rtt_ms"`
+	Results        []DNSWorkerProbeResultView `json:"results"`
+	LastError      string                     `json:"last_error"`
+	FailureSamples int                        `json:"failure_samples"`
 }
 
 type DNSZoneDelegationCheckView struct {
@@ -2799,6 +2824,15 @@ type dnsWorkerHealthStats struct {
 	maxDurationMs   int64
 }
 
+type dnsWorkerNodeProbeStats struct {
+	totalCount        int
+	healthyCount      int
+	totalAverageRTTMs float64
+	averageSamples    int
+	maxRTTMs          int64
+	probes            []DNSWorkerNodeProbeView
+}
+
 func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) DNSWorkerHealthSummaryView {
 	snapshotMaxAge := authoritativeDNSSnapshotMaxAge()
 	workers, err := model.ListDNSWorkers()
@@ -2844,11 +2878,14 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 		}
 	}
 
+	nodeProbeStatsByWorker := buildDNSWorkerNodeProbeStats()
 	view.TotalWorkerCount = len(workers)
 	view.MaxLatencyMs = maxDurationMs
 	view.AverageLatencyMs = averageMilliseconds(totalDurationMs, totalQueries)
 	view.ErrorRatePercent = ratioPercent(totalErrors, totalQueries)
 
+	var totalNodeProbeAverageRTTMs float64
+	var totalNodeProbeAverageSamples int
 	for _, worker := range workers {
 		if worker == nil {
 			continue
@@ -2881,30 +2918,49 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 		if probeState.healthy {
 			view.ProbeHealthyCount++
 		}
+		nodeProbeStats := nodeProbeStatsByWorker[worker.WorkerID]
+		if nodeProbeStats == nil {
+			nodeProbeStats = &dnsWorkerNodeProbeStats{probes: []DNSWorkerNodeProbeView{}}
+		}
+		view.NodeProbeCheckedCount += nodeProbeStats.totalCount
+		view.NodeProbeHealthyCount += nodeProbeStats.healthyCount
+		if nodeProbeStats.averageSamples > 0 {
+			totalNodeProbeAverageRTTMs += nodeProbeStats.totalAverageRTTMs
+			totalNodeProbeAverageSamples += nodeProbeStats.averageSamples
+		}
+		if nodeProbeStats.maxRTTMs > view.NodeProbeMaxRTTMs {
+			view.NodeProbeMaxRTTMs = nodeProbeStats.maxRTTMs
+		}
 		view.Workers = append(view.Workers, DNSWorkerHealthItemView{
-			WorkerID:           worker.WorkerID,
-			Name:               workerName,
-			Status:             status,
-			PublicAddress:      worker.PublicAddress,
-			QueryCount:         stats.queryCount,
-			ErrorQueries:       stats.errorQueries,
-			ErrorRatePercent:   ratioPercent(stats.errorQueries, stats.queryCount),
-			AverageLatencyMs:   averageMilliseconds(stats.totalDurationMs, stats.queryCount),
-			MaxLatencyMs:       stats.maxDurationMs,
-			LastSeenAt:         worker.LastSeenAt,
-			LastSnapshotAt:     worker.LastSnapshotAt,
-			SnapshotAgeSeconds: snapshotAgeSeconds,
-			SnapshotStale:      snapshotStale,
-			GeoIPEnabled:       worker.GeoIPEnabled,
-			GeoIPDatabasePath:  worker.GeoIPDatabasePath,
-			GeoIPLastError:     worker.GeoIPLastError,
-			LastError:          worker.LastError,
-			LastProbeAt:        worker.LastProbeAt,
-			LastProbeResults:   probeResults,
-			ProbeStatus:        probeState.status,
-			ProbeHealthy:       probeState.healthy,
-			ProbeAgeSeconds:    probeState.ageSeconds,
-			ProbeMessage:       probeState.message,
+			WorkerID:                worker.WorkerID,
+			Name:                    workerName,
+			Status:                  status,
+			PublicAddress:           worker.PublicAddress,
+			QueryCount:              stats.queryCount,
+			ErrorQueries:            stats.errorQueries,
+			ErrorRatePercent:        ratioPercent(stats.errorQueries, stats.queryCount),
+			AverageLatencyMs:        averageMilliseconds(stats.totalDurationMs, stats.queryCount),
+			MaxLatencyMs:            stats.maxDurationMs,
+			LastSeenAt:              worker.LastSeenAt,
+			LastSnapshotAt:          worker.LastSnapshotAt,
+			SnapshotAgeSeconds:      snapshotAgeSeconds,
+			SnapshotStale:           snapshotStale,
+			GeoIPEnabled:            worker.GeoIPEnabled,
+			GeoIPDatabasePath:       worker.GeoIPDatabasePath,
+			GeoIPLastError:          worker.GeoIPLastError,
+			LastError:               worker.LastError,
+			LastProbeAt:             worker.LastProbeAt,
+			LastProbeResults:        probeResults,
+			ProbeStatus:             probeState.status,
+			ProbeHealthy:            probeState.healthy,
+			ProbeAgeSeconds:         probeState.ageSeconds,
+			ProbeMessage:            probeState.message,
+			NodeProbeTotalCount:     nodeProbeStats.totalCount,
+			NodeProbeHealthyCount:   nodeProbeStats.healthyCount,
+			NodeProbeHealthyPercent: ratioPercent(int64(nodeProbeStats.healthyCount), int64(nodeProbeStats.totalCount)),
+			NodeProbeAverageRTTMs:   averageFloat(nodeProbeStats.totalAverageRTTMs, nodeProbeStats.averageSamples),
+			NodeProbeMaxRTTMs:       nodeProbeStats.maxRTTMs,
+			NodeProbes:              nodeProbeStats.probes,
 		})
 	}
 	if view.TotalWorkerCount > 0 {
@@ -2912,6 +2968,12 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 	}
 	if view.ProbeCheckedCount > 0 {
 		view.ProbeHealthyPercent = ratioPercent(int64(view.ProbeHealthyCount), int64(view.ProbeCheckedCount))
+	}
+	if view.NodeProbeCheckedCount > 0 {
+		view.NodeProbeHealthyPercent = ratioPercent(int64(view.NodeProbeHealthyCount), int64(view.NodeProbeCheckedCount))
+	}
+	if totalNodeProbeAverageSamples > 0 {
+		view.NodeProbeAverageRTTMs = totalNodeProbeAverageRTTMs / float64(totalNodeProbeAverageSamples)
 	}
 	sort.SliceStable(view.Workers, func(i, j int) bool {
 		if view.Workers[i].Status != view.Workers[j].Status {
@@ -2925,11 +2987,96 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 	return view
 }
 
+func buildDNSWorkerNodeProbeStats() map[string]*dnsWorkerNodeProbeStats {
+	probes, err := model.ListDNSWorkerNodeProbes()
+	if err != nil || len(probes) == 0 {
+		return map[string]*dnsWorkerNodeProbeStats{}
+	}
+	nodes, err := model.ListNodes()
+	if err != nil {
+		nodes = []*model.Node{}
+	}
+	nodesByID := make(map[string]*model.Node, len(nodes))
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		nodesByID[node.NodeID] = node
+	}
+	statsByWorker := make(map[string]*dnsWorkerNodeProbeStats)
+	for _, probe := range probes {
+		if probe == nil {
+			continue
+		}
+		workerID := strings.TrimSpace(probe.WorkerID)
+		nodeID := strings.TrimSpace(probe.NodeID)
+		if workerID == "" || nodeID == "" {
+			continue
+		}
+		stats := statsByWorker[workerID]
+		if stats == nil {
+			stats = &dnsWorkerNodeProbeStats{probes: []DNSWorkerNodeProbeView{}}
+			statsByWorker[workerID] = stats
+		}
+		nodeName := nodeID
+		poolName := ""
+		nodeStatus := NodeStatusOffline
+		if node := nodesByID[nodeID]; node != nil {
+			nodeName = strings.TrimSpace(node.Name)
+			if nodeName == "" {
+				nodeName = nodeID
+			}
+			poolName = strings.TrimSpace(node.PoolName)
+			nodeStatus = computeNodeStatus(node)
+		}
+		stats.totalCount++
+		if probe.Healthy {
+			stats.healthyCount++
+		}
+		if probe.AverageRTTMs > 0 {
+			stats.totalAverageRTTMs += probe.AverageRTTMs
+			stats.averageSamples++
+		}
+		if probe.MaxRTTMs > stats.maxRTTMs {
+			stats.maxRTTMs = probe.MaxRTTMs
+		}
+		stats.probes = append(stats.probes, DNSWorkerNodeProbeView{
+			NodeID:         nodeID,
+			NodeName:       nodeName,
+			PoolName:       poolName,
+			Status:         nodeStatus,
+			CheckedAt:      probe.CheckedAt,
+			Healthy:        probe.Healthy,
+			AverageRTTMs:   probe.AverageRTTMs,
+			MaxRTTMs:       probe.MaxRTTMs,
+			Results:        decodeDNSWorkerProbeResults(probe.ResultsJSON),
+			LastError:      probe.LastError,
+			FailureSamples: probe.FailureSamples,
+		})
+	}
+	for _, stats := range statsByWorker {
+		sort.SliceStable(stats.probes, func(i, j int) bool {
+			if stats.probes[i].Healthy != stats.probes[j].Healthy {
+				return stats.probes[i].Healthy
+			}
+			return stats.probes[i].CheckedAt.After(stats.probes[j].CheckedAt)
+		})
+	}
+	return statsByWorker
+}
+
 func averageMilliseconds(totalDurationMs int64, count int64) float64 {
 	if count <= 0 || totalDurationMs <= 0 {
 		return 0
 	}
 	return float64(totalDurationMs) / float64(count)
+}
+
+func averageFloat(total float64, count int) float64 {
+	if count <= 0 || total <= 0 {
+		return 0
+	}
+	return total / float64(count)
 }
 
 func ratioPercent(numerator int64, denominator int64) float64 {

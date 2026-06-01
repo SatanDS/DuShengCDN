@@ -1722,6 +1722,40 @@ func validateDatabaseSchemaV23(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV24 adds node-side DNS Worker active probe status.
+func migrateV24(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV24(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV23(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasTable(&DNSWorkerNodeProbe{}) {
+		return fmt.Errorf("table dns_worker_node_probes is missing")
+	}
+	for _, column := range []string{
+		"worker_id",
+		"node_id",
+		"public_address",
+		"query_name",
+		"query_type",
+		"checked_at",
+		"results_json",
+		"healthy",
+		"average_rtt_ms",
+		"max_rtt_ms",
+		"last_error",
+		"failure_samples",
+	} {
+		if !db.Migrator().HasColumn(&DNSWorkerNodeProbe{}, column) {
+			return fmt.Errorf("column dns_worker_node_probes.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1746,6 +1780,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 20, toVersion: 21, migrate: migrateV21, validate: validateDatabaseSchemaV21},
 		{fromVersion: 21, toVersion: 22, migrate: migrateV22, validate: validateDatabaseSchemaV22},
 		{fromVersion: 22, toVersion: 23, migrate: migrateV23, validate: validateDatabaseSchemaV23},
+		{fromVersion: 23, toVersion: 24, migrate: migrateV24, validate: validateDatabaseSchemaV24},
 	}
 }
 
@@ -1834,7 +1869,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV22(db, backend); err != nil {
+	if err := validateDatabaseSchemaV24(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

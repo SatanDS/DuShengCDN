@@ -835,6 +835,94 @@ func TestProbeAuthoritativeDNSWorkerChecksUDPAndTCP(t *testing.T) {
 	}
 }
 
+func TestAgentDNSProbeResultsPersistToWorkerHealth(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now().UTC()
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1-hk",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	_, err = RecordDNSWorkerHeartbeat(workerModel, DNSWorkerHeartbeatInput{
+		Version:             "v1.0.0",
+		Status:              dnsWorkerStatusOnline,
+		LastSnapshotVersion: "snapshot-a",
+		LastSnapshotAt:      &now,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	node := &model.Node{
+		NodeID:            "node-hk-1",
+		Name:              "hk-edge-1",
+		IP:                "203.0.113.10",
+		PoolName:          "HK",
+		AgentToken:        "agent-token",
+		AgentVersion:      "1.0.0",
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		Status:            NodeStatusOnline,
+		LastSeenAt:        now,
+		SchedulingEnabled: true,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	persistHeartbeatObservability(node.NodeID, AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{
+			{
+				WorkerID:      worker.WorkerID,
+				Name:          "ns1-hk",
+				PublicAddress: "ns1.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results: []AgentDNSProbeResult{
+					{Network: "UDP", Reachable: true, DurationMs: 11, RCode: "NOERROR", AnswerCount: 1},
+					{Network: "TCP", Reachable: true, DurationMs: 17, RCode: "NOERROR", AnswerCount: 1},
+				},
+			},
+		},
+	}, now)
+
+	probes, err := model.ListDNSWorkerNodeProbes()
+	if err != nil {
+		t.Fatalf("ListDNSWorkerNodeProbes: %v", err)
+	}
+	if len(probes) != 1 || probes[0].WorkerID != worker.WorkerID || probes[0].NodeID != node.NodeID || !probes[0].Healthy {
+		t.Fatalf("unexpected persisted node probe: %+v", probes)
+	}
+	if probes[0].AverageRTTMs != 14 || probes[0].MaxRTTMs != 17 || probes[0].FailureSamples != 0 {
+		t.Fatalf("unexpected probe stats: %+v", probes[0])
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.WorkerHealth.NodeProbeCheckedCount != 1 ||
+		summary.WorkerHealth.NodeProbeHealthyCount != 1 ||
+		summary.WorkerHealth.NodeProbeHealthyPercent != 100 ||
+		summary.WorkerHealth.NodeProbeAverageRTTMs != 14 ||
+		summary.WorkerHealth.NodeProbeMaxRTTMs != 17 {
+		t.Fatalf("unexpected node probe summary: %+v", summary.WorkerHealth)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 || len(summary.WorkerHealth.Workers[0].NodeProbes) != 1 {
+		t.Fatalf("expected node probe in worker health item: %+v", summary.WorkerHealth.Workers)
+	}
+	nodeProbe := summary.WorkerHealth.Workers[0].NodeProbes[0]
+	if nodeProbe.NodeName != "hk-edge-1" || nodeProbe.PoolName != "HK" || !nodeProbe.Healthy || len(nodeProbe.Results) != 2 {
+		t.Fatalf("unexpected node probe view: %+v", nodeProbe)
+	}
+}
+
 func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	setupServiceTestDB(t)
 

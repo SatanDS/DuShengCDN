@@ -160,13 +160,13 @@ go run . --port 3000 --log-dir ./logs
 
 生产环境建议在节点详情中维护节点池、公网 IP 池、调度权重和排空状态。自动 DNS 默认会按网站绑定的节点池选择在线且 OpenResty 健康的公网 IP；启用网站 GSLB 后，可在自动 DNS 配置中绑定多个节点池，按池权重、节点负载和防抖冷却时间同步 Cloudflare A/AAAA 记录。缓存清理和预热仍下发到网站默认节点池内的在线 Agent。
 
-当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度。自建权威 DNS 模式已经提供管理端 Zone/记录/Worker 入口、网站模式选择、DNS Worker 查询面、心跳、只读快照 API、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测、Zone 委派检查和迁移向导；如需按每次 DNS 查询来源返回不同节点，应在左侧「权威 DNS」创建 Zone 和 DNS Worker，通过「迁移向导」检查候选站点，满足条件时可一键切换到自建权威 DNS，也可到网站详情「自动 DNS」里手动切换。
+当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度。自建权威 DNS 模式已经提供管理端 Zone/记录/Worker 入口、网站模式选择、DNS Worker 查询面、心跳、只读快照 API、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测、Agent 多点 Worker 探测、Zone 委派检查和迁移向导；如需按每次 DNS 查询来源返回不同节点，应在左侧「权威 DNS」创建 Zone 和 DNS Worker，通过「迁移向导」检查候选站点，满足条件时可一键切换到自建权威 DNS，也可到网站详情「自动 DNS」里手动切换。
 
 ## 自建权威 DNS 部署规划
 
 自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。
 
-Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，可用于检查实时 GSLB 是否按来源 CIDR、国家代码、来源分流桶、节点池权重、健康状态和负载阈值返回预期边缘 IP。「GSLB 调度状态」展示当前实际目标、期望目标、最近评估时间和防抖冷却状态；「GSLB 调度模拟」还可以在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照返回目标，并解释节点池匹配、候选节点、跳过节点和原因。这里的延迟是 Worker 本地处理真实 DNS 查询的耗时，不是用户到多地 NS 的公网 RTT。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
+Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、Agent 多节点探测通过率/RTT、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，可用于检查实时 GSLB 是否按来源 CIDR、国家代码、来源分流桶、节点池权重、健康状态和负载阈值返回预期边缘 IP。「GSLB 调度状态」展示当前实际目标、期望目标、最近评估时间和防抖冷却状态；「GSLB 调度模拟」还可以在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照返回目标，并解释节点池匹配、候选节点、跳过节点和原因。这里的 Worker 查询延迟是 Worker 本地处理真实 DNS 查询的耗时；Agent 多节点探测 RTT 表示各边缘节点到 Worker NS 的主动探测耗时。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
 
 管理端操作顺序：
 
@@ -246,6 +246,7 @@ go run ./cmd/dns-worker \
 * Worker 默认按来源 IP 每秒最多处理 `200` 次查询，超过后返回 `REFUSED`；可通过 `--query-rate-limit` 或 `DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT` 调整，设为 `0` 表示关闭。
 * Worker 默认把 UDP 响应上限限制为 `1232` 字节；超过时设置 TC 位让递归解析器回退 TCP，可通过 `--udp-response-size` 或 `DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE` 调整。
 * DNS Worker 不替代 Agent/OpenResty。反向代理配置修改后仍需发布并激活版本，Agent 才会应用。
+* 在线 Agent 会自动接收 Server 下发的少量 DNS Worker 探测目标，并在心跳中上报 UDP/TCP `53` 可达性与 RTT；该能力不需要新增 Agent 配置项，但要求 Agent 节点能访问 DNS Worker 公网地址的 UDP/TCP `53`。
 
 卸载 DNS Worker：
 

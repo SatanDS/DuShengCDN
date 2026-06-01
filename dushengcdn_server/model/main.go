@@ -35,6 +35,7 @@ func registeredModels() []any {
 		&DNSZone{},
 		&DNSRecord{},
 		&DNSWorker{},
+		&DNSWorkerNodeProbe{},
 		&DNSQueryRollup{},
 		&ConfigVersion{},
 		&Node{},

@@ -133,6 +133,12 @@ tests/
 当前有效实体：
 
 * `proxy_routes`
+* `gslb_scheduling_states`
+* `dns_zones`
+* `dns_records`
+* `dns_workers`
+* `dns_query_rollups`
+* `dns_worker_node_probes`
 * `origins`
 * `config_versions`
 * `nodes`
@@ -159,8 +165,9 @@ tests/
 * `proxy_routes.node_pool` 只保存网站绑定的默认节点池名称，用于自动 DNS 选点和缓存运行时操作，不得演变成按节点分组的配置版本。
 * `proxy_routes.gslb_policy` 只保存站点级 DNS 调度策略，可引用多个节点池用于 GSLB 选点；它不能用于生成按节点池拆分的 OpenResty 配置版本。
 * `gslb_scheduling_states` 只保存运行时 DNS 调度状态和防抖信息，不参与配置版本快照。
-* 自建权威 DNS 阶段允许新增 `dns_zones`、`dns_records`、`dns_workers`、`dns_query_rollups` 等 DNS 基础对象；这些对象只服务权威 DNS 查询、Worker 快照和观测聚合，不得承载 OpenResty 反向代理配置。
+* 自建权威 DNS 阶段允许新增 `dns_zones`、`dns_records`、`dns_workers`、`dns_query_rollups`、`dns_worker_node_probes` 等 DNS 基础与观测对象；这些对象只服务权威 DNS 查询、Worker 快照、主动探测和观测聚合，不得承载 OpenResty 反向代理配置。
 * DNS Worker 使用 Server 下发的只读快照回答查询，查询路径不得访问数据库、不得调用外部 GeoIP HTTP API、不得执行远程命令。
+* Agent 侧 DNS Worker 主动探测只能使用 Server 下发的结构化目标执行 UDP/TCP `53` 查询，不得扩展为任意端口扫描、远程 shell 或通用探测平台；探测结果通过 heartbeat/status 上报并由 Server 聚合。
 * 权威 DNS 的逐来源防抖状态必须包含来源作用域，例如 `global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42`，不能继续只按 `proxy_route_id` 覆盖全局选择。
 * 遗留 `domain` 字段只能作为 `domains[0]` 的兼容镜像；新代码不得继续以该字段作为唯一业务输入。
 * `proxy_routes` 如关联 `origins`，必须同时保存可直接渲染的 `origin_url`。
@@ -293,7 +300,7 @@ Agent 必须满足：
 * Agent 主链路修改必须验证同步、应用与回滚。
 * 前端页面至少覆盖加载态、空态、错误态与成功反馈。
 * Go 版本调整时，同步检查 `go.mod`、Dockerfile 与 CI 工作流。
-* 权威 DNS 修改必须覆盖 DNS 协议响应、GSLB 选点、ECS/来源识别、TTL、防抖、快照失效和 Worker 心跳/聚合上报。
+* 权威 DNS 修改必须覆盖 DNS 协议响应、GSLB 选点、ECS/来源识别、TTL、防抖、快照失效、Worker 心跳/聚合上报，以及 Agent 主动探测链路涉及的协议、持久化和 UI 回归。
 
 ## 后续维护方式
 
@@ -307,4 +314,4 @@ Agent 必须满足：
 
 当前专项“网站级规则与配置界面改造”的模型边界已纳入 [产品边界](./)，执行时仍按数据模型、接口、前端页面、迁移测试与文档联动的顺序推进。
 
-当前专项“自建权威 DNS 与 GSLB 调度”的设计边界见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)。数据模型、快照 API、DNS Worker 查询面、管理端入口、查询趋势、快照一致性告警、委派检查、迁移向导、Worker 查询延迟/可用性看板和 Server 侧按需 Worker UDP/TCP 探测已具备；后续如需更完整多地健康探测，应新增多探测点链路并同步设计文档。
+当前专项“自建权威 DNS 与 GSLB 调度”的设计边界见 [自建权威 DNS 与 GSLB 调度规划](./authoritative-dns-gslb.md)。数据模型、快照 API、DNS Worker 查询面、管理端入口、查询趋势、快照一致性告警、委派检查、迁移向导、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测，以及复用在线 Agent 节点的 DNS Worker 多点主动探测已具备；后续如需更完整独立探测网络或将探测纳入调度评分，应继续同步设计文档。

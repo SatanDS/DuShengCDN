@@ -162,6 +162,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `dns_records` | 权威 DNS | Zone 内静态记录，至少支持 `A`、`AAAA`、`CNAME`、`TXT`、`MX`、`NS`、`SOA` |
 | `dns_workers` | 权威 DNS | DNS Worker 身份、Token、公网地址、版本、心跳、快照状态、GeoIP 国家库加载状态和最近一次 UDP/TCP 探测结果 |
 | `dns_query_rollups` | 权威 DNS | DNS 查询聚合指标，按时间窗口、Zone、站点、来源作用域、qtype、rcode 和 Worker 统计 |
+| `dns_worker_node_probes` | 权威 DNS 观测 | 在线 Agent 节点对 DNS Worker 公网 UDP/TCP `53` 的最新主动探测结果、RTT、健康状态和失败样本 |
 
 自建权威 DNS 的完整设计见 [自建权威 DNS 与 GSLB 调度规划](../design/authoritative-dns-gslb.md)。
 
@@ -280,6 +281,7 @@ DNS Worker 心跳会把本地 GeoIP 国家库状态同步到 Server，包括 `ge
 * `agent_token` 与 `discovery_token` 不能同时为空。
 * `heartbeat_interval` 与 `request_timeout` 支持毫秒整数或 Go duration 字符串。
 * Server 运行时配置 `AgentWebsocketUpgradeEnabled` 开启时，Agent 会在 HTTP 心跳成功后尝试升级为 WebSocket；连接失败或断开后自动退回 HTTP 心跳。
+* Server 会在 Agent settings 中自动下发少量在线 DNS Worker 探测目标；Agent 无需额外配置，会在本机执行 UDP/TCP `53` DNS 查询探测并随心跳上报。若 Agent 节点无法出站访问 Worker 的 `53` 端口，权威 DNS 的多节点探测会显示失败。
 * 未配置 `openresty_path` 时默认调用 `openresty`。
 * Agent 周期性健康检查会请求 `http://127.0.0.1:<openresty_observability_port>/dushengcdn/stub_status`，不再通过高频 `openresty -t` 判断运行时健康；配置应用、启动恢复和 reload 前校验仍会执行 `openresty -t -c <main_config_path>`。
 * 如果 `agent.json` 不存在，但 `DUSHENGCDN_SERVER_URL` 与 Token 等环境变量足够，Agent 可以直接启动；两者同时存在时环境变量优先。

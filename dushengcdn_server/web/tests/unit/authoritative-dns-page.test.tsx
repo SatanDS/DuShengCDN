@@ -193,6 +193,11 @@ describe('Authoritative DNS page', () => {
                     probe_healthy_count: 1,
                     probe_checked_count: 1,
                     probe_healthy_percent: 100,
+                    node_probe_healthy_count: 1,
+                    node_probe_checked_count: 2,
+                    node_probe_healthy_percent: 50,
+                    node_probe_average_rtt_ms: 31,
+                    node_probe_max_rtt_ms: 70,
                     availability_percent: 100,
                     average_latency_ms: 12.5,
                     max_latency_ms: 48,
@@ -218,6 +223,70 @@ describe('Authoritative DNS page', () => {
                         probe_healthy: true,
                         probe_age_seconds: 120,
                         probe_message: 'UDP/TCP 53 均可达',
+                        node_probe_total_count: 2,
+                        node_probe_healthy_count: 1,
+                        node_probe_healthy_percent: 50,
+                        node_probe_average_rtt_ms: 31,
+                        node_probe_max_rtt_ms: 70,
+                        node_probes: [
+                          {
+                            node_id: 'node-hk-1',
+                            node_name: 'hk-edge-1',
+                            pool_name: 'HK',
+                            status: 'online',
+                            checked_at: '2026-05-31T08:11:00Z',
+                            healthy: true,
+                            average_rtt_ms: 21,
+                            max_rtt_ms: 24,
+                            last_error: '',
+                            failure_samples: 0,
+                            results: [
+                              {
+                                network: 'UDP',
+                                reachable: true,
+                                duration_ms: 18,
+                                rcode: 'NOERROR',
+                                answer_count: 1,
+                              },
+                              {
+                                network: 'TCP',
+                                reachable: true,
+                                duration_ms: 24,
+                                rcode: 'NOERROR',
+                                answer_count: 1,
+                              },
+                            ],
+                          },
+                          {
+                            node_id: 'node-eu-1',
+                            node_name: 'eu-edge-1',
+                            pool_name: 'EU',
+                            status: 'online',
+                            checked_at: '2026-05-31T08:11:00Z',
+                            healthy: false,
+                            average_rtt_ms: 41,
+                            max_rtt_ms: 70,
+                            last_error: 'TCP 53 探测失败',
+                            failure_samples: 1,
+                            results: [
+                              {
+                                network: 'UDP',
+                                reachable: true,
+                                duration_ms: 41,
+                                rcode: 'NOERROR',
+                                answer_count: 1,
+                              },
+                              {
+                                network: 'TCP',
+                                reachable: false,
+                                duration_ms: 70,
+                                rcode: '',
+                                answer_count: 0,
+                                error: 'i/o timeout',
+                              },
+                            ],
+                          },
+                        ],
                         last_probe_results: [
                           {
                             network: 'UDP',
@@ -255,6 +324,12 @@ describe('Authoritative DNS page', () => {
                         probe_healthy: false,
                         probe_age_seconds: 0,
                         probe_message: '尚未执行公网 UDP/TCP 53 探测',
+                        node_probe_total_count: 0,
+                        node_probe_healthy_count: 0,
+                        node_probe_healthy_percent: 0,
+                        node_probe_average_rtt_ms: 0,
+                        node_probe_max_rtt_ms: 0,
+                        node_probes: [],
                         last_probe_results: [],
                       },
                     ],
@@ -464,6 +539,12 @@ describe('Authoritative DNS page', () => {
                   probe_healthy: false,
                   probe_age_seconds: 0,
                   probe_message: '尚未执行公网 UDP/TCP 53 探测',
+                  node_probe_total_count: 0,
+                  node_probe_healthy_count: 0,
+                  node_probe_healthy_percent: 0,
+                  node_probe_average_rtt_ms: 0,
+                  node_probe_max_rtt_ms: 0,
+                  node_probes: [],
                   created_at: '2026-05-31T08:00:00Z',
                   updated_at: '2026-05-31T08:00:00Z',
                 },
@@ -496,6 +577,12 @@ describe('Authoritative DNS page', () => {
                     probe_healthy: true,
                     probe_age_seconds: 120,
                     probe_message: 'UDP/TCP 53 均可达',
+                    node_probe_total_count: 0,
+                    node_probe_healthy_count: 0,
+                    node_probe_healthy_percent: 0,
+                    node_probe_average_rtt_ms: 0,
+                    node_probe_max_rtt_ms: 0,
+                    node_probes: [],
                     last_probe_results: [
                       {
                         network: 'UDP',
@@ -726,6 +813,11 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('snapshot-a')).toBeInTheDocument();
     expect(screen.getAllByText('snapshot-b').length).toBeGreaterThan(0);
     expect(screen.getByText('Worker 可用性')).toBeInTheDocument();
+    expect(screen.getByText('多节点探测通过')).toBeInTheDocument();
+    expect(screen.getByText('Agent 多节点探测')).toBeInTheDocument();
+    expect(screen.getByText('hk-edge-1')).toBeInTheDocument();
+    expect(screen.getByText('eu-edge-1')).toBeInTheDocument();
+    expect(screen.getByText('TCP 53 探测失败')).toBeInTheDocument();
     expect(screen.getAllByText('平均延迟').length).toBeGreaterThan(0);
     expect(screen.getAllByText('最大延迟').length).toBeGreaterThan(0);
     expect(screen.getAllByText('12.5 ms').length).toBeGreaterThan(0);

@@ -1319,6 +1319,47 @@ func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerGeoIPFields(t *testing.T) {
 	}
 }
 
+func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerNodeProbes(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "dns-worker-node-probes.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateAll(db); err != nil {
+		t.Fatalf("auto migrate current schema: %v", err)
+	}
+	if db.Migrator().HasTable(&DNSWorkerNodeProbe{}) {
+		if err := db.Migrator().DropTable(&DNSWorkerNodeProbe{}); err != nil {
+			t.Fatalf("drop dns_worker_node_probes: %v", err)
+		}
+	}
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 23); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	if !db.Migrator().HasTable(&DNSWorkerNodeProbe{}) {
+		t.Fatal("expected dns_worker_node_probes table to exist")
+	}
+	for _, column := range []string{"worker_id", "node_id", "checked_at", "results_json", "healthy", "average_rtt_ms", "max_rtt_ms"} {
+		if !db.Migrator().HasColumn(&DNSWorkerNodeProbe{}, column) {
+			t.Fatalf("expected dns_worker_node_probes.%s column to exist", column)
+		}
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
 func TestRunDatabaseSchemaMigrationDoesNotAdvanceVersionWhenValidationFails(t *testing.T) {
 	db := openBareTestSQLiteDB(t, "failed-validation.db")
 

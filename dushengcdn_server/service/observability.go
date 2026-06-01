@@ -95,11 +95,36 @@ type AgentNodeHealthEvent struct {
 	Metadata        map[string]string `json:"metadata"`
 }
 
+type AgentDNSProbeReport struct {
+	WorkerID      string                `json:"worker_id"`
+	Name          string                `json:"name"`
+	PublicAddress string                `json:"public_address"`
+	QueryName     string                `json:"query_name"`
+	QueryType     string                `json:"query_type"`
+	CheckedAtUnix int64                 `json:"checked_at_unix"`
+	Results       []AgentDNSProbeResult `json:"results"`
+}
+
+type AgentDNSProbeResult struct {
+	Network     string `json:"network"`
+	Reachable   bool   `json:"reachable"`
+	DurationMs  int64  `json:"duration_ms"`
+	RCode       string `json:"rcode"`
+	AnswerCount int    `json:"answer_count"`
+	Error       string `json:"error,omitempty"`
+}
+
 func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, reportedAt time.Time) {
 	if strings.TrimSpace(nodeID) == "" {
 		return
 	}
-	if payload.Profile == nil && payload.Snapshot == nil && payload.TrafficReport == nil && len(payload.AccessLogs) == 0 && len(payload.BufferedObservability) == 0 && payload.HealthEvents == nil {
+	if payload.Profile == nil &&
+		payload.Snapshot == nil &&
+		payload.TrafficReport == nil &&
+		len(payload.AccessLogs) == 0 &&
+		len(payload.BufferedObservability) == 0 &&
+		payload.HealthEvents == nil &&
+		len(payload.DNSProbeResults) == 0 {
 		return
 	}
 
@@ -124,10 +149,129 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 				return err
 			}
 		}
+		if err := persistAgentDNSProbeReports(tx, nodeID, payload.DNSProbeResults, reportedAt); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		slog.Error("persist heartbeat observability failed", "node_id", nodeID, "error", err)
 	}
+}
+
+func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSProbeReport, reportedAt time.Time) error {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" || len(reports) == 0 {
+		return nil
+	}
+	for _, report := range reports {
+		workerID := strings.TrimSpace(report.WorkerID)
+		if workerID == "" {
+			continue
+		}
+		results := normalizeAgentDNSProbeResults(report.Results)
+		checkedAt := timeFromUnix(report.CheckedAtUnix, reportedAt)
+		healthy, averageRTTMs, maxRTTMs, failureSamples, lastError := summarizeAgentDNSProbeResults(results)
+		record := &model.DNSWorkerNodeProbe{
+			WorkerID:       workerID,
+			NodeID:         nodeID,
+			PublicAddress:  strings.TrimSpace(report.PublicAddress),
+			QueryName:      strings.TrimSpace(report.QueryName),
+			QueryType:      normalizeAgentDNSProbeQueryType(report.QueryType),
+			CheckedAt:      checkedAt,
+			ResultsJSON:    marshalJSON(results),
+			Healthy:        healthy,
+			AverageRTTMs:   averageRTTMs,
+			MaxRTTMs:       maxRTTMs,
+			LastError:      truncateForDatabase(lastError, 2048),
+			FailureSamples: failureSamples,
+		}
+		if record.ResultsJSON == "" {
+			record.ResultsJSON = "[]"
+		}
+		if err := model.UpsertDNSWorkerNodeProbe(tx, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeAgentDNSProbeResults(results []AgentDNSProbeResult) []AgentDNSProbeResult {
+	if len(results) == 0 {
+		return []AgentDNSProbeResult{}
+	}
+	cleaned := make([]AgentDNSProbeResult, 0, len(results))
+	seen := map[string]struct{}{}
+	for _, result := range results {
+		network := strings.ToUpper(strings.TrimSpace(result.Network))
+		if network == "" {
+			continue
+		}
+		if _, ok := seen[network]; ok {
+			continue
+		}
+		seen[network] = struct{}{}
+		result.Network = network
+		if result.DurationMs < 0 {
+			result.DurationMs = 0
+		}
+		result.RCode = strings.ToUpper(strings.TrimSpace(result.RCode))
+		result.Error = truncateForDatabase(result.Error, 1024)
+		cleaned = append(cleaned, result)
+	}
+	return cleaned
+}
+
+func normalizeAgentDNSProbeQueryType(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "A", "AAAA", "NS", "SOA":
+		return strings.ToUpper(strings.TrimSpace(value))
+	default:
+		return "SOA"
+	}
+}
+
+func summarizeAgentDNSProbeResults(results []AgentDNSProbeResult) (bool, float64, int64, int, string) {
+	if len(results) == 0 {
+		return false, 0, 0, 0, "Agent 未返回 DNS Worker 探测结果"
+	}
+	reachableByNetwork := map[string]bool{}
+	var totalRTT int64
+	var rttSamples int64
+	var maxRTT int64
+	failureSamples := 0
+	lastError := ""
+	for _, result := range results {
+		network := strings.ToUpper(strings.TrimSpace(result.Network))
+		if network != "" {
+			reachableByNetwork[network] = result.Reachable
+		}
+		if result.Reachable {
+			duration := nonNegativeInt64(result.DurationMs)
+			totalRTT += duration
+			rttSamples++
+			if duration > maxRTT {
+				maxRTT = duration
+			}
+			continue
+		}
+		failureSamples++
+		if lastError == "" {
+			if strings.TrimSpace(result.Error) != "" {
+				lastError = strings.TrimSpace(result.Error)
+			} else if network != "" {
+				lastError = network + " 53 探测失败"
+			}
+		}
+	}
+	healthy := reachableByNetwork["UDP"] && reachableByNetwork["TCP"]
+	if !healthy && lastError == "" {
+		lastError = "UDP/TCP 53 未同时可达"
+	}
+	averageRTT := 0.0
+	if rttSamples > 0 {
+		averageRTT = float64(totalRTT) / float64(rttSamples)
+	}
+	return healthy, averageRTT, maxRTT, failureSamples, lastError
 }
 
 func persistBufferedObservability(tx *gorm.DB, nodeID string, records []AgentBufferedObservabilityRecord, reportedAt time.Time) error {

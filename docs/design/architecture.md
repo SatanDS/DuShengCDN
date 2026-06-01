@@ -46,8 +46,8 @@ Agent + OpenResty edge nodes
 
 | 组件 | 职责 |
 | --- | --- |
-| Server | 管理端 UI、管理 API、Agent API、配置渲染、版本发布、数据存储与聚合查询 |
-| Agent | 注册、心跳、同步、写入文件、校验、reload、失败回滚、自更新与轻量采集 |
+| Server | 管理端 UI、管理 API、Agent API、配置渲染、版本发布、数据存储、聚合查询和 DNS Worker 探测目标下发 |
+| Agent | 注册、心跳、同步、写入文件、校验、reload、失败回滚、自更新、轻量采集，以及受控的 DNS Worker UDP/TCP 53 可达性探测 |
 | OpenResty | 接收真实流量，按 DuShengCDN 渲染的配置执行反向代理 |
 | Frontend | 管理网站配置、源站、证书、节点、版本、用户、设置与观测页面 |
 | DNS Worker | 权威 DNS 查询服务运行角色；从 Server 拉取只读调度快照，监听 UDP/TCP `53`，并按来源、地区、节点健康和负载实时返回 A/AAAA 答案 |
@@ -110,6 +110,8 @@ Agent 上报应用结果
 
 默认启用 WS 连接升级时，Agent 会先通过 HTTP heartbeat 获取设置，随后尝试连接 Agent WebSocket。WS 成功后，周期性状态上报改由 WS 承载；Server 发布或激活版本后会向已连接 Agent 广播激活版本摘要，使 Agent 立即进入既有同步流程。WS 断开或建立失败时，Agent 自动退回 HTTP heartbeat。
 
+权威 DNS 启用后，Server 会在 Agent settings 中下发少量在线 DNS Worker 的公网探测目标。Agent 在节点本地对这些目标执行 UDP/TCP `53` DNS 查询探测，并在下一次 heartbeat 或 WebSocket status 中上报结果；Server 将最新结果保存到 `dns_worker_node_probes`，用于「权威 DNS」可用性面板展示多节点探测通过率和 RTT。
+
 ### 运行时指令流
 
 ```text
@@ -156,6 +158,7 @@ Client -> OpenResty server block -> named upstream -> Origin
 * `dns_records`
 * `dns_workers`
 * `dns_query_rollups`
+* `dns_worker_node_probes`
 * `origins`
 * `config_versions`
 * `nodes`

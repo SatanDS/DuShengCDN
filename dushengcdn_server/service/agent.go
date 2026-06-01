@@ -22,6 +22,7 @@ const (
 	OpenrestyStatusHealthy   = "healthy"
 	OpenrestyStatusUnhealthy = "unhealthy"
 	OpenrestyStatusUnknown   = "unknown"
+	maxAgentDNSProbeTargets  = 4
 )
 
 type AgentNodePayload struct {
@@ -40,6 +41,7 @@ type AgentNodePayload struct {
 	AccessLogs            []AgentNodeAccessLog               `json:"access_logs,omitempty"`
 	BufferedObservability []AgentBufferedObservabilityRecord `json:"buffered_observability,omitempty"`
 	HealthEvents          []AgentNodeHealthEvent             `json:"health_events"`
+	DNSProbeResults       []AgentDNSProbeReport              `json:"dns_probe_results,omitempty"`
 }
 
 type ApplyLogPayload struct {
@@ -89,14 +91,23 @@ type AgentConfigResponse struct {
 }
 
 type AgentSettings struct {
-	HeartbeatInterval       int    `json:"heartbeat_interval"`
-	WebsocketUpgradeEnabled bool   `json:"websocket_upgrade_enabled"`
-	AutoUpdate              bool   `json:"auto_update"`
-	UpdateRepo              string `json:"update_repo"`
-	UpdateNow               bool   `json:"update_now"`
-	UpdateChannel           string `json:"update_channel"`
-	UpdateTag               string `json:"update_tag"`
-	RestartOpenrestyNow     bool   `json:"restart_openresty_now"`
+	HeartbeatInterval       int                   `json:"heartbeat_interval"`
+	WebsocketUpgradeEnabled bool                  `json:"websocket_upgrade_enabled"`
+	AutoUpdate              bool                  `json:"auto_update"`
+	UpdateRepo              string                `json:"update_repo"`
+	UpdateNow               bool                  `json:"update_now"`
+	UpdateChannel           string                `json:"update_channel"`
+	UpdateTag               string                `json:"update_tag"`
+	RestartOpenrestyNow     bool                  `json:"restart_openresty_now"`
+	DNSProbeTargets         []AgentDNSProbeTarget `json:"dns_probe_targets,omitempty"`
+}
+
+type AgentDNSProbeTarget struct {
+	WorkerID      string `json:"worker_id"`
+	Name          string `json:"name"`
+	PublicAddress string `json:"public_address"`
+	QueryName     string `json:"query_name"`
+	QueryType     string `json:"query_type"`
 }
 
 type ActiveConfigMeta struct {
@@ -203,7 +214,39 @@ func buildAgentSettings(node *model.Node, updateNow bool, updateChannel string, 
 		UpdateChannel:           updateChannel,
 		UpdateTag:               strings.TrimSpace(updateTag),
 		RestartOpenrestyNow:     restartOpenrestyNow,
+		DNSProbeTargets:         buildAgentDNSProbeTargets(),
 	}
+}
+
+func buildAgentDNSProbeTargets() []AgentDNSProbeTarget {
+	workers, err := model.ListDNSWorkers()
+	if err != nil || len(workers) == 0 {
+		return nil
+	}
+	queryName, err := dnsWorkerProbeQueryName(0)
+	if err != nil {
+		return nil
+	}
+	targets := make([]AgentDNSProbeTarget, 0, len(workers))
+	for _, worker := range workers {
+		if worker == nil || normalizeDNSWorkerStatus(worker.Status) != dnsWorkerStatusOnline {
+			continue
+		}
+		if strings.TrimSpace(worker.WorkerID) == "" || strings.TrimSpace(worker.PublicAddress) == "" {
+			continue
+		}
+		targets = append(targets, AgentDNSProbeTarget{
+			WorkerID:      worker.WorkerID,
+			Name:          worker.Name,
+			PublicAddress: worker.PublicAddress,
+			QueryName:     queryName,
+			QueryType:     "SOA",
+		})
+		if len(targets) >= maxAgentDNSProbeTargets {
+			break
+		}
+	}
+	return targets
 }
 
 func GetActiveConfigMetaForAgent() (*ActiveConfigMeta, error) {
