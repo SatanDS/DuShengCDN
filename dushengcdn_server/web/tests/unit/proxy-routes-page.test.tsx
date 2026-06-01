@@ -1288,6 +1288,161 @@ describe('Proxy route website pages', () => {
     });
   });
 
+  it('saves PoW settings from config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  pow_enabled: payload.pow_enabled,
+                  pow_config: JSON.parse(String(payload.pow_config)),
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  pow_enabled: false,
+                  pow_config: {
+                    difficulty: 4,
+                    algorithm: 'fast',
+                    session_ttl: 600,
+                    challenge_ttl: 300,
+                    whitelist: {
+                      ips: [],
+                      ip_cidrs: [],
+                      paths: [],
+                      path_regexes: [],
+                      user_agents: [],
+                    },
+                    blacklist: {
+                      ips: [],
+                      ip_cidrs: [],
+                      paths: [],
+                      path_regexes: [],
+                      user_agents: [],
+                    },
+                  },
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="pow" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: 'PoW 防护' }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: /启用 PoW 防护/ }));
+    await user.selectOptions(screen.getByRole('combobox'), 'slow');
+
+    const [difficultyInput, sessionTTLInput, challengeTTLInput] =
+      screen.getAllByRole('spinbutton');
+
+    await user.clear(difficultyInput);
+    await user.type(difficultyInput, '6');
+
+    await user.clear(sessionTTLInput);
+    await user.type(sessionTTLInput, '900');
+
+    await user.clear(challengeTTLInput);
+    await user.type(challengeTTLInput, '120');
+
+    const powTextareas = screen.getAllByRole('textbox');
+    expect(powTextareas).toHaveLength(10);
+
+    await user.type(powTextareas[0], '203.0.113.8');
+    await user.type(powTextareas[2], '/health/*');
+    await user.type(powTextareas[4], 'Googlebot');
+    await user.type(powTextareas[6], '10.10.0.0/16');
+    await user.type(powTextareas[8], '^/private/');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-pow-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing PoW save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      pow_enabled: true,
+    });
+    expect(JSON.parse(String(updateRequests[0].pow_config))).toEqual({
+      difficulty: 6,
+      algorithm: 'slow',
+      session_ttl: 900,
+      challenge_ttl: 120,
+      whitelist: {
+        ips: ['203.0.113.8'],
+        ip_cidrs: [],
+        paths: ['/health/*'],
+        path_regexes: [],
+        user_agents: ['Googlebot'],
+      },
+      blacklist: {
+        ips: [],
+        ip_cidrs: ['10.10.0.0/16'],
+        paths: [],
+        path_regexes: ['^/private/'],
+        user_agents: [],
+      },
+    });
+  });
+
   it('saves region restriction settings from config page', async () => {
     const updateRequests: Array<Record<string, unknown>> = [];
 
