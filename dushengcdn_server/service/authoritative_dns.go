@@ -1135,7 +1135,7 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	worker.Status = normalizeDNSWorkerStatus(input.Status)
 	worker.Version = strings.TrimSpace(input.Version)
 	worker.LastSnapshotVersion = strings.TrimSpace(input.LastSnapshotVersion)
-	worker.LastSnapshotAt = input.LastSnapshotAt
+	worker.LastSnapshotAt = normalizeDNSWorkerSnapshotAt(input.LastSnapshotAt, now)
 	worker.LastSeenAt = &now
 	worker.LastError = truncateForDatabase(strings.TrimSpace(input.LastError), 16000)
 	worker.GeoIPEnabled = input.GeoIPEnabled
@@ -4231,6 +4231,17 @@ func normalizeDNSWorkerStatus(raw string) string {
 	default:
 		return dnsWorkerStatusOffline
 	}
+}
+
+func normalizeDNSWorkerSnapshotAt(snapshotAt *time.Time, now time.Time) *time.Time {
+	if snapshotAt == nil {
+		return nil
+	}
+	normalized := snapshotAt.UTC()
+	if normalized.After(now.UTC()) {
+		normalized = now.UTC()
+	}
+	return &normalized
 }
 
 func normalizeDNSRollupWindow(value int) int {

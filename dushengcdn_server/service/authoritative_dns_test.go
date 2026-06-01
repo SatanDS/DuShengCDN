@@ -1622,6 +1622,42 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerHeartbeatClampsFutureSnapshotTime(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	futureSnapshotAt := time.Now().UTC().Add(time.Hour)
+	view, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status:              "online",
+		LastSnapshotVersion: "future-snapshot",
+		LastSnapshotAt:      &futureSnapshotAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if view.LastSnapshotAt == nil || !view.LastSnapshotAt.Before(futureSnapshotAt) {
+		t.Fatalf("expected future snapshot time to be clamped in view, got %+v", view.LastSnapshotAt)
+	}
+	reloaded, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if reloaded.LastSnapshotAt == nil || !reloaded.LastSnapshotAt.Before(futureSnapshotAt) {
+		t.Fatalf("expected future snapshot time to be clamped in database, got %+v", reloaded.LastSnapshotAt)
+	}
+	summary := buildDNSWorkerSnapshotConsistency(time.Now().UTC())
+	if summary.LatestSnapshotAt == nil || !summary.LatestSnapshotAt.Before(futureSnapshotAt) {
+		t.Fatalf("expected snapshot consistency to avoid future latest snapshot, got %+v", summary)
+	}
+}
+
 func TestDNSWorkerHeartbeatNormalizesInconsistentRollupDurations(t *testing.T) {
 	setupServiceTestDB(t)
 
