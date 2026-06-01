@@ -3366,7 +3366,8 @@ func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsisten
 		}
 		status := normalizeDNSWorkerStatus(worker.Status)
 		snapshotVersion := strings.TrimSpace(worker.LastSnapshotVersion)
-		stale := status == dnsWorkerStatusOnline && (worker.LastSnapshotAt == nil || now.Sub(worker.LastSnapshotAt.UTC()) > snapshotMaxAge)
+		snapshotAt := normalizeDNSWorkerSnapshotAt(worker.LastSnapshotAt, now)
+		stale := status == dnsWorkerStatusOnline && (snapshotAt == nil || now.Sub(snapshotAt.UTC()) > snapshotMaxAge)
 		workerName := strings.TrimSpace(worker.Name)
 		if workerName == "" {
 			workerName = worker.WorkerID
@@ -3376,7 +3377,7 @@ func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsisten
 			Name:            workerName,
 			Status:          status,
 			SnapshotVersion: snapshotVersion,
-			LastSnapshotAt:  worker.LastSnapshotAt,
+			LastSnapshotAt:  snapshotAt,
 			LastSeenAt:      worker.LastSeenAt,
 			Stale:           stale,
 			GeoIPEnabled:    worker.GeoIPEnabled,
@@ -3404,12 +3405,12 @@ func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsisten
 		}
 		group.WorkerCount++
 		group.Workers = append(group.Workers, workerName)
-		if worker.LastSnapshotAt != nil && (group.LatestSnapshotAt == nil || worker.LastSnapshotAt.After(*group.LatestSnapshotAt)) {
-			latest := *worker.LastSnapshotAt
+		if snapshotAt != nil && (group.LatestSnapshotAt == nil || snapshotAt.After(*group.LatestSnapshotAt)) {
+			latest := *snapshotAt
 			group.LatestSnapshotAt = &latest
 		}
-		if snapshotVersion != "" && worker.LastSnapshotAt != nil && (view.LatestSnapshotAt == nil || worker.LastSnapshotAt.After(*view.LatestSnapshotAt)) {
-			latest := *worker.LastSnapshotAt
+		if snapshotVersion != "" && snapshotAt != nil && (view.LatestSnapshotAt == nil || snapshotAt.After(*view.LatestSnapshotAt)) {
+			latest := *snapshotAt
 			view.LatestSnapshotAt = &latest
 			view.LatestSnapshotVersion = snapshotVersion
 		}
@@ -3548,14 +3549,15 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 		if stats == nil {
 			stats = &dnsWorkerHealthStats{}
 		}
+		snapshotAt := normalizeDNSWorkerSnapshotAt(worker.LastSnapshotAt, now)
 		snapshotAgeSeconds := int64(0)
-		if worker.LastSnapshotAt != nil {
-			age := now.Sub(worker.LastSnapshotAt.UTC())
+		if snapshotAt != nil {
+			age := now.Sub(snapshotAt.UTC())
 			if age > 0 {
 				snapshotAgeSeconds = int64(age.Seconds())
 			}
 		}
-		snapshotStale := status == dnsWorkerStatusOnline && (worker.LastSnapshotAt == nil || now.Sub(worker.LastSnapshotAt.UTC()) > snapshotMaxAge)
+		snapshotStale := status == dnsWorkerStatusOnline && (snapshotAt == nil || now.Sub(snapshotAt.UTC()) > snapshotMaxAge)
 		probeResults := decodeDNSWorkerProbeResults(worker.LastProbeResult)
 		probeState := evaluateDNSWorkerProbeState(now, worker.LastProbeAt, probeResults)
 		if probeState.status != dnsWorkerProbeUnknown {
@@ -3589,7 +3591,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			AverageLatencyMs:        averageMilliseconds(stats.totalDurationMs, stats.queryCount),
 			MaxLatencyMs:            stats.maxDurationMs,
 			LastSeenAt:              worker.LastSeenAt,
-			LastSnapshotAt:          worker.LastSnapshotAt,
+			LastSnapshotAt:          snapshotAt,
 			SnapshotAgeSeconds:      snapshotAgeSeconds,
 			SnapshotStale:           snapshotStale,
 			GeoIPEnabled:            worker.GeoIPEnabled,

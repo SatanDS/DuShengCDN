@@ -1658,6 +1658,48 @@ func TestDNSWorkerHeartbeatClampsFutureSnapshotTime(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerViewsClampHistoricalFutureSnapshotTime(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	futureSnapshotAt := time.Now().UTC().Add(time.Hour)
+	workerModel.Status = dnsWorkerStatusOnline
+	workerModel.LastSnapshotVersion = "future-snapshot"
+	workerModel.LastSnapshotAt = &futureSnapshotAt
+	if err := workerModel.Update(); err != nil {
+		t.Fatalf("update worker: %v", err)
+	}
+
+	snapshotSummary := buildDNSWorkerSnapshotConsistency(time.Now().UTC())
+	if snapshotSummary.LatestSnapshotAt == nil || !snapshotSummary.LatestSnapshotAt.Before(futureSnapshotAt) {
+		t.Fatalf("expected snapshot consistency to clamp future snapshot time, got %+v", snapshotSummary)
+	}
+	if len(snapshotSummary.Workers) != 1 ||
+		snapshotSummary.Workers[0].LastSnapshotAt == nil ||
+		!snapshotSummary.Workers[0].LastSnapshotAt.Before(futureSnapshotAt) {
+		t.Fatalf("expected worker snapshot view to clamp future snapshot time, got %+v", snapshotSummary.Workers)
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 {
+		t.Fatalf("expected one worker health item, got %+v", summary.WorkerHealth.Workers)
+	}
+	workerHealth := summary.WorkerHealth.Workers[0]
+	if workerHealth.LastSnapshotAt == nil || !workerHealth.LastSnapshotAt.Before(futureSnapshotAt) {
+		t.Fatalf("expected worker health to clamp future snapshot time, got %+v", workerHealth)
+	}
+}
+
 func TestDNSWorkerHeartbeatNormalizesInconsistentRollupDurations(t *testing.T) {
 	setupServiceTestDB(t)
 
