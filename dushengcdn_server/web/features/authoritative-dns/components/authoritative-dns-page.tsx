@@ -487,6 +487,21 @@ function getProbeStatusVariant(status: DNSWorkerProbeStatus) {
   }
 }
 
+function getNodeDNSProbeStatusLabel(status: DNSWorkerProbeStatus) {
+  switch (status) {
+    case 'healthy':
+      return '公网可达';
+    case 'partial':
+      return '部分可达';
+    case 'failed':
+      return '探测失败';
+    case 'stale':
+      return '探测过期';
+    case 'unknown':
+      return '未探测';
+  }
+}
+
 function getNodeProbeStatusVariant(status: string) {
   switch (status) {
     case 'online':
@@ -3077,6 +3092,11 @@ function DNSWorkerHealthPanel({
         <InfoTile
           label="多节点探测通过"
           value={`${health.node_probe_healthy_count ?? 0} / ${health.node_probe_checked_count ?? 0}`}
+          helper={
+            (health.node_probe_stale_count ?? 0) > 0
+              ? `${health.node_probe_stale_count} 个过期`
+              : undefined
+          }
         />
         <InfoTile
           label="多节点平均 RTT"
@@ -3171,6 +3191,11 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
         <InfoTile
           label="多节点探测"
           value={`${worker.node_probe_healthy_count ?? 0} / ${worker.node_probe_total_count ?? 0}`}
+          helper={
+            (worker.node_probe_stale_count ?? 0) > 0
+              ? `${worker.node_probe_stale_count} 个过期`
+              : undefined
+          }
         />
         <InfoTile
           label="多节点 RTT"
@@ -3240,8 +3265,8 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
                     <StatusBadge
-                      label={probe.healthy ? '可达' : '异常'}
-                      variant={probe.healthy ? 'success' : 'danger'}
+                      label={getNodeDNSProbeStatusLabel(probe.probe_status)}
+                      variant={getProbeStatusVariant(probe.probe_status)}
                     />
                     <StatusBadge
                       label={probe.status}
@@ -3252,6 +3277,9 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--foreground-secondary)]">
                   <span>平均 {formatLatencyMs(probe.average_rtt_ms)}</span>
                   <span>最大 {formatLatencyMs(probe.max_rtt_ms)}</span>
+                  {probe.probe_age_seconds > 0 ? (
+                    <span>{formatDurationSeconds(probe.probe_age_seconds)}前</span>
+                  ) : null}
                   {probe.results.map((result) => (
                     <StatusBadge
                       key={`${probe.node_id}-${result.network}`}
@@ -3263,6 +3291,11 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
                 {probe.last_error ? (
                   <p className="mt-2 text-xs text-[var(--status-danger-foreground)]">
                     {probe.last_error}
+                  </p>
+                ) : null}
+                {probe.probe_message ? (
+                  <p className="mt-2 text-xs text-[var(--foreground-secondary)]">
+                    {probe.probe_message}
                   </p>
                 ) : null}
               </div>
@@ -3460,7 +3493,15 @@ function CounterList({
   );
 }
 
-function InfoTile({ label, value }: { label: string; value: string | number }) {
+function InfoTile({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string | number;
+  helper?: string;
+}) {
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
       <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
@@ -3469,6 +3510,11 @@ function InfoTile({ label, value }: { label: string; value: string | number }) {
       <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
         {value}
       </p>
+      {helper ? (
+        <p className="mt-1 text-xs text-[var(--foreground-secondary)]">
+          {helper}
+        </p>
+      ) : null}
     </div>
   );
 }

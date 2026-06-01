@@ -264,6 +264,7 @@ curl -Iv https://your-domain
 2. 检查节点所在机房、云厂商安全组或出站防火墙是否阻断 UDP `53` 或 TCP `53`。
 3. 查看 `journalctl -u dushengcdn-agent -n 200 --no-pager`，确认 Agent 心跳是否正常；Agent 只有在收到 Server 下发的探测目标后，才会在下一次心跳或 WebSocket status 上报结果。
 4. 如果某个 Worker 没有出现在多节点探测中，确认该 Worker 已在线且填写了公网地址；Server 每次只下发少量在线 Worker 目标，避免心跳被大量探测拖慢。
+5. 如果显示「探测过期」，说明 Server 最近没有收到该 Agent 对 Worker 的新探测结果；先确认 Agent 已升级到支持 DNS 探测的版本，再检查心跳或 WebSocket status 是否持续上报。
 
 迁移向导不会直接修改注册商 NS。注册商侧 NS 生效还受上级 DNS 缓存和 TTL 影响，调整后可再次执行 Zone 委派检查。
 

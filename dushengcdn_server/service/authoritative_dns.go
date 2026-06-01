@@ -23,27 +23,28 @@ import (
 )
 
 const (
-	dnsWorkerStatusOnline        = "online"
-	dnsWorkerStatusOffline       = "offline"
-	dnsDelegationMatched         = "matched"
-	dnsDelegationPartial         = "partial"
-	dnsDelegationMismatch        = "mismatch"
-	dnsDelegationFailed          = "failed"
-	dnsDelegationNotConfig       = "not_configured"
-	dnsSnapshotConsistent        = "consistent"
-	dnsSnapshotDivergent         = "divergent"
-	dnsSnapshotStale             = "stale"
-	dnsSnapshotNoOnline          = "no_online_workers"
-	dnsSnapshotUnknown           = "unknown"
-	dnsWorkerProbeHealthy        = "healthy"
-	dnsWorkerProbePartial        = "partial"
-	dnsWorkerProbeFailed         = "failed"
-	dnsWorkerProbeStale          = "stale"
-	dnsWorkerProbeUnknown        = "unknown"
-	defaultDNSZoneTTL            = 300
-	defaultDNSSnapshotMaxAge     = 5 * time.Minute
-	defaultDNSWorkerProbeTimeout = 3 * time.Second
-	defaultDNSWorkerProbeMaxAge  = 24 * time.Hour
+	dnsWorkerStatusOnline           = "online"
+	dnsWorkerStatusOffline          = "offline"
+	dnsDelegationMatched            = "matched"
+	dnsDelegationPartial            = "partial"
+	dnsDelegationMismatch           = "mismatch"
+	dnsDelegationFailed             = "failed"
+	dnsDelegationNotConfig          = "not_configured"
+	dnsSnapshotConsistent           = "consistent"
+	dnsSnapshotDivergent            = "divergent"
+	dnsSnapshotStale                = "stale"
+	dnsSnapshotNoOnline             = "no_online_workers"
+	dnsSnapshotUnknown              = "unknown"
+	dnsWorkerProbeHealthy           = "healthy"
+	dnsWorkerProbePartial           = "partial"
+	dnsWorkerProbeFailed            = "failed"
+	dnsWorkerProbeStale             = "stale"
+	dnsWorkerProbeUnknown           = "unknown"
+	defaultDNSZoneTTL               = 300
+	defaultDNSSnapshotMaxAge        = 5 * time.Minute
+	defaultDNSWorkerProbeTimeout    = 3 * time.Second
+	defaultDNSWorkerProbeMaxAge     = 24 * time.Hour
+	defaultDNSWorkerNodeProbeMaxAge = 5 * time.Minute
 )
 
 var dnsLookupNS = net.LookupNS
@@ -361,6 +362,7 @@ type DNSWorkerHealthSummaryView struct {
 	ProbeHealthyPercent     float64                   `json:"probe_healthy_percent"`
 	NodeProbeHealthyCount   int                       `json:"node_probe_healthy_count"`
 	NodeProbeCheckedCount   int                       `json:"node_probe_checked_count"`
+	NodeProbeStaleCount     int                       `json:"node_probe_stale_count"`
 	NodeProbeHealthyPercent float64                   `json:"node_probe_healthy_percent"`
 	NodeProbeAverageRTTMs   float64                   `json:"node_probe_average_rtt_ms"`
 	NodeProbeMaxRTTMs       int64                     `json:"node_probe_max_rtt_ms"`
@@ -397,6 +399,7 @@ type DNSWorkerHealthItemView struct {
 	ProbeMessage            string                     `json:"probe_message"`
 	NodeProbeTotalCount     int                        `json:"node_probe_total_count"`
 	NodeProbeHealthyCount   int                        `json:"node_probe_healthy_count"`
+	NodeProbeStaleCount     int                        `json:"node_probe_stale_count"`
 	NodeProbeHealthyPercent float64                    `json:"node_probe_healthy_percent"`
 	NodeProbeAverageRTTMs   float64                    `json:"node_probe_average_rtt_ms"`
 	NodeProbeMaxRTTMs       int64                      `json:"node_probe_max_rtt_ms"`
@@ -404,17 +407,20 @@ type DNSWorkerHealthItemView struct {
 }
 
 type DNSWorkerNodeProbeView struct {
-	NodeID         string                     `json:"node_id"`
-	NodeName       string                     `json:"node_name"`
-	PoolName       string                     `json:"pool_name"`
-	Status         string                     `json:"status"`
-	CheckedAt      time.Time                  `json:"checked_at"`
-	Healthy        bool                       `json:"healthy"`
-	AverageRTTMs   float64                    `json:"average_rtt_ms"`
-	MaxRTTMs       int64                      `json:"max_rtt_ms"`
-	Results        []DNSWorkerProbeResultView `json:"results"`
-	LastError      string                     `json:"last_error"`
-	FailureSamples int                        `json:"failure_samples"`
+	NodeID          string                     `json:"node_id"`
+	NodeName        string                     `json:"node_name"`
+	PoolName        string                     `json:"pool_name"`
+	Status          string                     `json:"status"`
+	CheckedAt       time.Time                  `json:"checked_at"`
+	Healthy         bool                       `json:"healthy"`
+	ProbeStatus     string                     `json:"probe_status"`
+	ProbeAgeSeconds int64                      `json:"probe_age_seconds"`
+	ProbeMessage    string                     `json:"probe_message"`
+	AverageRTTMs    float64                    `json:"average_rtt_ms"`
+	MaxRTTMs        int64                      `json:"max_rtt_ms"`
+	Results         []DNSWorkerProbeResultView `json:"results"`
+	LastError       string                     `json:"last_error"`
+	FailureSamples  int                        `json:"failure_samples"`
 }
 
 type DNSZoneDelegationCheckView struct {
@@ -2827,6 +2833,7 @@ type dnsWorkerHealthStats struct {
 type dnsWorkerNodeProbeStats struct {
 	totalCount        int
 	healthyCount      int
+	staleCount        int
 	totalAverageRTTMs float64
 	averageSamples    int
 	maxRTTMs          int64
@@ -2878,7 +2885,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 		}
 	}
 
-	nodeProbeStatsByWorker := buildDNSWorkerNodeProbeStats()
+	nodeProbeStatsByWorker := buildDNSWorkerNodeProbeStats(now)
 	view.TotalWorkerCount = len(workers)
 	view.MaxLatencyMs = maxDurationMs
 	view.AverageLatencyMs = averageMilliseconds(totalDurationMs, totalQueries)
@@ -2924,6 +2931,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 		}
 		view.NodeProbeCheckedCount += nodeProbeStats.totalCount
 		view.NodeProbeHealthyCount += nodeProbeStats.healthyCount
+		view.NodeProbeStaleCount += nodeProbeStats.staleCount
 		if nodeProbeStats.averageSamples > 0 {
 			totalNodeProbeAverageRTTMs += nodeProbeStats.totalAverageRTTMs
 			totalNodeProbeAverageSamples += nodeProbeStats.averageSamples
@@ -2957,6 +2965,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			ProbeMessage:            probeState.message,
 			NodeProbeTotalCount:     nodeProbeStats.totalCount,
 			NodeProbeHealthyCount:   nodeProbeStats.healthyCount,
+			NodeProbeStaleCount:     nodeProbeStats.staleCount,
 			NodeProbeHealthyPercent: ratioPercent(int64(nodeProbeStats.healthyCount), int64(nodeProbeStats.totalCount)),
 			NodeProbeAverageRTTMs:   averageFloat(nodeProbeStats.totalAverageRTTMs, nodeProbeStats.averageSamples),
 			NodeProbeMaxRTTMs:       nodeProbeStats.maxRTTMs,
@@ -2987,7 +2996,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 	return view
 }
 
-func buildDNSWorkerNodeProbeStats() map[string]*dnsWorkerNodeProbeStats {
+func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeStats {
 	probes, err := model.ListDNSWorkerNodeProbes()
 	if err != nil || len(probes) == 0 {
 		return map[string]*dnsWorkerNodeProbeStats{}
@@ -3029,29 +3038,36 @@ func buildDNSWorkerNodeProbeStats() map[string]*dnsWorkerNodeProbeStats {
 			poolName = strings.TrimSpace(node.PoolName)
 			nodeStatus = computeNodeStatus(node)
 		}
+		probeState := evaluateDNSWorkerNodeProbeState(now, probe)
 		stats.totalCount++
-		if probe.Healthy {
+		if probeState.status == dnsWorkerProbeStale {
+			stats.staleCount++
+		}
+		if probeState.healthy {
 			stats.healthyCount++
 		}
-		if probe.AverageRTTMs > 0 {
+		if probeState.status != dnsWorkerProbeStale && probe.AverageRTTMs > 0 {
 			stats.totalAverageRTTMs += probe.AverageRTTMs
 			stats.averageSamples++
 		}
-		if probe.MaxRTTMs > stats.maxRTTMs {
+		if probeState.status != dnsWorkerProbeStale && probe.MaxRTTMs > stats.maxRTTMs {
 			stats.maxRTTMs = probe.MaxRTTMs
 		}
 		stats.probes = append(stats.probes, DNSWorkerNodeProbeView{
-			NodeID:         nodeID,
-			NodeName:       nodeName,
-			PoolName:       poolName,
-			Status:         nodeStatus,
-			CheckedAt:      probe.CheckedAt,
-			Healthy:        probe.Healthy,
-			AverageRTTMs:   probe.AverageRTTMs,
-			MaxRTTMs:       probe.MaxRTTMs,
-			Results:        decodeDNSWorkerProbeResults(probe.ResultsJSON),
-			LastError:      probe.LastError,
-			FailureSamples: probe.FailureSamples,
+			NodeID:          nodeID,
+			NodeName:        nodeName,
+			PoolName:        poolName,
+			Status:          nodeStatus,
+			CheckedAt:       probe.CheckedAt,
+			Healthy:         probeState.healthy,
+			ProbeStatus:     probeState.status,
+			ProbeAgeSeconds: probeState.ageSeconds,
+			ProbeMessage:    probeState.message,
+			AverageRTTMs:    probe.AverageRTTMs,
+			MaxRTTMs:        probe.MaxRTTMs,
+			Results:         decodeDNSWorkerProbeResults(probe.ResultsJSON),
+			LastError:       probe.LastError,
+			FailureSamples:  probe.FailureSamples,
 		})
 	}
 	for _, stats := range statsByWorker {
@@ -3063,6 +3079,68 @@ func buildDNSWorkerNodeProbeStats() map[string]*dnsWorkerNodeProbeStats {
 		})
 	}
 	return statsByWorker
+}
+
+func evaluateDNSWorkerNodeProbeState(now time.Time, probe *model.DNSWorkerNodeProbe) dnsWorkerProbeState {
+	if probe == nil || probe.CheckedAt.IsZero() {
+		return dnsWorkerProbeState{
+			status:  dnsWorkerProbeUnknown,
+			healthy: false,
+			message: "尚未收到 Agent 多节点探测结果",
+		}
+	}
+	checkedAt := probe.CheckedAt.UTC()
+	age := now.Sub(checkedAt)
+	ageSeconds := int64(0)
+	if age > 0 {
+		ageSeconds = int64(age.Seconds())
+	}
+	if age > defaultDNSWorkerNodeProbeMaxAge {
+		return dnsWorkerProbeState{
+			status:     dnsWorkerProbeStale,
+			healthy:    false,
+			ageSeconds: ageSeconds,
+			message:    fmt.Sprintf("Agent 多节点探测结果超过 %s 未刷新", formatDNSWorkerNodeProbeMaxAge(defaultDNSWorkerNodeProbeMaxAge)),
+		}
+	}
+	results := decodeDNSWorkerProbeResults(probe.ResultsJSON)
+	if probe.Healthy {
+		return dnsWorkerProbeState{
+			status:     dnsWorkerProbeHealthy,
+			healthy:    true,
+			ageSeconds: ageSeconds,
+			message:    "UDP/TCP 53 均可达",
+		}
+	}
+	for _, result := range results {
+		if result.Reachable {
+			return dnsWorkerProbeState{
+				status:     dnsWorkerProbePartial,
+				healthy:    false,
+				ageSeconds: ageSeconds,
+				message:    strings.TrimSpace(firstNonEmpty(probe.LastError, "UDP/TCP 53 未同时可达")),
+			}
+		}
+	}
+	return dnsWorkerProbeState{
+		status:     dnsWorkerProbeFailed,
+		healthy:    false,
+		ageSeconds: ageSeconds,
+		message:    strings.TrimSpace(firstNonEmpty(probe.LastError, "Agent 多节点探测失败")),
+	}
+}
+
+func formatDNSWorkerNodeProbeMaxAge(value time.Duration) string {
+	if value <= 0 {
+		return "0 秒"
+	}
+	if value < time.Minute {
+		return fmt.Sprintf("%d 秒", int(value.Seconds()))
+	}
+	if value < time.Hour {
+		return fmt.Sprintf("%d 分钟", int(value.Minutes()))
+	}
+	return fmt.Sprintf("%d 小时", int(value.Hours()))
 }
 
 func averageMilliseconds(totalDurationMs int64, count int64) float64 {

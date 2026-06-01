@@ -153,7 +153,7 @@ route_id + record_type + source_scope
 * 左侧「权威 DNS」主菜单作为独立基础设施资源入口。
 * 「权威 DNS」页面支持 Zone、NS、SOA、静态记录和 DNS Worker Token 管理，并展示 Worker 在线状态、版本、最近心跳、快照时间、GeoIP 国家库加载状态、查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性、Worker 查询延迟、可用率、错误率、Agent 多点探测通过率/RTT、返回码、返回目标、来源作用域、动态站点分布和当前 GSLB 调度状态。
 * DNS Worker 列表支持按需探测单个 Worker 的公网 UDP/TCP 53，返回 RTT、RCODE、应答数量和错误信息，并在刷新后继续展示最近一次结果，用于验证 Server 到该 NS 的解析可达性。
-* Worker 可用性面板会把最近一次公网探测归类为 `healthy`、`partial`、`failed`、`stale` 或 `unknown`，并展示各 Agent 节点对 DNS Worker 的 UDP/TCP `53` 探测结果、平均 RTT、最大 RTT 和失败原因；迁移向导会要求至少一个在线 Worker 通过最新 UDP/TCP 53 探测后再标记站点为可切换。
+* Worker 可用性面板会把最近一次公网探测归类为 `healthy`、`partial`、`failed`、`stale` 或 `unknown`，并展示各 Agent 节点对 DNS Worker 的 UDP/TCP `53` 探测结果、平均 RTT、最大 RTT、过期数量和失败原因；Agent 多点探测超过新鲜度窗口后仍保留明细但不计入健康通过率，避免旧成功结果误导排障；迁移向导会要求至少一个在线 Worker 通过最新 UDP/TCP 53 探测后再标记站点为可切换。
 * 「GSLB 调度模拟」可选择权威 DNS 模式网站、记录类型、来源国家代码和来源 IP，基于 Server 当前生成的只读快照复用 DNS Worker 调度器预演返回目标、TTL、来源作用域和快照版本，并展示匹配节点池、候选节点、被跳过节点与原因，不改变真实调度状态。
 * Zone 详情支持按需执行委派检查，对比注册商当前公网 NS 与 Zone 期望 NS，并在 NS 位于当前 Zone 内时提示需要配置注册商 Glue/主机记录。
 * 网站配置的「自动 DNS」分区支持 `Cloudflare 同步` 和 `自建权威 DNS` 两种模式。
@@ -190,7 +190,7 @@ TTL 规则：
 * DNS Worker 保存最后一次有效快照，并在本地缓存文件中写入 SHA-256 checksum 完整性元数据；启动加载缓存时会先校验 checksum，并从快照中的 GSLB 防抖状态恢复最近可用选择，Server 暂时不可用时继续使用最后一次校验通过的快照服务。
 * 快照超过 `AuthoritativeDNSSnapshotMaxAge` 后，动态 GSLB 记录返回 `SERVFAIL`，静态 SOA/NS 可继续返回。
 * 管理端会按最近心跳检测在线 Worker 的快照版本和快照年龄，并在多 Worker 版本不一致或快照过期时告警。
-* 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；最近探测会参与迁移准备状态。在线 Agent 还会接收 Server 下发的少量 Worker 探测目标，主动探测公网 UDP/TCP `53` 可达性并回传 RTT，用于补充多节点视角，但当前结果仅进入观测面板，尚不参与 GSLB 调度评分。
+* 管理端会基于 Worker 心跳聚合展示在线率、查询错误率和本地查询处理耗时，并可按需从 Server 探测某个 Worker 的 UDP/TCP 53 可达性；最近探测会参与迁移准备状态。在线 Agent 还会接收 Server 下发的少量 Worker 探测目标，主动探测公网 UDP/TCP `53` 可达性并回传 RTT，用于补充多节点视角；过期的 Agent 探测结果不会继续计入健康通过率，但当前结果整体仍仅进入观测面板，尚不参与 GSLB 调度评分。
 * DNS Worker 不直接修改数据库，不在查询路径里写入状态。
 * 快照携带 Server 侧最近一次 GSLB 防抖状态，Worker 启动或拉取新快照后会恢复可用的 `route_id + record_type + source_scope` 选择状态；逐查询产生的新状态先保存在 Worker 内存中，再通过 heartbeat 批量回传 Server。
 * 查询聚合按窗口批量上报，失败时本地缓冲，避免每次查询写库。

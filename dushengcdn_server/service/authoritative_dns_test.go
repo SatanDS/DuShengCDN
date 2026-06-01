@@ -923,6 +923,114 @@ func TestAgentDNSProbeResultsPersistToWorkerHealth(t *testing.T) {
 	}
 }
 
+func TestAgentDNSProbeResultsStaleExcludedFromWorkerHealth(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now().UTC()
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1-hk",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	_, err = RecordDNSWorkerHeartbeat(workerModel, DNSWorkerHeartbeatInput{
+		Version:             "v1.0.0",
+		Status:              dnsWorkerStatusOnline,
+		LastSnapshotVersion: "snapshot-a",
+		LastSnapshotAt:      &now,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	for _, node := range []*model.Node{
+		{
+			NodeID:            "node-fresh",
+			Name:              "fresh-edge",
+			PoolName:          "HK",
+			AgentToken:        "agent-token-fresh",
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now,
+			SchedulingEnabled: true,
+		},
+		{
+			NodeID:            "node-stale",
+			Name:              "stale-edge",
+			PoolName:          "EU",
+			AgentToken:        "agent-token-stale",
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now,
+			SchedulingEnabled: true,
+		},
+	} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+
+	results := []AgentDNSProbeResult{
+		{Network: "UDP", Reachable: true, DurationMs: 10, RCode: "NOERROR", AnswerCount: 1},
+		{Network: "TCP", Reachable: true, DurationMs: 20, RCode: "NOERROR", AnswerCount: 1},
+	}
+	persistHeartbeatObservability("node-fresh", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{{
+			WorkerID:      worker.WorkerID,
+			PublicAddress: "ns1.example.net",
+			QueryName:     "example.com.",
+			QueryType:     "SOA",
+			CheckedAtUnix: now.Unix(),
+			Results:       results,
+		}},
+	}, now)
+	staleCheckedAt := now.Add(-defaultDNSWorkerNodeProbeMaxAge - time.Minute)
+	persistHeartbeatObservability("node-stale", AgentNodePayload{
+		DNSProbeResults: []AgentDNSProbeReport{{
+			WorkerID:      worker.WorkerID,
+			PublicAddress: "ns1.example.net",
+			QueryName:     "example.com.",
+			QueryType:     "SOA",
+			CheckedAtUnix: staleCheckedAt.Unix(),
+			Results:       results,
+		}},
+	}, now)
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.WorkerHealth.NodeProbeCheckedCount != 2 ||
+		summary.WorkerHealth.NodeProbeHealthyCount != 1 ||
+		summary.WorkerHealth.NodeProbeStaleCount != 1 ||
+		summary.WorkerHealth.NodeProbeHealthyPercent != 50 ||
+		summary.WorkerHealth.NodeProbeAverageRTTMs != 15 ||
+		summary.WorkerHealth.NodeProbeMaxRTTMs != 20 {
+		t.Fatalf("unexpected stale-aware node probe summary: %+v", summary.WorkerHealth)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 || len(summary.WorkerHealth.Workers[0].NodeProbes) != 2 {
+		t.Fatalf("expected two node probes in worker health item: %+v", summary.WorkerHealth.Workers)
+	}
+	workerHealth := summary.WorkerHealth.Workers[0]
+	if workerHealth.NodeProbeHealthyCount != 1 || workerHealth.NodeProbeStaleCount != 1 || workerHealth.NodeProbeAverageRTTMs != 15 {
+		t.Fatalf("unexpected worker node probe stats: %+v", workerHealth)
+	}
+	var staleProbe DNSWorkerNodeProbeView
+	for _, probe := range workerHealth.NodeProbes {
+		if probe.NodeID == "node-stale" {
+			staleProbe = probe
+			break
+		}
+	}
+	if staleProbe.NodeID == "" || staleProbe.Healthy || staleProbe.ProbeStatus != dnsWorkerProbeStale || staleProbe.ProbeAgeSeconds <= 0 {
+		t.Fatalf("unexpected stale probe view: %+v", staleProbe)
+	}
+}
+
 func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	setupServiceTestDB(t)
 

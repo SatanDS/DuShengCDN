@@ -279,6 +279,7 @@ export interface DNSWorkerHealthSummary {
   probe_healthy_percent: number;
   node_probe_healthy_count: number;
   node_probe_checked_count: number;
+  node_probe_stale_count: number;
   node_probe_healthy_percent: number;
   node_probe_average_rtt_ms: number;
   node_probe_max_rtt_ms: number;
@@ -315,6 +316,7 @@ export interface DNSWorkerHealthItem {
   probe_message: string;
   node_probe_total_count: number;
   node_probe_healthy_count: number;
+  node_probe_stale_count: number;
   node_probe_healthy_percent: number;
   node_probe_average_rtt_ms: number;
   node_probe_max_rtt_ms: number;
@@ -328,6 +330,9 @@ export interface DNSWorkerNodeProbe {
   status: 'online' | 'offline' | 'pending';
   checked_at: string;
   healthy: boolean;
+  probe_status: DNSWorkerProbeStatus;
+  probe_age_seconds: number;
+  probe_message: string;
   average_rtt_ms: number;
   max_rtt_ms: number;
   results: DNSWorkerProbeResult[];

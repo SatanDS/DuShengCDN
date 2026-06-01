@@ -96,7 +96,7 @@ Cloudflare 自动 DNS 支持：
 * 在 DNS Worker 列表可点击「探测」，由 Server 对该 Worker 公网地址发起 UDP/TCP 53 的 SOA 查询，确认解析可达性、RTT、RCODE 和错误信息；最近一次探测结果会保存在 Worker 列表和可用性面板中。
 * 在线 Agent 会从心跳设置里收到少量在线 DNS Worker 的探测目标，并从各自节点发起 UDP/TCP `53` 查询；权威 DNS 的 Worker 可用性面板会按 Agent 节点展示探测点、节点池、UDP/TCP 可达性、平均 RTT、最大 RTT 和失败原因。
 * 迁移向导会要求至少一个在线 DNS Worker 的最新公网 UDP/TCP 53 探测通过，避免 Worker 只会连回 Server、但公网递归 DNS 无法访问 `53` 端口时误切换。
-* Worker 延迟来自 DNS Worker 本地处理真实查询的聚合耗时；Agent 多节点探测 RTT 则表示各边缘节点到 Worker NS 的主动探测耗时。当前多点探测用于观测与排障，暂不直接参与 GSLB 选点。
+* Worker 延迟来自 DNS Worker 本地处理真实查询的聚合耗时；Agent 多节点探测 RTT 则表示各边缘节点到 Worker NS 的主动探测耗时。超过新鲜度窗口的 Agent 多点探测会标记为“探测过期”，仍保留明细但不计入健康通过率。当前多点探测用于观测与排障，暂不直接参与 GSLB 选点。
 * 未配置本地 GeoIP 库时，国家代码为空，调度作用域会回退到 `global`；Worker 列表和可用性面板会显示 GeoIP 是否加载、数据库路径和最近加载错误，便于排查国家代码节点池不命中的原因。
 * 这种模式不依赖 Cloudflare API，也不支持 Cloudflare 橙云代理；需要自行保证 DNS Worker 的公网可达和高可用。
 * 生产环境至少部署两个 DNS Worker，并放行 UDP/TCP 53。
