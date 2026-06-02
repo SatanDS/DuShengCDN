@@ -141,7 +141,7 @@ export function CertificateImportModal({
       isOpen={isOpen}
       onClose={handleClose}
       title="导入证书"
-      description="支持手动粘贴 PEM 或上传证书文件。导入成功后可立即在网站表单里选择。"
+      description="支持手动粘贴证书内容，或上传证书文件。导入成功后可立即在网站表单里选择。"
       size="xl"
     >
       <div className="space-y-6">
@@ -175,7 +175,7 @@ export function CertificateImportModal({
         </div>
 
         {importMode === 'manual' ? (
-          <AppCard description="直接粘贴 PEM 证书和私钥内容，适合快速录入已有证书。">
+          <AppCard description="直接粘贴证书内容和私钥内容，适合快速录入已有证书。">
             <form className="space-y-5" onSubmit={handleManualSubmit}>
               <div className="grid gap-4 md:grid-cols-2">
                 <ResourceField
@@ -200,7 +200,8 @@ export function CertificateImportModal({
               </div>
 
               <ResourceField
-                label="证书 PEM"
+                label="证书内容"
+                tooltip="通常是 PEM 格式，从 -----BEGIN CERTIFICATE----- 开始，到 -----END CERTIFICATE----- 结束。"
                 error={manualForm.formState.errors.cert_pem?.message}
               >
                 <ResourceTextarea
@@ -211,7 +212,8 @@ export function CertificateImportModal({
               </ResourceField>
 
               <ResourceField
-                label="私钥 PEM"
+                label="私钥内容"
+                tooltip="通常是 PEM 格式，从 -----BEGIN PRIVATE KEY----- 或 -----BEGIN RSA PRIVATE KEY----- 开始。私钥要妥善保管，不要发给无关人员。"
                 error={manualForm.formState.errors.key_pem?.message}
               >
                 <ResourceTextarea
@@ -230,7 +232,7 @@ export function CertificateImportModal({
             </form>
           </AppCard>
         ) : (
-          <AppCard description="上传证书文件和私钥文件，适合直接复用现有 PEM 文件。">
+          <AppCard description="上传证书文件和私钥文件，适合直接复用已有文件。">
             <form className="space-y-5" onSubmit={handleFileSubmit}>
               <div className="grid gap-4 md:grid-cols-2">
                 <ResourceField label="证书名称">
@@ -265,8 +267,9 @@ export function CertificateImportModal({
                   hint={
                     certFile
                       ? `已选择：${certFile.name}`
-                      : '请选择 PEM/CRT 文件'
+                      : '请选择证书文件'
                   }
+                  tooltip="支持常见的 .pem、.crt、.cer 证书文件。"
                 >
                   <ResourceInput
                     key={`cert-${fileInputNonce}`}
@@ -282,8 +285,9 @@ export function CertificateImportModal({
                   hint={
                     keyFile
                       ? `已选择：${keyFile.name}`
-                      : '请选择 KEY/PEM 文件'
+                      : '请选择私钥文件'
                   }
+                  tooltip="支持常见的 .key、.pem 私钥文件。私钥和证书必须是一对。"
                 >
                   <ResourceInput
                     key={`key-${fileInputNonce}`}

@@ -78,7 +78,7 @@ export function CertificateDetailModal({
         onClose();
       }}
       title="证书详情"
-      description="查看证书元信息、备注以及当前保存的 PEM 内容。"
+      description="查看证书时间、备注以及当前保存的证书内容。"
       size="xl"
       footer={
         <div className="flex flex-wrap justify-end gap-3">
@@ -175,13 +175,13 @@ export function CertificateDetailModal({
             <div>
               <div className="mb-2 flex items-center justify-between gap-3">
                 <p className="text-sm font-medium text-[var(--foreground-primary)]">
-                  证书 PEM
+                  证书内容
                 </p>
                 <SecondaryButton
                   type="button"
                   className="px-3 py-2 text-xs"
                   onClick={() =>
-                    void handleCopy(content.cert_pem, '证书 PEM 已复制。')
+                    void handleCopy(content.cert_pem, '证书内容已复制。')
                   }
                 >
                   复制
@@ -194,13 +194,13 @@ export function CertificateDetailModal({
             <div>
               <div className="mb-2 flex items-center justify-between gap-3">
                 <p className="text-sm font-medium text-[var(--foreground-primary)]">
-                  私钥 PEM
+                  私钥内容
                 </p>
                 <SecondaryButton
                   type="button"
                   className="px-3 py-2 text-xs"
                   onClick={() =>
-                    void handleCopy(content.key_pem, '私钥 PEM 已复制。')
+                    void handleCopy(content.key_pem, '私钥内容已复制。')
                   }
                 >
                   复制

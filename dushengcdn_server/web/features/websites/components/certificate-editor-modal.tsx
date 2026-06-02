@@ -101,7 +101,7 @@ export function CertificateEditorModal({
       isOpen={isOpen}
       onClose={handleClose}
       title="编辑证书"
-      description="可以修改证书名称、备注，以及重新上传 PEM 证书和私钥内容。"
+      description="可以修改证书名称、备注，以及重新粘贴证书内容和私钥内容。"
       size="xl"
       footer={
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -177,7 +177,8 @@ export function CertificateEditorModal({
           </div>
 
           <ResourceField
-            label="证书 PEM"
+            label="证书内容"
+            tooltip="通常是 PEM 格式，从 -----BEGIN CERTIFICATE----- 开始，到 -----END CERTIFICATE----- 结束。"
             error={form.formState.errors.cert_pem?.message}
           >
             <ResourceTextarea
@@ -187,7 +188,8 @@ export function CertificateEditorModal({
           </ResourceField>
 
           <ResourceField
-            label="私钥 PEM"
+            label="私钥内容"
+            tooltip="通常是 PEM 格式，从 -----BEGIN PRIVATE KEY----- 或 -----BEGIN RSA PRIVATE KEY----- 开始。私钥必须和证书匹配。"
             error={form.formState.errors.key_pem?.message}
           >
             <ResourceTextarea

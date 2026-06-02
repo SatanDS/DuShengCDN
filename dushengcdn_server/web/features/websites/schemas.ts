@@ -34,8 +34,8 @@ export const manualImportSchema = z.object({
     .trim()
     .min(1, '请输入证书名称')
     .max(255, '证书名称不能超过 255 个字符'),
-  cert_pem: z.string().trim().min(1, '请输入证书 PEM 内容'),
-  key_pem: z.string().trim().min(1, '请输入私钥 PEM 内容'),
+  cert_pem: z.string().trim().min(1, '请输入证书内容'),
+  key_pem: z.string().trim().min(1, '请输入私钥内容'),
   remark: z.string().max(255, '备注不能超过 255 个字符'),
 });
 
@@ -98,7 +98,7 @@ export const acmeApplySchema = z
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['dns_zone_id_ref'],
-        message: '请选择权威 DNS 托管域名',
+        message: '请选择本地托管域名',
       });
     }
   });
