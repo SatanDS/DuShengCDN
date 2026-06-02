@@ -1840,8 +1840,30 @@ describe('Proxy route website pages', () => {
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole('checkbox', { name: /启用恶意请求防护/ }));
-    await user.selectOptions(screen.getByRole('combobox'), 'log');
+    await user.selectOptions(screen.getByLabelText('运行模式'), 'log');
     await user.click(screen.getByRole('checkbox', { name: /恶意工具 UA/ }));
+
+    expect(screen.queryByPlaceholderText('1.2.3.4')).not.toBeInTheDocument();
+    const wafRuleSelect = screen.getByLabelText(
+      '按需添加白名单或拦截规则',
+    );
+    const addWAFRuleButton = screen.getByRole('button', {
+      name: '添加恶意请求防护规则',
+    });
+    for (const ruleKey of [
+      'whitelist.ips',
+      'whitelist.ip_cidrs',
+      'whitelist.paths',
+      'block_rules.path_contains',
+      'block_rules.path_regexes',
+      'block_rules.query_contains',
+      'block_rules.header_contains',
+      'block_rules.user_agents',
+    ]) {
+      await user.selectOptions(wafRuleSelect, ruleKey);
+      await user.click(addWAFRuleButton);
+    }
+
     await user.type(screen.getByPlaceholderText('1.2.3.4'), '203.0.113.8');
     await user.type(screen.getByPlaceholderText('10.0.0.0/8'), '10.10.0.0/16');
     await user.type(screen.getByPlaceholderText('/api/public/*'), '/health/*');
@@ -1979,7 +2001,7 @@ describe('Proxy route website pages', () => {
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole('checkbox', { name: /启用计算验证防护/ }));
-    await user.selectOptions(screen.getByRole('combobox'), 'slow');
+    await user.selectOptions(screen.getByLabelText('验证算法'), 'slow');
 
     const [difficultyInput, sessionTTLInput, challengeTTLInput] =
       screen.getAllByRole('spinbutton');
@@ -1993,14 +2015,30 @@ describe('Proxy route website pages', () => {
     await user.clear(challengeTTLInput);
     await user.type(challengeTTLInput, '120');
 
+    expect(screen.queryAllByRole('textbox')).toHaveLength(0);
+    const powRuleSelect = screen.getByLabelText('按需添加规则');
+    const addPowRuleButton = screen.getByRole('button', {
+      name: '添加计算验证规则',
+    });
+    for (const ruleKey of [
+      'whitelist.ips',
+      'whitelist.paths',
+      'whitelist.user_agents',
+      'blacklist.ip_cidrs',
+      'blacklist.path_regexes',
+    ]) {
+      await user.selectOptions(powRuleSelect, ruleKey);
+      await user.click(addPowRuleButton);
+    }
+
     const powTextareas = screen.getAllByRole('textbox');
-    expect(powTextareas).toHaveLength(10);
+    expect(powTextareas).toHaveLength(5);
 
     await user.type(powTextareas[0], '203.0.113.8');
-    await user.type(powTextareas[2], '/health/*');
-    await user.type(powTextareas[4], 'Googlebot');
-    await user.type(powTextareas[6], '10.10.0.0/16');
-    await user.type(powTextareas[8], '^/private/');
+    await user.type(powTextareas[1], '/health/*');
+    await user.type(powTextareas[2], 'Googlebot');
+    await user.type(powTextareas[3], '10.10.0.0/16');
+    await user.type(powTextareas[4], '^/private/');
 
     const saveButton = document.querySelector(
       'button[form="proxy-route-pow-form"]',

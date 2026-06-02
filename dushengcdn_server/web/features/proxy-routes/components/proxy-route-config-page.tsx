@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Minus, Plus } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -1989,6 +1989,118 @@ type PowListValues = {
   user_agents: string;
 };
 
+type PowListGroup = 'whitelist' | 'blacklist';
+type PowListField = keyof PowListValues;
+
+type PowRuleKey = `${PowListGroup}.${PowListField}`;
+
+type PowRuleOption = {
+  key: PowRuleKey;
+  group: PowListGroup;
+  field: PowListField;
+  label: string;
+  hint: string;
+  placeholder: string;
+  description: string;
+};
+
+const powRuleOptions: PowRuleOption[] = [
+  {
+    key: 'whitelist.ips',
+    group: 'whitelist',
+    field: 'ips',
+    label: '白名单 IP',
+    hint: '每行一个 IP 地址',
+    placeholder: '1.2.3.4',
+    description: '匹配这些 IP 的请求会跳过计算验证。',
+  },
+  {
+    key: 'whitelist.ip_cidrs',
+    group: 'whitelist',
+    field: 'ip_cidrs',
+    label: '白名单 IP CIDR',
+    hint: '每行一个 CIDR 范围',
+    placeholder: '10.0.0.0/8',
+    description: '匹配这些网段的请求会跳过计算验证。',
+  },
+  {
+    key: 'whitelist.paths',
+    group: 'whitelist',
+    field: 'paths',
+    label: '白名单路径',
+    hint: '每行一个路径通配符',
+    placeholder: '/.well-known/*\n/favicon.ico',
+    description: '匹配这些路径的请求会跳过计算验证。',
+  },
+  {
+    key: 'whitelist.path_regexes',
+    group: 'whitelist',
+    field: 'path_regexes',
+    label: '白名单路径正则',
+    hint: '每行一个正则表达式',
+    placeholder: '^/api/public/',
+    description: '路径命中这些正则时跳过计算验证。',
+  },
+  {
+    key: 'whitelist.user_agents',
+    group: 'whitelist',
+    field: 'user_agents',
+    label: '白名单 User-Agent',
+    hint: '每行一个关键字',
+    placeholder: 'Googlebot\nbingbot',
+    description: 'User-Agent 包含这些关键字时跳过计算验证。',
+  },
+  {
+    key: 'blacklist.ips',
+    group: 'blacklist',
+    field: 'ips',
+    label: '黑名单 IP',
+    hint: '每行一个 IP 地址',
+    placeholder: '1.2.3.4',
+    description: '匹配这些 IP 的请求必须完成计算验证。',
+  },
+  {
+    key: 'blacklist.ip_cidrs',
+    group: 'blacklist',
+    field: 'ip_cidrs',
+    label: '黑名单 IP CIDR',
+    hint: '每行一个 CIDR 范围',
+    placeholder: '10.0.0.0/8',
+    description: '匹配这些网段的请求必须完成计算验证。',
+  },
+  {
+    key: 'blacklist.paths',
+    group: 'blacklist',
+    field: 'paths',
+    label: '黑名单路径',
+    hint: '每行一个路径通配符',
+    placeholder: '/admin/*',
+    description: '匹配这些路径的请求必须完成计算验证。',
+  },
+  {
+    key: 'blacklist.path_regexes',
+    group: 'blacklist',
+    field: 'path_regexes',
+    label: '黑名单路径正则',
+    hint: '每行一个正则表达式',
+    placeholder: '^/private/',
+    description: '路径命中这些正则时必须完成计算验证。',
+  },
+  {
+    key: 'blacklist.user_agents',
+    group: 'blacklist',
+    field: 'user_agents',
+    label: '黑名单 User-Agent',
+    hint: '每行一个关键字',
+    placeholder: 'bot\ncrawler',
+    description: 'User-Agent 包含这些关键字时必须完成计算验证。',
+  },
+];
+
+const powRuleOptionMap = new Map(
+  powRuleOptions.map((option) => [option.key, option]),
+);
+
 const powSchema = z
   .object({
     pow_enabled: z.boolean(),
@@ -2124,6 +2236,111 @@ const wafSchema = z
 
 type WAFValues = z.infer<typeof wafSchema>;
 
+type WAFWhitelistField = keyof WAFValues['whitelist'];
+type WAFBlockRuleField = keyof WAFValues['block_rules'];
+type WAFCustomRuleKey =
+  | `whitelist.${WAFWhitelistField}`
+  | `block_rules.${WAFBlockRuleField}`;
+
+type WAFCustomRuleOption =
+  | {
+      key: `whitelist.${WAFWhitelistField}`;
+      group: 'whitelist';
+      field: WAFWhitelistField;
+      label: string;
+      hint: string;
+      placeholder: string;
+      description: string;
+    }
+  | {
+      key: `block_rules.${WAFBlockRuleField}`;
+      group: 'block_rules';
+      field: WAFBlockRuleField;
+      label: string;
+      hint: string;
+      placeholder: string;
+      description: string;
+    };
+
+const wafCustomRuleOptions: WAFCustomRuleOption[] = [
+  {
+    key: 'whitelist.ips',
+    group: 'whitelist',
+    field: 'ips',
+    label: '白名单 IP',
+    hint: '每行一个 IP 地址',
+    placeholder: '1.2.3.4',
+    description: '匹配这些 IP 的请求会跳过恶意请求防护。',
+  },
+  {
+    key: 'whitelist.ip_cidrs',
+    group: 'whitelist',
+    field: 'ip_cidrs',
+    label: '白名单 IP CIDR',
+    hint: '每行一个 CIDR 范围',
+    placeholder: '10.0.0.0/8',
+    description: '匹配这些网段的请求会跳过恶意请求防护。',
+  },
+  {
+    key: 'whitelist.paths',
+    group: 'whitelist',
+    field: 'paths',
+    label: '白名单路径',
+    hint: '每行一个路径，支持以 * 结尾的前缀匹配。',
+    placeholder: '/api/public/*',
+    description: '匹配这些路径的请求会跳过恶意请求防护。',
+  },
+  {
+    key: 'block_rules.path_contains',
+    group: 'block_rules',
+    field: 'path_contains',
+    label: '拦截路径包含',
+    hint: '每行一个关键字',
+    placeholder: '/debug',
+    description: '请求路径包含这些关键字时命中恶意请求防护。',
+  },
+  {
+    key: 'block_rules.path_regexes',
+    group: 'block_rules',
+    field: 'path_regexes',
+    label: '拦截路径正则',
+    hint: '每行一个正则表达式。',
+    placeholder: '^/private/',
+    description: '请求路径命中这些正则时命中恶意请求防护。',
+  },
+  {
+    key: 'block_rules.query_contains',
+    group: 'block_rules',
+    field: 'query_contains',
+    label: '拦截查询参数包含',
+    hint: '每行一个关键字',
+    placeholder: 'debug=true',
+    description: '查询参数包含这些关键字时命中恶意请求防护。',
+  },
+  {
+    key: 'block_rules.header_contains',
+    group: 'block_rules',
+    field: 'header_contains',
+    label: '拦截请求头包含',
+    hint: '每行一个关键字',
+    placeholder: 'X-Scanner',
+    description: '请求头包含这些关键字时命中恶意请求防护。',
+  },
+  {
+    key: 'block_rules.user_agents',
+    group: 'block_rules',
+    field: 'user_agents',
+    label: '拦截 User-Agent 包含',
+    hint: '每行一个关键字',
+    placeholder: 'sqlmap',
+    description: 'User-Agent 包含这些关键字时命中恶意请求防护。',
+  },
+];
+
+const wafCustomRuleOptionMap = new Map(
+  wafCustomRuleOptions.map((option) => [option.key, option]),
+);
+
 function buildWAFValuesFromRoute(route: ProxyRouteItem): WAFValues {
   const config = route.waf_config;
   return {
@@ -2171,6 +2388,35 @@ function buildPowListFromConfig(
   };
 }
 
+function buildPowValuesFromRoute(route: ProxyRouteItem): PowValues {
+  const config = route.pow_config;
+  return {
+    pow_enabled: route.pow_enabled,
+    difficulty: config?.difficulty ?? 4,
+    algorithm: config?.algorithm ?? 'fast',
+    session_ttl: config?.session_ttl ?? 600,
+    challenge_ttl: config?.challenge_ttl ?? 300,
+    whitelist: buildPowListFromConfig(config?.whitelist),
+    blacklist: buildPowListFromConfig(config?.blacklist),
+  };
+}
+
+function buildInitialPowRuleKeys(values: Pick<PowValues, 'whitelist' | 'blacklist'>) {
+  return powRuleOptions
+    .filter((option) => values[option.group][option.field].trim() !== '')
+    .map((option) => option.key);
+}
+
+function buildInitialWAFCustomRuleKeys(values: Pick<WAFValues, 'whitelist' | 'block_rules'>) {
+  return wafCustomRuleOptions
+    .filter((option) =>
+      option.group === 'whitelist'
+        ? values.whitelist[option.field].trim() !== ''
+        : values.block_rules[option.field].trim() !== '',
+    )
+    .map((option) => option.key);
+}
+
 export function PowSection({
   route,
   saving,
@@ -2182,36 +2428,44 @@ export function PowSection({
   saving: boolean;
   onSave: SaveHandler;
 } & ConfigSectionPresentationProps) {
-  const powConfig = route.pow_config;
   const form = useForm<PowValues>({
     resolver: zodResolver(powSchema),
-    defaultValues: {
-      pow_enabled: route.pow_enabled,
-      difficulty: powConfig?.difficulty ?? 4,
-      algorithm: powConfig?.algorithm ?? 'fast',
-      session_ttl: powConfig?.session_ttl ?? 600,
-      challenge_ttl: powConfig?.challenge_ttl ?? 300,
-      whitelist: buildPowListFromConfig(powConfig?.whitelist),
-      blacklist: buildPowListFromConfig(powConfig?.blacklist),
-    },
+    defaultValues: buildPowValuesFromRoute(route),
   });
+  const [selectedPowRuleKey, setSelectedPowRuleKey] = useState<PowRuleKey>(
+    powRuleOptions[0].key,
+  );
+  const [activePowRuleKeys, setActivePowRuleKeys] = useState<PowRuleKey[]>(() =>
+    buildInitialPowRuleKeys(buildPowValuesFromRoute(route)),
+  );
 
   useEffect(() => {
-    form.reset({
-      pow_enabled: route.pow_enabled,
-      difficulty: powConfig?.difficulty ?? 4,
-      algorithm: powConfig?.algorithm ?? 'fast',
-      session_ttl: powConfig?.session_ttl ?? 600,
-      challenge_ttl: powConfig?.challenge_ttl ?? 300,
-      whitelist: buildPowListFromConfig(powConfig?.whitelist),
-      blacklist: buildPowListFromConfig(powConfig?.blacklist),
-    });
-  }, [form, route, powConfig]);
+    const nextValues = buildPowValuesFromRoute(route);
+    form.reset(nextValues);
+    setActivePowRuleKeys(buildInitialPowRuleKeys(nextValues));
+  }, [form, route]);
 
   const watchedEnabled = form.watch('pow_enabled');
+  const addPowRule = () => {
+    setActivePowRuleKeys((current) =>
+      current.includes(selectedPowRuleKey)
+        ? current
+        : [...current, selectedPowRuleKey],
+    );
+  };
+  const removePowRule = (option: PowRuleOption) => {
+    form.setValue(option.key, '', { shouldDirty: true, shouldValidate: true });
+    setActivePowRuleKeys((current) =>
+      current.filter((key) => key !== option.key),
+    );
+  };
 
   const parseList = (text: string): string[] =>
     linesFromTextarea(text).filter(Boolean);
+
+  const visiblePowRuleOptions = activePowRuleKeys
+    .map((key) => powRuleOptionMap.get(key))
+    .filter((option): option is PowRuleOption => Boolean(option));
 
   return (
     <ConfigSectionShell
@@ -2266,6 +2520,7 @@ export function PowSection({
 
         <ResourceField label="验证算法">
           <ResourceSelect
+            aria-label="验证算法"
             disabled={!watchedEnabled}
             {...form.register('algorithm')}
           >
@@ -2314,89 +2569,88 @@ export function PowSection({
           />
         </ResourceField>
 
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          <fieldset disabled={!watchedEnabled} className="space-y-4">
-            <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
-              白名单（匹配的请求跳过计算验证）
-            </legend>
-            <ResourceField label="IP" hint="每行一个 IP 地址">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="1.2.3.4&#10;5.6.7.8"
-                {...form.register('whitelist.ips')}
-              />
-            </ResourceField>
-            <ResourceField label="IP CIDR" hint="每行一个 CIDR 范围">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="10.0.0.0/8&#10;192.168.0.0/16"
-                {...form.register('whitelist.ip_cidrs')}
-              />
-            </ResourceField>
-            <ResourceField label="路径" hint="每行一个路径通配符">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="/.well-known/*&#10;/favicon.ico"
-                {...form.register('whitelist.paths')}
-              />
-            </ResourceField>
-            <ResourceField label="路径正则" hint="每行一个正则表达式">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="^/api/public/"
-                {...form.register('whitelist.path_regexes')}
-              />
-            </ResourceField>
-            <ResourceField label="User-Agent" hint="每行一个关键字">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="Googlebot&#10;bingbot"
-                {...form.register('whitelist.user_agents')}
-              />
-            </ResourceField>
-          </fieldset>
+        <ResourceField
+          label="按需添加规则"
+          hint="选择一种规则类型，点击加号后再填写。未添加的规则不会生效。"
+          container="div"
+        >
+          <div className="flex items-center gap-2">
+            <ResourceSelect
+              aria-label="按需添加规则"
+              disabled={!watchedEnabled}
+              value={selectedPowRuleKey}
+              onChange={(event) =>
+                setSelectedPowRuleKey(event.target.value as PowRuleKey)
+              }
+            >
+              {powRuleOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </ResourceSelect>
+            <SecondaryButton
+              type="button"
+              aria-label="添加计算验证规则"
+              title="添加规则"
+              disabled={
+                !watchedEnabled || activePowRuleKeys.includes(selectedPowRuleKey)
+              }
+              onClick={addPowRule}
+              className="h-11 w-11 shrink-0 rounded-lg p-0"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+            </SecondaryButton>
+          </div>
+        </ResourceField>
 
-          <fieldset disabled={!watchedEnabled} className="space-y-4">
-            <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
-              黑名单（匹配的请求必须计算验证）
-            </legend>
-            <ResourceField label="IP" hint="每行一个 IP 地址">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="1.2.3.4"
-                {...form.register('blacklist.ips')}
-              />
-            </ResourceField>
-            <ResourceField label="IP CIDR" hint="每行一个 CIDR 范围">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="10.0.0.0/8"
-                {...form.register('blacklist.ip_cidrs')}
-              />
-            </ResourceField>
-            <ResourceField label="路径" hint="每行一个路径通配符">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="/admin/*"
-                {...form.register('blacklist.paths')}
-              />
-            </ResourceField>
-            <ResourceField label="路径正则" hint="每行一个正则表达式">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="^/private/"
-                {...form.register('blacklist.path_regexes')}
-              />
-            </ResourceField>
-            <ResourceField label="User-Agent" hint="每行一个关键字">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="bot&#10;crawler"
-                {...form.register('blacklist.user_agents')}
-              />
-            </ResourceField>
-          </fieldset>
-        </div>
+        {visiblePowRuleOptions.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-[var(--border-default)] px-4 py-3 text-sm text-[var(--foreground-secondary)]">
+            暂未添加额外规则。默认按上方计算验证设置处理请求。
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {visiblePowRuleOptions.map((option) => (
+              <div
+                key={option.key}
+                className="rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-[var(--foreground-primary)]">
+                      {option.label}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
+                      {option.description}
+                    </p>
+                  </div>
+                  <SecondaryButton
+                    type="button"
+                    aria-label={`移除${option.label}`}
+                    title={`移除${option.label}`}
+                    disabled={!watchedEnabled}
+                    onClick={() => removePowRule(option)}
+                    className="h-9 w-9 shrink-0 rounded-lg p-0"
+                  >
+                    <Minus className="h-4 w-4" aria-hidden="true" />
+                  </SecondaryButton>
+                </div>
+                <ResourceField
+                  label="匹配内容"
+                  hint={option.hint}
+                  className="mt-3"
+                >
+                  <ResourceTextarea
+                    className="min-h-20"
+                    disabled={!watchedEnabled}
+                    placeholder={option.placeholder}
+                    {...form.register(option.key)}
+                  />
+                </ResourceField>
+              </div>
+            ))}
+          </div>
+        )}
         {form.formState.errors.blacklist && (
           <p className="text-sm text-[var(--color-danger)]">
             {Object.values(form.formState.errors.blacklist)
@@ -2428,9 +2682,16 @@ export function WAFSection({
     resolver: zodResolver(wafSchema),
     defaultValues: buildWAFValuesFromRoute(route),
   });
+  const [selectedWAFCustomRuleKey, setSelectedWAFCustomRuleKey] =
+    useState<WAFCustomRuleKey>(wafCustomRuleOptions[0].key);
+  const [activeWAFCustomRuleKeys, setActiveWAFCustomRuleKeys] = useState<
+    WAFCustomRuleKey[]
+  >(() => buildInitialWAFCustomRuleKeys(buildWAFValuesFromRoute(route)));
 
   useEffect(() => {
-    form.reset(buildWAFValuesFromRoute(route));
+    const nextValues = buildWAFValuesFromRoute(route);
+    form.reset(nextValues);
+    setActiveWAFCustomRuleKeys(buildInitialWAFCustomRuleKeys(nextValues));
   }, [form, route]);
 
   const watchedEnabled = form.watch('waf_enabled');
@@ -2446,6 +2707,41 @@ export function WAFSection({
     form.setValue('builtin_rules', Array.from(current) as WAFRuleKey[], {
       shouldDirty: true,
     });
+  };
+  const addWAFCustomRule = () => {
+    setActiveWAFCustomRuleKeys((current) =>
+      current.includes(selectedWAFCustomRuleKey)
+        ? current
+        : [...current, selectedWAFCustomRuleKey],
+    );
+  };
+  const removeWAFCustomRule = (option: WAFCustomRuleOption) => {
+    if (option.group === 'whitelist') {
+      form.setValue(`whitelist.${option.field}`, '', {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    } else {
+      form.setValue(`block_rules.${option.field}`, '', {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    }
+    setActiveWAFCustomRuleKeys((current) =>
+      current.filter((key) => key !== option.key),
+    );
+  };
+  const visibleWAFCustomRuleOptions = activeWAFCustomRuleKeys
+    .map((key) => wafCustomRuleOptionMap.get(key))
+    .filter((option): option is WAFCustomRuleOption => Boolean(option));
+  const getWAFCustomRuleError = (option: WAFCustomRuleOption) => {
+    if (option.group === 'whitelist' && option.field === 'paths') {
+      return form.formState.errors.whitelist?.paths?.message;
+    }
+    if (option.group === 'block_rules' && option.field === 'path_regexes') {
+      return form.formState.errors.block_rules?.path_regexes?.message;
+    }
+    return undefined;
   };
 
   return (
@@ -2510,6 +2806,7 @@ export function WAFSection({
           }
         >
           <ResourceSelect
+            aria-label="运行模式"
             disabled={!watchedEnabled}
             {...form.register('waf_mode')}
           >
@@ -2551,83 +2848,92 @@ export function WAFSection({
           </div>
         </ResourceField>
 
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          <fieldset disabled={!watchedEnabled} className="space-y-4">
-            <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
-              白名单（匹配后跳过恶意请求防护）
-            </legend>
-            <ResourceField label="IP" hint="每行一个 IP 地址">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="1.2.3.4"
-                {...form.register('whitelist.ips')}
-              />
-            </ResourceField>
-            <ResourceField label="IP CIDR" hint="每行一个 CIDR 范围">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="10.0.0.0/8"
-                {...form.register('whitelist.ip_cidrs')}
-              />
-            </ResourceField>
-            <ResourceField
-              label="路径"
-              hint="每行一个路径，支持以 * 结尾的前缀匹配。"
-              error={form.formState.errors.whitelist?.paths?.message}
+        <ResourceField
+          label="按需添加白名单或拦截规则"
+          hint="选择一种规则类型，点击加号后再填写。未添加的规则不会生效。"
+          container="div"
+        >
+          <div className="flex items-center gap-2">
+            <ResourceSelect
+              aria-label="按需添加白名单或拦截规则"
+              disabled={!watchedEnabled}
+              value={selectedWAFCustomRuleKey}
+              onChange={(event) =>
+                setSelectedWAFCustomRuleKey(
+                  event.target.value as WAFCustomRuleKey,
+                )
+              }
             >
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="/api/public/*"
-                {...form.register('whitelist.paths')}
-              />
-            </ResourceField>
-          </fieldset>
+              {wafCustomRuleOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </ResourceSelect>
+            <SecondaryButton
+              type="button"
+              aria-label="添加恶意请求防护规则"
+              title="添加规则"
+              disabled={
+                !watchedEnabled ||
+                activeWAFCustomRuleKeys.includes(selectedWAFCustomRuleKey)
+              }
+              onClick={addWAFCustomRule}
+              className="h-11 w-11 shrink-0 rounded-lg p-0"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+            </SecondaryButton>
+          </div>
+        </ResourceField>
 
-          <fieldset disabled={!watchedEnabled} className="space-y-4">
-            <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
-              自定义拦截规则
-            </legend>
-            <ResourceField label="路径包含" hint="每行一个关键字">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="/debug"
-                {...form.register('block_rules.path_contains')}
-              />
-            </ResourceField>
-            <ResourceField
-              label="路径正则"
-              hint="每行一个正则表达式。"
-              error={form.formState.errors.block_rules?.path_regexes?.message}
-            >
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="^/private/"
-                {...form.register('block_rules.path_regexes')}
-              />
-            </ResourceField>
-            <ResourceField label="查询参数包含" hint="每行一个关键字">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="debug=true"
-                {...form.register('block_rules.query_contains')}
-              />
-            </ResourceField>
-            <ResourceField label="请求头包含" hint="每行一个关键字">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="X-Scanner"
-                {...form.register('block_rules.header_contains')}
-              />
-            </ResourceField>
-            <ResourceField label="User-Agent 包含" hint="每行一个关键字">
-              <ResourceTextarea
-                className="min-h-20"
-                placeholder="sqlmap"
-                {...form.register('block_rules.user_agents')}
-              />
-            </ResourceField>
-          </fieldset>
-        </div>
+        {visibleWAFCustomRuleOptions.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-[var(--border-default)] px-4 py-3 text-sm text-[var(--foreground-secondary)]">
+            暂未添加自定义规则。当前仅使用上方内置规则。
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {visibleWAFCustomRuleOptions.map((option) => (
+              <div
+                key={option.key}
+                className="rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-[var(--foreground-primary)]">
+                      {option.label}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
+                      {option.description}
+                    </p>
+                  </div>
+                  <SecondaryButton
+                    type="button"
+                    aria-label={`移除${option.label}`}
+                    title={`移除${option.label}`}
+                    disabled={!watchedEnabled}
+                    onClick={() => removeWAFCustomRule(option)}
+                    className="h-9 w-9 shrink-0 rounded-lg p-0"
+                  >
+                    <Minus className="h-4 w-4" aria-hidden="true" />
+                  </SecondaryButton>
+                </div>
+                <ResourceField
+                  label="匹配内容"
+                  hint={option.hint}
+                  error={getWAFCustomRuleError(option)}
+                  className="mt-3"
+                >
+                  <ResourceTextarea
+                    className="min-h-20"
+                    disabled={!watchedEnabled}
+                    placeholder={option.placeholder}
+                    {...form.register(option.key)}
+                  />
+                </ResourceField>
+              </div>
+            ))}
+          </div>
+        )}
       </form>
     </ConfigSectionShell>
   );
