@@ -70,53 +70,53 @@ const defaultPerformanceFields = {
 
 const performanceFieldTooltips: Record<string, string> = {
     worker_processes:
-        'Nginx worker 进程数。通常建议保持 auto，让 OpenResty 按 CPU 核数自动分配。',
+        '底层指令：worker_processes。表示代理服务启动多少个工作进程；通常保持 auto，让系统按处理器核心数自动分配。',
     worker_connections:
-        '每个 worker 可同时处理的最大连接数。值越大，可承载的并发连接越多。',
+        '底层指令：worker_connections。表示每个工作进程可同时处理的最大连接数；值越大，可承载的并发连接越多。',
     worker_rlimit_nofile:
-        '提升 worker 可打开的文件描述符上限，避免高并发下连接或文件句柄不足。',
+        '底层指令：worker_rlimit_nofile。提升工作进程可打开的文件句柄上限，避免高并发下连接或文件句柄不足。',
     events_use:
-        '指定事件驱动模型。默认使用 epoll，Linux 高并发场景通常优先选择它。',
+        '底层指令：events use。指定事件驱动模型；默认使用 epoll，Linux 高并发场景通常优先选择它。',
     multi_accept:
-        '默认开启。worker 会尽可能一次接受多个新连接，适合高吞吐接入场景。',
-    keepalive_timeout: '客户端 Keep-Alive 空闲保持时间，单位秒。',
-    keepalive_requests: '单个长连接允许复用的最大请求数。',
-    client_header_timeout: '读取客户端请求头的超时时间，单位秒。',
-    client_body_timeout: '读取客户端请求体的超时时间，单位秒。',
+        '底层指令：multi_accept。默认开启后，工作进程会尽可能一次接受多个新连接，适合高吞吐接入场景。',
+    keepalive_timeout: '底层指令：keepalive_timeout。客户端长连接空闲保持时间，单位秒。',
+    keepalive_requests: '底层指令：keepalive_requests。单个长连接允许复用的最大请求数。',
+    client_header_timeout: '底层指令：client_header_timeout。读取客户端请求头的超时时间，单位秒。',
+    client_body_timeout: '底层指令：client_body_timeout。读取客户端请求体的超时时间，单位秒。',
     client_max_body_size:
-        '限制客户端请求体大小，常用于上传文件大小控制，例如 64m、128m。',
+        '底层指令：client_max_body_size。限制客户端请求体大小，常用于上传文件大小控制，例如 64m、128m。',
     large_client_header_buffers:
-        '控制大请求头使用的缓冲区数量和大小，例如 4 16k。',
-    send_timeout: '向客户端发送响应时的超时时间，单位秒。',
-    proxy_connect_timeout: '连接源站的超时时间，单位秒。',
-    proxy_send_timeout: '向源站发送请求的超时时间，单位秒。',
-    proxy_read_timeout: '等待源站返回响应的超时时间，单位秒。',
+        '底层指令：large_client_header_buffers。控制大请求头使用的缓冲区数量和大小，例如 4 16k。',
+    send_timeout: '底层指令：send_timeout。向客户端发送响应时的超时时间，单位秒。',
+    proxy_connect_timeout: '底层指令：proxy_connect_timeout。连接源站的超时时间，单位秒。',
+    proxy_send_timeout: '底层指令：proxy_send_timeout。向源站发送请求的超时时间，单位秒。',
+    proxy_read_timeout: '底层指令：proxy_read_timeout。等待源站返回响应的超时时间，单位秒。',
     websocket:
         '控制是否为反向代理规则自动注入 WebSocket 升级所需的 HTTP/1.1、Upgrade 和 Connection 头。',
     proxy_request_buffering:
-        '控制请求体是否先在 Nginx 侧缓冲后再转发给源站，上传和流式场景经常会用到。',
+        '底层指令：proxy_request_buffering。控制请求体是否先在代理服务侧缓冲后再转发给源站，上传和流式场景经常会用到。',
     proxy_buffering:
-        '控制是否启用代理响应缓冲。开启后通常有更平滑的吞吐，但会增加内存占用。',
-    proxy_buffers: '设置代理响应缓冲区的数量和大小，例如 16 16k。',
-    proxy_buffer_size: '保存响应头等小块数据的基础缓冲区大小。',
-    proxy_busy_buffers_size: '限制 busy 状态下可同时占用的缓冲区总大小。',
-    gzip: '控制是否启用 gzip 压缩响应。',
+        '底层指令：proxy_buffering。控制是否启用代理响应缓冲。开启后通常有更平滑的吞吐，但会增加内存占用。',
+    proxy_buffers: '底层指令：proxy_buffers。设置代理响应缓冲区的数量和大小，例如 16 16k。',
+    proxy_buffer_size: '底层指令：proxy_buffer_size。保存响应头等小块数据的基础缓冲区大小。',
+    proxy_busy_buffers_size: '底层指令：proxy_busy_buffers_size。限制忙碌状态下可同时占用的缓冲区总大小。',
+    gzip: '底层指令：gzip。控制是否启用 gzip 压缩响应。',
     gzip_min_length:
-        '只有响应体超过该字节数时才会启用 gzip，避免对极小响应做无意义压缩。',
-    gzip_comp_level: 'gzip 压缩等级，1 更省 CPU，9 压缩更高但更耗 CPU。',
-    proxy_cache_path: '缓存目录路径，对应 proxy_cache_path 指令中的磁盘位置。',
-    levels: '缓存目录层级，例如 1:2，可控制缓存文件的目录分布。',
-    inactive: '缓存对象在未命中访问时的失活时间，例如 30m。',
+        '底层指令：gzip_min_length。只有响应体超过该字节数时才会启用 gzip，避免对极小响应做无意义压缩。',
+    gzip_comp_level: '底层指令：gzip_comp_level。gzip 压缩等级，1 更省处理器，9 压缩更高但更耗处理器。',
+    proxy_cache_path: '底层指令：proxy_cache_path。缓存目录在节点磁盘上的位置。',
+    levels: '底层参数：levels。缓存目录层级，例如 1:2，可控制缓存文件的目录分布。',
+    inactive: '底层参数：inactive。缓存对象在未被访问时的失活时间，例如 30m。',
     max_size:
-        '缓存目录允许占用的最大磁盘空间，会渲染到 proxy_cache_path 的 max_size。',
+        '底层参数：max_size。缓存目录允许占用的最大磁盘空间，会渲染到 proxy_cache_path。',
     cache_key_template: '生成缓存 Key 的模板，决定不同请求如何命中同一缓存对象。',
     proxy_cache_lock:
-        '启用后，同一缓存 Key 未命中时只允许一个请求回源，减少击穿。',
-    proxy_cache_lock_timeout: '等待缓存锁的最长时间，例如 5s。',
+        '底层指令：proxy_cache_lock。启用后，同一缓存 Key 未命中时只允许一个请求回源，减少击穿。',
+    proxy_cache_lock_timeout: '底层指令：proxy_cache_lock_timeout。等待缓存锁的最长时间，例如 5s。',
     proxy_cache_use_stale:
-        '源站异常时允许返回旧缓存的条件列表，例如 error、timeout、http_500。',
+        '底层指令：proxy_cache_use_stale。源站异常时允许返回旧缓存的条件列表，例如 error、timeout、http_500。',
     resolvers:
-        '自定义 DNS 解析器，留空表示不配置。若配置，当源站需要动态解析且 DNS 服务器失效时，能防止容器异常挂掉。例如：1.1.1.1 8.8.8.8',
+        '底层指令：resolver。自定义解析服务器，留空表示不配置。若源站需要动态解析，可在这里填写例如 1.1.1.1 8.8.8.8。',
 };
 
 type PerformanceTab = 'settings' | 'editor';
@@ -695,7 +695,7 @@ export function PerformancePage() {
                     >
                         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
                             <ResourceField
-                                label="自定义 DNS (resolver)"
+                                label="自定义解析服务器"
                                 hint="例如：1.1.1.1 8.8.8.8"
                                 tooltip={performanceFieldTooltips.resolvers}
                             >
@@ -711,7 +711,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="worker_processes"
+                                label="工作进程数量"
                                 tooltip={performanceFieldTooltips.worker_processes}
                             >
                                 <ResourceInput
@@ -726,7 +726,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="worker_connections"
+                                label="单进程最大连接数"
                                 tooltip={performanceFieldTooltips.worker_connections}
                             >
                                 <ResourceInput
@@ -741,7 +741,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="worker_rlimit_nofile"
+                                label="文件句柄上限"
                                 tooltip={performanceFieldTooltips.worker_rlimit_nofile}
                             >
                                 <ResourceInput
@@ -756,7 +756,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="events use"
+                                label="事件模型"
                                 hint="留空表示不显式渲染。"
                                 tooltip={performanceFieldTooltips.events_use}
                             >
@@ -777,7 +777,7 @@ export function PerformancePage() {
                                 </ResourceSelect>
                             </ResourceField>
                             <ToggleField
-                                label="multi_accept"
+                                label="一次接受多个连接"
                                 tooltip={performanceFieldTooltips.multi_accept}
                                 checked={performanceFields.OpenRestyEventsMultiAcceptEnabled}
                                 onChange={(checked) =>
@@ -788,7 +788,7 @@ export function PerformancePage() {
                                 }
                             />
                             <ResourceField
-                                label="keepalive_timeout (秒)"
+                                label="长连接空闲时间（秒）"
                                 tooltip={performanceFieldTooltips.keepalive_timeout}
                             >
                                 <ResourceInput
@@ -803,7 +803,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="keepalive_requests"
+                                label="长连接复用次数"
                                 tooltip={performanceFieldTooltips.keepalive_requests}
                             >
                                 <ResourceInput
@@ -818,7 +818,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="client_header_timeout (秒)"
+                                label="请求头读取超时（秒）"
                                 tooltip={performanceFieldTooltips.client_header_timeout}
                             >
                                 <ResourceInput
@@ -833,7 +833,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="client_body_timeout (秒)"
+                                label="请求体读取超时（秒）"
                                 tooltip={performanceFieldTooltips.client_body_timeout}
                             >
                                 <ResourceInput
@@ -848,7 +848,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="client_max_body_size"
+                                label="请求体大小上限"
                                 tooltip={performanceFieldTooltips.client_max_body_size}
                             >
                                 <ResourceInput
@@ -863,7 +863,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="large_client_header_buffers"
+                                label="大请求头缓冲"
                                 tooltip={performanceFieldTooltips.large_client_header_buffers}
                             >
                                 <ResourceInput
@@ -878,7 +878,7 @@ export function PerformancePage() {
                                 />
                             </ResourceField>
                             <ResourceField
-                                label="send_timeout (秒)"
+                                label="响应发送超时（秒）"
                                 tooltip={performanceFieldTooltips.send_timeout}
                             >
                                 <ResourceInput
@@ -913,7 +913,7 @@ export function PerformancePage() {
                         >
                             <div className="grid gap-5 md:grid-cols-2">
                                 <ResourceField
-                                    label="proxy_connect_timeout (秒)"
+                                    label="源站连接超时（秒）"
                                     tooltip={performanceFieldTooltips.proxy_connect_timeout}
                                 >
                                     <ResourceInput
@@ -928,7 +928,7 @@ export function PerformancePage() {
                                     />
                                 </ResourceField>
                                 <ResourceField
-                                    label="proxy_send_timeout (秒)"
+                                    label="发送到源站超时（秒）"
                                     tooltip={performanceFieldTooltips.proxy_send_timeout}
                                 >
                                     <ResourceInput
@@ -943,7 +943,7 @@ export function PerformancePage() {
                                     />
                                 </ResourceField>
                                 <ResourceField
-                                    label="proxy_read_timeout (秒)"
+                                    label="等待源站响应超时（秒）"
                                     tooltip={performanceFieldTooltips.proxy_read_timeout}
                                 >
                                     <ResourceInput
@@ -958,7 +958,7 @@ export function PerformancePage() {
                                     />
                                 </ResourceField>
                                 <ToggleField
-                                    label="websocket"
+                                    label="支持 WebSocket"
                                     tooltip={performanceFieldTooltips.websocket}
                                     checked={performanceFields.OpenRestyWebsocketEnabled}
                                     onChange={(checked) =>
@@ -969,7 +969,7 @@ export function PerformancePage() {
                                     }
                                 />
                                 <ToggleField
-                                    label="proxy_request_buffering"
+                                    label="先缓冲请求体"
                                     tooltip={performanceFieldTooltips.proxy_request_buffering}
                                     checked={
                                         performanceFields.OpenRestyProxyRequestBufferingEnabled
@@ -982,7 +982,7 @@ export function PerformancePage() {
                                     }
                                 />
                                 <ToggleField
-                                    label="proxy_buffering"
+                                    label="启用响应缓冲"
                                     tooltip={performanceFieldTooltips.proxy_buffering}
                                     checked={performanceFields.OpenRestyProxyBufferingEnabled}
                                     onChange={(checked) =>
@@ -993,7 +993,7 @@ export function PerformancePage() {
                                     }
                                 />
                                 <ResourceField
-                                    label="proxy_buffers"
+                                    label="响应缓冲数量和大小"
                                     tooltip={performanceFieldTooltips.proxy_buffers}
                                 >
                                     <ResourceInput
@@ -1008,7 +1008,7 @@ export function PerformancePage() {
                                     />
                                 </ResourceField>
                                 <ResourceField
-                                    label="proxy_buffer_size"
+                                    label="响应头缓冲大小"
                                     tooltip={performanceFieldTooltips.proxy_buffer_size}
                                 >
                                     <ResourceInput
@@ -1023,7 +1023,7 @@ export function PerformancePage() {
                                     />
                                 </ResourceField>
                                 <ResourceField
-                                    label="proxy_busy_buffers_size"
+                                    label="忙碌缓冲上限"
                                     tooltip={performanceFieldTooltips.proxy_busy_buffers_size}
                                 >
                                     <ResourceInput
@@ -1058,7 +1058,7 @@ export function PerformancePage() {
                                 <div className="space-y-5">
                                     <div className="grid gap-5 md:grid-cols-2">
                                         <ToggleField
-                                            label="gzip"
+                                            label="启用响应压缩"
                                             tooltip={performanceFieldTooltips.gzip}
                                             checked={performanceFields.OpenRestyGzipEnabled}
                                             onChange={(checked) =>
@@ -1069,7 +1069,7 @@ export function PerformancePage() {
                                             }
                                         />
                                         <ResourceField
-                                            label="gzip_min_length"
+                                            label="压缩最小响应大小"
                                             tooltip={performanceFieldTooltips.gzip_min_length}
                                         >
                                             <ResourceInput
@@ -1084,7 +1084,7 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="gzip_comp_level"
+                                            label="压缩等级"
                                             tooltip={performanceFieldTooltips.gzip_comp_level}
                                         >
                                             <ResourceInput
@@ -1144,7 +1144,7 @@ export function PerformancePage() {
                                         ].join(' ')}
                                     >
                                         <ResourceField
-                                            label="proxy_cache_path"
+                                            label="缓存目录"
                                             tooltip={performanceFieldTooltips.proxy_cache_path}
                                             hint={
                                                 performanceFields.OpenRestyCacheEnabled
@@ -1165,7 +1165,7 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="levels"
+                                            label="缓存目录层级"
                                             tooltip={performanceFieldTooltips.levels}
                                         >
                                             <ResourceInput
@@ -1181,7 +1181,7 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="inactive"
+                                            label="缓存失活时间"
                                             tooltip={performanceFieldTooltips.inactive}
                                         >
                                             <ResourceInput
@@ -1197,7 +1197,7 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="max_size"
+                                            label="缓存磁盘上限"
                                             tooltip={performanceFieldTooltips.max_size}
                                         >
                                             <ResourceInput
@@ -1213,7 +1213,7 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="cache key template"
+                                            label="缓存命中规则"
                                             tooltip={performanceFieldTooltips.cache_key_template}
                                         >
                                             <ResourceInput
@@ -1228,7 +1228,7 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ToggleField
-                                            label="proxy_cache_lock"
+                                            label="防止缓存击穿"
                                             tooltip={performanceFieldTooltips.proxy_cache_lock}
                                             checked={performanceFields.OpenRestyCacheLockEnabled}
                                             disabled={!performanceFields.OpenRestyCacheEnabled}
@@ -1240,7 +1240,7 @@ export function PerformancePage() {
                                             }
                                         />
                                         <ResourceField
-                                            label="proxy_cache_lock_timeout"
+                                            label="缓存锁等待时间"
                                             tooltip={
                                                 performanceFieldTooltips.proxy_cache_lock_timeout
                                             }
@@ -1258,7 +1258,7 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="proxy_cache_use_stale"
+                                            label="源站异常时使用旧缓存"
                                             tooltip={performanceFieldTooltips.proxy_cache_use_stale}
                                         >
                                             <ResourceInput
