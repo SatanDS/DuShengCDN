@@ -63,7 +63,7 @@ export function ConfigVersionSnapshotModal({
           <div className="grid gap-4 md:grid-cols-3">
             <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
               <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                Checksum
+                校验值
               </p>
               <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
                 {versionDetail.checksum}

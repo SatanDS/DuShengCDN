@@ -1437,8 +1437,8 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
               <AppCard title="版本信息">
                 <div className="space-y-2 text-sm text-[var(--foreground-secondary)]">
-                  <p>Agent：{node.agent_version || 'unknown'}</p>
-                  <p>Nginx：{node.nginx_version || 'unknown'}</p>
+                  <p>节点程序版本：{node.agent_version || 'unknown'}</p>
+                  <p>代理服务内核：{node.nginx_version || 'unknown'}</p>
                   <p>当前配置：{node.current_version || '未应用'}</p>
                 </div>
               </AppCard>
@@ -1520,7 +1520,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                     </div>
                     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                       <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        Target Checksum
+                        目标校验值
                       </p>
                       <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
                         {activeConfigVersion.checksum}
@@ -1633,7 +1633,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                       <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        Node ID
+                        节点 ID
                       </p>
                       <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
                         {node.node_id}
@@ -1641,7 +1641,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                     </div>
                     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                       <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        Agent Token
+                        节点密钥
                       </p>
                       <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
                         {node.agent_token || '暂无'}
@@ -1750,7 +1750,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                       <tr className="text-[var(--foreground-secondary)]">
                         <th className="px-3 py-3 font-medium">版本</th>
                         <th className="px-3 py-3 font-medium">结果</th>
-                        <th className="px-3 py-3 font-medium">Checksum</th>
+                        <th className="px-3 py-3 font-medium">校验值</th>
                         <th className="px-3 py-3 font-medium">时间</th>
                         <th className="px-3 py-3 font-medium">消息</th>
                       </tr>

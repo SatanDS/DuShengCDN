@@ -280,7 +280,7 @@ function PublishPreviewCard({
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                 <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  Current Active Main Config
+                  当前激活主配置
                 </p>
                 <StatusBadge label={activeVersionMeta.version} variant="info" />
               </div>
@@ -302,7 +302,7 @@ function PublishPreviewCard({
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                 <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  Pending Main Config
+                  待发布主配置
                 </p>
               </div>
               <CodeBlock className="max-h-[32rem] whitespace-pre-wrap">
@@ -311,38 +311,6 @@ function PublishPreviewCard({
             </div>
           </div>
         ) : null}
-
-        {/* Legacy duplicated main config preview block kept commented out while
-            we replace it with an explicit active-vs-pending comparison above.
-        {diff.main_config_changed && activeVersion ? (
-          <div className="grid gap-5 xl:grid-cols-2">
-            <div>
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  褰撳墠婵€娲讳富閰嶇疆
-                </p>
-                <StatusBadge label={activeVersion.version} variant="info" />
-              </div>
-              <CodeBlock className="max-h-[32rem] whitespace-pre-wrap">
-                {activeVersion.main_config}
-              </CodeBlock>
-            </div>
-            <div>
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  寰呭彂甯冧富閰嶇疆
-                </p>
-                <p className="text-xs text-[var(--foreground-secondary)]">
-                  Checksum锛歿preview.checksum}
-                </p>
-              </div>
-              <CodeBlock className="max-h-[32rem] whitespace-pre-wrap">
-                {preview.main_config}
-              </CodeBlock>
-            </div>
-          </div>
-        ) : null}
-        */}
 
         <div>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
@@ -350,7 +318,7 @@ function PublishPreviewCard({
               主配置
             </p>
             <p className="text-xs text-[var(--foreground-secondary)]">
-              Checksum：{preview.checksum}
+              校验值：{preview.checksum}
             </p>
           </div>
           <CodeBlock className="max-h-[32rem] whitespace-pre-wrap">
@@ -618,7 +586,7 @@ export function ConfigVersionsPage() {
                     <th className="px-3 py-3 font-medium">版本号</th>
                     <th className="px-3 py-3 font-medium">状态</th>
                     <th className="px-3 py-3 font-medium">创建人</th>
-                    <th className="px-3 py-3 font-medium">Checksum</th>
+                    <th className="px-3 py-3 font-medium">校验值</th>
                     <th className="px-3 py-3 font-medium">创建时间</th>
                     <th className="px-3 py-3 font-medium">操作</th>
                   </tr>

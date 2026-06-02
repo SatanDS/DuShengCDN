@@ -211,7 +211,7 @@ export function ApplyLogsPage() {
         <div className="space-y-5">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
             <div className="grid flex-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
-              <ResourceField label="Node ID">
+              <ResourceField label="节点 ID">
                 <ResourceInput
                   value={nodeFilterInput}
                   onChange={(event) => setNodeFilterInput(event.target.value)}
@@ -262,10 +262,10 @@ export function ApplyLogsPage() {
                 <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
                   <thead>
                     <tr className="text-[var(--foreground-secondary)]">
-                      <th className="px-3 py-3 font-medium">Node ID</th>
+                      <th className="px-3 py-3 font-medium">节点 ID</th>
                       <th className="px-3 py-3 font-medium">版本</th>
                       <th className="px-3 py-3 font-medium">结果</th>
-                      <th className="px-3 py-3 font-medium">Checksum</th>
+                      <th className="px-3 py-3 font-medium">校验值</th>
                       <th className="px-3 py-3 font-medium">时间</th>
                       <th className="px-3 py-3 font-medium">消息</th>
                       <th className="px-3 py-3 font-medium">操作</th>
@@ -364,14 +364,14 @@ export function ApplyLogsPage() {
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <StatusBadge {...getResultMeta(selectedLog.result)} />
-              <StatusBadge label={`Node：${selectedLog.node_id}`} variant="info" />
+              <StatusBadge label={`节点：${selectedLog.node_id}`} variant="info" />
               <StatusBadge label={`版本：${selectedLog.version}`} variant="warning" />
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <MetricCard label="创建时间" value={formatDateTime(selectedLog.created_at)} />
               <MetricCard label="相对时间" value={formatRelativeTime(selectedLog.created_at)} />
-              <MetricCard label="目标 Checksum" value={selectedLog.checksum || '—'} breakAll />
+              <MetricCard label="目标校验值" value={selectedLog.checksum || '—'} breakAll />
               <MetricCard
                 label="支持文件数"
                 value={String(selectedLog.support_file_count)}
