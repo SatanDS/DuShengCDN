@@ -138,7 +138,7 @@ describe('CertificateApplyModal', () => {
     await user.type(screen.getByLabelText('主域名'), 'www.example.com');
     await user.selectOptions(screen.getByLabelText('验证方式'), 'authoritative');
     await user.selectOptions(
-      await screen.findByLabelText('权威 DNS 托管域名'),
+      await screen.findByLabelText('本地托管域名'),
       '11',
     );
     await user.click(screen.getByRole('button', { name: '开始申请' }));

@@ -261,14 +261,14 @@ export function CertificateApplyModal({
   }, [dnsProviderMode, form, authoritativeZones, matchingAuthoritativeZones]);
 
   const authoritativeZoneHint = dnsZonesQuery.isError
-    ? `权威 DNS 托管域名加载失败：${getErrorMessage(dnsZonesQuery.error)}`
+    ? `本地托管域名加载失败：${getErrorMessage(dnsZonesQuery.error)}`
     : enabledAuthoritativeZones.length === 0
-      ? '还没有可用的权威 DNS 托管域名。先在“本地自建解析”里创建并启用域名，再回来申请证书。'
+      ? '还没有可用的本地托管域名。先在“本地自建解析”里创建并启用域名，再回来申请证书。'
       : certificateDomains.length > 0 && matchingAuthoritativeZones.length === 0
-        ? '当前证书域名没有匹配的权威 DNS 托管域名，请先创建或启用对应根域名。'
+        ? '当前证书域名没有匹配的本地托管域名，请先创建或启用对应根域名。'
         : matchingAuthoritativeZones.length > 0
-          ? '已按证书域名匹配可用的权威 DNS 托管域名。系统会临时写入并清理验证 TXT 记录。'
-          : '证书里的所有域名都必须属于这里选择的权威 DNS 托管域名。系统会临时写入并清理验证 TXT 记录。';
+          ? '已按证书域名匹配可用的本地托管域名。系统会临时写入并清理验证记录。'
+          : '证书里的所有域名都必须属于这里选择的本地托管域名。系统会临时写入并清理验证记录。';
 
   return (
     <AppModal
@@ -283,10 +283,10 @@ export function CertificateApplyModal({
       }
       description={
         mode === 'edit-acme'
-          ? '修改 ACME 证书配置。保存后将使用新配置重新申请证书。'
+          ? '修改自动申请配置。保存后将使用新配置重新申请证书。'
           : mode === 'convert-upload'
-            ? '填写 ACME 申请资料。申请成功后，当前手动证书会原地转换为可自动续签的申请证书。'
-            : "使用 ACME (Let's Encrypt 等) 自动申请和续期证书，支持通配符域名。"
+            ? '填写自动申请资料。申请成功后，当前手动证书会原地转换为可自动续签的申请证书。'
+            : "自动向 Let's Encrypt 等证书机构申请和续期证书，支持通配符域名。"
       }
       size="xl"
     >
@@ -333,7 +333,7 @@ export function CertificateApplyModal({
           <ResourceField
             label="验证方式"
             hint="申请证书时需要临时写入 _acme-challenge 记录。"
-            tooltip="选择 Cloudflare 时会调用 Cloudflare API 写验证记录；选择本地自建解析（权威 DNS）时，会写入左侧“本地自建解析”的托管域名。"
+            tooltip="证书机构会要求证明这个域名归你管理。选择 Cloudflare 时，面板会调用 Cloudflare 写入验证记录；选择本地自建解析时，面板会写入左侧“本地自建解析”的托管域名。"
           >
             <ResourceSelect
               aria-label="验证方式"
@@ -350,7 +350,7 @@ export function CertificateApplyModal({
               })}
             >
               <option value="cloudflare">Cloudflare 账号</option>
-              <option value="authoritative">本地自建解析（权威 DNS）</option>
+              <option value="authoritative">本地自建解析</option>
             </ResourceSelect>
           </ResourceField>
 
@@ -369,14 +369,14 @@ export function CertificateApplyModal({
 
         {dnsProviderMode === 'authoritative' ? (
           <ResourceField
-            label="权威 DNS 托管域名"
+            label="本地托管域名"
             hint={authoritativeZoneHint}
             error={form.formState.errors.dns_zone_id_ref?.message}
             tooltip="这里选择左侧“本地自建解析”中创建的域名，一般是根域名，例如 example.com。申请 www.example.com 或 *.example.com 证书时，都要选择 example.com。"
             container="div"
           >
             <ResourceSelect
-              aria-label="权威 DNS 托管域名"
+              aria-label="本地托管域名"
               disabled={
                 dnsZonesQuery.isLoading ||
                 dnsZonesQuery.isError ||
@@ -386,12 +386,12 @@ export function CertificateApplyModal({
             >
               <option value="">
                 {dnsZonesQuery.isLoading
-                  ? '正在加载权威 DNS 托管域名...'
+                  ? '正在加载本地托管域名...'
                   : dnsZonesQuery.isError
-                    ? '权威 DNS 托管域名加载失败'
+                    ? '本地托管域名加载失败'
                     : enabledAuthoritativeZones.length === 0
-                      ? '暂无权威 DNS 托管域名'
-                      : '请选择权威 DNS 托管域名'}
+                      ? '暂无本地托管域名'
+                      : '请选择本地托管域名'}
               </option>
               {authoritativeZones.map((zone) => (
                 <option key={zone.id} value={zone.id} disabled={!zone.enabled}>
@@ -407,12 +407,12 @@ export function CertificateApplyModal({
             </ResourceSelect>
             {enabledAuthoritativeZones.length === 0 ? (
               <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)] px-4 py-3 text-xs leading-5 text-[var(--foreground-secondary)]">
-                还没有可选择的权威 DNS 托管域名。
+                还没有可选择的本地托管域名。
                 <Link
                   href="/authoritative-dns"
                   className="ml-1 font-medium text-[var(--brand-primary)] hover:underline"
                 >
-                  去创建权威 DNS 托管域名
+                  去创建本地托管域名
                 </Link>
               </div>
             ) : null}
@@ -500,8 +500,9 @@ export function CertificateApplyModal({
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <ToggleField
-                  label="跳过 CNAME 检查"
-                  description="在执行 DNS-01 验证时不追踪 CNAME 记录。"
+                  label="跳过别名检查"
+                  description="如果验证记录通过别名跳到其它域名，开启后不会继续追踪。"
+                  tooltip="CNAME 也叫别名记录，会把一个域名指向另一个域名。大多数用户保持关闭即可。"
                   checked={form.watch('disable_cname')}
                   onChange={(checked) =>
                     form.setValue('disable_cname', checked)
@@ -509,7 +510,8 @@ export function CertificateApplyModal({
                 />
                 <ToggleField
                   label="跳过 DNS 前置检查"
-                  description="直接请求 Let's Encrypt 验证而不做本地校验。"
+                  description="不先在本地确认验证记录是否生效，直接让证书机构验证。"
+                  tooltip="一般保持关闭。只有确认本地检查被运营商缓存误判时，才建议临时开启。"
                   checked={form.watch('skip_dns')}
                   onChange={(checked) => form.setValue('skip_dns', checked)}
                 />

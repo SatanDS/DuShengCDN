@@ -11,6 +11,7 @@
 - 如果网站配置已经切到 `本地自建解析` 并绑定托管域名，从网站详情点 `申请证书` 会默认选中本地自建解析和同一个托管域名；托管域名列表异步加载完成后也会回填下拉框，避免显示为空。
 - 网站详情将“申请证书”和“导入证书”拆成两个入口，避免用户把上传证书和 ACME 申请混在一起。
 - 证书页文案继续统一：空状态明确提示可 `导入证书` 或 `申请证书`，证书来源把 `ACME 申请` 显示为更直观的 `自动申请`，导入弹窗标题统一为 `导入证书`。
+- 证书申请弹窗继续新手化：`权威 DNS 托管域名` 改为 `本地托管域名`，`本地自建解析（权威 DNS）` 改为 `本地自建解析`，`ACME`、`DNS-01`、`CNAME` 等术语从主文案中移出，改由 `!` 说明解释。
 - DNS 记录 A/AAAA 创建改成一个输入框一个 IP，可点 `+` 增加，MX 优先级加了白话说明。
 - 左侧入口与多数用户可见文案统一为 `本地自建解析`、`DNS 响应端`、`解析配置`、`按压力优先`、`攻击防护模式`、`API 密钥`。
 - 通用 `!` 说明图标保留悬停/聚焦说明，但不再抢占表单控件 label，避免辅助标签和测试误判。
@@ -27,6 +28,7 @@
 - `cd dushengcdn_server/web; pnpm tsc --noEmit --pretty false`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/navigation-utils.test.ts tests/unit/proxy-routes-page.test.tsx tests/unit/authoritative-dns-page.test.tsx tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx`
+- `cd dushengcdn_server/web; pnpm tsc --noEmit --pretty false`
 - `cd dushengcdn_server/web; pnpm lint`
 - `cd dushengcdn_server; go test ./model`
 - `cd dushengcdn_server; go test ./internal/dnsworker`

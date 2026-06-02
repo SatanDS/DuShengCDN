@@ -165,7 +165,7 @@ describe('WebsiteDetailPage', () => {
 
     expect(screen.getByLabelText('主域名')).toHaveValue('www.example.com');
     expect(screen.getByLabelText('验证方式')).toHaveValue('authoritative');
-    const zoneSelect = await screen.findByLabelText('权威 DNS 托管域名');
+    const zoneSelect = await screen.findByLabelText('本地托管域名');
     expect(zoneSelect).toBeEnabled();
     expect(zoneSelect).toHaveValue('11');
     expect(
