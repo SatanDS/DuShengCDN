@@ -1371,7 +1371,7 @@ export function SettingsPage() {
 
             <AppCard
               title="本地解析运行参数"
-              description="控制本地自建解析的默认缓存时间、解析配置有效期和节点数据有效期。"
+              description="控制解析缓存、响应端配置过期保护，以及节点状态数据多久还可以用于自动选 IP。"
               action={
                 <PrimaryButton
                   type="button"
@@ -1414,7 +1414,7 @@ export function SettingsPage() {
                           metricFreshness <= 0
                         ) {
                           throw new Error(
-                            '节点数据有效期必须为大于 0 的整数秒。',
+                            '节点状态数据有效时间必须为大于 0 的整数秒。',
                           );
                         }
 
@@ -1482,8 +1482,9 @@ export function SettingsPage() {
                   />
                 </ResourceField>
                 <ResourceField
-                  label="节点数据有效期（秒）"
-                  tooltip="节点连接数、CPU、内存等数据超过这个时间后不再参与负载判断，避免用旧数据做调度。"
+                  label="节点状态数据有效时间（秒）"
+                  hint="不是健康检查间隔。节点上报的连接数、处理器和内存数据超过这个时间后，就不再用于按压力选 IP。"
+                  tooltip="判断依据是节点最近一次上报的压力数据时间。超过该时间的数据会被视为过旧，避免系统拿旧压力数据继续做多节点智能解析。"
                 >
                   <ResourceInput
                     type="number"
@@ -1499,9 +1500,9 @@ export function SettingsPage() {
               </div>
               <div className="mt-5">
                 <ToggleField
-                  label="启用 Agent 探测调度门槛"
-                  description="开启后，本地自建解析只会使用仍有新鲜成功探测结果的边缘节点。"
-                  tooltip="Agent 会从边缘节点主动探测 DNS 响应端。如果开启这个门槛，探测失败或探测过期的节点不会被选为解析返回 IP。"
+                  label="按响应端探测结果筛选节点"
+                  description="开启后，本地自建解析只会使用最近探测成功的边缘节点。"
+                  tooltip="边缘节点会主动探测 DNS 响应端。如果开启这个筛选，探测失败或探测结果过期的节点不会被选为解析返回 IP。"
                   checked={operationFields.GSLBProbeSchedulingEnabled}
                   onChange={(checked) =>
                     setOperationFields((previous) => ({
