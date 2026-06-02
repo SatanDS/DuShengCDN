@@ -27,6 +27,22 @@ export function buildNodePoolOptions(
   });
 }
 
+export function getNodesForPool<T extends { pool_name?: string | null }>(
+  nodes: T[],
+  poolName: string,
+) {
+  const normalizedPoolName = poolName.trim() || 'default';
+  return nodes.filter(
+    (node) => (node.pool_name?.trim() || 'default') === normalizedPoolName,
+  );
+}
+
+export function formatNodeName(
+  node: { name?: string | null; node_id?: string | null; ip?: string | null },
+) {
+  return node.name?.trim() || node.node_id?.trim() || node.ip?.trim() || '未命名节点';
+}
+
 export function NodePoolSelect({
   value,
   options,

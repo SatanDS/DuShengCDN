@@ -237,7 +237,66 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [buildRoute()],
+                data: [
+                  buildRoute({
+                    node_pool: '香港',
+                  }),
+                  buildRoute({
+                    id: 10,
+                    site_name: 'gslb-site',
+                    domain: 'gslb.example.com',
+                    domains: ['gslb.example.com'],
+                    primary_domain: 'gslb.example.com',
+                    domain_count: 1,
+                    gslb_enabled: true,
+                    gslb_policy: {
+                      ...buildRoute().gslb_policy,
+                      pools: [
+                        {
+                          name: '香港',
+                          weight: 80,
+                          countries: [],
+                          source_cidrs: [],
+                          enabled: true,
+                        },
+                        {
+                          name: '欧洲',
+                          weight: 20,
+                          countries: [],
+                          source_cidrs: [],
+                          enabled: true,
+                        },
+                      ],
+                    },
+                  }),
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/nodes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    id: 1,
+                    node_id: 'node-hk',
+                    name: 'Aliyun HK',
+                    ip: '47.83.141.29',
+                    pool_name: '香港',
+                  },
+                  {
+                    id: 2,
+                    node_id: 'node-eu',
+                    name: 'AKKO GB',
+                    ip: '38.59.224.50',
+                    pool_name: '欧洲',
+                  },
+                ],
               }),
             ),
           );
@@ -265,7 +324,10 @@ describe('Proxy route website pages', () => {
 
     expect(await screen.findByText('marketing-site')).toBeInTheDocument();
     expect(screen.getAllByText(/app\.example\.com/).length).toBeGreaterThan(0);
-    expect(screen.getByRole('link')).toHaveAttribute(
+    expect(await screen.findByText('香港 · Aliyun HK')).toBeInTheDocument();
+    expect(screen.getByText('负载均衡')).toBeInTheDocument();
+    expect(screen.getByText('香港 / 欧洲')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: '配置' })[0]).toHaveAttribute(
       'href',
       '/proxy-route/detail?id=9&section=domains',
     );
@@ -492,7 +554,22 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [{ id: 1, pool_name: 'edge-hk' }],
+                data: [
+                  {
+                    id: 1,
+                    node_id: 'node-default',
+                    name: 'Default Edge',
+                    ip: '203.0.113.10',
+                    pool_name: 'default',
+                  },
+                  {
+                    id: 2,
+                    node_id: 'node-hk',
+                    name: 'HK Edge',
+                    ip: '203.0.113.20',
+                    pool_name: 'edge-hk',
+                  },
+                ],
               }),
             ),
           );
@@ -694,7 +771,22 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [{ id: 1, pool_name: 'edge-hk' }],
+                data: [
+                  {
+                    id: 1,
+                    node_id: 'node-default',
+                    name: 'Default Edge',
+                    ip: '203.0.113.10',
+                    pool_name: 'default',
+                  },
+                  {
+                    id: 2,
+                    node_id: 'node-hk',
+                    name: 'HK Edge',
+                    ip: '203.0.113.20',
+                    pool_name: 'edge-hk',
+                  },
+                ],
               }),
             ),
           );
@@ -827,7 +919,22 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [{ id: 1, pool_name: 'edge-hk' }],
+                data: [
+                  {
+                    id: 1,
+                    node_id: 'node-default',
+                    name: 'Default Edge',
+                    ip: '203.0.113.10',
+                    pool_name: 'default',
+                  },
+                  {
+                    id: 2,
+                    node_id: 'node-hk',
+                    name: 'HK Edge',
+                    ip: '203.0.113.20',
+                    pool_name: 'edge-hk',
+                  },
+                ],
               }),
             ),
           );
@@ -873,6 +980,9 @@ describe('Proxy route website pages', () => {
     expect(
       await screen.findByRole('heading', { name: '反向代理' }),
     ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText('池内节点')).toHaveValue('node-default');
+    });
 
     await waitFor(() => {
       expect(
@@ -880,7 +990,10 @@ describe('Proxy route website pages', () => {
       ).toBeInTheDocument();
     });
     await user.selectOptions(screen.getByLabelText('节点池选择'), 'edge-hk');
-    expect(screen.getByLabelText('节点池名称')).toHaveValue('edge-hk');
+    expect(screen.getByLabelText('节点池选择')).toHaveValue('edge-hk');
+    await waitFor(() => {
+      expect(screen.getByLabelText('池内节点')).toHaveValue('node-hk');
+    });
 
     const saveButton = document.querySelector(
       'button[form="proxy-route-proxy-form"]',

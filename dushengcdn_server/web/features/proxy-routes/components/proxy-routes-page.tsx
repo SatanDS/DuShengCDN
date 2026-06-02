@@ -21,6 +21,12 @@ import {
 import { getDNSZones } from '@/features/authoritative-dns/api/authoritative-dns';
 import type { DNSZoneItem } from '@/features/authoritative-dns/types';
 import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
+import { getNodes } from '@/features/nodes/api/nodes';
+import type { NodeItem } from '@/features/nodes/types';
+import {
+  formatNodeName,
+  getNodesForPool,
+} from '@/features/proxy-routes/components/node-pool-select';
 import { ProxyRouteCreateDrawer } from '@/features/proxy-routes/components/proxy-route-create-drawer';
 import {
   BasicAuthSection,
@@ -172,6 +178,35 @@ function getFeatureStatus(route: ProxyRouteItem, section: FeatureSectionKey) {
         variant: route.basic_auth_enabled ? 'success' : 'warning',
       } as const;
   }
+}
+
+function buildRouteNodePoolSummary(route: ProxyRouteItem, nodes: NodeItem[]) {
+  if (route.gslb_enabled) {
+    const pools =
+      route.gslb_policy?.pools
+        ?.filter((pool) => pool.enabled !== false)
+        .map((pool) => pool.name.trim())
+        .filter(Boolean) ?? [];
+    const uniquePools = Array.from(new Set(pools));
+    return {
+      label: '负载均衡',
+      value:
+        uniquePools.length > 0
+          ? uniquePools.join(' / ')
+          : route.node_pool || 'default',
+    };
+  }
+
+  const poolName = route.node_pool || 'default';
+  const poolNodes = getNodesForPool(nodes, poolName);
+  const nodeNames = poolNodes.map(formatNodeName);
+  return {
+    label: '节点池',
+    value:
+      nodeNames.length > 0
+        ? `${poolName} · ${nodeNames.join(' / ')}`
+        : `${poolName} · 暂无节点`,
+  };
 }
 
 function FeatureSectionList({
@@ -485,6 +520,10 @@ export function ProxyRoutesPage() {
     queryFn: getDNSZones,
     enabled: activeFeatureSection === 'dns',
   });
+  const nodesQuery = useQuery({
+    queryKey: ['nodes'],
+    queryFn: getNodes,
+  });
 
   const deleteMutation = useMutation({
     mutationFn: deleteProxyRoute,
@@ -547,6 +586,7 @@ export function ProxyRoutesPage() {
   });
 
   const routes = useMemo(() => routesQuery.data ?? [], [routesQuery.data]);
+  const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
   const filteredRoutes = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLowerCase();
     if (!normalizedKeyword) {
@@ -806,75 +846,85 @@ export function ProxyRoutesPage() {
                       key={route.id}
                       className="rounded-[28px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
                     >
-                      <div className="flex flex-col gap-5">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="space-y-3">
-                            <div className="space-y-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <h2 className="text-lg font-semibold text-[var(--foreground-primary)]">
-                                  {route.site_name}
-                                </h2>
-                                {getWebsiteStatusBadges(route).map((badge) => (
-                                  <StatusBadge
-                                    key={`${route.id}-${badge.label}`}
-                                    label={badge.label}
-                                    variant={badge.variant}
-                                  />
-                                ))}
+                      {(() => {
+                        const nodePoolSummary = buildRouteNodePoolSummary(
+                          route,
+                          nodes,
+                        );
+                        return (
+                          <div className="flex flex-col gap-5">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="space-y-3">
+                                <div className="space-y-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <h2 className="text-lg font-semibold text-[var(--foreground-primary)]">
+                                      {route.site_name}
+                                    </h2>
+                                    {getWebsiteStatusBadges(route).map(
+                                      (badge) => (
+                                        <StatusBadge
+                                          key={`${route.id}-${badge.label}`}
+                                          label={badge.label}
+                                          variant={badge.variant}
+                                        />
+                                      ),
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap gap-2">
+                                <Link
+                                  href={`/proxy-route/detail?id=${route.id}&section=${preferredSection}`}
+                                  className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
+                                >
+                                  配置
+                                </Link>
+                                <DangerButton
+                                  type="button"
+                                  onClick={() => handleDelete(route)}
+                                  disabled={deleteMutation.isPending}
+                                >
+                                  删除
+                                </DangerButton>
                               </div>
                             </div>
-                          </div>
 
-                          <div className="flex flex-wrap gap-2">
-                            <Link
-                              href={`/proxy-route/detail?id=${route.id}&section=${preferredSection}`}
-                              className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
-                            >
-                              配置
-                            </Link>
-                            <DangerButton
-                              type="button"
-                              onClick={() => handleDelete(route)}
-                              disabled={deleteMutation.isPending}
-                            >
-                              删除
-                            </DangerButton>
-                          </div>
-                        </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+                                <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+                                  域名列表
+                                </p>
+                                <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                                  {route.domains.join(' / ')}
+                                </p>
+                              </div>
 
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                            <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
-                              域名列表
-                            </p>
-                            <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                              {route.domains.join(' / ')}
-                            </p>
-                          </div>
+                              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+                                <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+                                  {nodePoolSummary.label}
+                                </p>
+                                <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                                  {nodePoolSummary.value}
+                                </p>
+                              </div>
 
-                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                            <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
-                              节点池
-                            </p>
-                            <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                              {route.node_pool || 'default'}
+                              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+                                <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
+                                  源站摘要
+                                </p>
+                                <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                                  {getUpstreamSummary(route)}
+                                </p>
+                              </div>
+                            </div>
+
+                            <p className="text-sm text-[var(--foreground-secondary)]">
+                              {route.remark || null}
                             </p>
                           </div>
-
-                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
-                            <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
-                              源站摘要
-                            </p>
-                            <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                              {getUpstreamSummary(route)}
-                            </p>
-                          </div>
-                        </div>
-
-                        <p className="text-sm text-[var(--foreground-secondary)]">
-                          {route.remark || null}
-                        </p>
-                      </div>
+                        );
+                      })()}
                     </article>
                   ))}
                 </div>

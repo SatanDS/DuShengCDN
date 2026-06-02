@@ -21,6 +21,7 @@ import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import type { DnsAccountItem } from '@/features/dns-accounts/types';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
 import { getNodes } from '@/features/nodes/api/nodes';
+import type { NodeItem } from '@/features/nodes/types';
 import {
   getProxyRoute,
   purgeProxyRouteCache,
@@ -34,6 +35,8 @@ import {
 } from '@/features/proxy-routes/components/domain-list-input';
 import {
   buildNodePoolOptions,
+  formatNodeName,
+  getNodesForPool,
   NodePoolSelect,
 } from '@/features/proxy-routes/components/node-pool-select';
 import {
@@ -755,11 +758,13 @@ function ReverseProxySection({
   saving,
   onSave,
   nodePoolOptions,
+  nodes = [],
   nodePoolsLoading,
 }: {
   route: ProxyRouteItem;
   saving: boolean;
   nodePoolOptions: string[];
+  nodes?: NodeItem[];
   nodePoolsLoading: boolean;
   onSave: SaveHandler;
 }) {
@@ -783,6 +788,26 @@ function ReverseProxySection({
       remark: route.remark || '',
     });
   }, [form, route]);
+
+  const selectedNodePool = form.watch('node_pool');
+  const normalizedSelectedNodePool = selectedNodePool.trim() || 'default';
+  const selectedNodePoolUnknown =
+    normalizedSelectedNodePool !== '' &&
+    !nodePoolOptions.includes(normalizedSelectedNodePool);
+  const nodesInSelectedPool = useMemo(
+    () => getNodesForPool(nodes, normalizedSelectedNodePool),
+    [nodes, normalizedSelectedNodePool],
+  );
+  const [selectedNodeID, setSelectedNodeID] = useState('');
+
+  useEffect(() => {
+    setSelectedNodeID((current) => {
+      if (nodesInSelectedPool.some((node) => node.node_id === current)) {
+        return current;
+      }
+      return nodesInSelectedPool[0]?.node_id ?? '';
+    });
+  }, [nodesInSelectedPool]);
 
   return (
     <ConfigSectionShell
@@ -834,27 +859,70 @@ function ReverseProxySection({
           />
         </ResourceField>
 
-        <ResourceField
-          label="默认节点池"
-          hint={autoDNSNodePoolHint}
-          error={form.formState.errors.node_pool?.message}
-          container="div"
-        >
-          <Controller
-            control={form.control}
-            name="node_pool"
-            render={({ field }) => (
-              <NodePoolSelect
-                name={field.name}
-                value={field.value}
-                options={nodePoolOptions}
-                disabled={nodePoolsLoading}
-                onChange={field.onChange}
-                onBlur={field.onBlur}
-              />
-            )}
-          />
-        </ResourceField>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(260px,420px)]">
+          <ResourceField
+            label="默认节点池"
+            hint={autoDNSNodePoolHint}
+            error={form.formState.errors.node_pool?.message}
+            container="div"
+          >
+            <ResourceSelect
+              name="node_pool"
+              aria-label="节点池选择"
+              value={normalizedSelectedNodePool}
+              disabled={nodePoolsLoading}
+              onChange={(event) =>
+                form.setValue('node_pool', event.target.value, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+            >
+              {selectedNodePoolUnknown ? (
+                <option value={normalizedSelectedNodePool}>
+                  {normalizedSelectedNodePool}（未找到）
+                </option>
+              ) : null}
+              {nodePoolOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </ResourceSelect>
+            {selectedNodePoolUnknown ? (
+              <p className="mt-2 text-xs text-[var(--status-warning-foreground)]">
+                当前节点池不在现有节点池列表里，请从下拉选择真实存在的节点池。
+              </p>
+            ) : null}
+          </ResourceField>
+
+          <ResourceField
+            label="池内节点"
+            hint={
+              nodesInSelectedPool.length > 0
+                ? '根据左侧节点池实时同步，只用于确认该池真实节点。'
+                : '当前节点池里还没有真实节点。'
+            }
+            container="div"
+          >
+            <ResourceSelect
+              aria-label="池内节点"
+              value={selectedNodeID}
+              disabled={nodePoolsLoading || nodesInSelectedPool.length === 0}
+              onChange={(event) => setSelectedNodeID(event.target.value)}
+            >
+              {nodesInSelectedPool.length === 0 ? (
+                <option value="">暂无节点</option>
+              ) : (
+                nodesInSelectedPool.map((node) => (
+                  <option key={node.node_id || node.id} value={node.node_id}>
+                    {formatNodeName(node)}
+                  </option>
+                ))
+              )}
+            </ResourceSelect>
+          </ResourceField>
+        </div>
 
         <ResourceField
           label="Origin Host Header"
@@ -3261,6 +3329,7 @@ export function ProxyRouteConfigPage({
     () => buildNodePoolOptions(nodesQuery.data ?? []),
     [nodesQuery.data],
   );
+  const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
 
   if (!Number.isFinite(numericRouteID) || numericRouteID <= 0) {
     return (
@@ -3418,6 +3487,7 @@ export function ProxyRouteConfigPage({
               route={route}
               saving={saveMutation.isPending}
               nodePoolOptions={nodePoolOptions}
+              nodes={nodes}
               nodePoolsLoading={nodesQuery.isLoading}
               onSave={(payload, context) =>
                 saveMutation.mutate({ payload, context })
