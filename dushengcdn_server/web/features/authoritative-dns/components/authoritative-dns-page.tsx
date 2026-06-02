@@ -11,6 +11,7 @@ import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
+import { RankChart } from '@/components/data/rank-chart';
 import { TrendChart } from '@/components/data/trend-chart';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
@@ -3229,34 +3230,39 @@ function DNSObservabilityPanel({
           consistency={summary.snapshot_consistency}
         />
         <DNSWorkerHealthPanel summary={summary} />
-        <CounterList
+        <CounterChart
           title="返回码"
           items={summary.rcode_breakdown}
           total={summary.total_queries}
+          color="#2563eb"
         />
-        <CounterList
+        <CounterChart
           title="返回目标"
           items={summary.top_targets}
           total={summary.dynamic_queries || summary.total_queries}
           emptyText="暂无 A/AAAA 目标分布。"
+          color="#0ea5e9"
         />
-        <CounterList
+        <CounterChart
           title="响应端查询"
           items={summary.worker_breakdown}
           total={summary.total_queries}
+          color="#22c55e"
         />
-        <CounterList
+        <CounterChart
           title="动态站点"
           items={summary.route_breakdown}
           total={summary.dynamic_queries}
           emptyText="暂无动态解析站点查询。"
+          color="#f59e0b"
         />
-        <CounterList
+        <CounterChart
           title="来源作用域"
           items={summary.source_scope_breakdown}
           total={summary.total_queries}
           emptyText="暂无来源作用域分布。"
           formatLabel={(item) => formatSourceScopeLabel(item.key || item.label)}
+          color="#14b8a6"
         />
       </div>
     </AppCard>
@@ -3667,52 +3673,74 @@ function DNSSnapshotConsistencyPanel({
   );
 }
 
-function CounterList({
+function CounterChart({
   title,
   items,
   total,
+  color,
   emptyText = '暂无数据。',
   formatLabel,
 }: {
   title: string;
   items: DNSObservabilityCounterItem[];
   total: number;
+  color: string;
   emptyText?: string;
   formatLabel?: (item: DNSObservabilityCounterItem) => string;
 }) {
+  const visibleItems = items.map((item) => ({
+    ...item,
+    label: formatLabel ? formatLabel(item) : item.label || item.key || '未命名',
+  }));
+  const chartItems = visibleItems
+    .map((item) => ({ label: item.label, value: item.count }))
+    .reverse();
+  const topItems = visibleItems.slice(0, 3);
+
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4">
-      <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
-        {title}
-      </h3>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
+          {title}
+        </h3>
+        <span className="text-xs text-[var(--foreground-muted)]">
+          共 {formatCount(total)} 次
+        </span>
+      </div>
       {items.length === 0 ? (
         <p className="mt-3 text-sm text-[var(--foreground-secondary)]">
           {emptyText}
         </p>
       ) : (
-        <div className="mt-3 space-y-3">
-          {items.map((item) => {
-            const percent =
-              total > 0 ? Math.min(100, (item.count / total) * 100) : 0;
-            return (
-              <div key={`${title}-${item.key}`} className="space-y-1">
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <span className="min-w-0 truncate text-[var(--foreground-primary)]">
-                    {formatLabel ? formatLabel(item) : item.label}
+        <div className="mt-3 space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {topItems.map((item) => (
+              <div
+                key={`${title}-${item.key}`}
+                className="inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-xs"
+              >
+                <span className="truncate text-[var(--foreground-secondary)]">
+                  {item.label}
+                </span>
+                <strong className="shrink-0 font-semibold text-[var(--foreground-primary)]">
+                  {formatCount(item.count)}
+                </strong>
+                {total > 0 ? (
+                  <span className="shrink-0 text-[var(--foreground-muted)]">
+                    {formatPercent(item.count, total)}
                   </span>
-                  <span className="shrink-0 text-[var(--foreground-secondary)]">
-                    {formatCount(item.count)}
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-muted)]">
-                  <div
-                    className="h-full rounded-full bg-[var(--accent-primary)]"
-                    style={{ width: `${percent}%` }}
-                  />
-                </div>
+                ) : null}
               </div>
-            );
-          })}
+            ))}
+          </div>
+          <div className="overflow-hidden rounded-[28px] border border-[var(--border-default)] bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0))] px-3 py-3">
+            <RankChart
+              items={chartItems}
+              color={color}
+              valueFormatter={formatCount}
+              emptyMessage={emptyText}
+            />
+          </div>
         </div>
       )}
     </div>

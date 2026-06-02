@@ -930,7 +930,17 @@ function MeteringTab({
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <DistributionList title="TOP 地区" items={data.top_regions} />
+        <AppCard title="TOP 地区">
+          <RankChart
+            items={data.top_regions.map((item) => ({
+              label: item.key,
+              value: item.value,
+            }))}
+            color="#14b8a6"
+            valueFormatter={formatCompactNumber}
+            emptyMessage="暂无地区排行"
+          />
+        </AppCard>
         <AppCard title="流量排行图">
           <RankChart
             items={data.site_traffic.map((item) => ({
