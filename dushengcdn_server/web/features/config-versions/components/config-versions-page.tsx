@@ -58,14 +58,33 @@ function truncateChecksum(checksum: string) {
 }
 
 function hasConfigDiff(diff: ConfigDiffResult) {
+  if (typeof diff.runtime_config_changed === 'boolean') {
+    return diff.runtime_config_changed;
+  }
+
+  if (!diff.active_version) {
+    return true;
+  }
+
   return (
     diff.added_domains.length > 0 ||
     diff.removed_domains.length > 0 ||
     diff.modified_domains.length > 0 ||
     diff.main_config_changed ||
-    diff.changed_option_keys.length > 0 ||
-    !diff.active_version
+    diff.changed_option_keys.length > 0
   );
+}
+
+function hasDraftDiff(diff: ConfigDiffResult) {
+  if (typeof diff.snapshot_changed === 'boolean') {
+    return diff.snapshot_changed || hasConfigDiff(diff);
+  }
+
+  if (!diff.active_version) {
+    return true;
+  }
+
+  return hasConfigDiff(diff);
 }
 
 function DiffList({ title, items }: { title: string; items: string[] }) {
@@ -252,7 +271,11 @@ function PublishPreviewCard({
         {!canPublish ? (
           <InlineMessage
             tone="info"
-            message="当前规则与已激活版本一致，已阻止重复发布。"
+            message={
+              hasDraftDiff(diff)
+                ? '当前只有面板展示信息变化，不会改变节点运行配置，无需普通发布；如需留存快照，可使用强制重新发布。'
+                : '当前运行配置与已激活版本一致，已阻止重复发布。'
+            }
           />
         ) : null}
 

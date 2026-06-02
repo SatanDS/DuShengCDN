@@ -108,7 +108,7 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 	if repeatPublishResp.Success {
 		t.Fatal("expected repeated publish without route changes to be rejected")
 	}
-	if !strings.Contains(repeatPublishResp.Message, "当前规则没有变更") {
+	if !strings.Contains(repeatPublishResp.Message, "当前运行配置没有变更") {
 		t.Fatalf("unexpected repeated publish message: %s", repeatPublishResp.Message)
 	}
 

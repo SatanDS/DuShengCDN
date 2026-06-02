@@ -183,6 +183,8 @@ function buildDiff(overrides: Record<string, unknown> = {}) {
     removed_domains: [],
     modified_domains: [],
     main_config_changed: false,
+    snapshot_changed: false,
+    runtime_config_changed: false,
     changed_option_keys: [],
     changed_option_details: [],
     current_website_count: 1,
@@ -310,6 +312,8 @@ describe('Proxy route website pages', () => {
                 message: '',
                 data: buildDiff({
                   modified_sites: ['marketing-site'],
+                  snapshot_changed: true,
+                  runtime_config_changed: true,
                 }),
               }),
             ),
@@ -331,6 +335,83 @@ describe('Proxy route website pages', () => {
       'href',
       '/proxy-route/detail?id=9&section=domains',
     );
+  });
+
+  it('does not publish control panel only draft changes', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes('/proxy-routes/')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: '',
+              data: [buildRoute()],
+            }),
+          ),
+        );
+      }
+
+      if (url.includes('/nodes/')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: '',
+              data: [],
+            }),
+          ),
+        );
+      }
+
+      if (url.includes('/config-versions/diff')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: '',
+              data: buildDiff({
+                snapshot_changed: true,
+                runtime_config_changed: false,
+              }),
+            }),
+          ),
+        );
+      }
+
+      if (url.includes('/config-versions/publish')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: false,
+              message: 'publish should not be called',
+            }),
+          ),
+        );
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithProviders(<ProxyRoutesPage />);
+
+    expect(await screen.findByText('仅面板信息变更')).toBeInTheDocument();
+    expect(await screen.findByText('无需发布')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '发布配置' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('当前只有面板展示信息变更，不会改变节点运行配置，无需发布。'),
+      ).toBeInTheDocument();
+    });
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes('/config-versions/publish'),
+      ),
+    ).toBe(false);
   });
 
   it('renders selected feature section as an expandable configuration page', async () => {

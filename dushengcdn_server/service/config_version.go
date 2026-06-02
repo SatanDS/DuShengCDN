@@ -53,6 +53,8 @@ type ConfigDiffResult struct {
 	RemovedDomains       []string               `json:"removed_domains"`
 	ModifiedDomains      []string               `json:"modified_domains"`
 	MainConfigChanged    bool                   `json:"main_config_changed"`
+	SnapshotChanged      bool                   `json:"snapshot_changed"`
+	RuntimeConfigChanged bool                   `json:"runtime_config_changed"`
 	ChangedOptionKeys    []string               `json:"changed_option_keys"`
 	ChangedOptionDetails []ConfigOptionDiffItem `json:"changed_option_details"`
 	CurrentWebsiteCount  int                    `json:"current_website_count"`
@@ -279,6 +281,8 @@ func DiffConfigVersion() (*ConfigDiffResult, error) {
 			result.MainConfigChanged = true
 			result.ChangedOptionKeys = openRestyOptionKeys()
 			result.ChangedOptionDetails = buildInitialOpenRestyOptionDiffs(bundle.OpenRestyConfig)
+			result.SnapshotChanged = len(bundle.SnapshotRoutes) > 0
+			result.RuntimeConfigChanged = len(bundle.Routes) > 0
 			sort.Strings(result.AddedSites)
 			sort.Strings(result.AddedDomains)
 			sort.Strings(result.ChangedOptionKeys)
@@ -327,8 +331,10 @@ func DiffConfigVersion() (*ConfigDiffResult, error) {
 		}
 	}
 	result.MainConfigChanged = activeVersion.MainConfig != bundle.MainConfig
+	result.RuntimeConfigChanged = activeVersion.Checksum != bundle.Checksum
 	result.ChangedOptionDetails = diffOpenRestyOptionDetails(activeSnapshot.OpenRestyConfig, bundle.OpenRestyConfig)
 	result.ChangedOptionKeys = extractOptionDiffKeys(result.ChangedOptionDetails)
+	result.SnapshotChanged = snapshotRoutesStateChanged(activeSnapshot.Routes, bundle.SnapshotRoutes) || len(result.ChangedOptionDetails) > 0
 	sort.Strings(result.AddedSites)
 	sort.Strings(result.RemovedSites)
 	sort.Strings(result.ModifiedSites)
@@ -364,7 +370,7 @@ func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) 
 	}
 	activeVersion, err := model.GetActiveConfigVersion()
 	if !force && err == nil && activeVersion.Checksum == bundle.Checksum {
-		return nil, errors.New("当前规则没有变更，不能重复发布")
+		return nil, errors.New("当前运行配置没有变更，无需重复发布")
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -817,6 +823,29 @@ func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
 		return false
 	}
 	return true
+}
+
+func snapshotRoutesStateChanged(left []snapshotRoute, right []snapshotRoute) bool {
+	if len(left) != len(right) {
+		return true
+	}
+	normalizedLeft := normalizeSnapshotRoutes(append([]snapshotRoute{}, left...))
+	normalizedRight := normalizeSnapshotRoutes(append([]snapshotRoute{}, right...))
+	sort.Slice(normalizedLeft, func(i, j int) bool {
+		return normalizedLeft[i].SiteName < normalizedLeft[j].SiteName
+	})
+	sort.Slice(normalizedRight, func(i, j int) bool {
+		return normalizedRight[i].SiteName < normalizedRight[j].SiteName
+	})
+	for index := range normalizedLeft {
+		if !snapshotRouteConfigEqual(normalizedLeft[index], normalizedRight[index]) {
+			return true
+		}
+		if strings.TrimSpace(normalizedLeft[index].Remark) != strings.TrimSpace(normalizedRight[index].Remark) {
+			return true
+		}
+	}
+	return false
 }
 
 func snapshotPoWConfigEqual(left *ProxyRoutePoWConfig, right *ProxyRoutePoWConfig) bool {

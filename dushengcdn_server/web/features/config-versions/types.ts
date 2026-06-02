@@ -39,6 +39,8 @@ export interface ConfigDiffResult {
   removed_domains: string[];
   modified_domains: string[];
   main_config_changed: boolean;
+  snapshot_changed: boolean;
+  runtime_config_changed: boolean;
   changed_option_keys: string[];
   changed_option_details: ConfigOptionDiffItem[];
   current_website_count: number;

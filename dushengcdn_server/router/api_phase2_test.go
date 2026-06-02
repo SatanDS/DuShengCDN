@@ -761,6 +761,12 @@ func TestPhase2CustomHeadersPreviewAndDiffLifecycle(t *testing.T) {
 	if !ok || len(addedSites) != 1 || addedSites[0].(string) != "new-preview.example.com" {
 		t.Fatalf("unexpected added sites: %#v", diff["added_sites"])
 	}
+	if snapshotChanged, ok := diff["snapshot_changed"].(bool); !ok || !snapshotChanged {
+		t.Fatalf("expected snapshot_changed=true, got %#v", diff["snapshot_changed"])
+	}
+	if runtimeConfigChanged, ok := diff["runtime_config_changed"].(bool); !ok || !runtimeConfigChanged {
+		t.Fatalf("expected runtime_config_changed=true, got %#v", diff["runtime_config_changed"])
+	}
 }
 
 func TestPhase2ProxyRouteWebsiteDetailAndLimits(t *testing.T) {

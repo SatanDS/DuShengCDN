@@ -578,6 +578,70 @@ func TestDiffConfigVersionTracksAddedDomainWithinWebsite(t *testing.T) {
 	if len(diff.ModifiedSites) != 1 || diff.ModifiedSites[0] != "main-site" {
 		t.Fatalf("unexpected modified sites: %#v", diff.ModifiedSites)
 	}
+	if !diff.SnapshotChanged {
+		t.Fatal("expected added domain to mark snapshot changed")
+	}
+	if !diff.RuntimeConfigChanged {
+		t.Fatal("expected added domain to mark runtime config changed")
+	}
+}
+
+func TestDiffConfigVersionSeparatesSnapshotOnlyChanges(t *testing.T) {
+	setupServiceTestDB(t)
+
+	route, err := CreateProxyRoute(ProxyRouteInput{
+		SiteName:  "panel-name",
+		Domains:   []string{"panel-only.example.com"},
+		OriginURL: "http://10.0.0.8:8080",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+	firstRelease, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+
+	if _, err = UpdateProxyRoute(route.ID, ProxyRouteInput{
+		SiteName:  "panel-name",
+		Domains:   []string{"panel-only.example.com"},
+		OriginURL: "http://10.0.0.8:8080",
+		Enabled:   true,
+		Remark:    "only visible in the control panel",
+	}); err != nil {
+		t.Fatalf("UpdateProxyRoute failed: %v", err)
+	}
+
+	diff, err := DiffConfigVersion()
+	if err != nil {
+		t.Fatalf("DiffConfigVersion failed: %v", err)
+	}
+	if !diff.SnapshotChanged {
+		t.Fatal("expected remark change to mark snapshot changed")
+	}
+	if diff.RuntimeConfigChanged {
+		t.Fatal("expected remark change to leave rendered runtime config unchanged")
+	}
+	if len(diff.AddedSites) != 0 || len(diff.RemovedSites) != 0 || len(diff.ModifiedSites) != 0 {
+		t.Fatalf("expected no runtime site diff for remark-only change, got added=%#v removed=%#v modified=%#v", diff.AddedSites, diff.RemovedSites, diff.ModifiedSites)
+	}
+	if len(diff.AddedDomains) != 0 || len(diff.RemovedDomains) != 0 || len(diff.ModifiedDomains) != 0 {
+		t.Fatalf("expected no runtime domain diff for remark-only change, got added=%#v removed=%#v modified=%#v", diff.AddedDomains, diff.RemovedDomains, diff.ModifiedDomains)
+	}
+	if changed, err := HasConfigChanges(); err != nil || changed {
+		t.Fatalf("expected HasConfigChanges=false for snapshot-only change, changed=%v err=%v", changed, err)
+	}
+	if _, err = PublishConfigVersion("root", false); err == nil || !strings.Contains(err.Error(), "当前运行配置没有变更") {
+		t.Fatalf("expected runtime no-change publish error, got %v", err)
+	}
+	forcedRelease, err := PublishConfigVersion("root", true)
+	if err != nil {
+		t.Fatalf("forced PublishConfigVersion failed: %v", err)
+	}
+	if firstRelease.Version.Checksum != forcedRelease.Version.Checksum {
+		t.Fatal("expected forced snapshot-only publish to keep runtime checksum")
+	}
 }
 
 func TestCreateProxyRouteRejectsInvalidRateLimitFields(t *testing.T) {

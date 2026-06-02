@@ -84,7 +84,7 @@ function isFeatureSection(
   return featureSectionKeys.includes(section as FeatureSectionKey);
 }
 
-function hasConfigChanges(diff: {
+type ConfigDiffState = {
   active_version?: string;
   added_sites: string[];
   removed_sites: string[];
@@ -93,8 +93,22 @@ function hasConfigChanges(diff: {
   removed_domains: string[];
   modified_domains: string[];
   main_config_changed: boolean;
+  snapshot_changed?: boolean;
+  runtime_config_changed?: boolean;
   changed_option_keys: string[];
-}) {
+};
+
+function hasDraftChanges(diff: ConfigDiffState) {
+  if (typeof diff.snapshot_changed === 'boolean') {
+    return (
+      diff.snapshot_changed ||
+      diff.runtime_config_changed === true ||
+      diff.main_config_changed ||
+      diff.changed_option_keys.length > 0 ||
+      !diff.active_version
+    );
+  }
+
   return (
     diff.added_sites.length > 0 ||
     diff.removed_sites.length > 0 ||
@@ -106,6 +120,70 @@ function hasConfigChanges(diff: {
     diff.changed_option_keys.length > 0 ||
     !diff.active_version
   );
+}
+
+function hasRuntimeConfigChanges(diff: ConfigDiffState) {
+  if (typeof diff.runtime_config_changed === 'boolean') {
+    return diff.runtime_config_changed;
+  }
+
+  if (!diff.active_version) {
+    return true;
+  }
+
+  return hasDraftChanges(diff);
+}
+
+function getDraftStatus(diff: ConfigDiffState | undefined) {
+  if (!diff) {
+    return {
+      label: '读取中',
+      variant: 'info' as const,
+      message: '正在读取配置差异...',
+    };
+  }
+
+  if (hasRuntimeConfigChanges(diff)) {
+    const siteChangeCount =
+      diff.added_sites.length +
+      diff.removed_sites.length +
+      diff.modified_sites.length;
+    const domainChangeCount =
+      diff.added_domains.length +
+      diff.removed_domains.length +
+      diff.modified_domains.length;
+    const summaryItems = [
+      siteChangeCount > 0 ? `网站 ${siteChangeCount} 项` : '',
+      domainChangeCount > 0 ? `域名 ${domainChangeCount} 项` : '',
+      diff.changed_option_keys.length > 0
+        ? `代理服务参数 ${diff.changed_option_keys.length} 项`
+        : '',
+      diff.main_config_changed ? '主配置' : '',
+    ].filter(Boolean);
+
+    return {
+      label: '有待发布变更',
+      variant: 'warning' as const,
+      message:
+        summaryItems.length > 0
+          ? `待发布：${summaryItems.join('，')}。发布后 Agent 才会应用。`
+          : '运行配置已变更，发布后 Agent 才会应用。',
+    };
+  }
+
+  if (hasDraftChanges(diff)) {
+    return {
+      label: '仅面板信息变更',
+      variant: 'info' as const,
+      message: '当前变更不改变节点运行配置，无需发布到 Agent。',
+    };
+  }
+
+  return {
+    label: '已与线上一致',
+    variant: 'success' as const,
+    message: '当前运行配置已与激活版本一致。',
+  };
 }
 
 function isFeatureEnabled(route: ProxyRouteItem, section: FeatureSectionKey) {
@@ -614,6 +692,7 @@ export function ProxyRoutesPage() {
     0,
   );
   const enabledCount = routes.filter((route) => route.enabled).length;
+  const draftStatus = getDraftStatus(diff);
   const handleDelete = async (route: ProxyRouteItem) => {
     const confirmed = await confirmDialog({
       title: '删除规则网站',
@@ -630,16 +709,37 @@ export function ProxyRoutesPage() {
   };
 
   const handlePublish = async () => {
-    if (!diff || !hasConfigChanges(diff)) {
+    let latestDiff = diff;
+    try {
+      const latestDiffResult = await diffQuery.refetch();
+      latestDiff = latestDiffResult.data ?? latestDiff;
+    } catch (error) {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+      return;
+    }
+
+    if (!latestDiff || !hasDraftChanges(latestDiff)) {
       setFeedback({ tone: 'info', message: '当前草稿没有可发布的变更。' });
       return;
     }
 
+    if (!hasRuntimeConfigChanges(latestDiff)) {
+      setFeedback({
+        tone: 'info',
+        message: '当前只有面板展示信息变更，不会改变节点运行配置，无需发布。',
+      });
+      return;
+    }
+
     const summary = [
-      `新增网站 ${diff.added_sites.length} 个`,
-      `删除网站 ${diff.removed_sites.length} 个`,
-      `修改网站 ${diff.modified_sites.length} 个`,
-      `域名变更 ${diff.added_domains.length + diff.removed_domains.length + diff.modified_domains.length} 项`,
+      `新增网站 ${latestDiff.added_sites.length} 个`,
+      `删除网站 ${latestDiff.removed_sites.length} 个`,
+      `修改网站 ${latestDiff.modified_sites.length} 个`,
+      `域名变更 ${
+        latestDiff.added_domains.length +
+        latestDiff.removed_domains.length +
+        latestDiff.modified_domains.length
+      } 项`,
     ].join('，');
 
     const confirmed = await confirmDialog({
@@ -750,17 +850,11 @@ export function ProxyRoutesPage() {
           <AppCard title="草稿状态">
             <div className="space-y-3">
               <StatusBadge
-                label={
-                  diff && hasConfigChanges(diff)
-                    ? '有待发布变更'
-                    : '已与线上一致'
-                }
-                variant={diff && hasConfigChanges(diff) ? 'warning' : 'success'}
+                label={draftStatus.label}
+                variant={draftStatus.variant}
               />
               <p className="text-sm text-[var(--foreground-secondary)]">
-                {diff
-                  ? `网站变更 ${diff.added_sites.length + diff.removed_sites.length + diff.modified_sites.length} 项`
-                  : '正在读取 diff...'}
+                {draftStatus.message}
               </p>
             </div>
           </AppCard>
@@ -806,12 +900,17 @@ export function ProxyRoutesPage() {
                     placeholder="搜索站点"
                   />
                 </div>
-                {diff && hasConfigChanges(diff) ? (
+                {diff && hasDraftChanges(diff) ? (
                   <div className="flex flex-wrap gap-2">
+                    {!hasRuntimeConfigChanges(diff) ? (
+                      <StatusBadge label="无需发布" variant="info" />
+                    ) : null}
                     {diff.modified_sites.length > 0 ? (
                       <StatusBadge
                         label={`修改网站 ${diff.modified_sites.length}`}
-                        variant="warning"
+                        variant={
+                          hasRuntimeConfigChanges(diff) ? 'warning' : 'info'
+                        }
                       />
                     ) : null}
                     {diff.added_sites.length > 0 ? (
