@@ -383,7 +383,7 @@ export function PerformancePage() {
                         performanceFields.OpenRestySendTimeout.trim(),
                     ],
                 ],
-                'OpenResty 连接与事件参数已保存。',
+                '代理服务连接与事件参数已保存。',
             );
         });
     };
@@ -513,7 +513,7 @@ export function PerformancePage() {
                         String(performanceFields.OpenRestyCacheEnabled),
                     ],
                 ],
-                'OpenResty 压缩与缓存参数已保存。',
+                '代理服务压缩与缓存参数已保存。',
             );
         });
     };
@@ -546,7 +546,7 @@ export function PerformancePage() {
                         performanceFields.OpenRestyGzipCompLevel.trim(),
                     ],
                 ],
-                'OpenResty 压缩参数已保存。',
+                '代理服务压缩参数已保存。',
             );
         });
     };
@@ -555,7 +555,7 @@ export function PerformancePage() {
         void runBusyAction('performance-template', async () => {
             await saveOptionEntries(
                 [['OpenRestyMainConfigTemplate', templateContent]],
-                'OpenResty 主配置模板已保存。',
+                '代理服务主配置模板已保存。',
             );
         });
     };
@@ -582,7 +582,7 @@ export function PerformancePage() {
     if (optionsQuery.isError) {
         return (
             <ErrorState
-                title="OpenResty 配置加载失败"
+                title="代理服务配置加载失败"
                 description={getErrorMessage(optionsQuery.error)}
             />
         );
@@ -591,7 +591,7 @@ export function PerformancePage() {
     if (previewQuery.isError) {
         return (
             <ErrorState
-                title="OpenResty 配置预览加载失败"
+                title="代理服务配置预览加载失败"
                 description={getErrorMessage(previewQuery.error)}
             />
         );
@@ -601,8 +601,8 @@ export function PerformancePage() {
     if (!preview) {
         return (
             <EmptyState
-                title="OpenResty 配置预览不可用"
-                description="当前未获取到 OpenResty 配置预览。"
+                title="代理服务配置预览不可用"
+                description="当前未获取到代理服务配置预览。"
             />
         );
     }
@@ -624,7 +624,8 @@ export function PerformancePage() {
                     {
                         key: 'editor' as const,
                         label: '编辑',
-                        description: '编辑 nginx.conf 模板并查看当前渲染结果。',
+                        description:
+                            '编辑主配置模板并查看当前渲染结果；底层文件仍是 nginx.conf。',
                     },
                 ].map((tab) => (
                     <button
@@ -679,7 +680,7 @@ export function PerformancePage() {
                     </div>
 
                     <AppCard
-                        title="OpenResty 连接与事件"
+                        title="代理服务连接与事件"
                         action={
                             <PrimaryButton
                                 type="button"
@@ -896,7 +897,7 @@ export function PerformancePage() {
 
                     <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                         <AppCard
-                            title="OpenResty 反代缓冲与超时"
+                            title="代理服务反代缓冲与超时"
                             description="用于控制 upstream 连接、发送、读取超时，以及常用代理缓冲参数。"
                             action={
                                 <PrimaryButton
@@ -1041,7 +1042,7 @@ export function PerformancePage() {
 
                         <div className="grid content-start gap-6">
                             <AppCard
-                                title="OpenResty 压缩"
+                                title="代理服务压缩"
                                 action={
                                     <PrimaryButton
                                         type="button"
@@ -1104,7 +1105,7 @@ export function PerformancePage() {
                             </AppCard>
 
                             <AppCard
-                                title="OpenResty 缓存"
+                                title="代理服务缓存"
                                 description="缓存能力限定在单节点反代优化场景。"
                                 action={
                                     <div className="flex flex-wrap gap-2">
@@ -1282,8 +1283,8 @@ export function PerformancePage() {
             ) : (
                 <div className="space-y-6">
                     <AppCard
-                        title="nginx.conf 模板编辑"
-                        description="编辑 DuShengCDN 管理的主配置模板。系统占位符必须保留，保存后会进入统一发布链路。"
+                        title="主配置模板编辑"
+                        description="编辑 DuShengCDN 管理的代理服务主配置模板。系统占位符必须保留，保存后会进入统一发布链路；底层文件名仍是 nginx.conf。"
                         action={
                             <div className="flex flex-wrap gap-2">
                                 <SecondaryButton

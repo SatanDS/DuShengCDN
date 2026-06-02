@@ -834,7 +834,7 @@ function MeteringTab({
                 ? formatBytesPerSecond(data.bandwidth_p95_bps)
                 : '暂无数据'
             }
-            hint="按节点 OpenResty 入站与出站字节差值折算。"
+            hint="按节点代理服务入站与出站字节差值折算。"
           />
           <MetricPanel
             label="缓存命中率"
@@ -865,7 +865,7 @@ function MeteringTab({
       <div className="grid gap-6 xl:grid-cols-2">
         <AppCard
           title="带宽趋势"
-          description="按小时聚合 OpenResty 流量，用于观察峰值和 P95 口径。"
+          description="按小时聚合代理服务流量，用于观察峰值和 P95 口径。"
         >
           <TrendChart
             labels={data.bandwidth_trend.map((point) =>
