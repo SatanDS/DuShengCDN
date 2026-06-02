@@ -8,7 +8,7 @@ export const dashboardNavigation: NavigationItem[] = [
   },
   {
     href: '/node',
-    label: '节点/IP池',
+    label: '节点和IP池',
     icon: 'node',
   },
   {
@@ -23,7 +23,7 @@ export const dashboardNavigation: NavigationItem[] = [
   },
   {
     href: '/dns-account',
-    label: 'DNS 账号',
+    label: 'Cloudflare 账号',
     icon: 'domain',
   },
   {
@@ -54,7 +54,7 @@ export const dashboardNavigation: NavigationItem[] = [
 
   {
     href: '/performance',
-    label: 'OpenResty配置',
+    label: '代理服务配置',
     icon: 'performance',
   },
   {

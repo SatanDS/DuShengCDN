@@ -43,7 +43,7 @@ export function DnsAccountsPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteDnsAccount,
     onSuccess: async () => {
-      setFeedback({ tone: 'success', message: 'DNS 账号已删除。' });
+      setFeedback({ tone: 'success', message: 'Cloudflare 账号已删除。' });
       await queryClient.invalidateQueries({ queryKey: ['dns-accounts'] });
     },
     onError: (error) => {
@@ -53,8 +53,8 @@ export function DnsAccountsPage() {
 
   const handleDelete = async (account: DnsAccountItem) => {
     const confirmed = await confirmDialog({
-      title: '删除 DNS 账号',
-      message: `确认删除 DNS 账号“${account.name}”吗？`,
+      title: '删除 Cloudflare 账号',
+      message: `确认删除 Cloudflare 账号“${account.name}”吗？`,
       confirmLabel: '删除',
       tone: 'danger',
     });
@@ -71,8 +71,8 @@ export function DnsAccountsPage() {
     <>
       <div className="space-y-6">
         <PageHeader
-          title="DNS 账号"
-          description="统一管理 DNS 服务商账号，用于申请证书时写验证记录，以及 Cloudflare 自动解析。"
+          title="Cloudflare 账号"
+          description="统一管理 Cloudflare 授权，用于申请证书时写验证记录，以及同步 Cloudflare 解析。"
           action={
             <div className="flex flex-wrap gap-3">
               <PrimaryButton type="button" onClick={() => setIsCreateOpen(true)}>
@@ -82,13 +82,13 @@ export function DnsAccountsPage() {
           }
         />
 
-        <AppCard title="DNS 账号列表">
+        <AppCard title="Cloudflare 账号列表">
           {dnsAccountsQuery.isLoading ? (
             <LoadingState />
           ) : dnsAccountsQuery.isError ? (
             <ErrorState title="加载失败" description={getErrorMessage(dnsAccountsQuery.error)} />
           ) : accounts.length === 0 ? (
-            <EmptyState title="暂无 DNS 账号" description="点击右上角“添加账号”开始录入。" />
+            <EmptyState title="暂无 Cloudflare 账号" description="点击右上角“添加账号”开始录入。" />
           ) : (
             <div className="space-y-3">
               {accounts.map((account) => (
@@ -122,7 +122,7 @@ export function DnsAccountsPage() {
       
       {isCreateOpen && (
         <DnsAccountCreateModal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} onCreated={() => {
-          setFeedback({ tone: 'success', message: 'DNS 账号已添加。' });
+          setFeedback({ tone: 'success', message: 'Cloudflare 账号已添加。' });
           setIsCreateOpen(false);
           queryClient.invalidateQueries({ queryKey: ['dns-accounts'] });
         }} />
@@ -149,21 +149,24 @@ function DnsAccountCreateModal({ isOpen, onClose, onCreated }: { isOpen: boolean
   });
 
   return (
-    <AppModal isOpen={isOpen} onClose={onClose} title="添加 DNS 账号">
+    <AppModal isOpen={isOpen} onClose={onClose} title="添加 Cloudflare 账号">
       <form onSubmit={onSubmit} className="space-y-5">
         {error && <InlineMessage tone="danger" message={error} />}
         <ResourceField label="账号名称" error={formState.errors.name?.message as string}>
           <ResourceInput placeholder="Cloudflare 账号" {...register('name', { required: '请输入名称' })} />
         </ResourceField>
-        <ResourceField label="DNS 服务商">
+        <ResourceField
+          label="服务商"
+          tooltip="当前这里用于保存 Cloudflare 授权。后续如果支持其它 DNS 服务商，再在这里扩展。"
+        >
           <ResourceSelect {...register('type')}>
             <option value="cloudflare">Cloudflare</option>
           </ResourceSelect>
         </ResourceField>
         <ResourceField
           label="API 密钥"
-          hint="请填写 Cloudflare 里创建的 API 密钥，不要填写全局密钥。权限至少包含读取域名和修改 DNS。"
-          tooltip="API 密钥就是面板代你去 Cloudflare 添加、修改 DNS 记录时使用的授权。建议只授权需要管理的域名。"
+          hint="请填写 Cloudflare 里创建的 API 密钥，不要填写全局密钥。权限至少包含读取域名和修改解析记录。"
+          tooltip="API 密钥就是面板代你去 Cloudflare 添加、修改解析记录时使用的授权。建议只授权需要管理的域名。"
         >
           <ResourceInput {...register('authorization', { required: '请输入 API 密钥' })} />
         </ResourceField>

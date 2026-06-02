@@ -564,12 +564,12 @@ export function PerformancePage() {
         return (
             <div className="space-y-6">
                 <PageHeader
-                    title="OpenResty配置"
-                    description="集中管理 OpenResty 性能参数和主配置模板。"
+                    title="代理服务配置"
+                    description="集中管理代理服务性能参数和主配置模板。"
                 />
                 <EmptyState
                     title="权限不足"
-                    description="只有超级管理员可以访问 OpenResty 配置。"
+                    description="只有超级管理员可以访问代理服务配置。"
                 />
             </div>
         );
@@ -610,8 +610,8 @@ export function PerformancePage() {
     return (
         <div className="space-y-6">
             <PageHeader
-                title="OpenResty配置"
-                description="统一维护 OpenResty 结构化性能参数和主配置模板。"
+                title="代理服务配置"
+                description="统一维护代理服务性能参数和主配置模板。"
             />
 
             <div className="flex flex-wrap gap-3">
