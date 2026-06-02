@@ -391,10 +391,28 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		return nil, err
 	}
 	if dnsProviderMode == DNSProviderModeAuthoritative && dnsZoneIDRef != nil {
-		if err := validateAuthoritativeProxyRouteStaticRecordConflicts(*dnsZoneIDRef, domains, dnsRecordType, input.Enabled); err != nil {
-			return nil, err
-		}
-		if input.Enabled {
+		shouldPrecheckAuthoritativeDNS := shouldPrecheckAuthoritativeDNSRoute(
+			route,
+			domain,
+			string(domainsJSON),
+			input.Enabled,
+			dnsProviderMode,
+			dnsZoneIDRef,
+			nodePool,
+			dnsRecordType,
+			dnsRecordName,
+			dnsRecordContent,
+			dnsAutoTarget,
+			dnsTargetCount,
+			dnsScheduleMode,
+			dnsTTL,
+			gslbEnabled,
+			string(gslbPolicyJSON),
+		)
+		if shouldPrecheckAuthoritativeDNS {
+			if err := validateAuthoritativeProxyRouteStaticRecordConflicts(*dnsZoneIDRef, domains, dnsRecordType, input.Enabled); err != nil {
+				return nil, err
+			}
 			precheckRoute := buildAuthoritativeDNSPrecheckProxyRoute(
 				route,
 				nodePool,
@@ -476,6 +494,50 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.DDOSProtectionTarget = ddosTarget
 	route.Remark = remark
 	return route, nil
+}
+
+func shouldPrecheckAuthoritativeDNSRoute(
+	route *model.ProxyRoute,
+	domain string,
+	domainsJSON string,
+	enabled bool,
+	dnsProviderMode string,
+	dnsZoneIDRef *uint,
+	nodePool string,
+	dnsRecordType string,
+	dnsRecordName string,
+	dnsRecordContent string,
+	dnsAutoTarget bool,
+	dnsTargetCount int,
+	dnsScheduleMode string,
+	dnsTTL int,
+	gslbEnabled bool,
+	gslbPolicyJSON string,
+) bool {
+	if !enabled || dnsProviderMode != DNSProviderModeAuthoritative || dnsZoneIDRef == nil {
+		return false
+	}
+	if route == nil {
+		return true
+	}
+	if !route.Enabled || normalizeDNSProviderMode(route.DNSProviderMode) != DNSProviderModeAuthoritative {
+		return true
+	}
+	if route.DNSZoneIDRef == nil || *route.DNSZoneIDRef != *dnsZoneIDRef {
+		return true
+	}
+	return route.Domain != domain ||
+		route.Domains != domainsJSON ||
+		route.NodePool != nodePool ||
+		route.DNSRecordType != dnsRecordType ||
+		route.DNSRecordName != dnsRecordName ||
+		route.DNSRecordContent != dnsRecordContent ||
+		route.DNSAutoTarget != dnsAutoTarget ||
+		route.DNSTargetCount != dnsTargetCount ||
+		route.DNSScheduleMode != dnsScheduleMode ||
+		route.DNSTTL != dnsTTL ||
+		route.GSLBEnabled != gslbEnabled ||
+		route.GSLBPolicy != gslbPolicyJSON
 }
 
 func buildAuthoritativeDNSPrecheckProxyRoute(

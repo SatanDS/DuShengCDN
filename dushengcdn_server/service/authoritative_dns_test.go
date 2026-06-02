@@ -1005,6 +1005,158 @@ func TestCreateProxyRouteAuthoritativeAllowsReadyDNSWorker(t *testing.T) {
 	}
 }
 
+func TestUpdateProxyRouteAuthoritativeSkipsWorkerReadinessForNonDNSChange(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	worker := createReadyDNSWorker(t, now)
+
+	view, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute: %v", err)
+	}
+
+	staleProbeAt := now.Add(-(defaultDNSWorkerProbeMaxAge + time.Minute))
+	worker.LastProbeAt = &staleProbeAt
+	if err := worker.Update(); err != nil {
+		t.Fatalf("stale DNS worker probe: %v", err)
+	}
+	if err := validateAuthoritativeDNSReadyWorkers(); err == nil || !strings.Contains(err.Error(), "公网 UDP/TCP 53") {
+		t.Fatalf("expected stale DNS worker readiness to fail, got %v", err)
+	}
+
+	powConfig := defaultPoWConfig()
+	powConfig.Whitelist.PathRegexes = []string{`^/api/agent/`, `^/api/status$`}
+	updated, err := UpdateProxyRoute(view.ID, ProxyRouteInput{
+		SiteName:        "www.example.com",
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		PoWEnabled:      true,
+		PoWConfig:       mustJSON(t, powConfig),
+	})
+	if err != nil {
+		t.Fatalf("UpdateProxyRoute non-DNS change should not require worker readiness: %v", err)
+	}
+	if updated.PoWConfig == nil || len(updated.PoWConfig.Whitelist.PathRegexes) != 2 {
+		t.Fatalf("expected PoW whitelist to be saved, got %+v", updated.PoWConfig)
+	}
+}
+
+func TestUpdateProxyRouteAuthoritativeChecksWorkerReadinessForDNSChange(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	worker := createReadyDNSWorker(t, now)
+
+	view, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute: %v", err)
+	}
+
+	staleProbeAt := now.Add(-(defaultDNSWorkerProbeMaxAge + time.Minute))
+	worker.LastProbeAt = &staleProbeAt
+	if err := worker.Update(); err != nil {
+		t.Fatalf("stale DNS worker probe: %v", err)
+	}
+
+	_, err = UpdateProxyRoute(view.ID, ProxyRouteInput{
+		SiteName:        "www.example.com",
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+	})
+	if err == nil || !strings.Contains(err.Error(), "公网 UDP/TCP 53") {
+		t.Fatalf("expected DNS change to require worker readiness, got %v", err)
+	}
+}
+
 func TestUpdateProxyRouteAuthoritativeRejectsSourceSpecificNoTargets(t *testing.T) {
 	setupServiceTestDB(t)
 
