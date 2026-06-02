@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 
-import { MapleMark } from '@/components/brand/maple-mark';
 import { dashboardNavigation } from '@/lib/constants/navigation';
 import { cn } from '@/lib/utils/cn';
 import { isNavigationItemActive } from '@/lib/utils/navigation';
@@ -209,7 +209,14 @@ function SidebarContent({
     <div className="flex h-full flex-col gap-5">
       <div className="sidebar-brand-panel flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] px-3 py-3 shadow-[var(--shadow-soft)] backdrop-blur">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-white/70 bg-white/80 shadow-sm">
-          <MapleMark className="h-7 w-7" aria-hidden="true" />
+          <Image
+            src="/satan-du-leaf.png"
+            alt=""
+            width={40}
+            height={40}
+            priority
+            className="h-8 w-8 object-contain"
+          />
         </div>
         {showLabel ? (
           <div className="min-w-0">

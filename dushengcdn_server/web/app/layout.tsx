@@ -15,8 +15,9 @@ export const metadata: Metadata = {
   description: 'SatanDu 枫叶主题的 DuShengCDN 管理端',
   applicationName: 'DuShengCDN',
   icons: {
-    icon: '/maple-mark.svg',
-    apple: '/satan-du-logo.png',
+    icon: '/satan-du-leaf.png',
+    shortcut: '/satan-du-leaf.png',
+    apple: '/satan-du-leaf.png',
   },
 };
 
