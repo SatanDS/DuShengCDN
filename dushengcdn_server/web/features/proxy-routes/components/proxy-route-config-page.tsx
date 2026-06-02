@@ -298,6 +298,7 @@ type DNSAutomationValues = {
 type GSLBPoolRow = {
   id: string;
   name: string;
+  nodeIds: string[];
   weight: string;
   countries: string;
   sourceCidrs: string;
@@ -359,6 +360,7 @@ function createGSLBPoolRow(
   return {
     id: `gslb-pool-row-${gslbPoolRowSequence}`,
     name: '',
+    nodeIds: [],
     weight: '100',
     countries: '',
     sourceCidrs: '',
@@ -389,6 +391,7 @@ function syncGSLBPoolRowsWithOptions(
       const existingRow = currentRowsByName.get(name.toLowerCase());
       return createGSLBPoolRow({
         name,
+        nodeIds: existingRow?.nodeIds ?? [],
         weight: existingRow?.weight || '100',
         countries: existingRow?.countries || '',
         sourceCidrs: existingRow?.sourceCidrs || '',
@@ -431,6 +434,7 @@ function buildGSLBPoolRows(route: ProxyRouteItem) {
       .map((pool) =>
         createGSLBPoolRow({
           name: pool.name,
+          nodeIds: pool.node_ids ?? [],
           weight: String(pool.weight || 100),
           countries: pool.countries?.join(',') || '',
           sourceCidrs: pool.source_cidrs?.join('\n') || '',
@@ -453,6 +457,7 @@ function parseGSLBPoolRows(rows: GSLBPoolRow[]) {
         .split(/[\s,，;；]+/)
         .map((item) => item.trim())
         .filter(Boolean),
+      node_ids: row.nodeIds.map((item) => item.trim()).filter(Boolean),
       enabled: true,
     };
   });
@@ -1018,9 +1023,6 @@ export function DNSAutomationSection({
         (route.dns_account_id ? String(route.dns_account_id) : ''),
     },
   });
-  const [selectedGSLBNodeIDs, setSelectedGSLBNodeIDs] = useState<
-    Record<string, string>
-  >({});
 
   useEffect(() => {
     form.reset({
@@ -1056,7 +1058,6 @@ export function DNSAutomationSection({
         route.ddos_protection_target ||
         (route.dns_account_id ? String(route.dns_account_id) : ''),
     });
-    setSelectedGSLBNodeIDs({});
   }, [form, route]);
 
   const providerMode = form.watch('dns_provider_mode');
@@ -1563,20 +1564,46 @@ export function DNSAutomationSection({
                               normalizedRowPoolName === '' || rowPoolUnknown
                                 ? []
                                 : getNodesForPool(nodes, normalizedRowPoolName);
-                            const selectedRowNodeIDCandidate =
-                              selectedGSLBNodeIDs[row.id] || '';
-                            const selectedRowNodeID =
-                              selectedRowNodeIDCandidate &&
-                              rowPoolNodes.some(
-                                (node) =>
-                                  (node.node_id || String(node.id)) ===
-                                  selectedRowNodeIDCandidate,
-                              )
-                                ? selectedRowNodeIDCandidate
-                                : rowPoolNodes[0]
-                                  ? rowPoolNodes[0].node_id ||
-                                    String(rowPoolNodes[0].id)
-                                  : '';
+                            const rowPoolNodeIDs = rowPoolNodes.map((node) =>
+                              node.node_id || String(node.id),
+                            );
+                            const explicitNodeIDs = row.nodeIds.filter(
+                              (nodeID) => rowPoolNodeIDs.includes(nodeID),
+                            );
+                            const hasExplicitNodeSelection =
+                              row.nodeIds.length > 0;
+                            const effectiveNodeIDs =
+                              hasExplicitNodeSelection
+                                ? explicitNodeIDs
+                                : rowPoolNodeIDs;
+                            const allNodesSelected =
+                              rowPoolNodeIDs.length > 0 &&
+                              effectiveNodeIDs.length === rowPoolNodeIDs.length;
+                            const updateRowNodeIDs = (nodeIDs: string[]) => {
+                              const uniqueNodeIDs = Array.from(
+                                new Set(
+                                  nodeIDs.filter((nodeID) =>
+                                    rowPoolNodeIDs.includes(nodeID),
+                                  ),
+                                ),
+                              );
+                              if (
+                                rowPoolNodeIDs.length > 0 &&
+                                uniqueNodeIDs.length === 0
+                              ) {
+                                return;
+                              }
+                              const nextRows = rows.slice();
+                              nextRows[index] = {
+                                ...row,
+                                nodeIds:
+                                  uniqueNodeIDs.length ===
+                                  rowPoolNodeIDs.length
+                                    ? []
+                                    : uniqueNodeIDs,
+                              };
+                              updateRows(nextRows);
+                            };
 
                             return (
                               <div
@@ -1620,13 +1647,9 @@ export function DNSAutomationSection({
                                       nextRows[index] = {
                                         ...row,
                                         name: event.target.value,
+                                        nodeIds: [],
                                       };
                                       updateRows(nextRows);
-                                      setSelectedGSLBNodeIDs((current) => {
-                                        const next = { ...current };
-                                        delete next[row.id];
-                                        return next;
-                                      });
                                     }}
                                   >
                                     {normalizedRowPoolName === '' ? (
@@ -1646,36 +1669,80 @@ export function DNSAutomationSection({
                                     ))}
                                   </ResourceSelect>
 
-                                  <ResourceSelect
+                                  <div
                                     aria-label={`节点池内节点 ${index + 1}`}
-                                    value={selectedRowNodeID}
-                                    disabled={
-                                      !autoSyncEnabled ||
-                                      nodePoolsLoading ||
-                                      rowPoolNodes.length === 0
-                                    }
-                                    onChange={(event) =>
-                                      setSelectedGSLBNodeIDs((current) => ({
-                                        ...current,
-                                        [row.id]: event.target.value,
-                                      }))
-                                    }
+                                    role="group"
+                                    className="rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] p-3"
                                   >
                                     {rowPoolNodes.length === 0 ? (
-                                      <option value="">暂无节点</option>
+                                      <p className="text-xs text-[var(--foreground-muted)]">
+                                        暂无节点
+                                      </p>
                                     ) : (
-                                      rowPoolNodes.map((node) => (
-                                        <option
-                                          key={node.node_id || node.id}
-                                          value={
-                                            node.node_id || String(node.id)
-                                          }
-                                        >
-                                          {formatNodeName(node)}
-                                        </option>
-                                      ))
+                                      <div className="space-y-3">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <span className="text-xs text-[var(--foreground-secondary)]">
+                                            {allNodesSelected
+                                              ? `已选择全部 ${rowPoolNodes.length} 个节点`
+                                              : `已选择 ${effectiveNodeIDs.length} / ${rowPoolNodes.length} 个节点`}
+                                          </span>
+                                          <div className="flex gap-2">
+                                            <button
+                                              type="button"
+                                              className="text-xs font-medium text-[var(--brand-primary)] transition hover:text-[var(--foreground-primary)] disabled:text-[var(--foreground-muted)]"
+                                              disabled={!autoSyncEnabled}
+                                              onClick={() =>
+                                                updateRowNodeIDs(rowPoolNodeIDs)
+                                              }
+                                            >
+                                              全选
+                                            </button>
+                                          </div>
+                                        </div>
+                                        <div className="grid gap-2">
+                                          {rowPoolNodes.map((node) => {
+                                            const nodeID =
+                                              node.node_id || String(node.id);
+                                            return (
+                                              <label
+                                                key={nodeID}
+                                                className="flex min-h-9 items-center gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-sm text-[var(--foreground-primary)]"
+                                              >
+                                                <input
+                                                  type="checkbox"
+                                                  aria-label={`节点池 ${normalizedRowPoolName} 节点 ${formatNodeName(node)}`}
+                                                  checked={effectiveNodeIDs.includes(
+                                                    nodeID,
+                                                  )}
+                                                  disabled={!autoSyncEnabled}
+                                                  onChange={(event) => {
+                                                    if (event.target.checked) {
+                                                      updateRowNodeIDs([
+                                                        ...effectiveNodeIDs,
+                                                        nodeID,
+                                                      ]);
+                                                    } else {
+                                                      updateRowNodeIDs(
+                                                        effectiveNodeIDs.filter(
+                                                          (currentNodeID) =>
+                                                            currentNodeID !==
+                                                            nodeID,
+                                                        ),
+                                                      );
+                                                    }
+                                                  }}
+                                                  className="h-4 w-4 accent-[var(--brand-primary)]"
+                                                />
+                                                <span className="min-w-0 truncate">
+                                                  {formatNodeName(node)}
+                                                </span>
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
                                     )}
-                                  </ResourceSelect>
+                                  </div>
 
                                   {rowPoolUnknown ? (
                                     <p className="text-xs text-[var(--status-warning-foreground)]">

@@ -217,6 +217,9 @@ func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRout
 		if !isNodeSchedulableForDNS(node) || !isNodeOnlineAndOpenRestyHealthy(node) {
 			continue
 		}
+		if !gslbPoolAllowsNode(poolPolicy, node.NodeID) {
+			continue
+		}
 		probeStats := probeStatsByNode[node.NodeID]
 		if options.RequireHealthyDNSProbe && !dnsWorkerNodeProbeStatsSchedulable(probeStats) {
 			continue

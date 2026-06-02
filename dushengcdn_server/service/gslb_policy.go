@@ -23,6 +23,7 @@ type ProxyRouteGSLBPoolPolicy struct {
 	Weight      int      `json:"weight"`
 	Countries   []string `json:"countries"`
 	SourceCIDRs []string `json:"source_cidrs"`
+	NodeIDs     []string `json:"node_ids,omitempty"`
 	Enabled     bool     `json:"enabled"`
 }
 
@@ -166,10 +167,16 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 		if err != nil {
 			return nil, err
 		}
+		nodeIDs := normalizeGSLBNodeIDList(pool.NodeIDs)
 		if existingIndex, ok := seen[name]; ok {
 			result[existingIndex].Weight = weight
 			result[existingIndex].Countries = mergeGSLBStringLists(result[existingIndex].Countries, countries)
 			result[existingIndex].SourceCIDRs = mergeGSLBStringLists(result[existingIndex].SourceCIDRs, sourceCIDRs)
+			if len(result[existingIndex].NodeIDs) == 0 || len(nodeIDs) == 0 {
+				result[existingIndex].NodeIDs = nil
+			} else {
+				result[existingIndex].NodeIDs = mergeGSLBStringLists(result[existingIndex].NodeIDs, nodeIDs)
+			}
 			continue
 		}
 		seen[name] = len(result)
@@ -178,6 +185,7 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 			Weight:      weight,
 			Countries:   countries,
 			SourceCIDRs: sourceCIDRs,
+			NodeIDs:     nodeIDs,
 			Enabled:     true,
 		})
 	}
@@ -199,12 +207,26 @@ func validateGSLBPolicyPoolTargets(policy ProxyRouteGSLBPolicy, recordType strin
 	if err != nil {
 		return err
 	}
+	poolPolicies := make(map[string]ProxyRouteGSLBPoolPolicy, len(policy.Pools))
+	for _, pool := range policy.Pools {
+		if !pool.Enabled {
+			continue
+		}
+		name := normalizeNodePoolName(pool.Name)
+		if name != "" {
+			poolPolicies[name] = pool
+		}
+	}
 	availablePools := make(map[string]int, len(policy.Pools))
 	for _, node := range nodes {
 		if !isNodeSchedulableForDNS(node) || !isNodeOnlineAndOpenRestyHealthy(node) {
 			continue
 		}
 		poolName := normalizeNodePoolName(node.PoolName)
+		poolPolicy, ok := poolPolicies[poolName]
+		if !ok || !gslbPoolAllowsNode(poolPolicy, node.NodeID) {
+			continue
+		}
 		for _, value := range resolveNodePublicIPs(node) {
 			ip := iputil.NormalizeIP(value)
 			parsed := net.ParseIP(ip)
@@ -242,6 +264,39 @@ func validateGSLBPolicyPoolTargets(policy ProxyRouteGSLBPolicy, recordType strin
 		return fmt.Errorf("多节点智能解析节点池没有可用于 %s 记录的在线公网 IP：%s。请确认填写的是节点池名称，不是节点名称", recordType, strings.Join(missingPools, "、"))
 	}
 	return nil
+}
+
+func normalizeGSLBNodeIDList(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		nodeID := strings.TrimSpace(value)
+		if nodeID == "" {
+			continue
+		}
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		result = append(result, nodeID)
+	}
+	return result
+}
+
+func gslbPoolAllowsNode(pool ProxyRouteGSLBPoolPolicy, nodeID string) bool {
+	if len(pool.NodeIDs) == 0 {
+		return true
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return false
+	}
+	for _, allowedNodeID := range pool.NodeIDs {
+		if strings.TrimSpace(allowedNodeID) == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeGSLBCountryList(values []string) []string {

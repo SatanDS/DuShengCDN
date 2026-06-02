@@ -1491,6 +1491,9 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 	if !poolMatched {
 		reasons = append(reasons, "节点池未匹配当前来源")
 	}
+	if poolMatched && !gslbPoolAllowsNode(poolPolicy, node.NodeID) {
+		reasons = append(reasons, "节点未被当前节点池子集选中")
+	}
 	if node.DrainMode {
 		reasons = append(reasons, "节点处于排空模式")
 	}
@@ -1528,6 +1531,7 @@ func buildDNSGSLBSimulationNodeView(node *model.Node, recordType string, policy 
 		}
 	}
 	eligible := poolMatched &&
+		gslbPoolAllowsNode(poolPolicy, node.NodeID) &&
 		isNodeSchedulableForDNS(node) &&
 		isNodeOnlineAndOpenRestyHealthy(node) &&
 		(!requireHealthyDNSProbe || dnsWorkerNodeProbeStatsSchedulable(probeStats)) &&
@@ -1662,6 +1666,7 @@ func convertWorkerGSLBPolicyToAuthoritative(policy dnsworker.GSLBPolicy) ProxyRo
 			Weight:      pool.Weight,
 			Countries:   append([]string(nil), pool.Countries...),
 			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
+			NodeIDs:     append([]string(nil), pool.NodeIDs...),
 			Enabled:     pool.Enabled,
 		})
 	}
@@ -2859,6 +2864,7 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 			Weight:      pool.Weight,
 			Countries:   append([]string(nil), pool.Countries...),
 			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
+			NodeIDs:     append([]string(nil), pool.NodeIDs...),
 			Enabled:     pool.Enabled,
 		})
 	}

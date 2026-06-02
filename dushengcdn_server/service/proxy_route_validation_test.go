@@ -47,3 +47,30 @@ func TestNormalizeGSLBPolicyTreatsLegacyPoolsAsEnabled(t *testing.T) {
 		t.Fatalf("expected legacy pool to stay enabled, got %+v", policy.Pools)
 	}
 }
+
+func TestNormalizeGSLBPolicyKeepsSelectedNodeIDs(t *testing.T) {
+	policy, err := normalizeGSLBPolicy(ProxyRouteGSLBPolicy{
+		Pools: []ProxyRouteGSLBPoolPolicy{
+			{
+				Name:   " hk ",
+				Weight: 100,
+				NodeIDs: []string{
+					" node-a ",
+					"node-a",
+					"",
+					"node-b",
+				},
+				Enabled: true,
+			},
+		},
+	}, "default", 1, "weighted", 60)
+	if err != nil {
+		t.Fatalf("normalize GSLB policy: %v", err)
+	}
+	if len(policy.Pools) != 1 {
+		t.Fatalf("expected one pool, got %+v", policy.Pools)
+	}
+	if got := policy.Pools[0].NodeIDs; len(got) != 2 || got[0] != "node-a" || got[1] != "node-b" {
+		t.Fatalf("expected deduped selected node ids, got %+v", got)
+	}
+}

@@ -165,11 +165,31 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 		if len(policy.Pools[i].SourceCIDRs) > 0 {
 			policy.Pools[i].SourceCIDRs = normalizeCIDRList(policy.Pools[i].SourceCIDRs)
 		}
+		if len(policy.Pools[i].NodeIDs) > 0 {
+			policy.Pools[i].NodeIDs = normalizeNodeIDList(policy.Pools[i].NodeIDs)
+		}
 		if !hasExplicitEnabledPool {
 			policy.Pools[i].Enabled = true
 		}
 	}
 	return policy
+}
+
+func normalizeNodeIDList(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		nodeID := strings.TrimSpace(value)
+		if nodeID == "" {
+			continue
+		}
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		result = append(result, nodeID)
+	}
+	return result
 }
 
 func normalizeLoadThresholds(input GSLBLoadThresholds) GSLBLoadThresholds {

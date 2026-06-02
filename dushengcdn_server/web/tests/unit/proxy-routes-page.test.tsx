@@ -1279,6 +1279,13 @@ describe('Proxy route website pages', () => {
                   },
                   {
                     id: 2,
+                    node_id: 'node-hk-backup',
+                    name: 'HK Backup',
+                    ip: '203.0.113.11',
+                    pool_name: 'hk',
+                  },
+                  {
+                    id: 3,
                     node_id: 'node-eu',
                     name: 'EU Edge',
                     ip: '203.0.113.20',
@@ -1320,14 +1327,24 @@ describe('Proxy route website pages', () => {
     expect(screen.getByText(/2-29 秒会在保存时提升到 30 秒/)).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText('节点池选择 1'), 'hk');
-    expect(screen.getByLabelText('节点池内节点 1')).toHaveValue('node-hk');
+    expect(
+      screen.getByRole('checkbox', { name: /节点池 hk 节点 HK Edge/ }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole('checkbox', { name: /节点池 hk 节点 HK Backup/ }),
+    ).toBeChecked();
+    await user.click(
+      screen.getByRole('checkbox', { name: /节点池 hk 节点 HK Backup/ }),
+    );
     await user.clear(screen.getByLabelText('节点池权重 1'));
     await user.type(screen.getByLabelText('节点池权重 1'), '80');
     await user.type(screen.getByLabelText('节点池国家或地区 1'), 'HK,TW');
 
     await user.click(screen.getByLabelText('新增节点池'));
     await user.selectOptions(screen.getByLabelText('节点池选择 2'), 'eu');
-    expect(screen.getByLabelText('节点池内节点 2')).toHaveValue('node-eu');
+    expect(
+      screen.getByRole('checkbox', { name: /节点池 eu 节点 EU Edge/ }),
+    ).toBeChecked();
     await user.clear(screen.getByLabelText('节点池权重 2'));
     await user.type(screen.getByLabelText('节点池权重 2'), '20');
     await user.type(screen.getByLabelText('节点池国家或地区 2'), 'DE FR');
@@ -1354,12 +1371,14 @@ describe('Proxy route website pages', () => {
             name: 'hk',
             weight: 80,
             countries: ['HK', 'TW'],
+            node_ids: ['node-hk'],
             enabled: true,
           },
           {
             name: 'eu',
             weight: 20,
             countries: ['DE', 'FR'],
+            node_ids: [],
             enabled: true,
           },
         ],
@@ -1534,11 +1553,12 @@ describe('Proxy route website pages', () => {
     ).not.toBeInTheDocument();
     expect(screen.getAllByDisplayValue('香港').length).toBeGreaterThan(0);
     expect(screen.getAllByDisplayValue('欧洲').length).toBeGreaterThan(0);
-    const syncedNodeValues = screen
-      .getAllByLabelText(/节点池内节点/)
-      .map((element) => (element as HTMLSelectElement).value);
-    expect(syncedNodeValues).toContain('node-hk');
-    expect(syncedNodeValues).toContain('node-eu');
+    expect(
+      screen.getByRole('checkbox', { name: /节点池 香港 节点 香港节点/ }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole('checkbox', { name: /节点池 欧洲 节点 欧洲节点/ }),
+    ).toBeChecked();
   });
 
   it('saves authoritative DNS mode from automatic DNS config page', async () => {

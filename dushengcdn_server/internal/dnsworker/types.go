@@ -103,6 +103,7 @@ type GSLBPoolPolicy struct {
 	Weight      int      `json:"weight"`
 	Countries   []string `json:"countries"`
 	SourceCIDRs []string `json:"source_cidrs"`
+	NodeIDs     []string `json:"node_ids,omitempty"`
 	Enabled     bool     `json:"enabled"`
 }
 

@@ -807,6 +807,74 @@ func TestLatestNodeMetricSnapshotsUsesConfiguredFreshness(t *testing.T) {
 	}
 }
 
+func TestSelectGSLBDNSTargetsRespectsSelectedPoolNodeIDs(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	now := time.Now()
+	nodes := []*model.Node{
+		{
+			NodeID:          "node-primary",
+			Name:            "primary",
+			IP:              "8.8.8.8",
+			PoolName:        "hk",
+			PublicIPs:       `["8.8.8.8"]`,
+			Weight:          1000,
+			AgentToken:      "token-primary",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+		{
+			NodeID:          "node-backup",
+			Name:            "backup",
+			IP:              "1.1.1.1",
+			PoolName:        "hk",
+			PublicIPs:       `["1.1.1.1"]`,
+			Weight:          1,
+			AgentToken:      "token-backup",
+			AgentVersion:    "dev",
+			OpenrestyStatus: OpenrestyStatusHealthy,
+			Status:          NodeStatusOnline,
+			LastSeenAt:      now,
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 60)
+	policy.Pools[0].NodeIDs = []string{"node-backup"}
+	rawPolicy, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("marshal policy: %v", err)
+	}
+
+	selection, err := selectGSLBDNSTargets(&model.ProxyRoute{
+		ID:              102,
+		NodePool:        "hk",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+		GSLBEnabled:     true,
+		GSLBPolicy:      string(rawPolicy),
+	}, "A")
+	if err != nil {
+		t.Fatalf("select GSLB targets: %v", err)
+	}
+	if len(selection.Targets) != 1 || selection.Targets[0] != "1.1.1.1" {
+		t.Fatalf("expected selected node target only, got %#v", selection.Targets)
+	}
+}
+
 func TestLatestNodeMetricSnapshotsIgnoresFutureMetrics(t *testing.T) {
 	setupServiceTestDB(t)
 

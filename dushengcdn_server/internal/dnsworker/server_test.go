@@ -169,6 +169,44 @@ func TestResolveDynamicRouteSkipsDisabledGSLBPool(t *testing.T) {
 	}
 }
 
+func TestResolveDynamicRouteRespectsSelectedPoolNodeIDs(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           31,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "hk", Weight: 100, NodeIDs: []string{"node-backup"}, Enabled: true},
+				},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("node-primary", "hk", "8.8.8.8", 1000, 1),
+		testNode("node-backup", "hk", "1.1.1.1", 1, 1),
+	}
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected dynamic A answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "1.1.1.1" {
+		t.Fatalf("expected selected node target, got %s", got)
+	}
+}
+
 func TestResolveDynamicRouteTreatsLegacyGSLBPoolsAsEnabled(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.Routes = []SnapshotRoute{

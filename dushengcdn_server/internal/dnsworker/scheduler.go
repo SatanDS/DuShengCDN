@@ -288,6 +288,9 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 		if !isNodeSchedulable(node) || !metricWithinThresholds(node, policy.LoadThresholds) {
 			continue
 		}
+		if !poolAllowsNode(pool, node.NodeID) {
+			continue
+		}
 		if snapshot.GSLBProbeSchedulingEnabled && !node.DNSProbeHealthy {
 			continue
 		}
@@ -338,6 +341,22 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 	}
 	sortCandidates(candidates, policy.Strategy)
 	return candidates
+}
+
+func poolAllowsNode(pool GSLBPoolPolicy, nodeID string) bool {
+	if len(pool.NodeIDs) == 0 {
+		return true
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return false
+	}
+	for _, allowedNodeID := range pool.NodeIDs {
+		if strings.TrimSpace(allowedNodeID) == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 func hasCandidatesWithoutDNSProbe(snapshot *Snapshot, recordType string, policy GSLBPolicy, source SourceContext) bool {
