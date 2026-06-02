@@ -19,12 +19,12 @@ export const websiteConfigSections = [
   {
     key: 'proxy',
     label: '反向代理',
-    description: '配置主源站地址和源站负载均衡。',
+    description: '配置源站地址和默认节点池。',
   },
   {
     key: 'dns',
-    label: '自动解析域名',
-    description: '选择 Cloudflare 同步或本地自建解析。',
+    label: '负载均衡',
+    description: '配置自动解析和多节点智能解析。',
   },
   {
     key: 'cache',

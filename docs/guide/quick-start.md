@@ -217,7 +217,7 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
 
 暂时只使用来源 CIDR 或全局调度时可以先省略 GeoIP。
 
-然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「自动解析域名」里把 `解析模式` 切换为 `本地自建解析`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。Worker 默认按来源 IP 限制查询速率，并对超大 UDP 响应设置 TC 位回退 TCP；GSLB 节点池可按来源 CIDR 或国家代码匹配不同池。Worker 上报心跳后，左侧「本地自建解析」会展示查询趋势、SERVFAIL/NXDOMAIN 趋势和快照一致性告警，便于确认实时 GSLB 与多 Worker 快照状态。
+然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「负载均衡」里把 `解析模式` 切换为 `本地自建解析`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。Worker 默认按来源 IP 限制查询速率，并对超大 UDP 响应设置 TC 位回退 TCP；多节点智能解析节点池可按来源 CIDR 或国家代码匹配不同池。Worker 上报心跳后，左侧「本地自建解析」会展示查询趋势、SERVFAIL/NXDOMAIN 趋势和快照一致性告警，便于确认实时 GSLB 与多 Worker 快照状态。
 
 ## 6. 验证是否成功
 

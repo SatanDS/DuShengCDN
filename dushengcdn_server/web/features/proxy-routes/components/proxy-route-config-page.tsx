@@ -315,7 +315,7 @@ const dnsScheduleModeHints: Record<
     '按压力优先会参考连接数和主机压力，并可按阈值跳过压力过高的节点。',
 };
 const autoDNSNodePoolHint =
-  '反向代理节点池是网站默认承载池：未开启多节点智能解析时，自动解析从这里选公网 IP；缓存清理和预热也发到这里。开启多节点智能解析后，返回哪些 IP 由下方策略决定；默认节点池仍作为运行时操作范围和兜底池。';
+  '默认节点池用于未开启多节点智能解析时自动选 IP，也用于缓存清理、预热、攻击防护回退和运行时兜底。开启多节点智能解析后，用户访问会返回下方节点池权重里的 IP，不再由这里决定。';
 const autoDNSRecordContentHint =
   '固定 IP 时可用逗号、空格或换行填写多个地址。开启自动选择或多节点智能解析后，由系统从节点公网 IP 池生成。';
 const ddosProtectionModeHint =
@@ -790,7 +790,7 @@ function ReverseProxySection({
         </ResourceField>
 
         <ResourceField
-          label="节点池"
+          label="默认节点池"
           hint={autoDNSNodePoolHint}
           error={form.formState.errors.node_pool?.message}
           container="div"
@@ -967,8 +967,8 @@ export function DNSAutomationSection({
 
   return (
     <ConfigSectionShell
-      title="自动解析域名"
-      description="选择 Cloudflare 后台同步，或切换到本地自建解析，让 DNS 响应端按访问来源和节点状态返回边缘 IP。"
+      title="负载均衡"
+      description="配置域名解析、自动选 IP 和多节点智能解析；开启多节点智能解析后，返回 IP 由这里的节点池权重决定。"
       formId={formId}
       saving={saving}
       embedded={embedded}
@@ -1070,7 +1070,7 @@ export function DNSAutomationSection({
             {
               message: authoritativeMode
                 ? '本地自建解析设置已保存。'
-                : '自动解析设置已保存。',
+                : '负载均衡设置已保存。',
             },
           );
         })}
@@ -1344,8 +1344,8 @@ export function DNSAutomationSection({
           <div className="space-y-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
             <ToggleField
               label="启用多节点智能解析"
-              description="开启后返回哪些 IP 由下方多个节点池策略决定；反向代理节点池仍负责缓存运行时操作和默认兜底。"
-              tooltip="这类能力也常叫 GSLB。它会按访问来源、节点健康和权重从多个节点池里选择 IP。关闭时只从默认节点池选。"
+              description="开启后返回哪些 IP 由下方节点池权重决定；反向代理里的默认节点池只保留缓存、回退和兜底用途。"
+              tooltip="这类能力也常叫 GSLB。它会按访问来源、节点健康和权重从多个节点池里选择 IP。关闭时才从默认节点池选。"
               checked={gslbEnabled}
               disabled={!autoSyncEnabled}
               onChange={(checked) => {

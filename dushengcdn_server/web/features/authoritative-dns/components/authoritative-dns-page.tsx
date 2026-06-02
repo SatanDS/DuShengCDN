@@ -1392,7 +1392,7 @@ export function AuthoritativeDNSPage() {
         {showNoAuthoritativeRoutesNotice ? (
           <InlineMessage
             tone="warning"
-            message="DNS 响应端已经能拉取解析配置，但当前没有启用的网站绑定到本地自建解析。此时响应端只能回答基础记录和静态记录；业务域名需要到网站详情「自动解析域名」切换为本地自建解析并选择对应托管域名，或使用迁移向导一键切换。"
+            message="DNS 响应端已经能拉取解析配置，但当前没有启用的网站绑定到本地自建解析。此时响应端只能回答基础记录和静态记录；业务域名需要到网站详情「负载均衡」切换为本地自建解析并选择对应托管域名，或使用迁移向导一键切换。"
           />
         ) : null}
 
@@ -1669,7 +1669,7 @@ function ZonesPanel({
       {zones.length === 0 ? (
         <EmptyState
           title="暂无托管域名"
-          description="创建托管域名后，再到网站配置的自动解析域名分区切换为本地自建解析。"
+          description="创建托管域名后，再到网站配置的负载均衡分区切换为本地自建解析。"
         />
       ) : (
         <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -2412,7 +2412,7 @@ function GSLBSimulationPanel({
       ) : routes.length === 0 ? (
         <EmptyState
           title="暂无本地自建解析站点"
-          description="把网站配置的自动解析域名切换为本地自建解析后，可在这里模拟系统会返回哪个边缘 IP。"
+          description="把网站配置的负载均衡切换为本地自建解析后，可在这里模拟系统会返回哪个边缘 IP。"
         />
       ) : (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
@@ -2963,7 +2963,7 @@ function DNSMigrationGuidePanel({
                 2. 部署至少两个 DNS 响应端，确认响应端在线、能拉取解析配置，并通过公网 UDP/TCP 53 探测。
               </li>
               <li>
-                3. 在网站详情的「自动解析域名」里切换为本地自建解析并选择托管域名。
+                3. 在网站详情的「负载均衡」里切换为本地自建解析并选择托管域名。
               </li>
               <li>
                 4. 到注册商把域名 NS 指向 DNS 响应端，再回到托管域名详情检查指向。

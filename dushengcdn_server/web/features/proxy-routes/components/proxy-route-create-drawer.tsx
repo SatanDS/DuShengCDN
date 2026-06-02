@@ -461,8 +461,8 @@ export function ProxyRouteCreateDrawer({
         </ResourceField>
 
         <ResourceField
-          label="节点池"
-          hint="自动解析会从该节点池选择公网 IP，缓存清理/预热也会下发到该池在线节点。"
+          label="默认节点池"
+          hint="未开启多节点智能解析时会从该池自动选 IP；缓存清理、预热和攻击防护回退也会使用该池在线节点。"
           error={form.formState.errors.node_pool?.message}
           container="div"
         >
@@ -518,9 +518,9 @@ export function ProxyRouteCreateDrawer({
         />
 
         <ToggleField
-          label="创建时自动解析域名"
+          label="创建时启用负载均衡"
           description="可选择 Cloudflare 后台同步，或使用本地自建解析托管域名；不填写固定 IP 时会自动选择在线节点。"
-          tooltip="DNS 就是把域名解析成服务器 IP 的服务。开启后，面板会在创建网站时一并维护解析记录。"
+          tooltip="DNS 就是把域名解析成服务器 IP 的服务。开启后，面板会在创建网站时一并维护解析记录。多节点智能解析可在创建后到网站详情继续配置。"
           checked={dnsAutoSync}
           onChange={(checked) => {
             form.setValue('dns_auto_sync', checked, { shouldDirty: true });

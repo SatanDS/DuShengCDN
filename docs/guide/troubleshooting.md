@@ -282,7 +282,7 @@ curl -Iv https://your-domain
 
 如果从 Cloudflare 同步切到本地自建解析后解析不符合预期，先打开左侧「本地自建解析」的「迁移向导」查看「切换后复测」：
 
-1. 「网站解析模式」应显示已绑定目标 Zone；若失败，回到网站详情的「自动解析域名」确认解析模式和 Zone。
+1. 「网站解析模式」应显示已绑定目标 Zone；若失败，回到网站详情的「负载均衡」确认解析模式和 Zone。
 2. 「Zone 委派检查」应为已匹配；若部分匹配、不匹配或提示 Glue，登录注册商补齐 NS 或 Glue/主机记录。
 3. 「Worker 公网探测」至少应有一个在线 Worker UDP/TCP `53` 可达；若失败，检查 Worker 公网地址、防火墙、端口映射和安全组。
 4. 「Worker 快照一致性」应显示公网可达 Worker 都持有未超过 `AuthoritativeDNSSnapshotMaxAge` 的调度快照，且版本一致；若快照为空、过期或版本不一致，检查 Worker 到 Server 的 HTTPS 访问、Token、心跳日志和快照拉取错误。
@@ -315,7 +315,7 @@ bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.co
 如果 `dig @PUBLIC_IP example.com SOA` 和 `NS` 已返回 `NOERROR`，但业务域名的 `A`/`AAAA` 仍没有返回目标，或 Worker 日志里的快照显示 `routes=0`：
 
 1. 这说明 DNS Worker 已经能回答 Zone 基础记录，但当前快照里还没有绑定到本地自建解析的网站动态路由。
-2. 到网站详情「自动解析域名」把 `解析模式` 切换为 `本地自建解析`，并选择对应 Zone；也可以在「本地自建解析」的「迁移向导」里对候选站点执行一键切换。
+2. 到网站详情「负载均衡」把 `解析模式` 切换为 `本地自建解析`，并选择对应 Zone；也可以在「本地自建解析」的「迁移向导」里对候选站点执行一键切换。
 3. 确认网站至少有一个域名落在该 Zone 下，且没有同名静态 `CNAME` 或启用的同名静态 `A`/`AAAA` 与动态记录冲突。
 4. 切换后等待 DNS Worker 下一次心跳/快照拉取，或重启 Worker，再查看日志里的 `routes` 数量是否增加。
 5. 使用「GSLB 调度模拟」检查该站点的 A/AAAA 是否能返回边缘 IP；如果无目标，继续按节点池、公网 IP、在线状态、OpenResty 健康、排空模式、负载阈值和 Agent 探测门槛排查。

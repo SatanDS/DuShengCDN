@@ -542,7 +542,7 @@ describe('Proxy route website pages', () => {
     );
 
     await user.click(
-      within(dialog).getByRole('checkbox', { name: /创建时自动解析域名/ }),
+      within(dialog).getByRole('checkbox', { name: /创建时启用负载均衡/ }),
     );
     let dnsAccountSelect: HTMLElement | undefined;
     await waitFor(() => {
@@ -737,7 +737,7 @@ describe('Proxy route website pages', () => {
       'https://origin.internal:443',
     );
     await user.click(
-      within(dialog).getByRole('checkbox', { name: /创建时自动解析域名/ }),
+      within(dialog).getByRole('checkbox', { name: /创建时启用负载均衡/ }),
     );
     await user.selectOptions(within(dialog).getByLabelText('解析方式'), [
       'authoritative',
@@ -1176,7 +1176,7 @@ describe('Proxy route website pages', () => {
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: '自动解析域名' }),
+      await screen.findByRole('heading', { name: '负载均衡' }),
     ).toBeInTheDocument();
     expect(screen.getByText(/2-29 秒会在保存时提升到 30 秒/)).toBeInTheDocument();
 
@@ -1328,7 +1328,7 @@ describe('Proxy route website pages', () => {
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: '自动解析域名' }),
+      await screen.findByRole('heading', { name: '负载均衡' }),
     ).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText('解析模式'), 'authoritative');
@@ -1466,7 +1466,7 @@ describe('Proxy route website pages', () => {
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: '自动解析域名' }),
+      await screen.findByRole('heading', { name: '负载均衡' }),
     ).toBeInTheDocument();
 
     await user.selectOptions(
@@ -1557,7 +1557,7 @@ describe('Proxy route website pages', () => {
     );
 
     expect(
-      await screen.findByRole('heading', { name: '自动解析域名' }),
+      await screen.findByRole('heading', { name: '负载均衡' }),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/健康优先只看节点是否在线、代理服务是否正常/),
@@ -1566,7 +1566,7 @@ describe('Proxy route website pages', () => {
       screen.getByRole('option', { name: '健康优先（冷却防抖）' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/返回哪些 IP 由下方多个节点池策略决定/),
+      screen.getByText(/返回哪些 IP 由下方节点池权重决定/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/攻击自动防护只在攻击期间临时覆盖解析目标/),
