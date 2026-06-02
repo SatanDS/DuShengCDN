@@ -140,7 +140,7 @@ export function CertificateImportModal({
     <AppModal
       isOpen={isOpen}
       onClose={handleClose}
-      title="添加证书"
+      title="导入证书"
       description="支持手动粘贴 PEM 或上传证书文件。导入成功后可立即在网站表单里选择。"
       size="xl"
     >

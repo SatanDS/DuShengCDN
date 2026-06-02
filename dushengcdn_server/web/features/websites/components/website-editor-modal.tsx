@@ -207,7 +207,7 @@ export function WebsiteEditorModal({
                 onClick={onRequestImportCertificate}
                 className="w-full sm:w-auto"
               >
-                添加证书
+                导入证书
               </SecondaryButton>
             </div>
           </ResourceField>

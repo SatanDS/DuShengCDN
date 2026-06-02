@@ -186,7 +186,7 @@ export function TlsCertificatesPage() {
           ) : certificates.length === 0 ? (
             <EmptyState
               title="暂无证书"
-              description="点击右上角“添加证书”开始录入。"
+              description="可点击右上角“导入证书”上传已有证书，或点击“申请证书”自动签发。"
             />
           ) : (
             <div className="space-y-3">
@@ -215,7 +215,7 @@ export function TlsCertificatesPage() {
                           <p>
                             来源：
                             {certificate.provider === 'acme'
-                              ? 'ACME 申请'
+                              ? '自动申请'
                               : '手动上传'}
                           </p>
                           {certificate.provider === 'upload' &&
