@@ -3103,6 +3103,118 @@ func TestAgentDNSProbeResultsPersistToWorkerHealth(t *testing.T) {
 	}
 }
 
+func TestAgentDNSProbeWorkerHealthIncludesUnreportedOnlineNodes(t *testing.T) {
+	setupServiceTestDB(t)
+
+	if _, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns1-hk",
+		PublicAddress: "ns1.example.net",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if _, err = RecordDNSWorkerHeartbeat(workerModel, DNSWorkerHeartbeatInput{
+		Version:             "v1.0.0",
+		Status:              dnsWorkerStatusOnline,
+		LastSnapshotVersion: "snapshot-a",
+		LastSnapshotAt:      &now,
+	}); err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+
+	nodes := []*model.Node{
+		{
+			NodeID:            "node-jp",
+			Name:              "CLAW-JP",
+			PoolName:          "日本",
+			AgentToken:        "agent-token-jp",
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now,
+			SchedulingEnabled: true,
+		},
+		{
+			NodeID:            "node-eu",
+			Name:              "AKKO GB",
+			PoolName:          "欧洲",
+			AgentToken:        "agent-token-eu",
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now.Add(-time.Second),
+			SchedulingEnabled: true,
+		},
+		{
+			NodeID:            "node-hk",
+			Name:              "Aliyun HK",
+			PoolName:          "香港",
+			AgentToken:        "agent-token-hk",
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now.Add(-2 * time.Second),
+			SchedulingEnabled: true,
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node %s: %v", node.NodeID, err)
+		}
+	}
+
+	results := []AgentDNSProbeResult{
+		{Network: "UDP", Reachable: true, DurationMs: 10, RCode: "NOERROR", AnswerCount: 1},
+		{Network: "TCP", Reachable: true, DurationMs: 20, RCode: "NOERROR", AnswerCount: 1},
+	}
+	for _, nodeID := range []string{"node-jp", "node-hk"} {
+		persistHeartbeatObservability(nodeID, AgentNodePayload{
+			DNSProbeResults: []AgentDNSProbeReport{{
+				WorkerID:      worker.WorkerID,
+				PublicAddress: "ns1.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results:       results,
+			}},
+		}, now)
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.WorkerHealth.NodeProbeCheckedCount != 3 ||
+		summary.WorkerHealth.NodeProbeHealthyCount != 2 ||
+		summary.WorkerHealth.NodeProbeHealthyPercent < 66.6 ||
+		summary.WorkerHealth.NodeProbeHealthyPercent > 66.7 {
+		t.Fatalf("expected 2/3 node probe summary, got %+v", summary.WorkerHealth)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 || len(summary.WorkerHealth.Workers[0].NodeProbes) != 3 {
+		t.Fatalf("expected three node probe cards, got %+v", summary.WorkerHealth.Workers)
+	}
+	var unreported DNSWorkerNodeProbeView
+	for _, probe := range summary.WorkerHealth.Workers[0].NodeProbes {
+		if probe.NodeID == "node-eu" {
+			unreported = probe
+			break
+		}
+	}
+	if unreported.NodeID == "" ||
+		unreported.NodeName != "AKKO GB" ||
+		unreported.PoolName != "欧洲" ||
+		unreported.ProbeStatus != dnsWorkerProbeUnknown ||
+		unreported.Healthy ||
+		!unreported.CheckedAt.IsZero() {
+		t.Fatalf("expected unreported online node to be visible as unknown, got %+v", unreported)
+	}
+}
+
 func TestAgentDNSProbeFutureCheckedAtIsClampedOnPersist(t *testing.T) {
 	setupServiceTestDB(t)
 

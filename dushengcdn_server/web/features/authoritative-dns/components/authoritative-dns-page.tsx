@@ -86,6 +86,10 @@ type FeedbackState = {
   message: string;
 };
 
+function isMeaningfulTime(value: string | null | undefined) {
+  return Boolean(value) && !String(value).startsWith('0001-01-01');
+}
+
 type ActiveTab = 'zones' | 'workers' | 'migration';
 
 type ZoneFormValues = {
@@ -3492,7 +3496,9 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
                     </p>
                     <p className="mt-1 text-[11px] text-[var(--foreground-muted)]">
                       {probe.pool_name || 'default'} ·{' '}
-                      {formatRelativeTime(probe.checked_at)}
+                      {isMeaningfulTime(probe.checked_at)
+                        ? formatRelativeTime(probe.checked_at)
+                        : '尚未探测'}
                     </p>
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">

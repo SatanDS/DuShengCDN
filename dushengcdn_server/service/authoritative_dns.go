@@ -3664,6 +3664,13 @@ type dnsWorkerNodeProbeStats struct {
 	probes            []DNSWorkerNodeProbeView
 }
 
+type dnsWorkerProbeTargetNode struct {
+	NodeID   string
+	Name     string
+	PoolName string
+	Status   string
+}
+
 func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) DNSWorkerHealthSummaryView {
 	snapshotMaxAge := authoritativeDNSSnapshotMaxAge()
 	workers, err := model.ListDNSWorkers()
@@ -3837,22 +3844,61 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 }
 
 func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeStats {
-	probes, err := model.ListDNSWorkerNodeProbes()
-	if err != nil || len(probes) == 0 {
-		return map[string]*dnsWorkerNodeProbeStats{}
-	}
 	nodes, err := model.ListNodes()
 	if err != nil {
 		nodes = []*model.Node{}
 	}
 	nodesByID := make(map[string]*model.Node, len(nodes))
+	targetNodes := make([]dnsWorkerProbeTargetNode, 0, len(nodes))
 	for _, node := range nodes {
 		if node == nil {
 			continue
 		}
 		nodesByID[node.NodeID] = node
+		if !shouldExpectAgentDNSProbeForNode(node) {
+			continue
+		}
+		targetNodes = append(targetNodes, dnsWorkerProbeTargetNode{
+			NodeID:   strings.TrimSpace(node.NodeID),
+			Name:     displayNodeName(node),
+			PoolName: strings.TrimSpace(node.PoolName),
+			Status:   computeNodeStatus(node),
+		})
 	}
+	sort.SliceStable(targetNodes, func(i, j int) bool {
+		if targetNodes[i].PoolName != targetNodes[j].PoolName {
+			return targetNodes[i].PoolName < targetNodes[j].PoolName
+		}
+		if targetNodes[i].Name != targetNodes[j].Name {
+			return targetNodes[i].Name < targetNodes[j].Name
+		}
+		return targetNodes[i].NodeID < targetNodes[j].NodeID
+	})
+
 	statsByWorker := make(map[string]*dnsWorkerNodeProbeStats)
+	for _, workerID := range expectedAgentDNSProbeWorkerIDs() {
+		stats := &dnsWorkerNodeProbeStats{probes: []DNSWorkerNodeProbeView{}}
+		statsByWorker[workerID] = stats
+		for _, node := range targetNodes {
+			if node.NodeID == "" {
+				continue
+			}
+			stats.probes = append(stats.probes, DNSWorkerNodeProbeView{
+				NodeID:       node.NodeID,
+				NodeName:     node.Name,
+				PoolName:     node.PoolName,
+				Status:       node.Status,
+				ProbeStatus:  dnsWorkerProbeUnknown,
+				ProbeMessage: "尚未收到 Agent 多节点探测结果",
+				Results:      []DNSWorkerProbeResultView{},
+			})
+		}
+	}
+
+	probes, err := model.ListDNSWorkerNodeProbes()
+	if err != nil {
+		return statsByWorker
+	}
 	for _, probe := range probes {
 		if probe == nil {
 			continue
@@ -3871,37 +3917,15 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 		poolName := ""
 		nodeStatus := NodeStatusOffline
 		if node := nodesByID[nodeID]; node != nil {
-			nodeName = strings.TrimSpace(node.Name)
-			if nodeName == "" {
-				nodeName = nodeID
-			}
+			nodeName = displayNodeName(node)
 			poolName = strings.TrimSpace(node.PoolName)
 			nodeStatus = computeNodeStatus(node)
 		}
 		probeState := evaluateDNSWorkerNodeProbeState(now, probe)
 		checkedAt := normalizeDNSWorkerCheckedAt(&probe.CheckedAt, now, probe.UpdatedAt, probe.CreatedAt)
-		stats.totalCount++
-		switch probeState.status {
-		case dnsWorkerProbeHealthy:
-			stats.healthyCount++
-		case dnsWorkerProbePartial:
-			stats.partialCount++
-		case dnsWorkerProbeFailed:
-			stats.failedCount++
-		case dnsWorkerProbeStale:
-			stats.staleCount++
-		case dnsWorkerProbeUnknown:
-			stats.unknownCount++
-		}
+		existingIndex := findDNSWorkerNodeProbeViewIndex(stats.probes, nodeID)
 		averageRTTMs, maxRTTMs := normalizeDNSWorkerNodeProbeRTT(probe.AverageRTTMs, probe.MaxRTTMs)
-		if probeState.status != dnsWorkerProbeStale && averageRTTMs > 0 {
-			stats.totalAverageRTTMs += averageRTTMs
-			stats.averageSamples++
-		}
-		if probeState.status != dnsWorkerProbeStale && maxRTTMs > stats.maxRTTMs {
-			stats.maxRTTMs = maxRTTMs
-		}
-		stats.probes = append(stats.probes, DNSWorkerNodeProbeView{
+		view := DNSWorkerNodeProbeView{
 			NodeID:          nodeID,
 			NodeName:        nodeName,
 			PoolName:        poolName,
@@ -3916,17 +3940,139 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 			Results:         decodeDNSWorkerProbeResults(probe.ResultsJSON),
 			LastError:       probe.LastError,
 			FailureSamples:  probe.FailureSamples,
-		})
+		}
+		if existingIndex >= 0 {
+			stats.probes[existingIndex] = view
+		} else {
+			stats.probes = append(stats.probes, view)
+		}
 	}
 	for _, stats := range statsByWorker {
+		recomputeDNSWorkerNodeProbeStats(stats)
 		sort.SliceStable(stats.probes, func(i, j int) bool {
+			if stats.probes[i].ProbeStatus != stats.probes[j].ProbeStatus {
+				return dnsWorkerProbeStatusSortRank(stats.probes[i].ProbeStatus) < dnsWorkerProbeStatusSortRank(stats.probes[j].ProbeStatus)
+			}
 			if stats.probes[i].Healthy != stats.probes[j].Healthy {
 				return stats.probes[i].Healthy
 			}
-			return stats.probes[i].CheckedAt.After(stats.probes[j].CheckedAt)
+			if !stats.probes[i].CheckedAt.Equal(stats.probes[j].CheckedAt) {
+				return stats.probes[i].CheckedAt.After(stats.probes[j].CheckedAt)
+			}
+			if stats.probes[i].PoolName != stats.probes[j].PoolName {
+				return stats.probes[i].PoolName < stats.probes[j].PoolName
+			}
+			if stats.probes[i].NodeName != stats.probes[j].NodeName {
+				return stats.probes[i].NodeName < stats.probes[j].NodeName
+			}
+			return stats.probes[i].NodeID < stats.probes[j].NodeID
 		})
 	}
 	return statsByWorker
+}
+
+func recomputeDNSWorkerNodeProbeStats(stats *dnsWorkerNodeProbeStats) {
+	if stats == nil {
+		return
+	}
+	stats.totalCount = 0
+	stats.healthyCount = 0
+	stats.partialCount = 0
+	stats.failedCount = 0
+	stats.unknownCount = 0
+	stats.staleCount = 0
+	stats.totalAverageRTTMs = 0
+	stats.averageSamples = 0
+	stats.maxRTTMs = 0
+	for _, probe := range stats.probes {
+		stats.totalCount++
+		switch probe.ProbeStatus {
+		case dnsWorkerProbeHealthy:
+			stats.healthyCount++
+		case dnsWorkerProbePartial:
+			stats.partialCount++
+		case dnsWorkerProbeFailed:
+			stats.failedCount++
+		case dnsWorkerProbeStale:
+			stats.staleCount++
+		case dnsWorkerProbeUnknown:
+			stats.unknownCount++
+		}
+		if probe.ProbeStatus != dnsWorkerProbeStale && probe.AverageRTTMs > 0 {
+			stats.totalAverageRTTMs += probe.AverageRTTMs
+			stats.averageSamples++
+		}
+		if probe.ProbeStatus != dnsWorkerProbeStale && probe.MaxRTTMs > stats.maxRTTMs {
+			stats.maxRTTMs = probe.MaxRTTMs
+		}
+	}
+}
+
+func shouldExpectAgentDNSProbeForNode(node *model.Node) bool {
+	if node == nil {
+		return false
+	}
+	if strings.TrimSpace(node.NodeID) == "" {
+		return false
+	}
+	if !node.SchedulingEnabled || node.DrainMode {
+		return false
+	}
+	return computeNodeStatus(node) == NodeStatusOnline
+}
+
+func displayNodeName(node *model.Node) string {
+	if node == nil {
+		return ""
+	}
+	name := strings.TrimSpace(node.Name)
+	if name != "" {
+		return name
+	}
+	return strings.TrimSpace(node.NodeID)
+}
+
+func expectedAgentDNSProbeWorkerIDs() []string {
+	targets := buildAgentDNSProbeTargets()
+	workerIDs := make([]string, 0, len(targets))
+	seen := map[string]struct{}{}
+	for _, target := range targets {
+		workerID := strings.TrimSpace(target.WorkerID)
+		if workerID == "" {
+			continue
+		}
+		if _, ok := seen[workerID]; ok {
+			continue
+		}
+		seen[workerID] = struct{}{}
+		workerIDs = append(workerIDs, workerID)
+	}
+	return workerIDs
+}
+
+func findDNSWorkerNodeProbeViewIndex(probes []DNSWorkerNodeProbeView, nodeID string) int {
+	nodeID = strings.TrimSpace(nodeID)
+	for index, probe := range probes {
+		if strings.TrimSpace(probe.NodeID) == nodeID {
+			return index
+		}
+	}
+	return -1
+}
+
+func dnsWorkerProbeStatusSortRank(status string) int {
+	switch status {
+	case dnsWorkerProbeFailed, dnsWorkerProbePartial:
+		return 0
+	case dnsWorkerProbeStale:
+		return 1
+	case dnsWorkerProbeUnknown:
+		return 2
+	case dnsWorkerProbeHealthy:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func buildDNSWorkerNodeProbeStatsByNode(now time.Time) map[string]*dnsWorkerNodeProbeStats {
