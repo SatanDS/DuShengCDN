@@ -1289,7 +1289,9 @@ describe('Authoritative DNS page', () => {
     await user.click(screen.getByRole('button', { name: '探测' }));
     expect(await screen.findByText(/DNS 响应端探测完成/)).toBeInTheDocument();
 
-    await user.click(screen.getAllByRole('button', { name: '创建响应端' })[0]);
+    await user.click(
+      screen.getAllByRole('button', { name: '创建 DNS 响应端' })[0],
+    );
     const createDialog = await screen.findByRole('dialog', {
       name: '创建 DNS 响应端',
     });

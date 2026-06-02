@@ -1346,7 +1346,7 @@ export function AuthoritativeDNSPage() {
                 type="button"
                 onClick={() => setIsWorkerModalOpen(true)}
               >
-                创建响应端
+                创建 DNS 响应端
               </SecondaryButton>
               <PrimaryButton type="button" onClick={openCreateZone}>
                 创建托管域名
@@ -2033,14 +2033,14 @@ function WorkersPanel({
       description="响应端使用专属密钥拉取只读解析配置，并监听 UDP/TCP 53 对外回答 DNS 查询。"
       action={
         <PrimaryButton type="button" onClick={onCreateWorker}>
-          创建响应端
+          创建 DNS 响应端
         </PrimaryButton>
       }
     >
       {workers.length === 0 ? (
         <EmptyState
           title="暂无 DNS 响应端"
-          description="创建响应端后复制部署命令，并在注册商处把托管域名的 NS 指向响应端地址。"
+          description="创建 DNS 响应端后复制部署命令，并在注册商处把托管域名的 NS 指向响应端地址。"
         />
       ) : (
         <div className="space-y-4">
@@ -3646,7 +3646,7 @@ function DNSSnapshotConsistencyPanel({
           value={formatCount(consistency.stale_worker_count)}
         />
         <InfoTile
-          label="配置最大年龄"
+          label="DNS 响应端过期阈值"
           value={`${consistency.snapshot_max_age_seconds} 秒`}
         />
       </div>
