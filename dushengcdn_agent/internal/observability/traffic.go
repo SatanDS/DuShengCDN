@@ -22,6 +22,7 @@ type accessLogRecord struct {
 	RemoteAddr           string `json:"remote_addr"`
 	Path                 string `json:"path"`
 	Status               int    `json:"status"`
+	Reason               string `json:"reason"`
 	BytesSent            int64  `json:"bytes_sent"`
 	RequestLength        int64  `json:"request_length"`
 	UpstreamBytes        string `json:"upstream_response_length"`
@@ -201,6 +202,7 @@ func (aggregate *trafficAggregate) consume(line []byte) {
 		Host:          strings.TrimSpace(record.Host),
 		Path:          normalizeAccessLogPath(record.Path),
 		StatusCode:    record.Status,
+		Reason:        normalizeAccessLogReason(record.Reason),
 		RequestBytes:  nonNegativeInt64(record.RequestLength),
 		ResponseBytes: nonNegativeInt64(record.BytesSent),
 		UpstreamBytes: nonNegativeInt64(record.UpstreamBytes),
@@ -213,6 +215,7 @@ type parsedAccessLogRecord struct {
 	RemoteAddr           string
 	Path                 string
 	Status               int
+	Reason               string
 	BytesSent            int64
 	RequestLength        int64
 	UpstreamBytes        int64
@@ -244,6 +247,7 @@ func parseJSONAccessLogRecord(raw string) (parsedAccessLogRecord, bool) {
 		RemoteAddr:           strings.TrimSpace(record.RemoteAddr),
 		Path:                 normalizeAccessLogPath(record.Path),
 		Status:               record.Status,
+		Reason:               normalizeAccessLogReason(record.Reason),
 		BytesSent:            record.BytesSent,
 		RequestLength:        record.RequestLength,
 		UpstreamBytes:        parseByteList(record.UpstreamBytes),
@@ -423,6 +427,7 @@ type trafficCountItem struct {
 }
 
 const accessLogPathMaxRunes = 100
+const accessLogReasonMaxRunes = 512
 
 func normalizeAccessLogPath(value string) string {
 	trimmed := strings.TrimSpace(value)
@@ -444,6 +449,18 @@ func truncateAccessLogPath(value string) string {
 		return value
 	}
 	return string(runes[:accessLogPathMaxRunes])
+}
+
+func normalizeAccessLogReason(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || trimmed == "-" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= accessLogReasonMaxRunes {
+		return trimmed
+	}
+	return string(runes[:accessLogReasonMaxRunes])
 }
 
 func topCounts(values map[string]int64, limit int) map[string]int64 {

@@ -58,6 +58,9 @@ func TestCreateTLSCertificateAndRenderHTTPSConfig(t *testing.T) {
 	if !strings.Contains(result.Version.MainConfig, "access_log __DUSHENGCDN_ACCESS_LOG__ dushengcdn_json;") {
 		t.Fatal("expected main config to include managed access log placeholder")
 	}
+	if !strings.Contains(result.Version.MainConfig, `"reason":"$dushengcdn_request_reason"`) {
+		t.Fatal("expected main config to include access log reason field")
+	}
 	if !strings.Contains(result.Version.MainConfig, "log_by_lua_file __DUSHENGCDN_LUA_DIR__/log.lua;") {
 		t.Fatal("expected main config to include managed openresty lua log hook")
 	}
@@ -529,7 +532,7 @@ func TestPublishConfigVersionSkipsHTTPSForDomainsWithoutCertificate(t *testing.T
 	if !strings.Contains(result.Version.RenderedConfig, "listen 443 ssl;\n    http2 on;\n    server_name app.example.com;") {
 		t.Fatal("expected https server block to contain only the certified domain")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "listen 80;\n    server_name app.example.com;\n\n    return 301 https://$host$request_uri;") {
+	if !strings.Contains(result.Version.RenderedConfig, "listen 80;\n    server_name app.example.com;\n    set $dushengcdn_request_reason \"\";\n\n    return 301 https://$host$request_uri;") {
 		t.Fatal("expected certified domain to keep http redirect")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "listen 80;\n    server_name www.example.com;") {

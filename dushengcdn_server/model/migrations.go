@@ -1792,6 +1792,24 @@ func validateDatabaseSchemaV26(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV27 adds access log reason fields for protection hit explanations.
+func migrateV27(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV27(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV26(db, backend); err != nil {
+		return err
+	}
+	for _, table := range observabilityShardTables("node_access_logs") {
+		if !db.Migrator().HasColumn(table, "reason") {
+			return fmt.Errorf("column %s.reason is missing", table)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1819,6 +1837,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 23, toVersion: 24, migrate: migrateV24, validate: validateDatabaseSchemaV24},
 		{fromVersion: 24, toVersion: 25, migrate: migrateV25, validate: validateDatabaseSchemaV25},
 		{fromVersion: 25, toVersion: 26, migrate: migrateV26, validate: validateDatabaseSchemaV26},
+		{fromVersion: 26, toVersion: 27, migrate: migrateV27, validate: validateDatabaseSchemaV27},
 	}
 }
 
@@ -1907,7 +1926,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV26(db, backend); err != nil {
+	if err := validateDatabaseSchemaV27(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

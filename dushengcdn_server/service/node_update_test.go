@@ -874,6 +874,7 @@ func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 				Host:         "api.example.com",
 				Path:         "/v1/ping",
 				StatusCode:   502,
+				Reason:       "恶意请求防护拦截: bad_bots",
 			},
 		},
 		HealthEvents: []AgentNodeHealthEvent{
@@ -930,6 +931,9 @@ func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	}
 	if accessLogs[0].Region == "" || accessLogs[1].Region == "" {
 		t.Fatalf("expected access log region to persist: %+v", accessLogs)
+	}
+	if accessLogs[0].Reason != "恶意请求防护拦截: bad_bots" {
+		t.Fatalf("expected access log reason to persist, got %+v", accessLogs)
 	}
 
 	events, err := model.ListNodeHealthEvents(node.NodeID, true, 10)

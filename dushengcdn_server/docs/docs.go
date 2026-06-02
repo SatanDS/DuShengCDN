@@ -2852,6 +2852,9 @@ const docTemplate = `{
                 "remote_addr": {
                     "type": "string"
                 },
+                "reason": {
+                    "type": "string"
+                },
                 "request_bytes": {
                     "type": "integer"
                 },

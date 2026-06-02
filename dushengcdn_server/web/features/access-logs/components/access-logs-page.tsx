@@ -88,6 +88,18 @@ const foldOptions = [
   { value: '5', label: '按 5 分钟折叠' },
 ];
 const cleanupPresetOptions = [3, 7, 30];
+const wafReasonLabels: Record<string, string> = {
+  path_traversal: '路径穿越',
+  sensitive_paths: '敏感路径扫描',
+  bad_bots: '恶意工具 UA',
+  xss: '跨站脚本',
+  sqli: 'SQL 注入',
+  custom_path_contains: '自定义路径包含',
+  custom_path_regex: '自定义路径正则',
+  custom_query_contains: '自定义查询参数',
+  custom_header_contains: '自定义请求头',
+  custom_user_agent: '自定义 User-Agent',
+};
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
@@ -148,6 +160,27 @@ function buildTrendLabels(points: Array<{ bucket_started_at: string }>) {
       date.getMinutes(),
     ).padStart(2, '0')}`;
   });
+}
+
+function formatStatusReason(reason: string) {
+  return reason.replace(/: ([a-z_]+)$/i, (match, key: string) => {
+    const label = wafReasonLabels[key];
+    return label ? `: ${label}（${key}）` : match;
+  });
+}
+
+function getStatusReason(item: { status_code: number; reason?: string }) {
+  const reason = item.reason?.trim();
+  if (reason) {
+    return `命中原因：${formatStatusReason(reason)}`;
+  }
+  if (item.status_code === 404) {
+    return '没有记录到防护命中。404 通常表示源站或默认站点没有这个路径，也可能是节点为了隐藏扫描目标返回未找到。命中恶意请求防护时，这里会显示具体规则。';
+  }
+  if (item.status_code === 403) {
+    return '没有记录到具体防护规则。403 通常表示请求被认证、地区限制、恶意请求防护或源站权限策略拒绝；命中恶意请求防护时，这里会显示具体规则。';
+  }
+  return '';
 }
 
 export function AccessLogsPage() {
@@ -1190,6 +1223,7 @@ function DetailTab({
               <tbody className="divide-y divide-[var(--border-default)]">
                 {data.items.map((item) => {
                   const statusMeta = getStatusMeta(item.status_code);
+                  const statusReason = getStatusReason(item);
                   return (
                     <tr key={item.id} className="align-top">
                       <td className="px-3 py-4 text-[var(--foreground-secondary)]">
@@ -1224,10 +1258,21 @@ function DetailTab({
                         </div>
                       </td>
                       <td className="px-3 py-4">
-                        <StatusBadge
-                          label={statusMeta.label}
-                          variant={statusMeta.variant}
-                        />
+                        <div className="inline-flex items-center gap-1.5">
+                          <StatusBadge
+                            label={statusMeta.label}
+                            variant={statusMeta.variant}
+                          />
+                          {statusReason ? (
+                            <span
+                              aria-label="查看状态码原因"
+                              title={statusReason}
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[11px] font-semibold text-[var(--foreground-secondary)]"
+                            >
+                              !
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   );

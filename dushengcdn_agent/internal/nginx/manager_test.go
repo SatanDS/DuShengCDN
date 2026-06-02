@@ -824,6 +824,7 @@ func TestWAFLuaRunsAfterGeoIPAndBeforePoW(t *testing.T) {
 		`"__DUSHENGCDN_RUNTIME_CONFIG_DIR__/waf_config.json"`,
 		`function M.run()`,
 		`return ngx.exit(ngx.HTTP_FORBIDDEN)`,
+		`ngx.var.dushengcdn_request_reason = "恶意请求防护" .. action .. ": " .. label`,
 		`ngx.header["X-DuShengCDN-WAF"] = "matched; mode=log; rule=" .. reason`,
 		`local bots = {"sqlmap", "nikto", "acunetix", "masscan", "nessus", "nmap", "zgrab", "gobuster", "dirbuster"}`,
 	} {

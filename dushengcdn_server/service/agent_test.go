@@ -73,6 +73,9 @@ func TestGetActiveConfigForAgentIncludesWAFConfig(t *testing.T) {
 	if !strings.Contains(release.Version.RenderedConfig, "access_by_lua_file __DUSHENGCDN_LUA_DIR__/access.lua;") {
 		t.Fatalf("expected rendered config to include unified access lua for WAF, got %s", release.Version.RenderedConfig)
 	}
+	if !strings.Contains(release.Version.RenderedConfig, `set $dushengcdn_request_reason "";`) {
+		t.Fatalf("expected rendered config to initialize access log reason variable, got %s", release.Version.RenderedConfig)
+	}
 	if !strings.Contains(release.Version.MainConfig, "lua_shared_dict dushengcdn_waf_config 1m;") {
 		t.Fatalf("expected main config to include WAF shared dict, got %s", release.Version.MainConfig)
 	}

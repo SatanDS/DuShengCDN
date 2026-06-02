@@ -45,6 +45,7 @@ type AccessLogView struct {
 	Host       string    `json:"host"`
 	Path       string    `json:"path"`
 	StatusCode int       `json:"status_code"`
+	Reason     string    `json:"reason"`
 }
 
 type AccessLogList struct {
@@ -211,6 +212,7 @@ func ListAccessLogs(input AccessLogQuery) (*AccessLogList, error) {
 			Host:       item.Host,
 			Path:       item.Path,
 			StatusCode: item.StatusCode,
+			Reason:     item.Reason,
 		})
 	}
 	return &AccessLogList{

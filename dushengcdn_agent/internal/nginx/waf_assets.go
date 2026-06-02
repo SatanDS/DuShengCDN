@@ -250,6 +250,15 @@ local function custom_match(config, uri, query, user_agent, headers_text)
     return nil
 end
 
+local function set_reason(reason, mode)
+    local label = tostring(reason or "")
+    if label == "" then
+        return
+    end
+    local action = mode == "log" and "观察记录" or "拦截"
+    ngx.var.dushengcdn_request_reason = "恶意请求防护" .. action .. ": " .. label
+end
+
 function M.run()
     load_waf_config()
     if not waf_config_dict or not ok_cjson or not cjson then
@@ -281,9 +290,11 @@ function M.run()
     end
     ngx.log(ngx.WARN, "dushengcdn waf matched ", reason, " host=", host, " ip=", client_ip(), " uri=", ngx.var.request_uri or uri)
     if (entry.mode or "block") == "log" then
+        set_reason(reason, "log")
         ngx.header["X-DuShengCDN-WAF"] = "matched; mode=log; rule=" .. reason
         return
     end
+    set_reason(reason, "block")
     ngx.header["X-DuShengCDN-WAF"] = "blocked; rule=" .. reason
     return ngx.exit(ngx.HTTP_FORBIDDEN)
 end

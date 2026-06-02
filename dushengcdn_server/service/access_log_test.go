@@ -42,6 +42,7 @@ func TestListAccessLogsIncludesSummaryTotals(t *testing.T) {
 			Host:       "a.example.com",
 			Path:       "/beta",
 			StatusCode: 404,
+			Reason:     "恶意请求防护拦截: sensitive_paths",
 		},
 		{
 			NodeID:     "node-b",
@@ -95,6 +96,9 @@ func TestListAccessLogsIncludesSummaryTotals(t *testing.T) {
 	}
 	if len(filtered.Items) != 2 {
 		t.Fatalf("expected filtered items=2, got %d", len(filtered.Items))
+	}
+	if filtered.Items[0].Reason != "恶意请求防护拦截: sensitive_paths" {
+		t.Fatalf("expected access log reason to be returned, got %+v", filtered.Items[0])
 	}
 }
 
@@ -338,6 +342,7 @@ func TestPersistNodeAccessLogsTruncatesLongPath(t *testing.T) {
 	setupServiceTestDB(t)
 
 	longPath := "/" + strings.Repeat("a", 140)
+	longReason := "恶意请求防护拦截: " + strings.Repeat("sensitive_paths", 80)
 	reportedAt := time.Now().UTC()
 	if err := persistNodeAccessLogs(model.DB, "node-truncate", []AgentNodeAccessLog{
 		{
@@ -346,6 +351,7 @@ func TestPersistNodeAccessLogsTruncatesLongPath(t *testing.T) {
 			Host:         "truncate.example.com",
 			Path:         longPath,
 			StatusCode:   200,
+			Reason:       longReason,
 		},
 	}, reportedAt); err != nil {
 		t.Fatalf("persistNodeAccessLogs failed: %v", err)
@@ -364,6 +370,9 @@ func TestPersistNodeAccessLogsTruncatesLongPath(t *testing.T) {
 	}
 	if got := len([]rune(logs[0].Path)); got != nodeAccessLogPathMaxLength {
 		t.Fatalf("expected truncated path length %d, got %d (%q)", nodeAccessLogPathMaxLength, got, logs[0].Path)
+	}
+	if got := len([]rune(logs[0].Reason)); got != 512 {
+		t.Fatalf("expected truncated reason length 512, got %d", got)
 	}
 }
 

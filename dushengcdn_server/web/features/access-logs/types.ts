@@ -19,6 +19,7 @@ export interface AccessLogItem {
   host: string;
   path: string;
   status_code: number;
+  reason?: string;
 }
 
 export interface AccessLogList {

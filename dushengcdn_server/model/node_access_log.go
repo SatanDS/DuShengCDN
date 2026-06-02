@@ -18,6 +18,7 @@ type NodeAccessLog struct {
 	Host          string    `json:"host" gorm:"index;size:255"`
 	Path          string    `json:"path" gorm:"size:2048"`
 	StatusCode    int       `json:"status_code" gorm:"index"`
+	Reason        string    `json:"reason" gorm:"type:text"`
 	RequestBytes  int64     `json:"request_bytes"`
 	ResponseBytes int64     `json:"response_bytes"`
 	UpstreamBytes int64     `json:"upstream_bytes"`

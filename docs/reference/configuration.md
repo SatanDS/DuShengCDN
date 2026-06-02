@@ -334,7 +334,7 @@ DNS Worker 心跳会把本地 GeoIP 国家库状态同步到 Server，包括 `ge
 * Agent 周期性健康检查会请求 `http://127.0.0.1:<openresty_observability_port>/dushengcdn/stub_status`，不再通过高频 `openresty -t` 判断运行时健康；配置应用、启动恢复和 reload 前校验仍会执行 `openresty -t -c <main_config_path>`。
 * 如果 `agent.json` 不存在，但 `DUSHENGCDN_SERVER_URL` 与 Token 等环境变量足够，Agent 可以直接启动；两者同时存在时环境变量优先。
 * Agent 自动探测到私网 `node_ip` 时，Server 会在注册/心跳阶段优先保留 Agent 直连来源的公网地址，避免 NAT/多网卡场景误登记内网网卡地址。
-* `access_log_path` 指向的访问日志会被 Agent 增量解析并上报到 Server。新版受控日志格式包含 `request_length`、`bytes_sent` 与 `upstream_response_length`，分别用于观测计量中的请求入站、出站流量和回源流量；旧日志缺少的字段不会补算。
+* `access_log_path` 指向的访问日志会被 Agent 增量解析并上报到 Server。新版受控日志格式包含 `request_length`、`bytes_sent`、`upstream_response_length` 与 `reason`，分别用于观测计量中的请求入站、出站流量、回源流量和防护命中说明；旧日志缺少的字段不会补算。
 * 地区限制由节点本地 GeoIP 数据库优先识别；配置 `geoip_lookup_api_url` 后，本地库未识别国家码时再请求在线 API。API 返回 JSON 中的 `country_code`、`countryCode`、`iso_code`、`isoCode` 或 `country` 字段均可识别。
 
 ## 常见配置组合

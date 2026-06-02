@@ -3025,8 +3025,8 @@ export function WAFSection({
           label="运行模式"
           hint={
             watchedMode === 'log'
-              ? '只记录命中规则并继续放行，适合先观察误杀。'
-              : '命中规则后直接返回 403。'
+              ? '只记录命中规则并继续放行；发布后可在观测计量的访问明细里查看状态码旁的 ! 了解命中规则。'
+              : '命中规则后直接返回 403；发布后可在观测计量的访问明细里查看状态码旁的 ! 了解拦截规则。'
           }
         >
           <ResourceSelect
@@ -3041,7 +3041,7 @@ export function WAFSection({
 
         <ResourceField
           label="内置规则"
-          hint="建议先使用观察模式确认误杀情况，再切换为拦截模式。"
+          hint="建议先使用观察模式确认误杀情况，再切换为拦截模式；命中记录在观测计量的访问明细中查看。"
           container="div"
         >
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

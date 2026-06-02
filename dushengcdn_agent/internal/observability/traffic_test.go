@@ -86,7 +86,7 @@ func TestBuildTrafficObservabilityReturnsAccessLogs(t *testing.T) {
 	}
 	logPath := filepath.Join(filepath.Dir(routeConfigPath), "dushengcdn_access.log")
 	content := []byte(
-		"{\"ts\":\"2026-03-14T08:00:00Z\",\"host\":\"app.example.com\",\"path\":\"/login\",\"remote_addr\":\"10.0.0.1\",\"status\":200,\"request_length\":128,\"bytes_sent\":512}\n" +
+		"{\"ts\":\"2026-03-14T08:00:00Z\",\"host\":\"app.example.com\",\"path\":\"/login\",\"remote_addr\":\"10.0.0.1\",\"status\":200,\"reason\":\"恶意请求防护观察记录: sensitive_paths\",\"request_length\":128,\"bytes_sent\":512}\n" +
 			"{\"ts\":\"2026-03-14T08:00:05Z\",\"host\":\"api.example.com\",\"path\":\"/v1/ping\",\"remote_addr\":\"10.0.0.2\",\"status\":502,\"request_length\":64,\"bytes_sent\":256}\n",
 	)
 	if err := os.WriteFile(logPath, content, 0o644); err != nil {
@@ -106,6 +106,9 @@ func TestBuildTrafficObservabilityReturnsAccessLogs(t *testing.T) {
 	}
 	if accessLogs[0].RequestBytes != 128 || accessLogs[0].ResponseBytes != 512 {
 		t.Fatalf("expected byte fields in access logs, got %+v", accessLogs)
+	}
+	if accessLogs[0].Reason != "恶意请求防护观察记录: sensitive_paths" {
+		t.Fatalf("expected access log reason to be parsed, got %+v", accessLogs[0])
 	}
 	if accessLogs[0].Path != "/login" || accessLogs[1].Path != "/v1/ping" {
 		t.Fatalf("unexpected access log paths: %+v", accessLogs)
