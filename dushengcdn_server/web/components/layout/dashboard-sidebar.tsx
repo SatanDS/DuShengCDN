@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 
+import { MapleMark } from '@/components/brand/maple-mark';
 import { dashboardNavigation } from '@/lib/constants/navigation';
 import { cn } from '@/lib/utils/cn';
 import { isNavigationItemActive } from '@/lib/utils/navigation';
@@ -206,16 +207,18 @@ function SidebarContent({
 
   return (
     <div className="flex h-full flex-col gap-5">
-      <div className="flex items-center gap-3 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)] px-3 py-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--brand-primary-soft)] text-sm font-semibold text-[var(--brand-primary)]">
-          AF
+      <div className="sidebar-brand-panel flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] px-3 py-3 shadow-[var(--shadow-soft)] backdrop-blur">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-white/70 bg-white/80 shadow-sm">
+          <MapleMark className="h-7 w-7" aria-hidden="true" />
         </div>
         {showLabel ? (
-          <div>
-            <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-              DuShengCDN
+          <div className="min-w-0">
+            <p className="brand-gradient-text truncate text-sm font-semibold">
+              SatanDu
             </p>
-            <p className="text-xs text-[var(--foreground-secondary)]">控制面</p>
+            <p className="truncate text-xs text-[var(--foreground-secondary)]">
+              DuShengCDN 控制面
+            </p>
           </div>
         ) : null}
       </div>

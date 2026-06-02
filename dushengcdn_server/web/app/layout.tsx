@@ -12,8 +12,12 @@ export const metadata: Metadata = {
     default: 'DuShengCDN 控制台',
     template: '%s | DuShengCDN',
   },
-  description: 'DuShengCDN 管理端',
+  description: 'SatanDu 枫叶主题的 DuShengCDN 管理端',
   applicationName: 'DuShengCDN',
+  icons: {
+    icon: '/maple-mark.svg',
+    apple: '/satan-du-logo.png',
+  },
 };
 
 interface RootLayoutProps {

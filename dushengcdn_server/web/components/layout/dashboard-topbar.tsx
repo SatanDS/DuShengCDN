@@ -332,14 +332,24 @@ export function DashboardTopbar() {
     <>
       <header className="sticky top-0 z-20 border-b border-[var(--border-default)] bg-[var(--surface-panel)]/88 px-4 py-4 backdrop-blur md:px-8">
         <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={handleSidebarToggle}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] text-lg text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
-            aria-label="切换侧边栏"
-          >
-            ☰
-          </button>
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              type="button"
+              onClick={handleSidebarToggle}
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] text-lg text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
+              aria-label="切换侧边栏"
+            >
+              ☰
+            </button>
+            <div className="hidden min-w-0 sm:block">
+              <p className="brand-gradient-text truncate text-sm font-semibold">
+                Welcome to Dusheng CDN
+              </p>
+              <p className="truncate text-xs text-[var(--foreground-secondary)]">
+                SatanDu 控制台
+              </p>
+            </div>
+          </div>
 
           <div className="flex items-center gap-3 text-sm text-[var(--foreground-secondary)]">
             <button
