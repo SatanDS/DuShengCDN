@@ -24,6 +24,79 @@ describe('CertificateApplyModal', () => {
     vi.unstubAllGlobals();
   });
 
+  it('prefers local authoritative DNS when certificate domain matches a managed zone', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes('/acme-accounts/default')) {
+          return Promise.resolve(
+            Response.json({
+              success: true,
+              message: '',
+              data: {
+                id: 3,
+                email: 'admin@example.com',
+                url: 'https://acme-v02.api.letsencrypt.org/directory',
+                created_at: '',
+                updated_at: '',
+              },
+            }),
+          );
+        }
+
+        if (url.includes('/dns-accounts/')) {
+          return Promise.resolve(
+            Response.json({
+              success: true,
+              message: '',
+              data: [{ id: 7, name: 'cf-main', type: 'cloudflare' }],
+            }),
+          );
+        }
+
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            Response.json({
+              success: true,
+              message: '',
+              data: [
+                {
+                  id: 11,
+                  name: 'example.com',
+                  soa_email: 'admin.example.com',
+                  primary_ns: 'ns1.example.com',
+                  name_servers: ['ns1.example.com'],
+                  default_ttl: 60,
+                  serial: 1,
+                  enabled: true,
+                  record_count: 0,
+                  created_at: '',
+                  updated_at: '',
+                },
+              ],
+            }),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithQueryClient(
+      <CertificateApplyModal isOpen onClose={vi.fn()} onApplied={vi.fn()} />,
+    );
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('主域名'), 'www.example.com');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('验证方式')).toHaveValue('authoritative');
+    });
+    expect(await screen.findByLabelText('本地托管域名')).toHaveValue('11');
+  });
+
   it('submits certificate application with local authoritative DNS zone', async () => {
     const onClose = vi.fn();
     const onApplied = vi.fn();

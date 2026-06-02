@@ -6,12 +6,13 @@
 
 ## 已完成重点
 
-- 证书申请支持选择 `本地自建解析（权威 DNS）`，可选择 `权威 DNS 托管域名`，后端 ACME DNS-01 会临时写入 `_acme-challenge` TXT 并清理。
+- 证书申请支持选择 `本地自建解析（权威 DNS）`，可选择 `本地托管域名`，后端 ACME DNS-01 会临时写入 `_acme-challenge` TXT 并清理。
 - 证书申请弹窗在网站详情打开时会自动带入当前网站域名和证书名称，并按域名自动匹配托管域名。
 - 如果网站配置已经切到 `本地自建解析` 并绑定托管域名，从网站详情点 `申请证书` 会默认选中本地自建解析和同一个托管域名；托管域名列表异步加载完成后也会回填下拉框，避免显示为空。
+- 如果从证书页直接点 `申请证书`，输入的证书域名能匹配已启用的本地托管域名时，弹窗会自动切换到 `本地自建解析（权威 DNS）` 并选中最匹配的托管域名，避免用户只能看到 Cloudflare 账号。
 - 网站详情将“申请证书”和“导入证书”拆成两个入口，避免用户把上传证书和 ACME 申请混在一起。
 - 证书页文案继续统一：空状态明确提示可 `导入证书` 或 `申请证书`，证书来源把 `ACME 申请` 显示为更直观的 `自动申请`，导入弹窗标题统一为 `导入证书`。
-- 证书申请弹窗继续新手化：`权威 DNS 托管域名` 改为 `本地托管域名`，`本地自建解析（权威 DNS）` 改为 `本地自建解析`，`ACME`、`DNS-01`、`CNAME` 等术语从主文案中移出，改由 `!` 说明解释。
+- 证书申请弹窗继续新手化：`权威 DNS 托管域名` 改为 `本地托管域名`；验证方式保留 `本地自建解析（权威 DNS）`，让用户能明确找到权威 DNS 申请入口；`ACME`、`DNS-01`、`CNAME` 等术语从主文案中移出，改由 `!` 说明解释。
 - 证书导入、编辑和详情继续统一：主文案使用 `证书内容`、`私钥内容`，`PEM`、文件后缀和私钥匹配等细节放到 `!` 说明里；校验错误也改为 `请输入证书内容`、`请输入私钥内容`、`请选择本地托管域名`。
 - DNS 记录 A/AAAA 创建改成一个输入框一个 IP，可点 `+` 增加，MX 优先级加了白话说明。
 - 左侧入口与多数用户可见文案统一为 `本地自建解析`、`DNS 响应端`、`解析配置`、`按压力优先`、`攻击防护模式`、`API 密钥`。
@@ -29,6 +30,7 @@
 - `cd dushengcdn_server/web; pnpm tsc --noEmit --pretty false`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/navigation-utils.test.ts tests/unit/proxy-routes-page.test.tsx tests/unit/authoritative-dns-page.test.tsx tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx`
+- `cd dushengcdn_server/web; pnpm vitest run tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx --reporter=dot`
 - `cd dushengcdn_server/web; pnpm tsc --noEmit --pretty false`
 - `cd dushengcdn_server/web; pnpm lint`
 - `cd dushengcdn_server; go test ./model`
