@@ -461,11 +461,8 @@ describe('Proxy route website pages', () => {
     expect(screen.getByText('缓存已启用')).toBeInTheDocument();
     expect(screen.getByText('启用站点缓存')).toBeInTheDocument();
     expect(screen.getByText('缓存规则')).toBeInTheDocument();
-    expect(
-      screen.getByDisplayValue(
-        (value) => value.includes('/assets') && value.includes('/static'),
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText('缓存规则 1')).toHaveValue('/assets');
+    expect(screen.getByLabelText('缓存规则 2')).toHaveValue('/static');
     expect(
       screen.getByRole('button', { name: '清理全部缓存' }),
     ).toBeInTheDocument();
@@ -2631,14 +2628,11 @@ describe('Proxy route website pages', () => {
     ).toBeInTheDocument();
 
     await user.selectOptions(screen.getByRole('combobox'), 'path_exact');
-    const cacheForm = document.querySelector('#proxy-route-cache-form');
-    const rulesInput = cacheForm?.querySelector('textarea');
-    expect(rulesInput).toBeInstanceOf(HTMLTextAreaElement);
-    if (!rulesInput) {
-      throw new Error('missing cache rules input');
-    }
-    await user.clear(rulesInput);
-    await user.type(rulesInput, '/index.html');
+    const firstRuleInput = screen.getByLabelText('缓存规则 1');
+    await user.clear(firstRuleInput);
+    await user.type(firstRuleInput, '/index.html');
+    await user.click(screen.getByRole('button', { name: '添加缓存规则' }));
+    await user.type(screen.getByLabelText('缓存规则 2'), '/manifest.json');
 
     const saveButton = document.querySelector(
       'button[form="proxy-route-cache-form"]',
@@ -2659,7 +2653,7 @@ describe('Proxy route website pages', () => {
     expect(updateRequests[0]).toMatchObject({
       cache_enabled: true,
       cache_policy: 'path_exact',
-      cache_rules: ['/index.html'],
+      cache_rules: ['/index.html', '/manifest.json'],
     });
 
     rejectUpdate?.(new Error('缓存策略保存失败：节点池不可用'));

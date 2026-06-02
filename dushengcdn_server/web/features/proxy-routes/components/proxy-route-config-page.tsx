@@ -213,19 +213,19 @@ const cacheSchema = z
   .object({
     cache_enabled: z.boolean(),
     cache_policy: z.enum(['url', 'suffix', 'path_prefix', 'path_exact']),
-    cache_rules_text: z.string(),
+    cache_rules: z.array(z.string()),
   })
   .superRefine((value, context) => {
     if (!value.cache_enabled) {
       return;
     }
 
-    const rules = linesFromTextarea(value.cache_rules_text);
+    const rules = value.cache_rules.map((item) => item.trim()).filter(Boolean);
     const error = validateCacheRules(value.cache_policy, rules);
     if (error) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['cache_rules_text'],
+        path: ['cache_rules'],
         message: error,
       });
     }
@@ -2059,7 +2059,8 @@ export function CacheSection({
       cache_enabled: route.cache_enabled,
       cache_policy: (route.cache_policy ||
         'url') as CacheValues['cache_policy'],
-      cache_rules_text: route.cache_rule_list.join('\n'),
+      cache_rules:
+        route.cache_rule_list.length > 0 ? route.cache_rule_list : [''],
     },
   });
 
@@ -2068,12 +2069,23 @@ export function CacheSection({
       cache_enabled: route.cache_enabled,
       cache_policy: (route.cache_policy ||
         'url') as CacheValues['cache_policy'],
-      cache_rules_text: route.cache_rule_list.join('\n'),
+      cache_rules:
+        route.cache_rule_list.length > 0 ? route.cache_rule_list : [''],
     });
   }, [form, route]);
 
   const watchedEnabled = form.watch('cache_enabled');
   const watchedPolicy = form.watch('cache_policy');
+  const watchedRules = form.watch('cache_rules');
+  const cacheRulesError = form.formState.errors.cache_rules;
+  const cacheRulePlaceholder =
+    watchedPolicy === 'suffix'
+      ? 'jpg'
+      : watchedPolicy === 'path_prefix'
+        ? '/assets'
+        : watchedPolicy === 'path_exact'
+          ? '/robots.txt'
+          : '按 URL 缓存时无需额外规则';
   const purgeMutation = useMutation({
     mutationFn: () => purgeProxyRouteCache(route.id, { scope: 'all' }),
     onSuccess: async (result) => {
@@ -2120,7 +2132,9 @@ export function CacheSection({
         id={formId}
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => {
-          const rules = linesFromTextarea(values.cache_rules_text);
+          const rules = values.cache_rules
+            .map((item) => item.trim())
+            .filter(Boolean);
           onSave(
             buildPayloadFromRoute(route, {
               cache_enabled: values.cache_enabled,
@@ -2157,31 +2171,68 @@ export function CacheSection({
 
         <ResourceField
           label="缓存规则"
-          error={form.formState.errors.cache_rules_text?.message}
+          error={cacheRulesError?.message}
           hint={
             watchedPolicy === 'suffix'
-              ? '每行一个后缀，例如 jpg、css、js。'
+              ? '每条填写一个后缀，例如 jpg、css、js。'
               : watchedPolicy === 'path_prefix'
-                ? '每行一个路径前缀，例如 /assets、/static。'
+                ? '每条填写一个路径前缀，例如 /assets、/static。'
                 : watchedPolicy === 'path_exact'
-                  ? '每行一个精确路径，例如 /robots.txt。'
+                  ? '每条填写一个精确路径，例如 /robots.txt。'
                   : '按 URL 缓存时无需额外规则。'
           }
         >
-          <ResourceTextarea
-            disabled={!watchedEnabled || watchedPolicy === 'url'}
-            className="min-h-32"
-            placeholder={
-              watchedPolicy === 'suffix'
-                ? 'jpg\ncss\njs'
-                : watchedPolicy === 'path_prefix'
-                  ? '/assets\n/static'
-                  : watchedPolicy === 'path_exact'
-                    ? '/robots.txt\n/manifest.json'
-                    : '按 URL 缓存时无需额外规则'
-            }
-            {...form.register('cache_rules_text')}
-          />
+          <div className="space-y-3">
+            {(watchedRules.length > 0 ? watchedRules : ['']).map(
+              (_rule, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <ResourceInput
+                    aria-label={`缓存规则 ${index + 1}`}
+                    disabled={!watchedEnabled || watchedPolicy === 'url'}
+                    placeholder={cacheRulePlaceholder}
+                    {...form.register(`cache_rules.${index}`)}
+                  />
+                  <button
+                    type="button"
+                    aria-label={`删除缓存规则 ${index + 1}`}
+                    title="删除规则"
+                    disabled={!watchedEnabled || watchedPolicy === 'url'}
+                    onClick={() => {
+                      const nextRules = [...(form.getValues('cache_rules') ?? [])];
+                      nextRules.splice(index, 1);
+                      form.setValue(
+                        'cache_rules',
+                        nextRules.length > 0 ? nextRules : [''],
+                        {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        },
+                      );
+                    }}
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] transition hover:border-[var(--border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Minus className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
+              ),
+            )}
+            <button
+              type="button"
+              aria-label="添加缓存规则"
+              title="添加规则"
+              disabled={!watchedEnabled || watchedPolicy === 'url'}
+              onClick={() => {
+                const currentRules = form.getValues('cache_rules') ?? [];
+                form.setValue('cache_rules', [...currentRules, ''], {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                });
+              }}
+              className="grid h-10 w-10 place-items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] transition hover:border-[var(--status-info-border)] hover:text-[var(--status-info-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
         </ResourceField>
 
         <div className="flex flex-wrap gap-3">

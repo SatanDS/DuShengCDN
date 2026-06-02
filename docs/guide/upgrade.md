@@ -59,7 +59,7 @@ bash scripts/diagnose-server.sh
 
 ## Agent 升级
 
-节点 Agent 默认只跟随正式版自动更新。preview 升级需要手动触发。
+节点 Agent 默认只跟随正式版 GitHub Release 自动更新。只把代码推到 `main` 分支不会触发 Agent 自更新；仓库需要先发布新的正式 Release，并且 Release 中包含对应平台 Agent 二进制和同名 `.sha256` 校验文件。preview 升级需要手动触发。
 
 安装脚本可重复执行，用于重装或升级 Agent：
 
@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --agent-token YOUR_AGENT_TOKEN
 ```
 
-脚本会优先下载 GitHub Release 中的 Agent 二进制；没有匹配资产时会从源码构建，并写入当前 Git 版本，避免节点版本显示为 `dev`。
+脚本会优先下载 GitHub Release 中的 Agent 二进制；没有匹配资产时会从源码构建，并写入当前 Git 版本，避免节点版本显示为 `dev`。这个源码构建回退只发生在你手动重新执行安装脚本时，不等同于 Agent 自动跟随 `main` 分支更新。
 
 Docker Compose 部署 Agent 时：
 

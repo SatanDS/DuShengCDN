@@ -483,7 +483,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 
 Agent：
 
-* Agent 默认只跟随正式版自动更新。
+* Agent 默认只跟随正式版 GitHub Release 自动更新；只推送 `main` 分支提交不会触发 Agent 自更新。
 * Agent 自更新会要求 GitHub Release 同时包含目标二进制和同名 `.sha256` 校验文件，下载后必须通过 SHA-256 校验才会替换本地可执行文件。
 * 安装脚本可重复执行，用于重装或升级 Agent；没有 Release 资产时会从源码构建，并写入当前 Git 版本，避免显示为 `dev`。
 * Docker Compose 部署 Agent 时，使用 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f docker-compose.agent.yaml up -d --build` 重新构建。
