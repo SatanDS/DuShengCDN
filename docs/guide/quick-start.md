@@ -9,7 +9,7 @@ DuShengCDN 的最小运行单元包含：
 | Server | 管理端 UI、管理 API、Agent API、配置渲染、版本发布与状态存储 |
 | Agent | 运行在代理节点上，拉取配置、写入 OpenResty、执行校验与 reload |
 | OpenResty | 实际接收流量并反向代理到源站 |
-| DNS Worker（可选） | 自建权威 DNS 查询面，按实时 GSLB 策略回答 A/AAAA 查询 |
+| DNS Worker（可选） | 本地自建解析查询面，按实时 GSLB 策略回答 A/AAAA 查询 |
 
 Agent 统一通过 OpenResty 二进制控制运行时。本地部署需要节点上已有 `openresty` 可执行文件；Docker 部署可直接运行内置 OpenResty 的 Agent 镜像。
 
@@ -132,7 +132,7 @@ Agent 可以用两类凭证接入：
 | 凭证 | 管理端位置 |
 | --- | --- |
 | `discovery_token` | 左侧「设置」->「运维设置」->「Discovery Token 与部署命令」 |
-| `agent_token` | 左侧「节点/IP池」-> 新增或选择节点 ->「详情」->「节点信息」->「节点标识与部署」 |
+| `agent_token` | 左侧「节点和IP池」-> 新增或选择节点 ->「详情」->「节点信息」->「节点标识与部署」 |
 
 ## 3. 安装 Agent
 
@@ -177,7 +177,7 @@ journalctl -u dushengcdn-agent -f
 在管理端完成以下操作：
 
 1. 新增网站配置，填写网站名称、域名和源站地址。
-2. 如需自动 DNS，先在节点中维护节点池与公网 IP，再在网站配置中选择节点池和 Cloudflare DNS 账号。
+2. 如需自动解析，先在节点中维护节点池与公网 IP，再在网站配置中选择节点池和 Cloudflare 账号。
 3. 确认网站配置处于启用状态。
 4. 发布前查看预览或变更摘要。
 5. 发布并激活新版本。
@@ -185,9 +185,9 @@ journalctl -u dushengcdn-agent -f
 
 版本号格式为 `YYYYMMDD-NNN`。历史版本不可变，回滚通过重新激活旧版本完成。
 
-## 5. 可选：启用自建权威 DNS
+## 5. 可选：启用本地自建解析
 
-如果希望域名按每次 DNS 查询来源实时调度到不同边缘节点，可以使用 `scripts/install-server.sh` 在部署面板时自动创建并安装同机 DNS Worker；也可以先在左侧「权威 DNS」创建 Zone 和 DNS Worker Token，再手动部署 DNS Worker：
+如果希望域名按每次 DNS 查询来源实时调度到不同边缘节点，可以使用 `scripts/install-server.sh` 在部署面板时自动创建并安装同机 DNS Worker；也可以先在左侧「本地自建解析」创建 Zone 和 DNS Worker Token，再手动部署 DNS Worker：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
@@ -217,7 +217,7 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
 
 暂时只使用来源 CIDR 或全局调度时可以先省略 GeoIP。
 
-然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「自动 DNS」里把 `DNS 模式` 切换为 `自建权威 DNS`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。Worker 默认按来源 IP 限制查询速率，并对超大 UDP 响应设置 TC 位回退 TCP；GSLB 节点池可按来源 CIDR 或国家代码匹配不同池。Worker 上报心跳后，左侧「权威 DNS」会展示查询趋势、SERVFAIL/NXDOMAIN 趋势和快照一致性告警，便于确认实时 GSLB 与多 Worker 快照状态。
+然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「自动解析域名」里把 `解析模式` 切换为 `本地自建解析`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。Worker 默认按来源 IP 限制查询速率，并对超大 UDP 响应设置 TC 位回退 TCP；GSLB 节点池可按来源 CIDR 或国家代码匹配不同池。Worker 上报心跳后，左侧「本地自建解析」会展示查询趋势、SERVFAIL/NXDOMAIN 趋势和快照一致性告警，便于确认实时 GSLB 与多 Worker 快照状态。
 
 ## 6. 验证是否成功
 
@@ -245,6 +245,6 @@ journalctl -u dushengcdn-agent -n 100 --no-pager
 | Agent 无法注册 | 确认 Agent 节点能访问 `--server-url`，并检查 Token 是否填错或已失效 |
 | Agent 在线但没有应用配置 | 确认网站配置已启用，并且已经发布并激活版本 |
 | OpenResty 应用失败 | 查看节点应用记录和 `journalctl -u dushengcdn-agent`，重点检查域名、证书、源站地址和端口占用 |
-| 自动 DNS 没有解析到节点 | 确认网站绑定的节点池内有在线节点，节点公网 IP 池包含对应 A/AAAA 地址，且未开启排空或关闭调度 |
+| 自动解析没有解析到节点 | 确认网站绑定的节点池内有在线节点，节点公网 IP 池包含对应 A/AAAA 地址，且未开启排空或关闭调度 |
 
 更多排查路径见 [故障排查](./troubleshooting.md)。

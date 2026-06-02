@@ -151,21 +151,21 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | 字段 | 位置 | 作用 |
 | --- | --- | --- |
 | `nodes.pool_name` | 节点 | 节点池名称，默认 `default` |
-| `nodes.public_ips` | 节点 | 可用于自动 DNS 的公网 IPv4/IPv6 列表 |
+| `nodes.public_ips` | 节点 | 可用于自动解析的公网 IPv4/IPv6 列表 |
 | `nodes.weight` | 节点 | 加权调度时的优先级，默认 `100` |
-| `nodes.scheduling_enabled` | 节点 | 是否参与自动 DNS 调度 |
-| `nodes.drain_mode` | 节点 | 排空节点，自动 DNS 和缓存运行时操作都会跳过 |
+| `nodes.scheduling_enabled` | 节点 | 是否参与自动解析调度 |
+| `nodes.drain_mode` | 节点 | 排空节点，自动解析和缓存运行时操作都会跳过 |
 | `proxy_routes.node_pool` | 网站配置 | 网站绑定的目标节点池 |
-| `proxy_routes.dns_target_count` | 网站配置 | 自动 DNS 最多同步的目标 IP 数量 |
-| `proxy_routes.dns_schedule_mode` | 网站配置 | 自动 DNS 选点模式：`healthy`、`weighted` 或 `load_aware` |
+| `proxy_routes.dns_target_count` | 网站配置 | 自动解析最多同步的目标 IP 数量 |
+| `proxy_routes.dns_schedule_mode` | 网站配置 | 自动解析选点模式：`healthy`、`weighted` 或 `load_aware` |
 | `proxy_routes.dns_ttl` | 网站配置 | Cloudflare DNS 记录 TTL；`0` 和 `1` 表示自动 TTL，`2-29` 会提升到 `30`，最高 `86400` |
 | `proxy_routes.dns_provider_mode` | 网站配置 | DNS 模式：`cloudflare` 后台同步，或 `authoritative` 自建权威 DNS 快照/实时回答模式 |
 | `proxy_routes.dns_zone_id_ref` | 网站配置 | 关联 `dns_zones`，用于把网站域名纳入自建权威 Zone |
 | `proxy_routes.gslb_enabled` | 网站配置 | 是否启用站点级 GSLB 多节点池调度 |
 | `proxy_routes.gslb_policy` | 网站配置 | GSLB 策略 JSON，包含节点池权重、来源 CIDR、国家代码、目标数量、TTL、来源识别接口、最大连接数、最大 CPU/内存使用率和防抖参数 |
 | `proxy_routes.ddos_protection_provider` | 网站配置 | 攻击自动防护提供方：`cloudflare` 表示攻击期强制橙云并回到默认节点池，`custom` 表示攻击期解析到自定义清洗节点/IP 池 |
-| `proxy_routes.ddos_protection_target` | 网站配置 | 攻击自动防护目标；Cloudflare 提供方下可保存 DNS 账号 ID，`custom` 提供方下保存清洗节点/IP 池名称 |
-| `tls_certificates.dns_provider_mode` | TLS 证书 | ACME DNS 验证方式：`cloudflare` 使用 DNS 账号，`authoritative` 使用本地自建解析托管域名 |
+| `proxy_routes.ddos_protection_target` | 网站配置 | 攻击自动防护目标；Cloudflare 提供方下可保存 Cloudflare 账号 ID，`custom` 提供方下保存清洗节点/IP 池名称 |
+| `tls_certificates.dns_provider_mode` | TLS 证书 | ACME DNS 验证方式：`cloudflare` 使用 Cloudflare 账号，`authoritative` 使用本地自建解析托管域名 |
 | `tls_certificates.dns_zone_id_ref` | TLS 证书 | ACME 本地自建解析验证关联的 `dns_zones`；申请和续签时临时写入 `_acme-challenge` TXT 记录 |
 | `gslb_scheduling_states.scope_key` | 运行时状态 | 权威 DNS 模式下按来源作用域保存防抖状态，例如 `global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global\|bucket:42` |
 | `gslb_scheduling_states.selected_targets` | 运行时状态 | 最近一次实际选择的 GSLB DNS 目标；权威 DNS Worker 会通过 heartbeat 批量回传运行中产生的状态 |

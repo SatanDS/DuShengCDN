@@ -30,8 +30,8 @@
 本次更新补齐了基础 CDN 调度与缓存闭环能力：
 
 * 节点支持节点池、公网 IP 池、标签、权重、调度开关和排空模式。
-* Cloudflare 自动 DNS 支持同一域名同步多个 A/AAAA 目标，并可按节点池、健康状态、权重和 GSLB 负载感知策略选择在线节点。
-* 自建权威 DNS 与实时 GSLB 已落地 Server 控制面和 DNS Worker MVP，包含 Zone、DNS Worker Token、心跳/聚合、只读调度快照 API、UDP/TCP 53 查询回答、逐查询 GSLB 选点、来源 CIDR/国家代码匹配、稳定权重分流桶、按来源 IP 查询限速、UDP 响应大小保护、管理端 DNS 查询趋势、SERVFAIL/NXDOMAIN 观测、来源作用域分布、当前调度状态、Worker 查询延迟/可用性看板、GeoIP 国家库加载状态、Server 侧按需 Worker UDP/TCP 探测与健康状态、Worker 快照一致性告警、Zone 委派检查、Glue 提示和 Cloudflare 到权威 DNS 的迁移向导。
+* Cloudflare 自动解析支持同一域名同步多个 A/AAAA 目标，并可按节点池、健康状态、权重和 GSLB 负载感知策略选择在线节点。
+* 本地自建解析与实时 GSLB 已落地 Server 控制面和 DNS Worker MVP，包含 Zone、DNS Worker Token、心跳/聚合、只读调度快照 API、UDP/TCP 53 查询回答、逐查询 GSLB 选点、来源 CIDR/国家代码匹配、稳定权重分流桶、按来源 IP 查询限速、UDP 响应大小保护、管理端 DNS 查询趋势、SERVFAIL/NXDOMAIN 观测、来源作用域分布、当前调度状态、Worker 查询延迟/可用性看板、GeoIP 国家库加载状态、Server 侧按需 Worker UDP/TCP 探测与健康状态、Worker 快照一致性告警、Zone 委派检查、Glue 提示和 Cloudflare 到本地自建解析的迁移向导。
 * 网站缓存页支持向目标节点池下发全量缓存清理和首页预热。
 * 观测计量合并访问日志与计量统计，支持站点/节点流量、缓存命中率、回源流量、状态码分布、TOP URL/IP/地区、带宽 P95 和节点可用率。
 * OpenResty 回源失败保护增强，默认对常见 5xx/超时错误尝试切换下一源站。
@@ -45,11 +45,11 @@
 * OpenResty 主配置、性能参数、缓存参数与 Lua 资源托管
 * 本地 GeoIP 地区限制、真实客户端 IP 国家码识别、IP 国家码缓存与在线精确查询 API 回退
 * 可选本地轻量 WAF，支持观察/拦截模式、内置攻击规则、白名单与自定义规则
-* 网站配置详情页提供自动 DNS、缓存策略、PoW、WAF、地区限制和认证配置分区
+* 网站配置详情页提供自动解析域名、缓存策略、PoW、WAF、地区限制和认证配置分区
 * TLS 证书、域名资产、节点凭证与版本状态管理
-* 节点池、公网 IP 池、权重调度、排空模式与 Cloudflare 多目标自动 DNS / GSLB 多节点池调度
-* Cloudflare 自动 DNS、在线节点自动解析、节点离线 DNS 切换、GSLB 防抖状态与 DDoS 自动切换 Cloudflare/自定义清洗池
-* 自建权威 DNS 控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、查询限速、UDP 响应截断保护、NS 委派检查、Glue 提示、Cloudflare 迁移向导、逐查询实时 GSLB、来源 CIDR/国家代码匹配、稳定权重分流桶、当前调度状态、查询趋势、来源作用域分布、Worker GeoIP 状态、Worker 查询延迟/可用性、按需 Worker 探测健康状态和快照一致性观测
+* 节点池、公网 IP 池、权重调度、排空模式与 Cloudflare 多目标自动解析 / GSLB 多节点池调度
+* Cloudflare 自动解析、在线节点自动解析、节点离线 DNS 切换、GSLB 防抖状态与 DDoS 自动切换 Cloudflare/自定义清洗池
+* 本地自建解析控制面、Worker 快照/心跳 API、UDP/TCP 53 查询 Worker、查询限速、UDP 响应截断保护、NS 委派检查、Glue 提示、Cloudflare 迁移向导、逐查询实时 GSLB、来源 CIDR/国家代码匹配、稳定权重分流桶、当前调度状态、查询趋势、来源作用域分布、Worker GeoIP 状态、Worker 查询延迟/可用性、按需 Worker 探测健康状态和快照一致性观测
 * 站点级缓存策略、缓存清理、首页预热、缓存命中与回源健康统计
 * Agent 安装环境检测、Release 二进制下载、自动更新与删除节点联动卸载
 * 节点真实 IP 识别、节点详情静默刷新、全局操作提示与主题化确认弹窗
@@ -168,7 +168,7 @@ proxy_set_header Connection "upgrade";
 
 宝塔面板可在网站的“反向代理 -> 配置文件”里把 `proxy_set_header` 相关配置加入对应的 `location /` 块，保存后重载 Nginx。
 
-### 2. 配置 Cloudflare 自动 DNS 与防护
+### 2. 配置 Cloudflare 自动解析与防护
 
 如果域名已经接入 Cloudflare，可以让 DuShengCDN 自动创建或更新 DNS 记录，并在节点离线或遇到攻击流量时自动调整解析策略。
 
@@ -181,26 +181,26 @@ proxy_set_header Connection "upgrade";
 
 在管理端操作：
 
-1. 在左侧「DNS 账号」准备 Cloudflare DNS 账号。
+1. 在左侧「Cloudflare 账号」准备 Cloudflare 账号。
 2. 在节点详情中维护节点池、公网 IP 池、权重、调度开关和排空状态。
-3. 新建网站配置时选择节点池，并开启 `创建时自动解析 DNS`；已有站点可在详情页的 `自动 DNS` 分区维护。
-4. 选择 Cloudflare DNS 账号，记录类型通常选择 `A`；IPv6 节点选择 `AAAA`。
+3. 新建网站配置时选择节点池，并开启 `创建时自动解析域名`；已有站点可在详情页的 `自动解析域名` 分区维护。
+4. 选择 Cloudflare 账号，记录类型通常选择 `A`；IPv6 节点选择 `AAAA`。
 5. `记录内容` 留空时，系统会自动选择该节点池中的在线公网 IP，并把 `自动选择在线节点 IP` 打开。
-6. 如需跨 HK、EU 等多个节点池分流，在「自动 DNS」分区启用 `GSLB 多节点池调度`，点击 `+` 逐行添加节点池、权重、可选国家代码和来源 CIDR，例如池名 `hk`、权重 `80`、国家代码 `HK,TW`、来源 CIDR `203.0.113.0/24`。来源 CIDR 会优先于国家代码匹配。
+6. 如需跨 HK、EU 等多个节点池分流，在「自动解析域名」分区启用 `GSLB 多节点池调度`，点击 `+` 逐行添加节点池、权重、可选国家代码和来源 CIDR，例如池名 `hk`、权重 `80`、国家代码 `HK,TW`、来源 CIDR `203.0.113.0/24`。来源 CIDR 会优先于国家代码匹配。
 7. 如需正常状态也隐藏源站，可开启 `常态开启 Cloudflare 代理`；如需攻击期自动切换，将 `攻击防护模式` 设为 `自动`，再选择 `Cloudflare` 或 `自定义清洗池`。
 
-自动 DNS 行为：
+自动解析行为：
 
 * 创建网站时会立即向 Cloudflare 创建或更新 DNS 记录。
-* 后台每 1 分钟巡检一次已开启自动 DNS 的规则。
+* 后台每 1 分钟巡检一次已开启自动解析的规则。
 * 开启 `自动选择在线节点 IP` 后，节点离线、OpenResty 不健康、节点被排空、关闭调度或节点公网 IP 池没有对应 A/AAAA 地址时会跳过该节点。
-* 网站配置里的节点池是默认承载池：未启用 GSLB 时自动 DNS 从这里选公网 IP，缓存清理/预热也下发到这里。启用 GSLB 后，DNS A/AAAA 目标改由 GSLB 多节点池策略决定，默认节点池仍作为运行时操作范围和兜底池。
-* 自动 DNS 可以按“健康优先（冷却防抖）”、节点权重或负载感知评分选择，并支持同步多个 A/AAAA 目标。健康优先只判断在线、OpenResty 健康、调度开关、排空状态和最近心跳；CPU、内存、连接数只属于负载感知。
+* 网站配置里的节点池是默认承载池：未启用 GSLB 时自动解析从这里选公网 IP，缓存清理/预热也下发到这里。启用 GSLB 后，DNS A/AAAA 目标改由 GSLB 多节点池策略决定，默认节点池仍作为运行时操作范围和兜底池。
+* 自动解析可以按“健康优先（冷却防抖）”、节点权重或负载感知评分选择，并支持同步多个 A/AAAA 目标。健康优先只判断在线、OpenResty 健康、调度开关、排空状态和最近心跳；CPU、内存、连接数只属于负载感知。
 * GSLB 模式可绑定多个节点池，按来源 CIDR、国家代码、池权重、节点权重、OpenResty 连接数、CPU、内存和负载阈值选择 DNS 目标；网站配置里可维护最大连接数、最大 CPU 使用率和最大内存使用率。
-* 自建权威 DNS 模式下，`weighted` / `load_aware` 会按来源 IP/ECS 生成稳定分流桶，所以 HK 池权重 80、EU 池权重 20 这类配置会在不同来源桶之间形成接近 8:2 的 DNS 答案分布；Cloudflare 模式只同步一组静态记录，不具备逐查询来源分流。
+* 本地自建解析模式下，`weighted` / `load_aware` 会按来源 IP/ECS 生成稳定分流桶，所以 HK 池权重 80、EU 池权重 20 这类配置会在不同来源桶之间形成接近 8:2 的 DNS 答案分布；Cloudflare 模式只同步一组静态记录，不具备逐查询来源分流。
 * GSLB 会记录最近一次实际目标和期望目标，旧目标仍健康且冷却时间未到时不会反复切换。
 * Cloudflare DNS 模式不是逐请求实时调度，而是后台巡检重算并同步记录；实际流量还会受到 DNS TTL 与递归解析缓存影响。
-* 自建权威 DNS 模式需要把域名 NS 委派到 DuShengCDN DNS Worker；Worker 会在查询时实时执行 GSLB 调度。左侧「权威 DNS」的「迁移向导」可检查 Cloudflare 模式网站是否已有匹配 Zone、在线 Worker、公网 UDP/TCP 53 探测和 GSLB 配置，满足条件时可一键切换到自建权威 DNS；「GSLB 调度模拟」可按来源 IP 和国家代码预演当前快照返回目标，并解释节点候选/跳过原因、负载指标时间和 Agent 多点探测摘要。Agent 多点探测默认仅用于观测；在设置页「权威 DNS 运行参数」启用探测调度门槛后，无新鲜成功探测的边缘节点不会进入自建权威 DNS GSLB 候选。Zone 详情可检查公网 NS 是否匹配，并在 Zone 内 NS 需要 Glue/主机记录时提示。未配置本地 GeoIP 库时，国家代码匹配会回退到 `global` 作用域，详见 `docs/design/authoritative-dns-gslb.md`。
+* 本地自建解析模式需要把域名 NS 委派到 DuShengCDN DNS Worker；Worker 会在查询时实时执行 GSLB 调度。左侧「本地自建解析」的「迁移向导」可检查 Cloudflare 模式网站是否已有匹配 Zone、在线 Worker、公网 UDP/TCP 53 探测和 GSLB 配置，满足条件时可一键切换到本地自建解析；「GSLB 调度模拟」可按来源 IP 和国家代码预演当前快照返回目标，并解释节点候选/跳过原因、负载指标时间和 Agent 多点探测摘要。Agent 多点探测默认仅用于观测；在设置页「权威 DNS 运行参数」启用探测调度门槛后，无新鲜成功探测的边缘节点不会进入本地自建解析 GSLB 候选。Zone 详情可检查公网 NS 是否匹配，并在 Zone 内 NS 需要 Glue/主机记录时提示。未配置本地 GeoIP 库时，国家代码匹配会回退到 `global` 作用域，详见 `docs/design/authoritative-dns-gslb.md`。
 * ACME 申请证书可选择 Cloudflare 账号验证，也可选择本地自建解析托管域名验证；本地方式会临时写入 `_acme-challenge` TXT 记录并在验证后清理。
 * 手动填写的 DNS 记录内容不会被后台覆盖；A/AAAA 可用逗号、空格或换行填写多个目标。
 * 多域名规则默认会同步规则里的所有域名；单域名规则可在详情页手动指定记录名称。
@@ -214,7 +214,7 @@ proxy_set_header Connection "upgrade";
 * 防护提供方选 `自定义清洗池` 时，攻击期会暂停 GSLB，只把 DNS 解析到指定节点/IP 池里的在线公网 IP，并关闭 Cloudflare 橙云代理，适合切到自有抗 D 清洗入口；指标恢复正常后自动回到正常调度。
 * 阈值可在管理端设置项中调整：`CloudflareDDoSRequestThreshold` 和 `CloudflareDDoSErrorRateThreshold`。
 
-注意：Cloudflare 自动 DNS 只负责 DNS 记录与橙云状态，不会替代发布流程。反向代理配置修改后仍需发布并激活版本，Agent 才会拉取并应用 OpenResty 配置。
+注意：Cloudflare 自动解析只负责 DNS 记录与橙云状态，不会替代发布流程。反向代理配置修改后仍需发布并激活版本，Agent 才会拉取并应用 OpenResty 配置。
 
 ### 3. 安装 Agent
 
@@ -274,9 +274,9 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 * Debian 13 `trixie` 暂无 OpenResty 官方源时，脚本会回退到 Debian `bookworm` 源；遇到新版 apt 拒绝旧签名策略时，会临时使用 OpenResty 官方 HTTPS 源完成安装，并在安装后移除临时源。
 * 新装 OpenResty 后，脚本会阻止系统自带 `openresty` 服务自动启动，避免它提前占用 `80` / `443` 端口；端口由 `dushengcdn-agent` 托管。
 
-### 4. 可选：部署自建权威 DNS Worker
+### 4. 可选：部署本地自建解析 Worker
 
-如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「权威 DNS」创建 DNS Zone 和 DNS Worker，然后打开「迁移向导」检查 Cloudflare 模式网站的 Zone、Worker、公网探测和 GSLB 准备状态；满足条件时可点击「一键切换」，也可以在网站详情「自动 DNS」里手动切换到自建权威 DNS。之后把域名 NS 委派到 DNS Worker。完成注册商 NS 配置后，可以在 Zone 详情点击「检查委派」确认公网 NS 是否匹配；如果使用 `ns1.example.com` 这类 Zone 内 NS，还需要在注册商配置 Glue/主机记录。面板本机可以同时部署 DNS Worker；使用 `scripts/install-server.sh` 部署面板时，脚本可默认自动创建名为 `DNS服务响应端` 的 Worker、探测公网 IP 并安装同机 Worker。手动或多机部署时，仍可复制 Token 后单独运行 DNS Worker 安装脚本、Docker 或源码命令。
+如果要让域名按每次 DNS 查询来源实时调度到不同边缘节点，需要在管理端左侧「本地自建解析」创建 DNS Zone 和 DNS Worker，然后打开「迁移向导」检查 Cloudflare 模式网站的 Zone、Worker、公网探测和 GSLB 准备状态；满足条件时可点击「一键切换」，也可以在网站详情「自动解析域名」里手动切换到本地自建解析。之后把域名 NS 委派到 DNS Worker。完成注册商 NS 配置后，可以在 Zone 详情点击「检查委派」确认公网 NS 是否匹配；如果使用 `ns1.example.com` 这类 Zone 内 NS，还需要在注册商配置 Glue/主机记录。面板本机可以同时部署 DNS Worker；使用 `scripts/install-server.sh` 部署面板时，脚本可默认自动创建名为 `DNS服务响应端` 的 Worker、探测公网 IP 并安装同机 Worker。手动或多机部署时，仍可复制 Token 后单独运行 DNS Worker 安装脚本、Docker 或源码命令。
 
 推荐使用安装脚本部署 DNS Worker：
 
@@ -347,7 +347,7 @@ dig @YOUR_DNS_WORKER_IP www.example.com A
 
 生产环境建议至少部署两个 DNS Worker，并同时放行 UDP/TCP `53`。如果安装脚本或 Docker 启动提示 `address already in use` / 端口占用，先用 `ss -lntu '( sport = :53 )'` 或 `lsof -nP -i :53` 找到占用者；常见占用来自 `systemd-resolved`、`named` 或 `dnsmasq`。Worker 本地快照缓存会写入 SHA-256 checksum 元数据，启动加载时会校验完整性，并从快照中的 GSLB 防抖状态恢复最近可用选择；运行中产生的新防抖状态会随 heartbeat 批量回传 Server，同时兼容旧版本生成的裸快照 JSON。Worker 默认按来源 IP 每秒限制 `200` 次查询，并把 UDP 响应上限限制为 `1232` 字节；超大响应会设置 TC 位让递归解析器回退 TCP。安装脚本会默认准备本地 Country MMDB；如果使用 Docker 或源码方式部署且要按国家代码匹配 GSLB 节点池，需要自行配置本地 MaxMind Country MMDB。如果在节点池里配置来源 CIDR，则会优先按来源 IP/ECS 命中 `cidr:...` 作用域；启用 `weighted` 或 `load_aware` 时会追加 `|bucket:xx` 分流桶，未命中且无法识别国家时会回退到 `global` 作用域。
 
-Worker 上报心跳后，左侧「权威 DNS」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前调度状态，便于确认实时 GSLB 是否按预期分流；「GSLB 调度状态」会列出每个站点、A/AAAA、`global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42` 等来源作用域的当前实际目标、期望目标和防抖状态；「GSLB 调度模拟」可在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照会返回的边缘 IP，并展示节点池匹配、候选节点、跳过节点、负载指标时间和 Agent 多点探测摘要。这里的 Worker 延迟是 Worker 本地处理真实 DNS 查询的耗时；Agent 多点探测 RTT 表示各边缘节点到 Worker NS 的主动探测耗时，默认只用于观测与排障；开启「启用 Agent 探测调度门槛」后，才会影响自建权威 DNS GSLB 选点。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
+Worker 上报心跳后，左侧「本地自建解析」会展示最近 24 小时的查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前调度状态，便于确认实时 GSLB 是否按预期分流；「GSLB 调度状态」会列出每个站点、A/AAAA、`global`、`country:HK`、`cidr:203.0.113.0/24` 或 `global|bucket:42` 等来源作用域的当前实际目标、期望目标和防抖状态；「GSLB 调度模拟」可在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照会返回的边缘 IP，并展示节点池匹配、候选节点、跳过节点、负载指标时间和 Agent 多点探测摘要。这里的 Worker 延迟是 Worker 本地处理真实 DNS 查询的耗时；Agent 多点探测 RTT 表示各边缘节点到 Worker NS 的主动探测耗时，默认只用于观测与排障；开启「启用 Agent 探测调度门槛」后，才会影响本地自建解析 GSLB 选点。DNS Worker 列表的「探测」会由 Server 对 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合检查端口映射、防火墙和公网可达性；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Zone 详情的委派检查用于确认注册商 NS 和 Glue 配置是否到位。
 
 卸载 DNS Worker：
 

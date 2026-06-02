@@ -44,7 +44,7 @@ Agent：
 | Docker | 仅 Docker 部署 Agent 镜像时需要 |
 | 网络 | Agent 节点必须能访问 Server 地址 |
 
-DNS Worker（自建权威 DNS 运行角色）：
+DNS Worker（本地自建解析运行角色）：
 
 | 项目 | 要求 |
 | --- | --- |
@@ -212,24 +212,24 @@ go run . --port 3000 --log-dir ./logs
 
 ## Agent 接入
 
-生产环境建议在节点详情中维护节点池、公网 IP 池、调度权重和排空状态。自动 DNS 默认会按网站绑定的节点池选择在线且 OpenResty 健康的公网 IP；启用网站 GSLB 后，可在自动 DNS 配置中绑定多个节点池，按池权重、节点负载和防抖冷却时间同步 Cloudflare A/AAAA 记录。缓存清理和预热仍下发到网站默认节点池内的在线 Agent。
+生产环境建议在节点详情中维护节点池、公网 IP 池、调度权重和排空状态。自动解析默认会按网站绑定的节点池选择在线且 OpenResty 健康的公网 IP；启用网站 GSLB 后，可在自动解析配置中绑定多个节点池，按池权重、节点负载和防抖冷却时间同步 Cloudflare A/AAAA 记录。缓存清理和预热仍下发到网站默认节点池内的在线 Agent。
 
-当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度。自建权威 DNS 模式已经提供管理端 Zone/记录/Worker 入口、网站模式选择、DNS Worker 查询面、心跳、只读快照 API、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测、Agent 多点 Worker 探测、Zone 委派检查和迁移向导；如需按每次 DNS 查询来源返回不同节点，应在左侧「权威 DNS」创建 Zone 和 DNS Worker，通过「迁移向导」检查候选站点，满足条件时可一键切换到自建权威 DNS，也可到网站详情「自动 DNS」里手动切换。切换或保存启用站点前，公网可达的在线 Worker 都必须已拉取未过期调度快照，且快照版本一致。
+当前 Cloudflare DNS 模式是后台重算并同步记录，不是逐个用户请求实时调度。本地自建解析模式已经提供管理端 Zone/记录/Worker 入口、网站模式选择、DNS Worker 查询面、心跳、只读快照 API、查询趋势、SERVFAIL/NXDOMAIN 观测、Worker 快照一致性告警、Worker 查询延迟/可用性看板、Server 侧按需 Worker UDP/TCP 探测、Agent 多点 Worker 探测、Zone 委派检查和迁移向导；如需按每次 DNS 查询来源返回不同节点，应在左侧「本地自建解析」创建 Zone 和 DNS Worker，通过「迁移向导」检查候选站点，满足条件时可一键切换到本地自建解析，也可到网站详情「自动解析域名」里手动切换。切换或保存启用站点前，公网可达的在线 Worker 都必须已拉取未过期调度快照，且快照版本一致。
 
-## 自建权威 DNS 部署规划
+## 本地自建解析部署规划
 
-自建权威 DNS 使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。面板本机可以同时部署 DNS Worker，但面板服务本身不会监听公网 `53`；使用 `scripts/install-server.sh` 部署面板时可默认一起创建并安装本机 DNS Worker，脚本会先检查本地是否已有 Worker，避免重复部署。单独安装或多机部署 Worker 时，也可以继续在管理端创建 Token 后运行安装脚本、Docker 或源码命令。
+本地自建解析使用独立 DNS Worker 运行角色。Server 控制面负责管理 Zone、静态记录和 Worker Token，并通过 `GET /api/dns-snapshot` 向 Worker 下发只读调度快照，通过 `POST /api/dns-worker-heartbeat` 接收 Worker 状态与聚合指标。DNS Worker 监听 UDP/TCP `53`，只使用本地内存快照回答查询，不访问数据库，也不在查询路径调用外部 HTTP GeoIP API。面板本机可以同时部署 DNS Worker，但面板服务本身不会监听公网 `53`；使用 `scripts/install-server.sh` 部署面板时可默认一起创建并安装本机 DNS Worker，脚本会先检查本地是否已有 Worker，避免重复部署。单独安装或多机部署 Worker 时，也可以继续在管理端创建 Token 后运行安装脚本、Docker 或源码命令。
 
-Worker 上报的聚合指标会在左侧「权威 DNS」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、Agent 多节点探测通过率/RTT、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，可用于检查实时 GSLB 是否按来源 CIDR、国家代码、来源分流桶、节点池权重、健康状态和负载阈值返回预期边缘 IP。「GSLB 调度状态」展示当前实际目标、期望目标、最近评估时间和防抖冷却状态；「GSLB 调度模拟」还可以在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照返回目标，并解释节点池匹配、候选节点、跳过节点和原因；即使没有可返回目标，模拟也会保留节点诊断和无目标原因，便于上线前定位节点池、健康状态、公网 IP、负载阈值或探测门槛问题。这里的 Worker 查询延迟是 Worker 本地处理真实 DNS 查询的耗时；Agent 多节点探测 RTT 表示各边缘节点到 Worker NS 的主动探测耗时，默认只用于观测与排障；设置页「权威 DNS 运行参数」启用 Agent 探测调度门槛后，无新鲜成功探测的边缘节点不会进入自建权威 DNS GSLB 候选。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Worker 快照一致性会显示快照版本和最近拉取时间，迁移向导会要求公网可达 Worker 均持有未过期且版本一致的快照。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
+Worker 上报的聚合指标会在左侧「本地自建解析」展示最近 24 小时查询量、查询趋势、SERVFAIL/NXDOMAIN 趋势、Worker 快照一致性、Worker 查询延迟、可用率、错误率、最近公网探测健康状态、Agent 多节点探测通过率/RTT、GeoIP 国家库加载状态、来源作用域、Worker/Zone/站点维度、返回目标分布和当前 GSLB 调度状态，可用于检查实时 GSLB 是否按来源 CIDR、国家代码、来源分流桶、节点池权重、健康状态和负载阈值返回预期边缘 IP。「GSLB 调度状态」展示当前实际目标、期望目标、最近评估时间和防抖冷却状态；「GSLB 调度模拟」还可以在真实流量到达前按站点、记录类型、来源 IP 和来源国家代码预演当前快照返回目标，并解释节点池匹配、候选节点、跳过节点和原因；即使没有可返回目标，模拟也会保留节点诊断和无目标原因，便于上线前定位节点池、健康状态、公网 IP、负载阈值或探测门槛问题。这里的 Worker 查询延迟是 Worker 本地处理真实 DNS 查询的耗时；Agent 多节点探测 RTT 表示各边缘节点到 Worker NS 的主动探测耗时，默认只用于观测与排障；设置页「权威 DNS 运行参数」启用 Agent 探测调度门槛后，无新鲜成功探测的边缘节点不会进入本地自建解析 GSLB 候选。DNS Worker 列表里的「探测」会由 Server 对该 Worker 公网地址发起 UDP/TCP 53 SOA 查询，适合确认防火墙、端口映射和公网地址是否可达；最近一次探测结果会保存在 Worker 列表和可用性面板中，并会作为迁移向导的切换准备条件。Worker 快照一致性会显示快照版本和最近拉取时间，迁移向导会要求公网可达 Worker 均持有未过期且版本一致的快照。Zone 详情里的「委派检查」可以对比注册商当前公网 NS 与面板配置的 NS；如果 NS 名称位于同一个 Zone 内，会提示需要在注册商配置 Glue/主机记录。
 
 管理端操作顺序：
 
-1. 在左侧「权威 DNS」创建 Zone，填写注册商需要委派的 NS。
+1. 在左侧「本地自建解析」创建 Zone，填写注册商需要委派的 NS。
 2. 在同一页面创建 DNS Worker，复制创建后弹出的 Token 或部署命令。
 3. 部署至少两个 DNS Worker，并在注册商处把域名 NS 委派到 Worker；NS 位于当前 Zone 内时同步配置 Glue/主机记录。
-4. 打开「权威 DNS」的「迁移向导」，确认待迁移网站已经匹配到启用 Zone、存在在线 Worker、公网可达 Worker 均持有未过期且版本一致的调度快照，并按需启用站点 GSLB。
-5. 在迁移向导点击「一键切换」，或到网站详情的「自动 DNS」分区手动把 `DNS 模式` 切换为 `自建权威 DNS` 并选择对应 Zone。
-6. 迁移向导会在一键切换成功后自动复测：刷新网站 DNS 模式、执行 Zone 委派检查、探测在线 Worker 的公网 UDP/TCP `53`，并用当前快照按 global 与来源国家模拟 GSLB 返回目标。若委派结果不是已匹配，仍需到注册商调整 NS 或 Glue。
+4. 打开「本地自建解析」的「迁移向导」，确认待迁移网站已经匹配到启用 Zone、存在在线 Worker、公网可达 Worker 均持有未过期且版本一致的调度快照，并按需启用站点 GSLB。
+5. 在迁移向导点击「一键切换」，或到网站详情的「自动解析域名」分区手动把 `解析模式` 切换为 `本地自建解析` 并选择对应 Zone。
+6. 迁移向导会在一键切换成功后自动复测：刷新网站解析模式、执行 Zone 委派检查、探测在线 Worker 的公网 UDP/TCP `53`，并用当前快照按 global 与来源国家模拟 GSLB 返回目标。若委派结果不是已匹配，仍需到注册商调整 NS 或 Glue。
 7. 如需更细的来源验证，可继续使用「GSLB 调度模拟」按来源 IP、HK、EU、global 等来源作用域预演返回目标，再到 Zone 详情执行「委派检查」，确认公网 NS 与期望 NS 匹配。
 
 推荐使用安装脚本部署 DNS Worker：
@@ -242,7 +242,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，让国家代码节点池匹配开箱可用；下载失败不会阻断安装，Worker 会继续按来源 CIDR 或 `global` 作用域运行。
 
-如果 Server 面板和 DNS Worker 部署在同一台机器，`--server-url` 可以使用容器或宿主机可访问的面板地址；`--listen` 建议显式写公网地址，例如 `--listen 203.0.113.10:53`，避免只想对公网提供权威 DNS 时和本机回环 DNS 服务混淆。
+如果 Server 面板和 DNS Worker 部署在同一台机器，`--server-url` 可以使用容器或宿主机可访问的面板地址；`--listen` 建议显式写公网地址，例如 `--listen 203.0.113.10:53`，避免只想对公网提供本地自建解析时和本机回环 DNS 服务混淆。
 安装后可在 Worker 主机运行 `bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com`，一次性检查 systemd 服务、安装目录、环境文件、监听端口、快照、GeoIP、日志和 UDP/TCP SOA/NS 查询结果。
 全新部署或迁移前验收时，可在面板/Worker 同机部署主机运行闭环验证脚本：
 

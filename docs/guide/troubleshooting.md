@@ -15,8 +15,8 @@
 | 发布后节点未更新 | 激活版本、节点 heartbeat、应用记录 |
 | OpenResty 应用失败 | 应用记录、Agent 日志、证书、源站地址、端口占用 |
 | 访问分析无数据 | OpenResty 容器状态、观测端口、Agent 补报日志 |
-| 自动 DNS 不切换 | 节点池、公网 IP 池、调度开关、排空状态、Cloudflare Token 权限 |
-| 权威 DNS 迁移后解析异常 | 迁移向导切换后复测、Zone 委派检查、Worker 公网 UDP/TCP 53 探测、Agent 多节点探测、GSLB 模拟结果 |
+| 自动解析不切换 | 节点池、公网 IP 池、调度开关、排空状态、Cloudflare Token 权限 |
+| 本地自建解析迁移后解析异常 | 迁移向导切换后复测、Zone 委派检查、Worker 公网 UDP/TCP 53 探测、Agent 多节点探测、GSLB 模拟结果 |
 | 缓存操作失败 | Agent WebSocket 连接、网站节点池、OpenResty 缓存目录配置 |
 
 ## Server 无法启动
@@ -267,22 +267,22 @@ curl -Iv https://your-domain
 4. 检查 `openresty_observability_port` 是否被占用，默认是 `18081`。
 5. 确认 Server 侧没有因数据库清理策略删除对应时间窗口数据。
 
-## 自动 DNS 未按节点切换
+## 自动解析未按节点切换
 
 按顺序检查：
 
-1. Cloudflare DNS 账号 Token 是否具备 `Zone Read` 和 `DNS Edit` 权限。
+1. Cloudflare 账号 Token 是否具备 `Zone Read` 和 `DNS Edit` 权限。
 2. Token 是否保存为原始 Token、`Bearer ...` 或 JSON 中的 `api_token` / `apiToken` / `token`。
-3. 网站配置是否启用自动 DNS，并绑定了正确节点池。
+3. 网站配置是否启用自动解析，并绑定了正确节点池。
 4. 目标节点池内是否有在线节点，且 OpenResty 状态不是 unhealthy。
 5. 节点公网 IP 池是否包含对应记录类型的公网地址；A 记录需要 IPv4，AAAA 记录需要 IPv6。
 6. 节点是否被关闭调度或开启排空模式。
 
-## 权威 DNS 迁移后解析异常
+## 本地自建解析迁移后解析异常
 
-如果从 Cloudflare 同步切到自建权威 DNS 后解析不符合预期，先打开左侧「权威 DNS」的「迁移向导」查看「切换后复测」：
+如果从 Cloudflare 同步切到本地自建解析后解析不符合预期，先打开左侧「本地自建解析」的「迁移向导」查看「切换后复测」：
 
-1. 「网站 DNS 模式」应显示已绑定目标 Zone；若失败，回到网站详情的「自动 DNS」确认 DNS 模式和 Zone。
+1. 「网站解析模式」应显示已绑定目标 Zone；若失败，回到网站详情的「自动解析域名」确认解析模式和 Zone。
 2. 「Zone 委派检查」应为已匹配；若部分匹配、不匹配或提示 Glue，登录注册商补齐 NS 或 Glue/主机记录。
 3. 「Worker 公网探测」至少应有一个在线 Worker UDP/TCP `53` 可达；若失败，检查 Worker 公网地址、防火墙、端口映射和安全组。
 4. 「Worker 快照一致性」应显示公网可达 Worker 都持有未超过 `AuthoritativeDNSSnapshotMaxAge` 的调度快照，且版本一致；若快照为空、过期或版本不一致，检查 Worker 到 Server 的 HTTPS 访问、Token、心跳日志和快照拉取错误。
@@ -307,24 +307,24 @@ bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.co
 
 1. 在 DNS Worker 主机执行 `systemctl status dushengcdn-dns-worker`。如果提示 `Unit dushengcdn-dns-worker.service could not be found`，说明只配置了面板 Zone/注册商 NS，还没有部署 DNS Worker。
 2. 查看 `ss -lntup | grep ':53'` 和 `ss -lnuap | grep ':53'`。只看到 `systemd-resolved` 监听 `127.0.0.53` 或 `127.0.0.54` 不代表公网 `53` 已经有权威 DNS 服务；公网地址仍可能没有任何进程监听。
-3. 在左侧「权威 DNS」创建 DNS Worker Token 后，在 Worker 主机运行安装脚本；如果 Worker 和面板在同一台机器，可使用面板本机可访问地址作为 `--server-url`，并用 `--listen PUBLIC_IP:53` 绑定公网地址。
+3. 在左侧「本地自建解析」创建 DNS Worker Token 后，在 Worker 主机运行安装脚本；如果 Worker 和面板在同一台机器，可使用面板本机可访问地址作为 `--server-url`，并用 `--listen PUBLIC_IP:53` 绑定公网地址。
 4. 安装后执行 `systemctl status dushengcdn-dns-worker`、`journalctl -u dushengcdn-dns-worker -n 100 --no-pager`，确认服务已启动且没有 Token、Server URL 或快照拉取错误。
 5. 确认服务器防火墙、云安全组或上游网络同时放行 UDP `53` 和 TCP `53`，再执行 `dig @PUBLIC_IP example.com SOA` 和 `dig @PUBLIC_IP example.com NS`。
 6. 如果使用 `ns1.example.com` / `ns2.example.com` 这类位于同一 Zone 内的 NS，注册商还必须配置 Glue/主机记录，把这些 NS 名称指向 Worker 公网 IP。
 
 如果 `dig @PUBLIC_IP example.com SOA` 和 `NS` 已返回 `NOERROR`，但业务域名的 `A`/`AAAA` 仍没有返回目标，或 Worker 日志里的快照显示 `routes=0`：
 
-1. 这说明 DNS Worker 已经能回答 Zone 基础记录，但当前快照里还没有绑定到自建权威 DNS 的网站动态路由。
-2. 到网站详情「自动 DNS」把 `DNS 模式` 切换为 `自建权威 DNS`，并选择对应 Zone；也可以在「权威 DNS」的「迁移向导」里对候选站点执行一键切换。
+1. 这说明 DNS Worker 已经能回答 Zone 基础记录，但当前快照里还没有绑定到本地自建解析的网站动态路由。
+2. 到网站详情「自动解析域名」把 `解析模式` 切换为 `本地自建解析`，并选择对应 Zone；也可以在「本地自建解析」的「迁移向导」里对候选站点执行一键切换。
 3. 确认网站至少有一个域名落在该 Zone 下，且没有同名静态 `CNAME` 或启用的同名静态 `A`/`AAAA` 与动态记录冲突。
 4. 切换后等待 DNS Worker 下一次心跳/快照拉取，或重启 Worker，再查看日志里的 `routes` 数量是否增加。
 5. 使用「GSLB 调度模拟」检查该站点的 A/AAAA 是否能返回边缘 IP；如果无目标，继续按节点池、公网 IP、在线状态、OpenResty 健康、排空模式、负载阈值和 Agent 探测门槛排查。
 
 如果保存 Zone 静态记录、网站配置或迁移向导切换时提示“静态记录冲突”：
 
-1. 到左侧「权威 DNS」进入对应 Zone，检查是否已有同名启用的静态 `A`、`AAAA` 或 `CNAME`。
-2. 如果该域名已经由网站配置的自建权威 DNS 动态 GSLB 接管，删除或禁用同名同类型静态 `A`/`AAAA`，并删除或改名同名 `CNAME`。
-3. 如果想保留静态解析，不要把该网站切换到自建权威 DNS 动态模式，或改用另一个不冲突的域名。
+1. 到左侧「本地自建解析」进入对应 Zone，检查是否已有同名启用的静态 `A`、`AAAA` 或 `CNAME`。
+2. 如果该域名已经由网站配置的本地自建解析动态 GSLB 接管，删除或禁用同名同类型静态 `A`/`AAAA`，并删除或改名同名 `CNAME`。
+3. 如果想保留静态解析，不要把该网站切换到本地自建解析动态模式，或改用另一个不冲突的域名。
 4. `TXT`、`MX`、`NS`、`SOA` 等其它类型记录不属于该冲突范围，可继续保留。
 
 迁移向导会在候选列表提前展示这类阻断项；如果列表显示“需处理”，先处理阻断项，再重新刷新候选或点击迁移向导。
@@ -337,11 +337,11 @@ bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.co
 4. 如果提示的是特定国家或 CIDR，检查该来源匹配到的节点池是否至少有一个可用节点；来源 CIDR 会优先于国家代码匹配。
 5. 如果启用了 `负载感知` 或负载阈值，检查当前连接数、CPU 和内存快照是否把全部节点剔除了；可临时放宽最大连接数、最大 CPU 或最大内存阈值后再试。
 6. 检查「GSLB 调度模拟」里的指标时间和节点原因；即使当前无返回目标，模拟结果也会尽量保留匹配节点池与每个节点的跳过原因，便于判断是节点池、在线状态、公网 IP 类型还是负载阈值导致。超过 `GSLBMetricFreshnessSeconds` 的旧指标不会参与评分，缺少新鲜指标的节点只作为兜底候选。如果所有节点都显示无新鲜指标，先确认 Agent 心跳和指标上报是否正常，或临时放宽设置页「权威 DNS 运行参数」里的 GSLB 指标新鲜度。
-7. 到「权威 DNS」里的「GSLB 调度模拟」按同一站点、记录类型和来源再次模拟，查看每个节点的跳过原因、Agent 探测摘要和探测 RTT。Agent 探测异常说明边缘节点到 DNS Worker NS 的 UDP/TCP `53` 可达性存在风险；默认不会直接把该边缘节点从 GSLB 选点中剔除，但如果设置页「权威 DNS 运行参数」开启了「启用 Agent 探测调度门槛」，无新鲜成功探测的节点会被排除，进入候选后还会按探测健康比例、过期比例和平均 RTT 对权重或负载感知评分做有界修正。若模拟结果显示「Agent 探测未达到调度门槛」且无返回目标，说明按节点池、状态、负载和公网 IP 仍有候选，但这些候选都缺少新鲜成功探测；模拟节点原因会继续区分「尚未收到新鲜成功探测」「探测结果已过期」「UDP/TCP 53 未同时可达」或「UDP/TCP 53 探测均失败」，分别对应 Agent 尚未上报、上报中断、单协议被阻断或双协议均不可达。
+7. 到「本地自建解析」里的「GSLB 调度模拟」按同一站点、记录类型和来源再次模拟，查看每个节点的跳过原因、Agent 探测摘要和探测 RTT。Agent 探测异常说明边缘节点到 DNS Worker NS 的 UDP/TCP `53` 可达性存在风险；默认不会直接把该边缘节点从 GSLB 选点中剔除，但如果设置页「权威 DNS 运行参数」开启了「启用 Agent 探测调度门槛」，无新鲜成功探测的节点会被排除，进入候选后还会按探测健康比例、过期比例和平均 RTT 对权重或负载感知评分做有界修正。若模拟结果显示「Agent 探测未达到调度门槛」且无返回目标，说明按节点池、状态、负载和公网 IP 仍有候选，但这些候选都缺少新鲜成功探测；模拟节点原因会继续区分「尚未收到新鲜成功探测」「探测结果已过期」「UDP/TCP 53 未同时可达」或「UDP/TCP 53 探测均失败」，分别对应 Agent 尚未上报、上报中断、单协议被阻断或双协议均不可达。
 
 如果迁移向导、一键切换或网站详情保存时提示“没有在线 DNS Worker”或“在线 DNS Worker 尚未通过公网 UDP/TCP 53 探测”：
 
-1. 先在「权威 DNS」创建 DNS Worker，并用面板生成的 Token 部署 Worker。
+1. 先在「本地自建解析」创建 DNS Worker，并用面板生成的 Token 部署 Worker。
 2. 确认 Worker 心跳状态为在线，并且填写了可从公网访问的 DNS Worker 地址。
 3. 在 DNS Worker 列表点击「探测」，确认 UDP 和 TCP `53` 都可达；只通过其中一个协议时仍不视为可迁移/可启用。
 4. 检查 Worker 服务器防火墙、云安全组、NAT 和端口映射是否同时放行 UDP `53` 与 TCP `53`。
@@ -359,7 +359,7 @@ bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.co
 1. 先确认至少一个 Worker 在列表中为在线，并且最近一次公网 UDP/TCP `53` 探测为健康。
 2. 查看「Worker 快照一致性」，确认公网可达 Worker 的 `last_snapshot_version` 不为空且一致，`last_snapshot_at` 没有超过 `AuthoritativeDNSSnapshotMaxAge`。
 3. 在 Worker 服务器查看服务日志，重点检查 Token 无效、Server URL 不可达、HTTPS 证书校验失败、快照接口返回错误等信息。日志中出现 `DNS Worker Token authentication failed` 时，优先核对 `DUSHENGCDN_DNS_WORKER_TOKEN` 或 `--token`；出现 `request to Server URL ... failed` 时，优先核对 `DUSHENGCDN_DNS_WORKER_SERVER_URL` 或 `--server-url`、DNS 解析、防火墙和证书信任。
-4. 确认 Worker 使用的 Token 是左侧「权威 DNS」中创建的 DNS Worker Token，不是 Agent Token 或登录密码。
+4. 确认 Worker 使用的 Token 是左侧「本地自建解析」中创建的 DNS Worker Token，不是 Agent Token 或登录密码。
 5. 修复后等待下一次 Worker 心跳/快照拉取，或重启 Worker，再刷新迁移向导或重新保存网站。
 
 如果「Worker 可用性」里 Server 侧公网探测正常，但「Agent 多节点探测」异常：
@@ -369,7 +369,7 @@ bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.co
 3. 查看 `journalctl -u dushengcdn-agent -n 200 --no-pager`，确认 Agent 心跳是否正常；Agent 只有在收到 Server 下发的探测目标后，才会在下一次心跳或 WebSocket status 上报结果。
 4. 如果某个 Worker 没有出现在多节点探测中，确认该 Worker 已在线且填写了公网地址；Server 每次只下发少量在线 Worker 目标，避免心跳被大量探测拖慢。
 5. 如果显示「探测过期」，说明 Server 最近没有收到该 Agent 对 Worker 的新探测结果；先确认 Agent 已升级到支持 DNS 探测的版本，再检查心跳或 WebSocket status 是否持续上报。
-6. 如果已开启「启用 Agent 探测调度门槛」，多节点探测失败、过期或平均 RTT 明显偏高都会影响自建权威 DNS GSLB 选点；探测质量系数有上下限，不会完全压倒节点池权重、节点权重和负载感知评分。排障期间可临时关闭该开关，让节点先按在线状态、OpenResty 健康和负载阈值参与调度。
+6. 如果已开启「启用 Agent 探测调度门槛」，多节点探测失败、过期或平均 RTT 明显偏高都会影响本地自建解析 GSLB 选点；探测质量系数有上下限，不会完全压倒节点池权重、节点权重和负载感知评分。排障期间可临时关闭该开关，让节点先按在线状态、OpenResty 健康和负载阈值参与调度。
 
 迁移向导不会直接修改注册商 NS。注册商侧 NS 生效还受上级 DNS 缓存和 TTL 影响，调整后可再次执行 Zone 委派检查。
 
