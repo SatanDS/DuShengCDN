@@ -46,6 +46,8 @@ import {
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 import type { ReleaseChannel } from '@/features/update/types';
+import { getOptions } from '@/features/settings/api/settings';
+import type { OptionItem } from '@/features/settings/types';
 import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
 import {
@@ -68,6 +70,7 @@ import {
 } from '@/features/nodes/utils';
 
 const nodesQueryKey = ['nodes'];
+const settingsQueryKey = ['settings', 'options'] as const;
 
 type FeedbackState = {
   tone: 'info' | 'success' | 'danger';
@@ -112,6 +115,16 @@ function formatTrendHour(value: string) {
     return '—';
   }
   return `${date.getHours().toString().padStart(2, '0')}:00`;
+}
+
+function optionsToMap(options: OptionItem[] | undefined) {
+  return (options ?? []).reduce<Record<string, string>>(
+    (result, item) => {
+      result[item.key] = item.value;
+      return result;
+    },
+    {},
+  );
 }
 
 function parseTrafficMap(value?: string | null) {
@@ -263,6 +276,11 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     refetchInterval: 5000,
   });
 
+  const optionsQuery = useQuery({
+    queryKey: settingsQueryKey,
+    queryFn: getOptions,
+  });
+
   const stableAgentReleaseQuery = useQuery({
     queryKey: ['node-agent-release', nodeId, 'stable'],
     queryFn: () => getNodeAgentRelease(Number(nodeId), 'stable'),
@@ -308,10 +326,19 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   });
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && !serverUrl) {
+    if (serverUrl) {
+      return;
+    }
+    const optionMap = optionsToMap(optionsQuery.data);
+    const configuredServerUrl = getServerUrl(optionMap.ServerAddress ?? '');
+    if (configuredServerUrl) {
+      setServerUrl(configuredServerUrl);
+      return;
+    }
+    if (typeof window !== 'undefined') {
       setServerUrl(window.location.origin);
     }
-  }, [serverUrl]);
+  }, [optionsQuery.data, serverUrl]);
 
   const saveMutation = useMutation({
     mutationFn: async (payload: Parameters<typeof updateNode>[1]) =>
