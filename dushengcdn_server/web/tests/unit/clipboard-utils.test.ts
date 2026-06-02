@@ -58,4 +58,14 @@ describe('copyToClipboard', () => {
       message: expect.stringContaining('当前面板通过 HTTP 访问'),
     } satisfies Partial<ClipboardCopyError>);
   });
+
+  it('explains when the browser does not expose Clipboard API', async () => {
+    setClipboard(undefined);
+    setExecCommand(() => false);
+
+    await expect(copyToClipboard('agent install command')).rejects.toMatchObject({
+      name: 'ClipboardCopyError',
+      message: expect.stringContaining('浏览器没有提供剪贴板写入接口'),
+    } satisfies Partial<ClipboardCopyError>);
+  });
 });

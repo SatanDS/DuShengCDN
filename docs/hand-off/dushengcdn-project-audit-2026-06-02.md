@@ -21,6 +21,7 @@
 - 网站配置的自动解析域名创建/编辑文案继续新手化：主界面使用 `解析模式`、`Cloudflare 账号`、`解析缓存时间`、`多节点智能解析`、`最大处理器压力`、`清洗池` 等直观中文，`DNS`、`TTL`、`GSLB`、`CNAME`、`CPU` 等术语放进 `!` 说明里解释。
 - 本地自建解析页继续白话化：`网站 DNS 模式` 改成 `网站解析模式`，迁移提示中的 `自动 DNS` 改成 `自动解析域名`，模拟结果的 `TTL` 显示为 `缓存时间`；后端返回的 `GSLB 阈值`、`OpenResty 健康`、`DNS Worker 多点探测` 等诊断原因在面板上会转换成 `压力上限`、`代理服务是否正常`、`响应端多地探测` 等说明。
 - 设置页本地解析运行参数补充解释：`节点数据有效期` 改成 `节点状态数据有效时间`，明确它不是健康检查间隔，而是节点上报的连接数、处理器和内存数据多久还可用于按压力选 IP；`Agent 探测调度门槛` 改成 `按响应端探测结果筛选节点`。
+- 复制部署脚本/命令的剪贴板工具继续增强：当浏览器没有提供 `Clipboard API` 或自动复制失败时，会明确提示当前页面不是 HTTPS/安全上下文不足或浏览器未提供剪贴板写入接口，不再暴露 `writeText` undefined 这类技术报错。
 - 自动 DNS 的攻击防护三段式配置已落地：关闭/自动，提供方 Cloudflare/自定义，目标随提供方变化。
 - 面板部署脚本默认可自动创建并安装同机 DNS Worker，且安装前检查本机是否已有 Worker，避免覆盖。
 - DNS Worker 诊断脚本、部署文档、配置文档已补充同机部署、端口、快照、排障路径。
@@ -38,6 +39,7 @@
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/proxy-routes-page.test.tsx --reporter=dot`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/navigation-utils.test.ts --reporter=dot`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/authoritative-dns-page.test.tsx --reporter=dot`
+- `cd dushengcdn_server/web; pnpm vitest run tests/unit/clipboard-utils.test.ts --reporter=dot`
 - `cd dushengcdn_server/web; pnpm tsc --noEmit --pretty false`
 - `cd dushengcdn_server/web; pnpm lint`
 - `cd dushengcdn_server; go test ./model`
