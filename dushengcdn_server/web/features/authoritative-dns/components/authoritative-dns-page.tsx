@@ -1411,16 +1411,6 @@ export function AuthoritativeDNSPage() {
           }
         />
 
-        <GSLBSchedulingStatesPanel
-          states={schedulingStates}
-          isLoading={schedulingStatesQuery.isLoading}
-          error={
-            schedulingStatesQuery.isError
-              ? getErrorMessage(schedulingStatesQuery.error)
-              : ''
-          }
-        />
-
         <GSLBSimulationPanel
           routes={authoritativeRoutes}
           routesLoading={proxyRoutesQuery.isLoading}
@@ -1549,6 +1539,16 @@ export function AuthoritativeDNSPage() {
             onSwitchAuthoritative={handleSwitchAuthoritative}
           />
         )}
+
+        <GSLBSchedulingStatesPanel
+          states={schedulingStates}
+          isLoading={schedulingStatesQuery.isLoading}
+          error={
+            schedulingStatesQuery.isError
+              ? getErrorMessage(schedulingStatesQuery.error)
+              : ''
+          }
+        />
       </div>
 
       {isZoneModalOpen ? (
@@ -2216,6 +2216,8 @@ function GSLBSchedulingStatesPanel({
   isLoading: boolean;
   error: string;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   if (isLoading) {
     return (
       <AppCard title="智能解析状态">
@@ -2238,6 +2240,16 @@ function GSLBSchedulingStatesPanel({
     <AppCard
       title="智能解析状态"
       description="展示响应端和面板记录的当前返回 IP、期望返回 IP，以及不同访问来源的切换冷却状态。"
+      action={
+        rows.length > 0 ? (
+          <SecondaryButton
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? '收起状态' : '展开状态'}
+          </SecondaryButton>
+        ) : null
+      }
     >
       {rows.length === 0 ? (
         <EmptyState
@@ -2254,11 +2266,18 @@ function GSLBSchedulingStatesPanel({
             <InfoTile label="已生效" value={formatCount(activeCount)} />
             <InfoTile label="冷却中" value={formatCount(debouncingCount)} />
           </div>
-          <div className="grid gap-3 xl:grid-cols-2">
-            {rows.map((state) => (
-              <GSLBSchedulingStateCard key={state.id} state={state} />
-            ))}
-          </div>
+          {expanded ? (
+            <div className="grid gap-3 xl:grid-cols-2">
+              {rows.map((state) => (
+                <GSLBSchedulingStateCard key={state.id} state={state} />
+              ))}
+            </div>
+          ) : (
+            <InlineMessage
+              tone="info"
+              message="状态明细已折叠，点击“展开状态”查看每个访问来源当前返回的 IP。"
+            />
+          )}
           {states?.checked_at ? (
             <p className="text-xs text-[var(--foreground-muted)]">
               检查时间：{formatDateTime(states.checked_at)}
