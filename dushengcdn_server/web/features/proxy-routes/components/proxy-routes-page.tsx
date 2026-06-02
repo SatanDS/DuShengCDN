@@ -631,7 +631,7 @@ export function ProxyRoutesPage() {
   if (activeFeatureSection === 'dns' && dnsAccountsQuery.isError) {
     return (
       <ErrorState
-        title="DNS 账号列表加载失败"
+        title="Cloudflare 账号列表加载失败"
         description={getErrorMessage(dnsAccountsQuery.error)}
       />
     );

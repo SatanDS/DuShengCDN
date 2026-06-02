@@ -17,6 +17,7 @@
 - DNS 记录 A/AAAA 创建改成一个输入框一个 IP，可点 `+` 增加，MX 优先级加了白话说明。
 - 左侧入口与多数用户可见文案统一为 `本地自建解析`、`DNS 响应端`、`解析配置`、`按压力优先`、`攻击防护模式`、`API 密钥`。
 - 通用 `!` 说明图标保留悬停/聚焦说明，但不再抢占表单控件 label，避免辅助标签和测试误判。
+- 网站配置的自动解析域名创建/编辑文案继续新手化：主界面使用 `解析模式`、`Cloudflare 账号`、`解析缓存时间`、`多节点智能解析`、`最大处理器压力`、`清洗池` 等直观中文，`DNS`、`TTL`、`GSLB`、`CNAME`、`CPU` 等术语放进 `!` 说明里解释。
 - 自动 DNS 的攻击防护三段式配置已落地：关闭/自动，提供方 Cloudflare/自定义，目标随提供方变化。
 - 面板部署脚本默认可自动创建并安装同机 DNS Worker，且安装前检查本机是否已有 Worker，避免覆盖。
 - DNS Worker 诊断脚本、部署文档、配置文档已补充同机部署、端口、快照、排障路径。
@@ -31,6 +32,7 @@
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/navigation-utils.test.ts tests/unit/proxy-routes-page.test.tsx tests/unit/authoritative-dns-page.test.tsx tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx --reporter=dot`
+- `cd dushengcdn_server/web; pnpm vitest run tests/unit/proxy-routes-page.test.tsx --reporter=dot`
 - `cd dushengcdn_server/web; pnpm tsc --noEmit --pretty false`
 - `cd dushengcdn_server/web; pnpm lint`
 - `cd dushengcdn_server; go test ./model`

@@ -542,7 +542,7 @@ describe('Proxy route website pages', () => {
     );
 
     await user.click(
-      within(dialog).getByRole('checkbox', { name: /创建时自动解析 DNS/ }),
+      within(dialog).getByRole('checkbox', { name: /创建时自动解析域名/ }),
     );
     let dnsAccountSelect: HTMLElement | undefined;
     await waitFor(() => {
@@ -557,7 +557,7 @@ describe('Proxy route website pages', () => {
     await user.selectOptions(dnsAccountSelect, '7');
     await user.click(
       within(dialog).getByRole('checkbox', {
-        name: /常态开启 Cloudflare 代理/,
+        name: /平时也开启 Cloudflare 代理/,
       }),
     );
     await user.selectOptions(
@@ -737,7 +737,7 @@ describe('Proxy route website pages', () => {
       'https://origin.internal:443',
     );
     await user.click(
-      within(dialog).getByRole('checkbox', { name: /创建时自动解析 DNS/ }),
+      within(dialog).getByRole('checkbox', { name: /创建时自动解析域名/ }),
     );
     await user.selectOptions(within(dialog).getByLabelText('解析方式'), [
       'authoritative',
@@ -1474,7 +1474,7 @@ describe('Proxy route website pages', () => {
       'auto',
     );
     await user.selectOptions(screen.getByLabelText('防护提供方'), 'custom');
-    await user.selectOptions(screen.getByLabelText('清洗节点/IP池'), 'anti-ddos');
+    await user.selectOptions(screen.getByLabelText('清洗池'), 'anti-ddos');
 
     const saveButton = document.querySelector(
       'button[form="proxy-route-dns-form"]',
@@ -1560,13 +1560,13 @@ describe('Proxy route website pages', () => {
       await screen.findByRole('heading', { name: '自动 DNS' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/健康优先只看节点是否在线、OpenResty 是否健康/),
+      screen.getByText(/健康优先只看节点是否在线、代理服务是否正常/),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('option', { name: '健康优先（冷却防抖）' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/DNS A\/AAAA 目标由下方多个节点池策略决定/),
+      screen.getByText(/返回哪些 IP 由下方多个节点池策略决定/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/攻击自动防护只在攻击期间临时覆盖解析目标/),

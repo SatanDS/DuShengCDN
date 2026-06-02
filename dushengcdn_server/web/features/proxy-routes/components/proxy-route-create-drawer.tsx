@@ -147,7 +147,7 @@ const createWebsiteSchema = z
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['dns_record_content'],
-        message: 'CNAME 记录必须填写目标域名',
+        message: '别名记录必须填写目标域名',
       });
     }
     if (
@@ -159,7 +159,7 @@ const createWebsiteSchema = z
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['ddos_protection_target'],
-        message: '请选择清洗节点/IP池',
+        message: '请选择清洗池',
       });
     }
   });
@@ -190,16 +190,16 @@ const defaultValues: CreateWebsiteFormValues = {
 };
 
 const dnsTTLHint =
-  '0 表示自动 TTL；1 表示 Cloudflare 自动 TTL；2-29 秒会在保存时提升到 30 秒；30 秒及以上按填写值同步，最高 86400 秒。';
+  '0 或 1 表示自动缓存时间；2-29 秒会在保存时提升到 30 秒；30 秒及以上按填写值同步，最高 86400 秒。';
 const dnsScheduleModeHints: Record<
   CreateWebsiteFormValues['dns_schedule_mode'],
   string
 > = {
   healthy:
-    '健康优先只看节点是否在线、OpenResty 是否健康、是否允许调度和最近心跳时间；旧目标仍健康且处于冷却期时会保持不动。',
-  weighted: '权重优先会先过滤健康候选，再按节点权重排序。',
+    '健康优先只看节点是否在线、代理服务是否正常、是否允许调度；旧目标仍可用且处于冷却期时会保持不动。',
+  weighted: '权重优先会先排除不可用节点，再按节点权重选择。',
   load_aware:
-    '按压力优先会在健康候选中参考最新连接数、CPU、内存，尽量避开压力高的节点。',
+    '按压力优先会参考连接数和主机压力，尽量避开压力高的节点。',
 };
 
 function normalizeSelectedCertificateIDs(rows: DomainListRow[]) {
@@ -518,8 +518,9 @@ export function ProxyRouteCreateDrawer({
         />
 
         <ToggleField
-          label="创建时自动解析 DNS"
-          description="可选择 Cloudflare 后台同步，或使用本地自建解析托管域名；记录值留空会自动选择在线节点 IP。"
+          label="创建时自动解析域名"
+          description="可选择 Cloudflare 后台同步，或使用本地自建解析托管域名；不填写固定 IP 时会自动选择在线节点。"
+          tooltip="DNS 就是把域名解析成服务器 IP 的服务。开启后，面板会在创建网站时一并维护解析记录。"
           checked={dnsAutoSync}
           onChange={(checked) => {
             form.setValue('dns_auto_sync', checked, { shouldDirty: true });
@@ -538,7 +539,7 @@ export function ProxyRouteCreateDrawer({
           <div className="grid gap-4 md:grid-cols-2">
             <ResourceField
               label="解析方式"
-              hint="Cloudflare 会同步到账号里的 DNS；本地自建解析会交给左侧「本地自建解析」里的托管域名。"
+              hint="Cloudflare 会同步到账号里的解析记录；本地自建解析会交给左侧「本地自建解析」里的托管域名。"
             >
               <ResourceSelect
                 aria-label="解析方式"
@@ -605,7 +606,8 @@ export function ProxyRouteCreateDrawer({
             ) : (
               <ResourceField
                 label="Cloudflare 账号"
-                hint="需要 API 密钥具备 Zone Read 和 DNS Edit 权限。"
+                hint="API 密钥需要允许读取域名并修改解析记录。"
+                tooltip="Cloudflare 里对应的权限名通常是 Zone Read 和 DNS Edit。"
                 error={form.formState.errors.dns_account_id?.message}
               >
                 <ResourceSelect
@@ -636,19 +638,22 @@ export function ProxyRouteCreateDrawer({
               </ResourceField>
             )}
 
-            <ResourceField label="记录类型">
+            <ResourceField
+              label="记录类型"
+              tooltip="A 表示 IPv4 地址，AAAA 表示 IPv6 地址，CNAME 表示别名记录，也就是把一个域名指向另一个域名。"
+            >
               <ResourceSelect {...form.register('dns_record_type')}>
-                <option value="A">A</option>
-                <option value="AAAA">AAAA</option>
+                <option value="A">IPv4 地址（A）</option>
+                <option value="AAAA">IPv6 地址（AAAA）</option>
                 {!isAuthoritativeMode ? (
-                  <option value="CNAME">CNAME</option>
+                  <option value="CNAME">别名记录（CNAME）</option>
                 ) : null}
               </ResourceSelect>
             </ResourceField>
 
             {!isAuthoritativeMode ? (
               <ResourceField
-                label="IP 或目标域名"
+                label="IP 或别名目标"
                 hint={
                   dnsRecordType === 'CNAME'
                     ? '填写要指向的目标域名。'
@@ -696,9 +701,9 @@ export function ProxyRouteCreateDrawer({
                 </ResourceField>
 
                 <ResourceField
-                  label="DNS 缓存时间"
+                  label="解析缓存时间"
                   hint={dnsTTLHint}
-                  tooltip="这个时间决定用户本地或运营商 DNS 多久刷新一次记录。时间短切换更快，查询量会更高。"
+                  tooltip="也叫 TTL，决定用户本地或运营商 DNS 多久刷新一次记录。时间短切换更快，查询量会更高。"
                 >
                   <ResourceInput
                     type="number"
@@ -713,7 +718,7 @@ export function ProxyRouteCreateDrawer({
             ) : null}
 
             <ToggleField
-              label="常态开启 Cloudflare 代理"
+              label="平时也开启 Cloudflare 代理"
               description="正常状态也同步橙云；攻击自动防护恢复后会回到这个常态设置。"
               checked={form.watch('cloudflare_proxied')}
               disabled={isAuthoritativeMode}
@@ -755,7 +760,7 @@ export function ProxyRouteCreateDrawer({
 
             <ResourceField
               label="防护提供方"
-              hint="Cloudflare 会开启橙云；自定义会切到指定清洗节点/IP 池。"
+              hint="Cloudflare 会开启橙云；自定义会切到指定清洗池。"
             >
               <ResourceSelect
                 aria-label="防护提供方"
@@ -780,7 +785,7 @@ export function ProxyRouteCreateDrawer({
             <ResourceField
               label={
                 ddosProtectionProvider === 'custom'
-                  ? '清洗节点/IP池'
+                  ? '清洗池'
                   : 'Cloudflare 账号'
               }
               hint={
@@ -788,11 +793,16 @@ export function ProxyRouteCreateDrawer({
                   ? '攻击期只返回该池内在线且可调度的公网 IP。'
                   : '留空时使用上方自动解析账号。'
               }
+              tooltip={
+                ddosProtectionProvider === 'custom'
+                  ? '清洗池可以是你提前准备的抗 D 节点池或公网 IP 池，用来在攻击期临时承接流量。'
+                  : undefined
+              }
               error={form.formState.errors.ddos_protection_target?.message}
             >
               {ddosProtectionProvider === 'custom' ? (
                 <ResourceSelect
-                  aria-label="清洗节点/IP池"
+                  aria-label="清洗池"
                   disabled={!ddosControlsEnabled || nodesQuery.isLoading}
                   {...form.register('ddos_protection_target')}
                 >
