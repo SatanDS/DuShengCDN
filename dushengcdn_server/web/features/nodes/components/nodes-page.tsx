@@ -227,7 +227,7 @@ function getPoolHealthBadge(pool: NodePoolSummary) {
 
 function NodeStack({ nodes }: { nodes: NodeItem[] }) {
   return (
-    <div className="max-h-64 min-w-[360px] space-y-2 overflow-y-auto pr-1">
+    <div className="scrollbar-none max-h-64 min-w-[360px] space-y-2 overflow-y-auto pr-1">
       {nodes.map((node) => (
         <div
           key={node.id}

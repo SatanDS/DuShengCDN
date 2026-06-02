@@ -188,6 +188,15 @@ button {
   background: var(--brand-gradient);
 }
 
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 .public-portal {
   isolation: isolate;
   background: var(--body-background);
