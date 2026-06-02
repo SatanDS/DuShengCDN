@@ -2119,8 +2119,8 @@ export function PowSection({
 
   return (
     <ConfigSectionShell
-      title="PoW 防护"
-      description="启用 Proof-of-Work 反爬虫验证。首次访问的浏览器需要完成计算挑战才能继续。"
+      title="计算验证防护"
+      description="首次访问的浏览器需要完成一次轻量计算后才能继续，用来拦住自动化爬虫。"
       formId={formId}
       saving={saving}
       embedded={embedded}
@@ -2154,13 +2154,14 @@ export function PowSection({
               pow_enabled: values.pow_enabled,
               pow_config: powConfigPayload,
             }),
-            { message: 'PoW 防护设置已保存。' },
+            { message: '计算验证防护设置已保存。' },
           );
         })}
       >
         <ToggleField
-          label="启用 PoW 防护"
-          description="对访问此站点的请求进行 Proof-of-Work 验证，阻止自动化爬虫。"
+          label="启用计算验证防护"
+          description="对访问此站点的请求进行浏览器计算验证，阻止自动化爬虫。"
+          tooltip="这类能力也常叫 PoW 或 Proof-of-Work。正常浏览器通常能自动完成，自动化请求会被消耗更多成本。"
           checked={watchedEnabled}
           onChange={(checked) =>
             form.setValue('pow_enabled', checked, { shouldDirty: true })
@@ -2220,7 +2221,7 @@ export function PowSection({
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <fieldset disabled={!watchedEnabled} className="space-y-4">
             <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
-              白名单（匹配的请求跳过 PoW）
+              白名单（匹配的请求跳过计算验证）
             </legend>
             <ResourceField label="IP" hint="每行一个 IP 地址">
               <ResourceTextarea
@@ -2261,7 +2262,7 @@ export function PowSection({
 
           <fieldset disabled={!watchedEnabled} className="space-y-4">
             <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
-              黑名单（匹配的请求必须 PoW）
+              黑名单（匹配的请求必须计算验证）
             </legend>
             <ResourceField label="IP" hint="每行一个 IP 地址">
               <ResourceTextarea
@@ -2353,8 +2354,8 @@ export function WAFSection({
 
   return (
     <ConfigSectionShell
-      title="WAF 防护"
-      description="启用节点本地轻量 WAF，在地区限制之后、PoW 之前检查恶意请求。"
+      title="恶意请求防护"
+      description="启用节点本地轻量规则，在地区限制之后、计算验证之前检查恶意请求。"
       formId={formId}
       saving={saving}
       embedded={embedded}
@@ -2390,13 +2391,14 @@ export function WAFSection({
               waf_mode: values.waf_mode,
               waf_config: wafConfigPayload,
             }),
-            { message: 'WAF 防护设置已保存。' },
+            { message: '恶意请求防护设置已保存。' },
           );
         })}
       >
         <ToggleField
-          label="启用 WAF 防护"
+          label="启用恶意请求防护"
           description="默认关闭。开启并发布配置后，节点会在本地检查常见攻击和自定义规则。"
+          tooltip="这类能力也常叫 WAF。这里是节点本地的轻量规则，不依赖第三方防护服务。"
           checked={watchedEnabled}
           onChange={(checked) =>
             form.setValue('waf_enabled', checked, { shouldDirty: true })
@@ -2456,7 +2458,7 @@ export function WAFSection({
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <fieldset disabled={!watchedEnabled} className="space-y-4">
             <legend className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
-              白名单（匹配后跳过 WAF）
+              白名单（匹配后跳过恶意请求防护）
             </legend>
             <ResourceField label="IP" hint="每行一个 IP 地址">
               <ResourceTextarea

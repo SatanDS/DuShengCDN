@@ -33,13 +33,13 @@ export const websiteConfigSections = [
   },
   {
     key: 'pow',
-    label: 'PoW 防护',
-    description: '配置 Proof-of-Work 反爬虫策略。',
+    label: '计算验证防护',
+    description: '配置浏览器计算验证，拦住自动化爬虫。',
   },
   {
     key: 'waf',
-    label: 'WAF 防护',
-    description: '配置本地轻量 WAF 规则。',
+    label: '恶意请求防护',
+    description: '配置节点本地恶意请求拦截规则。',
   },
   {
     key: 'region',

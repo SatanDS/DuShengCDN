@@ -334,13 +334,13 @@ export function WorldStage({
             <HeroMetric
               label="最近窗口请求"
               value={traffic.request_count.toLocaleString('zh-CN')}
-              hint={`QPS ${traffic.estimated_qps.toFixed(1)} · ${traffic.reported_nodes} 个节点已上报`}
+              hint={`每秒约 ${traffic.estimated_qps.toFixed(1)} 次 · ${traffic.reported_nodes} 个节点已上报`}
               isDark={isDark}
             />
             <HeroMetric
-              label="平均 CPU"
+              label="平均处理器压力"
               value={formatPercent(capacity.average_cpu_usage_percent)}
-              hint={`${capacity.high_cpu_nodes} 个节点 CPU 偏高`}
+              hint={`${capacity.high_cpu_nodes} 个节点处理器压力偏高`}
               isDark={isDark}
             />
             <HeroMetric

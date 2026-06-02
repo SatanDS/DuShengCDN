@@ -1666,10 +1666,10 @@ describe('Proxy route website pages', () => {
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: 'WAF 防护' }),
+      await screen.findByRole('heading', { name: '恶意请求防护' }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole('checkbox', { name: /启用 WAF 防护/ }));
+    await user.click(screen.getByRole('checkbox', { name: /启用恶意请求防护/ }));
     await user.selectOptions(screen.getByRole('combobox'), 'log');
     await user.click(screen.getByRole('checkbox', { name: /恶意工具 UA/ }));
     await user.type(screen.getByPlaceholderText('1.2.3.4'), '203.0.113.8');
@@ -1805,10 +1805,10 @@ describe('Proxy route website pages', () => {
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: 'PoW 防护' }),
+      await screen.findByRole('heading', { name: '计算验证防护' }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole('checkbox', { name: /启用 PoW 防护/ }));
+    await user.click(screen.getByRole('checkbox', { name: /启用计算验证防护/ }));
     await user.selectOptions(screen.getByRole('combobox'), 'slow');
 
     const [difficultyInput, sessionTTLInput, challengeTTLInput] =

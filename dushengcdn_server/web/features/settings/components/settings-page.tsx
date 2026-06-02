@@ -501,7 +501,7 @@ export function SettingsPage() {
   const rotateTokenMutation = useMutation({
     mutationFn: rotateBootstrapToken,
     onSuccess: async (data: BootstrapTokenPayload) => {
-      setFeedback({ tone: 'success', message: 'Discovery Token 已重新生成。' });
+      setFeedback({ tone: 'success', message: '接入令牌已重新生成。' });
       await queryClient.invalidateQueries({
         queryKey: ['settings', 'bootstrap-token'],
       });
@@ -511,7 +511,7 @@ export function SettingsPage() {
         } catch (error) {
           setFeedback({
             tone: 'success',
-            message: 'Discovery Token 已重新生成，但未能自动复制。',
+            message: '接入令牌已重新生成，但未能自动复制。',
             detail: getErrorMessage(error),
           });
         }
@@ -520,7 +520,7 @@ export function SettingsPage() {
     onError: (error) => {
       setFeedback({
         tone: 'danger',
-        message: formatActionError('重新生成 Discovery Token', error),
+        message: formatActionError('重新生成接入令牌', error),
       });
     },
   });
@@ -585,7 +585,7 @@ export function SettingsPage() {
             {
               key: 'operation' as const,
               label: '运维设置',
-              description: 'Agent 参数、Discovery Token 与部署命令。',
+              description: '节点程序参数、接入令牌与部署命令。',
             },
             {
               key: 'system' as const,
@@ -1515,8 +1515,8 @@ export function SettingsPage() {
             </AppCard>
 
             <AppCard
-              title="Discovery Token 与部署命令"
-              description="适用于新节点首次接入。安装脚本会自动检测 Linux / macOS 环境，并尝试补齐缺少的 OpenResty 或源码构建依赖。"
+              title="接入令牌与部署命令"
+              description="适用于新节点首次接入。安装脚本会自动检测 Linux / macOS 环境，并尝试补齐缺少的代理服务或源码构建依赖。"
               action={
                 <div className="flex flex-wrap gap-2">
                   <SecondaryButton
@@ -1526,7 +1526,7 @@ export function SettingsPage() {
                   >
                     {rotateTokenMutation.isPending
                       ? '生成中...'
-                      : '重新生成 Token'}
+                      : '重新生成接入令牌'}
                   </SecondaryButton>
                   {discoveryCommand ? (
                     <PrimaryButton
@@ -1545,14 +1545,14 @@ export function SettingsPage() {
                 <LoadingState />
               ) : bootstrapQuery.isError ? (
                 <ErrorState
-                  title="Discovery Token 加载失败"
+                  title="接入令牌加载失败"
                   description={getErrorMessage(bootstrapQuery.error)}
                 />
               ) : (
                 <div className="space-y-4">
                   <ResourceField
-                    label="Server URL"
-                    hint="默认使用当前 ServerAddress，可按需改为外部访问地址。"
+                    label="面板访问地址"
+                    hint="默认使用当前面板地址，可按需改为外部访问地址。"
                   >
                     <ResourceInput
                       value={operationFields.ServerAddress}
@@ -1566,7 +1566,7 @@ export function SettingsPage() {
                   </ResourceField>
                   <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                     <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                      Discovery Token
+                      接入令牌
                     </p>
                     <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
                       {discoveryToken || '未生成'}
@@ -1574,10 +1574,10 @@ export function SettingsPage() {
                   </div>
                   <ResourceField
                     label="一键部署命令"
-                    hint="命令会使用安装脚本自动注册 Agent，并默认安装缺少的运行依赖；没有 Release 时会从源码构建。"
+                    hint="命令会使用安装脚本自动注册节点程序，并默认安装缺少的运行依赖；没有发布包时会从源码构建。"
                   >
                     <CodeBlock className="break-all whitespace-pre-wrap">
-                      {discoveryCommand || '请先填写可访问的 Server URL。'}
+                      {discoveryCommand || '请先填写可访问的面板地址。'}
                     </CodeBlock>
                   </ResourceField>
                 </div>

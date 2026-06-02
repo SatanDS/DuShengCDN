@@ -99,7 +99,7 @@ function NodeHealthRow({ node }: { node: DashboardNodeHealth }) {
       <div className="mt-4 grid gap-3 md:grid-cols-4">
         <div>
           <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-            CPU
+            处理器
           </p>
           <p className="mt-2 text-sm text-[var(--foreground-primary)]">
             {formatPercent(node.cpu_usage_percent)}
@@ -224,7 +224,7 @@ export function DashboardOverview() {
 
         <AppCard
           title="24 小时容量趋势"
-          description="按小时聚合 CPU 与内存使用率，判断整体容量是否持续紧张。"
+          description="按小时聚合处理器与内存使用率，判断整体容量是否持续紧张。"
         >
           <TrendChart
             labels={overview.trends.capacity_24h.map((point) =>
@@ -233,7 +233,7 @@ export function DashboardOverview() {
             yAxisValueFormatter={formatPercent}
             series={[
               {
-                label: '平均 CPU',
+                label: '平均处理器压力',
                 color: '#0f766e',
                 fillColor: 'rgba(15, 118, 110, 0.15)',
                 variant: 'area',

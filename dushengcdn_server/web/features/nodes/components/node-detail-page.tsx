@@ -746,7 +746,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                 }
                 hint={
                   trafficSummary
-                    ? `QPS ${trafficSummary.estimated_qps.toFixed(1)} · 错误率 ${trafficSummary.error_rate_percent.toFixed(1)}%`
+                    ? `每秒约 ${trafficSummary.estimated_qps.toFixed(1)} 次 · 错误率 ${trafficSummary.error_rate_percent.toFixed(1)}%`
                     : '当前没有可展示的请求窗口摘要'
                 }
               />
@@ -757,7 +757,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                 }
                 hint={
                   latestMetricSnapshot
-                    ? `CPU ${formatPercent(latestMetricSnapshot.cpu_usage_percent)} · 存储 ${formatPercent(storageUsageRatio)}`
+                    ? `处理器 ${formatPercent(latestMetricSnapshot.cpu_usage_percent)} · 存储 ${formatPercent(storageUsageRatio)}`
                     : '当前没有资源快照'
                 }
               />
@@ -825,7 +825,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                     <div className="space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                       <div>
                         <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                          CPU
+                          处理器
                         </p>
                         <p className="mt-2 text-sm text-[var(--foreground-primary)]">
                           {observability.profile.cpu_model || 'unknown'}
@@ -886,7 +886,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   <div className="space-y-4">
                     <div className="grid gap-4 md:grid-cols-2">
                       <MetricBar
-                        label="CPU"
+                        label="处理器"
                         value={formatPercent(
                           latestMetricSnapshot.cpu_usage_percent,
                         )}
@@ -1021,7 +1021,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                         </p>
                         <p className="mt-2 text-sm text-[var(--foreground-secondary)]">
                           {trafficSummary
-                            ? `QPS ${trafficSummary.estimated_qps.toFixed(1)} · UV ${trafficSummary.unique_visitor_count}`
+                            ? `每秒约 ${trafficSummary.estimated_qps.toFixed(1)} 次 · 独立访客 ${trafficSummary.unique_visitor_count}`
                             : '暂无窗口流量摘要'}
                         </p>
                       </div>
@@ -1117,7 +1117,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
               <AppCard
                 title="24 小时容量趋势"
-                description="观察该节点 CPU 与内存使用率在 24 小时内的变化。"
+                description="观察该节点处理器与内存使用率在 24 小时内的变化。"
               >
                 <TrendChart
                   labels={
@@ -1128,7 +1128,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   yAxisValueFormatter={formatPercent}
                   series={[
                     {
-                      label: '平均 CPU',
+                      label: '平均处理器压力',
                       color: '#0f766e',
                       fillColor: 'rgba(15, 118, 110, 0.15)',
                       variant: 'area',
@@ -1650,8 +1650,8 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   </div>
 
                   <ResourceField
-                    label="Server URL"
-                    hint="默认使用当前控制面来源地址，可按需改为外部访问地址。"
+                    label="面板访问地址"
+                    hint="默认使用当前面板来源地址，可按需改为外部访问地址。"
                   >
                     <ResourceInput
                       value={serverUrl}

@@ -143,16 +143,16 @@ function getFeatureStatus(route: ProxyRouteItem, section: FeatureSectionKey) {
       } as const;
     case 'pow':
       return {
-        label: route.pow_enabled ? 'PoW 已启用' : 'PoW 未启用',
+        label: route.pow_enabled ? '计算验证已启用' : '计算验证未启用',
         variant: route.pow_enabled ? 'success' : 'warning',
       } as const;
     case 'waf':
       return {
         label: route.waf_enabled
           ? route.waf_mode === 'log'
-            ? 'WAF 观察模式'
-            : 'WAF 拦截模式'
-          : 'WAF 未启用',
+            ? '恶意请求观察模式'
+            : '恶意请求拦截模式'
+          : '恶意请求防护未启用',
         variant: route.waf_enabled
           ? route.waf_mode === 'log'
             ? 'info'
