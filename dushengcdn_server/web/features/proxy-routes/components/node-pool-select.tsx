@@ -7,7 +7,6 @@ import {
 
 export function buildNodePoolOptions(
   nodes: Array<{ pool_name?: string | null }>,
-  currentValue?: string | null,
 ) {
   const options = new Set<string>(['default']);
   for (const node of nodes) {
@@ -15,11 +14,6 @@ export function buildNodePoolOptions(
     if (poolName) {
       options.add(poolName);
     }
-  }
-
-  const normalizedCurrentValue = currentValue?.trim();
-  if (normalizedCurrentValue) {
-    options.add(normalizedCurrentValue);
   }
 
   return Array.from(options).sort((a, b) => {
@@ -54,10 +48,10 @@ export function NodePoolSelect({
   onChange: (value: string) => void;
   onBlur?: () => void;
 }) {
-  const selectOptions =
-    value.trim() && !options.includes(value.trim())
-      ? [...options, value.trim()]
-      : options;
+  const normalizedValue = value.trim();
+  const hasUnknownValue =
+    normalizedValue !== '' && !options.includes(normalizedValue);
+  const selectValue = hasUnknownValue ? '' : value;
 
   return (
     <div
@@ -68,13 +62,18 @@ export function NodePoolSelect({
       }
     >
       <ResourceSelect
-        value={value}
+        value={selectValue}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
         aria-label={selectAriaLabel}
       >
-        {selectOptions.map((option) => (
+        {selectValue === '' ? (
+          <option value="" disabled>
+            请选择现有节点池
+          </option>
+        ) : null}
+        {options.map((option) => (
           <option key={option} value={option}>
             {option}
           </option>
@@ -89,6 +88,11 @@ export function NodePoolSelect({
         placeholder="default"
         aria-label={inputAriaLabel}
       />
+      {hasUnknownValue ? (
+        <p className="text-xs text-[var(--status-warning-foreground)] md:col-span-2">
+          当前填写的“{normalizedValue}”不在现有节点池里，请从下拉选择或先到边缘节点 / IP 池创建对应节点池。
+        </p>
+      ) : null}
     </div>
   );
 }

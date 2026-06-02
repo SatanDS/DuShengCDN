@@ -368,6 +368,34 @@ function ensureGSLBPoolRows(rows: GSLBPoolRow[]) {
   return rows.length > 0 ? rows : [createGSLBPoolRow()];
 }
 
+function syncGSLBPoolRowsWithOptions(
+  rows: GSLBPoolRow[],
+  options: string[],
+): GSLBPoolRow[] {
+  const currentRowsByName = new Map<string, GSLBPoolRow>();
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (name) {
+      currentRowsByName.set(name.toLowerCase(), row);
+    }
+  }
+
+  const syncedRows = options
+    .map((option) => option.trim())
+    .filter(Boolean)
+    .map((name) => {
+      const existingRow = currentRowsByName.get(name.toLowerCase());
+      return createGSLBPoolRow({
+        name,
+        weight: existingRow?.weight || '100',
+        countries: existingRow?.countries || '',
+        sourceCidrs: existingRow?.sourceCidrs || '',
+      });
+    });
+
+  return ensureGSLBPoolRows(syncedRows);
+}
+
 function buildDomainRows(route: ProxyRouteItem) {
   const selectedCertIDs =
     route.cert_ids.length > 0
@@ -977,17 +1005,15 @@ export function DNSAutomationSection({
     () =>
       buildNodePoolOptions(
         nodePoolOptions.map((poolName) => ({ pool_name: poolName })),
-        route.ddos_protection_target || route.node_pool,
       ),
-    [nodePoolOptions, route.ddos_protection_target, route.node_pool],
+    [nodePoolOptions],
   );
   const gslbPoolOptions = useMemo(
     () =>
       buildNodePoolOptions(
         nodePoolOptions.map((poolName) => ({ pool_name: poolName })),
-        route.node_pool,
       ),
-    [nodePoolOptions, route.node_pool],
+    [nodePoolOptions],
   );
 
   return (
@@ -1406,7 +1432,32 @@ export function DNSAutomationSection({
             {gslbEnabled ? (
               <>
                 <ResourceField
-                  label="节点池权重"
+                  label={
+                    <span className="flex flex-wrap items-center gap-3">
+                      <span>节点池权重</span>
+                      <SecondaryButton
+                        type="button"
+                        className="rounded-full px-3 py-1.5 text-xs"
+                        disabled={!autoSyncEnabled || nodePoolsLoading}
+                        onClick={() => {
+                          form.setValue(
+                            'gslb_pool_rows',
+                            syncGSLBPoolRowsWithOptions(
+                              form.getValues('gslb_pool_rows') ?? [],
+                              gslbPoolOptions,
+                            ),
+                            {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            },
+                          );
+                          form.clearErrors('gslb_pool_rows');
+                        }}
+                      >
+                        同步现有节点池
+                      </SecondaryButton>
+                    </span>
+                  }
                   hint="请选择节点详情里真实存在的节点池；不要填写节点名称。国家或地区填写两位代码，留空表示全局兜底。"
                   tooltip="来源网段用于把某些用户 IP 段固定到指定节点池，适合有明确区域或线路规划的场景。节点池名要和节点详情里的节点池完全一致。"
                   error={form.formState.errors.gslb_pool_rows?.message}
@@ -2901,8 +2952,8 @@ export function ProxyRouteConfigPage({
     [managedDomainsQuery.data, route?.domains],
   );
   const nodePoolOptions = useMemo(
-    () => buildNodePoolOptions(nodesQuery.data ?? [], route?.node_pool),
-    [nodesQuery.data, route?.node_pool],
+    () => buildNodePoolOptions(nodesQuery.data ?? []),
+    [nodesQuery.data],
   );
 
   if (!Number.isFinite(numericRouteID) || numericRouteID <= 0) {

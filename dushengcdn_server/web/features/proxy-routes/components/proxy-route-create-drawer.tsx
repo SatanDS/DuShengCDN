@@ -284,10 +284,9 @@ export function ProxyRouteCreateDrawer({
   const selectedCertificateIDs = normalizeSelectedCertificateIDs(
     form.watch('domain_rows'),
   );
-  const nodePoolValue = form.watch('node_pool');
   const nodePoolOptions = useMemo(
-    () => buildNodePoolOptions(nodesQuery.data ?? [], nodePoolValue),
-    [nodePoolValue, nodesQuery.data],
+    () => buildNodePoolOptions(nodesQuery.data ?? []),
+    [nodesQuery.data],
   );
   const cloudflareAccounts = useMemo(
     () =>

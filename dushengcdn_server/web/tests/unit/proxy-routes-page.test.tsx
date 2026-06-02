@@ -1241,6 +1241,162 @@ describe('Proxy route website pages', () => {
     });
   });
 
+  it('syncs GSLB pool rows from current node pools only', async () => {
+    const dnsRoute = buildRoute({
+      node_pool: 'jp',
+      dns_auto_sync: true,
+      dns_account_id: 7,
+      dns_record_type: 'A',
+      dns_auto_target: true,
+      dns_target_count: 2,
+      dns_schedule_mode: 'weighted',
+      dns_ttl: 60,
+      gslb_enabled: true,
+      gslb_policy: {
+        mode: 'cloudflare_dns',
+        strategy: 'weighted',
+        pools: [
+          {
+            name: 'jp',
+            weight: 1,
+            countries: ['JP'],
+            enabled: true,
+          },
+          {
+            name: 'eu',
+            weight: 99,
+            countries: ['DE'],
+            enabled: true,
+          },
+        ],
+        target_count: 2,
+        ttl: 60,
+        source_ip: {
+          provider: 'none',
+          api_url: '',
+          api_token: '',
+        },
+        load_thresholds: {
+          max_openresty_connections: 0,
+          max_cpu_percent: 0,
+          max_memory_percent: 0,
+        },
+        debounce: {
+          cooldown_seconds: 60,
+          unhealthy_threshold: 1,
+          recovery_threshold: 1,
+        },
+      },
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: dnsRoute,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-accounts/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [{ id: 7, name: 'cf-main', type: 'cloudflare' }],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/nodes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  { id: 1, pool_name: '香港' },
+                  { id: 2, pool_name: '欧洲' },
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="dns" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: '负载均衡' }),
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue('jp')).toBeInTheDocument();
+    expect(
+      screen.getByText(/当前填写的“jp”不在现有节点池里/),
+    ).toBeInTheDocument();
+
+    const firstPoolSelect = screen.getByLabelText(
+      '节点池选择 1',
+    ) as HTMLSelectElement;
+    expect(
+      within(firstPoolSelect).queryByRole('option', { name: 'jp' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(firstPoolSelect).getByRole('option', { name: '香港' }),
+    ).toBeInTheDocument();
+    expect(
+      within(firstPoolSelect).getByRole('option', { name: '欧洲' }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '同步现有节点池' }));
+
+    expect(screen.queryByDisplayValue('jp')).not.toBeInTheDocument();
+    expect(screen.getAllByDisplayValue('香港').length).toBeGreaterThan(0);
+    expect(screen.getAllByDisplayValue('欧洲').length).toBeGreaterThan(0);
+  });
+
   it('saves authoritative DNS mode from automatic DNS config page', async () => {
     const updateRequests: Array<Record<string, unknown>> = [];
 
