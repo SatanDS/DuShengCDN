@@ -2627,12 +2627,12 @@ describe('Proxy route website pages', () => {
       await screen.findByRole('heading', { name: '缓存' }),
     ).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByRole('combobox'), 'path_exact');
+    await user.selectOptions(screen.getByRole('combobox'), 'path_contains');
     const firstRuleInput = screen.getByLabelText('缓存规则 1');
     await user.clear(firstRuleInput);
-    await user.type(firstRuleInput, '/index.html');
+    await user.type(firstRuleInput, '/Images');
     await user.click(screen.getByRole('button', { name: '添加缓存规则' }));
-    await user.type(screen.getByLabelText('缓存规则 2'), '/manifest.json');
+    await user.type(screen.getByLabelText('缓存规则 2'), '/thumb');
 
     const saveButton = document.querySelector(
       'button[form="proxy-route-cache-form"]',
@@ -2652,8 +2652,8 @@ describe('Proxy route website pages', () => {
 
     expect(updateRequests[0]).toMatchObject({
       cache_enabled: true,
-      cache_policy: 'path_exact',
-      cache_rules: ['/index.html', '/manifest.json'],
+      cache_policy: 'path_contains',
+      cache_rules: ['/Images', '/thumb'],
     });
 
     rejectUpdate?.(new Error('缓存策略保存失败：节点池不可用'));

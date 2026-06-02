@@ -212,7 +212,13 @@ const reverseProxySchema = z
 const cacheSchema = z
   .object({
     cache_enabled: z.boolean(),
-    cache_policy: z.enum(['url', 'suffix', 'path_prefix', 'path_exact']),
+    cache_policy: z.enum([
+      'url',
+      'suffix',
+      'path_prefix',
+      'path_contains',
+      'path_exact',
+    ]),
     cache_rules: z.array(z.string()),
   })
   .superRefine((value, context) => {
@@ -2083,9 +2089,11 @@ export function CacheSection({
       ? 'jpg'
       : watchedPolicy === 'path_prefix'
         ? '/assets'
-        : watchedPolicy === 'path_exact'
-          ? '/robots.txt'
-          : '按 URL 缓存时无需额外规则';
+        : watchedPolicy === 'path_contains'
+          ? '/Images'
+          : watchedPolicy === 'path_exact'
+            ? '/robots.txt'
+            : '按 URL 缓存时无需额外规则';
   const purgeMutation = useMutation({
     mutationFn: () => purgeProxyRouteCache(route.id, { scope: 'all' }),
     onSuccess: async (result) => {
@@ -2165,6 +2173,7 @@ export function CacheSection({
             <option value="url">按 URL 缓存</option>
             <option value="suffix">按后缀缓存</option>
             <option value="path_prefix">按路径前缀缓存</option>
+            <option value="path_contains">按路径包含缓存</option>
             <option value="path_exact">按精确路径缓存</option>
           </ResourceSelect>
         </ResourceField>
@@ -2177,9 +2186,11 @@ export function CacheSection({
               ? '每条填写一个后缀，例如 jpg、css、js。'
               : watchedPolicy === 'path_prefix'
                 ? '每条填写一个路径前缀，例如 /assets、/static。'
-                : watchedPolicy === 'path_exact'
-                  ? '每条填写一个精确路径，例如 /robots.txt。'
-                  : '按 URL 缓存时无需额外规则。'
+                : watchedPolicy === 'path_contains'
+                  ? '每条填写一个会出现在路径中的片段，例如 /Images、/thumb。'
+                  : watchedPolicy === 'path_exact'
+                    ? '每条填写一个精确路径，例如 /robots.txt。'
+                    : '按 URL 缓存时无需额外规则。'
           }
         >
           <div className="space-y-3">

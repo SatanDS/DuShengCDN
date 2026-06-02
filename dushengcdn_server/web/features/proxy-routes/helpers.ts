@@ -284,7 +284,7 @@ export function normalizeLimitRate(value: string) {
 }
 
 export function validateCacheRules(
-  policy: 'url' | 'suffix' | 'path_prefix' | 'path_exact',
+  policy: 'url' | 'suffix' | 'path_prefix' | 'path_contains' | 'path_exact',
   rules: string[],
 ) {
   if (policy === 'url') {

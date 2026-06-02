@@ -20,16 +20,17 @@ var proxyRouteDomainLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,6
 var proxyRouteRegionCountryPattern = regexp.MustCompile(`^[A-Z0-9]{2}$`)
 
 const (
-	proxyRouteCachePolicyURL        = "url"
-	proxyRouteCachePolicySuffix     = "suffix"
-	proxyRouteCachePolicyPathPrefix = "path_prefix"
-	proxyRouteCachePolicyPathExact  = "path_exact"
-	proxyRouteRegionModeAllow       = "allow"
-	proxyRouteRegionModeBlock       = "block"
-	proxyRouteWAFModeLog            = "log"
-	proxyRouteWAFModeBlock          = "block"
-	DNSProviderModeCloudflare       = "cloudflare"
-	DNSProviderModeAuthoritative    = "authoritative"
+	proxyRouteCachePolicyURL          = "url"
+	proxyRouteCachePolicySuffix       = "suffix"
+	proxyRouteCachePolicyPathPrefix   = "path_prefix"
+	proxyRouteCachePolicyPathContains = "path_contains"
+	proxyRouteCachePolicyPathExact    = "path_exact"
+	proxyRouteRegionModeAllow         = "allow"
+	proxyRouteRegionModeBlock         = "block"
+	proxyRouteWAFModeLog              = "log"
+	proxyRouteWAFModeBlock            = "block"
+	DNSProviderModeCloudflare         = "cloudflare"
+	DNSProviderModeAuthoritative      = "authoritative"
 )
 
 type ProxyRouteCustomHeaderInput struct {
@@ -1585,6 +1586,8 @@ func normalizeCacheRules(enabled bool, rawPolicy string, rules []string) ([]stri
 	case proxyRouteCachePolicySuffix:
 		return normalizeCacheSuffixRules(rules)
 	case proxyRouteCachePolicyPathPrefix:
+		return normalizeCachePathRules(rules, true)
+	case proxyRouteCachePolicyPathContains:
 		return normalizeCachePathRules(rules, true)
 	case proxyRouteCachePolicyPathExact:
 		return normalizeCachePathRules(rules, false)

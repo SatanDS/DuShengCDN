@@ -1647,6 +1647,8 @@ func renderRouteCachePolicyCondition(cacheConfig routeCacheConfig) string {
 		return fmt.Sprintf("        if ($uri !~* %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildSuffixMatchPattern(cacheConfig.Rules)))
 	case proxyRouteCachePolicyPathPrefix:
 		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathPrefixMatchPattern(cacheConfig.Rules)))
+	case proxyRouteCachePolicyPathContains:
+		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathContainsMatchPattern(cacheConfig.Rules)))
 	case proxyRouteCachePolicyPathExact:
 		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathExactMatchPattern(cacheConfig.Rules)))
 	default:
@@ -1676,6 +1678,14 @@ func buildPathPrefixMatchPattern(rules []string) string {
 		parts = append(parts, fmt.Sprintf("%s(?:/|$)", regexp.QuoteMeta(trimmed)))
 	}
 	return fmt.Sprintf("^(?:%s)", strings.Join(parts, "|"))
+}
+
+func buildPathContainsMatchPattern(rules []string) string {
+	parts := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		parts = append(parts, regexp.QuoteMeta(rule))
+	}
+	return fmt.Sprintf("(?:%s)", strings.Join(parts, "|"))
 }
 
 func buildPathExactMatchPattern(rules []string) string {

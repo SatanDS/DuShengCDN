@@ -322,6 +322,36 @@ func TestPublishConfigVersionRendersRouteLevelCachePolicy(t *testing.T) {
 	}
 }
 
+func TestPublishConfigVersionRendersPathContainsCachePolicy(t *testing.T) {
+	setupServiceTestDB(t)
+	if err := model.UpdateOption("OpenRestyCacheEnabled", "true"); err != nil {
+		t.Fatalf("UpdateOption OpenRestyCacheEnabled failed: %v", err)
+	}
+
+	_, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:       "emby.example.com",
+		OriginURL:    "https://origin.internal",
+		Enabled:      true,
+		CacheEnabled: true,
+		CachePolicy:  proxyRouteCachePolicyPathContains,
+		CacheRules:   []string{"/Images", "/thumb"},
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	result, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if !strings.Contains(result.Version.RenderedConfig, `if ($uri !~ "(?:/Images|/thumb)")`) {
+		t.Fatalf("expected rendered config to include path contains cache rule, got %s", result.Version.RenderedConfig)
+	}
+	if !strings.Contains(result.Version.SnapshotJSON, `"cache_policy":"path_contains"`) {
+		t.Fatal("expected snapshot to include path contains cache policy")
+	}
+}
+
 func TestPublishConfigVersionRendersMultipleUpstreams(t *testing.T) {
 	setupServiceTestDB(t)
 
