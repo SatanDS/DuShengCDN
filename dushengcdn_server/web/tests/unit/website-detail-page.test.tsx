@@ -70,7 +70,24 @@ describe('WebsiteDetailPage', () => {
             Response.json({
               success: true,
               message: '',
-              data: [],
+              data: [
+                {
+                  id: 9,
+                  site_name: 'www-site',
+                  domain: 'www.example.com',
+                  domains: ['www.example.com'],
+                  primary_domain: 'www.example.com',
+                  domain_count: 1,
+                  origin_url: 'http://127.0.0.1:8080',
+                  origin_host: '',
+                  enabled: true,
+                  enable_https: false,
+                  cert_id: null,
+                  dns_provider_mode: 'authoritative',
+                  dns_zone_id_ref: 11,
+                  remark: '',
+                },
+              ],
             }),
           );
         }
@@ -145,11 +162,12 @@ describe('WebsiteDetailPage', () => {
     await user.click(
       await screen.findByRole('button', { name: '申请证书' }),
     );
-    await user.selectOptions(screen.getByLabelText('验证方式'), 'authoritative');
 
     expect(screen.getByLabelText('主域名')).toHaveValue('www.example.com');
+    expect(screen.getByLabelText('验证方式')).toHaveValue('authoritative');
     const zoneSelect = await screen.findByLabelText('权威 DNS 托管域名');
     expect(zoneSelect).toBeEnabled();
+    expect(zoneSelect).toHaveValue('11');
     expect(
       screen.getByRole('option', { name: 'example.com（匹配当前域名）' }),
     ).toBeInTheDocument();

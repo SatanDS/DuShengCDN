@@ -122,10 +122,26 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
       return [];
     }
 
-    return (proxyRoutesQuery.data ?? []).filter((route) =>
-      isRouteRelatedToManagedDomain(website.domain, route.domain),
-    );
+    return (proxyRoutesQuery.data ?? []).filter((route) => {
+      const routeDomains =
+        route.domains && route.domains.length > 0
+          ? route.domains
+          : [route.domain];
+      return routeDomains.some((domain) =>
+        isRouteRelatedToManagedDomain(website.domain, domain),
+      );
+    });
   }, [proxyRoutesQuery.data, website]);
+
+  const preferredCertificateDNSRoute = useMemo(() => {
+    return (
+      relatedRoutes.find(
+        (route) =>
+          route.dns_provider_mode === 'authoritative' &&
+          route.dns_zone_id_ref,
+      ) ?? null
+    );
+  }, [relatedRoutes]);
 
   const certificate = website?.cert_id
     ? (certificateMap.get(website.cert_id) ?? null)
@@ -517,6 +533,12 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
           onClose={() => setIsCertificateApplyOpen(false)}
           defaultPrimaryDomain={website.domain}
           defaultName={`${website.domain} 证书`}
+          defaultDNSProviderMode={
+            preferredCertificateDNSRoute ? 'authoritative' : 'cloudflare'
+          }
+          defaultDNSZoneIDRef={
+            preferredCertificateDNSRoute?.dns_zone_id_ref ?? null
+          }
           onApplied={(appliedCertificate) => {
             void queryClient.invalidateQueries({
               queryKey: ['tls-certificates'],

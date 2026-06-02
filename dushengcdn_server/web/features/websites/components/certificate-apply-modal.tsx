@@ -39,6 +39,8 @@ interface CertificateApplyModalProps {
   certificate?: TlsCertificateItem | null;
   defaultPrimaryDomain?: string;
   defaultName?: string;
+  defaultDNSProviderMode?: AcmeApplyFormValues['dns_provider_mode'];
+  defaultDNSZoneIDRef?: number | null;
 }
 
 const emptyAuthoritativeZones: ReturnType<typeof getDNSZones> extends Promise<
@@ -55,6 +57,8 @@ export function CertificateApplyModal({
   certificate,
   defaultPrimaryDomain = '',
   defaultName = '',
+  defaultDNSProviderMode = 'cloudflare',
+  defaultDNSZoneIDRef = null,
 }: CertificateApplyModalProps) {
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState<{
@@ -91,6 +95,12 @@ export function CertificateApplyModal({
     setShowAdvanced(false);
 
     if (certificate) {
+      const selectedDNSProviderMode =
+        mode === 'convert-upload'
+          ? defaultDNSProviderMode === 'authoritative'
+            ? 'authoritative'
+            : 'cloudflare'
+          : certificate.dns_provider_mode || defaultDNSProviderMode;
       form.reset({
         name: certificate.name,
         primary_domain:
@@ -100,14 +110,16 @@ export function CertificateApplyModal({
         remark: certificate.remark || '',
         acme_account_id:
           mode === 'convert-upload' ? 0 : certificate.acme_account_id,
-        dns_provider_mode:
-          mode === 'convert-upload'
-            ? 'cloudflare'
-            : certificate.dns_provider_mode || 'cloudflare',
+        dns_provider_mode: selectedDNSProviderMode,
         dns_account_id:
-          mode === 'convert-upload' ? 0 : certificate.dns_account_id,
+          mode === 'convert-upload' ||
+          selectedDNSProviderMode === 'authoritative'
+            ? 0
+            : certificate.dns_account_id,
         dns_zone_id_ref:
-          mode === 'convert-upload' ? null : certificate.dns_zone_id_ref,
+          mode === 'convert-upload'
+            ? defaultDNSZoneIDRef
+            : certificate.dns_zone_id_ref,
         key_algorithm: certificate.key_algorithm || 'EC256',
         auto_renew: mode === 'convert-upload' ? true : certificate.auto_renew,
         dns1: mode === 'convert-upload' ? '' : certificate.dns1 || '',
@@ -127,15 +139,37 @@ export function CertificateApplyModal({
       }
     } else {
       const primaryDomain = normalizeCertificateDomain(defaultPrimaryDomain);
+      const initialDNSProviderMode =
+        defaultDNSProviderMode === 'authoritative'
+          ? 'authoritative'
+          : 'cloudflare';
       form.reset({
         ...defaultAcmeApplyValues,
         name:
           defaultName.trim() ||
           (primaryDomain ? `${primaryDomain} 证书` : ''),
         primary_domain: primaryDomain,
+        dns_provider_mode: initialDNSProviderMode,
+        dns_account_id:
+          initialDNSProviderMode === 'authoritative'
+            ? 0
+            : defaultAcmeApplyValues.dns_account_id,
+        dns_zone_id_ref:
+          initialDNSProviderMode === 'authoritative'
+            ? defaultDNSZoneIDRef
+            : null,
       });
     }
-  }, [isOpen, form, mode, certificate, defaultPrimaryDomain, defaultName]);
+  }, [
+    isOpen,
+    form,
+    mode,
+    certificate,
+    defaultPrimaryDomain,
+    defaultName,
+    defaultDNSProviderMode,
+    defaultDNSZoneIDRef,
+  ]);
 
   useEffect(() => {
     if (
@@ -211,6 +245,12 @@ export function CertificateApplyModal({
     }
     const currentZoneID = Number(form.getValues('dns_zone_id_ref'));
     if (Number.isFinite(currentZoneID) && currentZoneID > 0) {
+      if (authoritativeZones.some((zone) => zone.id === currentZoneID)) {
+        form.setValue('dns_zone_id_ref', currentZoneID, {
+          shouldDirty: false,
+          shouldValidate: false,
+        });
+      }
       return;
     }
     if (matchingAuthoritativeZones.length === 1) {
@@ -218,7 +258,7 @@ export function CertificateApplyModal({
         shouldDirty: true,
       });
     }
-  }, [dnsProviderMode, form, matchingAuthoritativeZones]);
+  }, [dnsProviderMode, form, authoritativeZones, matchingAuthoritativeZones]);
 
   const authoritativeZoneHint = dnsZonesQuery.isError
     ? `权威 DNS 托管域名加载失败：${getErrorMessage(dnsZonesQuery.error)}`
