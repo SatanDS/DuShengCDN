@@ -315,7 +315,7 @@ export function CertificateApplyModal({
   const authoritativeZoneHint = dnsZonesQuery.isError
     ? `本地托管域名加载失败：${getErrorMessage(dnsZonesQuery.error)}`
     : enabledAuthoritativeZones.length === 0
-      ? '还没有可用的本地托管域名。先在“本地自建解析”（也就是权威 DNS）里创建并启用域名，再回来申请证书。'
+      ? '还没有可用的本地托管域名。先在“本地自建解析”里创建并启用域名，再回来申请证书。'
       : certificateDomains.length > 0 && matchingAuthoritativeZones.length === 0
         ? '当前证书域名没有匹配的本地托管域名，请先创建或启用对应根域名。'
         : matchingAuthoritativeZones.length > 0
@@ -384,7 +384,7 @@ export function CertificateApplyModal({
         <div className="grid gap-4 md:grid-cols-2">
           <ResourceField
             label="验证方式"
-            hint="要用权威 DNS 申请，请选择“本地自建解析”。"
+            hint="要用本地自建解析申请，请选择“本地自建解析”。"
             tooltip="证书机构会要求证明这个域名归你管理。选择 Cloudflare 时，面板会调用 Cloudflare 写入 _acme-challenge 验证记录；选择本地自建解析时，面板会写入左侧“本地自建解析”（权威 DNS）的托管域名。"
           >
             <ResourceSelect
@@ -403,7 +403,7 @@ export function CertificateApplyModal({
               })}
             >
               <option value="cloudflare">Cloudflare 账号</option>
-              <option value="authoritative">本地自建解析（权威 DNS）</option>
+              <option value="authoritative">本地自建解析</option>
             </ResourceSelect>
           </ResourceField>
 
