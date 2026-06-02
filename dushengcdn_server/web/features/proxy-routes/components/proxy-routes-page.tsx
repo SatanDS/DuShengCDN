@@ -129,8 +129,8 @@ function getFeatureStatus(route: ProxyRouteItem, section: FeatureSectionKey) {
           route.dns_provider_mode === 'authoritative'
             ? '已用自建解析'
             : route.dns_auto_sync
-              ? '自动 DNS 已启用'
-              : '自动 DNS 未启用',
+              ? '自动解析已启用'
+              : '自动解析未启用',
         variant:
           route.dns_auto_sync || route.dns_provider_mode === 'authoritative'
             ? 'success'

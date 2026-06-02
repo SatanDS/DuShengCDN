@@ -376,7 +376,7 @@ export function NodeEditorModal({
 
         <ResourceField
           label="公网 IP 池"
-          hint="每行一个 A/AAAA 地址；留空时使用节点 IP。自动 DNS 会从这里选取目标。"
+          hint="每行一个 IPv4 或 IPv6 地址；留空时使用节点 IP。自动解析会从这里选取目标。"
         >
           <ResourceTextarea
             className="min-h-24"
@@ -399,7 +399,7 @@ export function NodeEditorModal({
         <div className="grid gap-4 md:grid-cols-2">
           <ToggleField
             label="参与自动调度"
-            description="关闭后自动 DNS 不再选择该节点。"
+            description="关闭后自动解析不再选择该节点。"
             checked={form.watch('scheduling_enabled')}
             onChange={(checked) => {
               form.setValue('scheduling_enabled', checked, {
@@ -411,7 +411,7 @@ export function NodeEditorModal({
 
           <ToggleField
             label="排空模式"
-            description="开启后自动 DNS 和缓存运行时操作都会跳过该节点。"
+            description="开启后自动解析和缓存运行时操作都会跳过该节点。"
             checked={form.watch('drain_mode')}
             onChange={(checked) => {
               form.setValue('drain_mode', checked, {

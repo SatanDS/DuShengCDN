@@ -1176,7 +1176,7 @@ describe('Proxy route website pages', () => {
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: '自动 DNS' }),
+      await screen.findByRole('heading', { name: '自动解析域名' }),
     ).toBeInTheDocument();
     expect(screen.getByText(/2-29 秒会在保存时提升到 30 秒/)).toBeInTheDocument();
 
@@ -1328,10 +1328,10 @@ describe('Proxy route website pages', () => {
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: '自动 DNS' }),
+      await screen.findByRole('heading', { name: '自动解析域名' }),
     ).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText('DNS 模式'), 'authoritative');
+    await user.selectOptions(screen.getByLabelText('解析模式'), 'authoritative');
     await user.selectOptions(screen.getByLabelText('托管域名'), '11');
 
     const saveButton = document.querySelector(
@@ -1466,7 +1466,7 @@ describe('Proxy route website pages', () => {
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: '自动 DNS' }),
+      await screen.findByRole('heading', { name: '自动解析域名' }),
     ).toBeInTheDocument();
 
     await user.selectOptions(
@@ -1557,7 +1557,7 @@ describe('Proxy route website pages', () => {
     );
 
     expect(
-      await screen.findByRole('heading', { name: '自动 DNS' }),
+      await screen.findByRole('heading', { name: '自动解析域名' }),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/健康优先只看节点是否在线、代理服务是否正常/),

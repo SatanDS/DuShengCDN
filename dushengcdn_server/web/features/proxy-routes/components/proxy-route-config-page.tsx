@@ -967,7 +967,7 @@ export function DNSAutomationSection({
 
   return (
     <ConfigSectionShell
-      title="自动 DNS"
+      title="自动解析域名"
       description="选择 Cloudflare 后台同步，或切换到本地自建解析，让 DNS 响应端按访问来源和节点状态返回边缘 IP。"
       formId={formId}
       saving={saving}
@@ -1070,7 +1070,7 @@ export function DNSAutomationSection({
             {
               message: authoritativeMode
                 ? '本地自建解析设置已保存。'
-                : '自动 DNS 设置已保存。',
+                : '自动解析设置已保存。',
             },
           );
         })}
@@ -1081,7 +1081,7 @@ export function DNSAutomationSection({
           tooltip="DNS 是把域名解析成服务器 IP 的服务。选择 Cloudflare 时，系统把记录同步到 Cloudflare；选择本地自建解析时，需要把域名 NS 指向你的 DNS 响应端。"
         >
           <ResourceSelect
-            aria-label="DNS 模式"
+            aria-label="解析模式"
             {...form.register('dns_provider_mode', {
               onChange: (event) => {
                 const mode = event.target
@@ -1507,8 +1507,9 @@ export function DNSAutomationSection({
 
                 <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
                   <ResourceField
-                    label="最大连接阈值"
+                    label="最大连接数"
                     hint="0 表示不按连接数跳过节点。"
+                    tooltip="这里对应代理服务当前连接数，超过后会尽量避开该节点。"
                   >
                     <ResourceInput
                       type="number"
@@ -1538,8 +1539,9 @@ export function DNSAutomationSection({
                   </ResourceField>
 
                   <ResourceField
-                    label="最大内存阈值"
+                    label="最大内存压力"
                     hint="0 表示不按内存使用率跳过节点。"
+                    tooltip="这里对应节点上报的内存使用率，超过后会尽量避开该节点。"
                   >
                     <ResourceInput
                       type="number"
@@ -1625,7 +1627,7 @@ export function DNSAutomationSection({
 
               <ResourceField
                 label="防护提供方"
-                hint="Cloudflare 会在攻击期同步橙云；自定义会把解析目标切到指定清洗池。"
+                hint="Cloudflare 会在攻击期同步橙云；自定义会把解析目标切到指定清洗池。攻击期都会暂停多节点智能解析。"
               >
                 <ResourceSelect
                   aria-label="防护提供方"
@@ -1660,7 +1662,7 @@ export function DNSAutomationSection({
                 }
                 hint={
                   ddosProtectionProvider === 'custom'
-                    ? '攻击期只返回该池内在线且可调度的公网 IP，并暂停多节点智能解析。'
+                    ? '攻击期只返回该池内在线且可调度的公网 IP；恢复正常后回到原解析策略。'
                     : '攻击期使用该账号同步记录并开启橙云；留空时使用上方自动解析账号。'
                 }
                 tooltip={

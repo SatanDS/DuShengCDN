@@ -23,7 +23,7 @@ export const websiteConfigSections = [
   },
   {
     key: 'dns',
-    label: '自动 DNS',
+    label: '自动解析域名',
     description: '选择 Cloudflare 同步或本地自建解析。',
   },
   {

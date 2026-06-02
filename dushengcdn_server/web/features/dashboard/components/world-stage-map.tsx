@@ -441,7 +441,7 @@ export function WorldStageMap({
             `<div>${locationLine}</div>`,
             `<div>请求量 ${data.requestCount.toLocaleString('zh-CN')} · 错误数 ${data.errorCount.toLocaleString('zh-CN')}</div>`,
             `<div>活动事件 ${data.activeEventCount} · 节点状态 ${getNodeStatusLabel(data.status)}</div>`,
-            `<div>OpenResty 状态 ${getOpenrestyStatusLabel(data.openrestyStatus)}</div>`,
+            `<div>代理服务状态 ${getOpenrestyStatusLabel(data.openrestyStatus)}</div>`,
           ].join('');
         },
       },

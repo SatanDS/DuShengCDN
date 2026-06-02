@@ -462,7 +462,7 @@ export function ProxyRouteCreateDrawer({
 
         <ResourceField
           label="节点池"
-          hint="自动 DNS 会从该节点池选择公网 IP，缓存清理/预热也会下发到该池在线节点。"
+          hint="自动解析会从该节点池选择公网 IP，缓存清理/预热也会下发到该池在线节点。"
           error={form.formState.errors.node_pool?.message}
           container="div"
         >
@@ -760,7 +760,7 @@ export function ProxyRouteCreateDrawer({
 
             <ResourceField
               label="防护提供方"
-              hint="Cloudflare 会开启橙云；自定义会切到指定清洗池。"
+              hint="Cloudflare 会开启橙云；自定义会切到指定清洗池。攻击期都会暂停多节点智能解析。"
             >
               <ResourceSelect
                 aria-label="防护提供方"
@@ -790,7 +790,7 @@ export function ProxyRouteCreateDrawer({
               }
               hint={
                 ddosProtectionProvider === 'custom'
-                  ? '攻击期只返回该池内在线且可调度的公网 IP。'
+                  ? '攻击期只返回该池内在线且可调度的公网 IP；恢复正常后回到原解析策略。'
                   : '留空时使用上方自动解析账号。'
               }
               tooltip={

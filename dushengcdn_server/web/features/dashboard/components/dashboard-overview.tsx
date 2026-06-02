@@ -266,7 +266,7 @@ export function DashboardOverview() {
               yAxisValueFormatter={(value) => formatBytesPerSecond(value, 3600)}
               series={[
                 {
-                  label: 'OpenResty 入站',
+                  label: '代理服务入站',
                   color: '#22c55e',
                   fillColor: 'rgba(34, 197, 94, 0.14)',
                   variant: 'area',
@@ -276,7 +276,7 @@ export function DashboardOverview() {
                   valueFormatter: (value) => formatBytesPerSecond(value, 3600),
                 },
                 {
-                  label: 'OpenResty 出站',
+                  label: '代理服务出站',
                   color: '#38bdf8',
                   values: overview.trends.network_24h.map(
                     (point) => point.openresty_tx_bytes,

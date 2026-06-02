@@ -136,7 +136,7 @@ function OptionDiffTable({ items }: { items: ConfigOptionDiffItem[] }) {
   if (items.length === 0) {
     return (
       <p className="text-sm text-[var(--foreground-secondary)]">
-        当前无 OpenResty 性能参数变化。
+        当前无代理服务性能参数变化。
       </p>
     );
   }
@@ -265,7 +265,7 @@ function PublishPreviewCard({
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-              OpenResty 参数变化
+              代理服务参数变化
             </p>
             <StatusBadge
               label={`${diff.changed_option_keys.length} 项`}

@@ -328,7 +328,7 @@ export function WorldStage({
             <HeroMetric
               label="运行健康"
               value={formatPercent(healthyRate)}
-              hint={`${summary.unhealthy_nodes} 个节点存在 OpenResty 异常`}
+              hint={`${summary.unhealthy_nodes} 个节点存在代理服务异常`}
               isDark={isDark}
             />
             <HeroMetric
