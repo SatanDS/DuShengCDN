@@ -193,7 +193,10 @@ export function CertificateApplyModal({
       return applyTlsCertificate(values);
     },
     onSuccess: async (certificate) => {
-      await queryClient.invalidateQueries({ queryKey: ['tls-certificates'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['tls-certificates'] }),
+        queryClient.invalidateQueries({ queryKey: ['managed-domains'] }),
+      ]);
       onApplied?.(certificate);
       onClose();
     },

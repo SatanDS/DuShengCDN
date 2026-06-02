@@ -18,6 +18,7 @@ import {
 } from '@/features/managed-domains/api/managed-domains';
 import type { ManagedDomainItem } from '@/features/managed-domains/types';
 import { getTlsCertificates } from '@/features/tls-certificates/api/tls-certificates';
+import { useCertificateApplicationRefresh } from '@/features/tls-certificates/hooks/use-certificate-application-refresh';
 import { CertificateImportModal } from '@/features/websites/components/certificate-import-modal';
 import { WebsiteEditorModal } from '@/features/websites/components/website-editor-modal';
 import {
@@ -73,6 +74,7 @@ export function WebsitesPage() {
     () => certificatesQuery.data ?? [],
     [certificatesQuery.data],
   );
+  useCertificateApplicationRefresh(certificates);
   const certificateMap = useMemo(
     () => new Map(certificates.map((item) => [item.id, item])),
     [certificates],

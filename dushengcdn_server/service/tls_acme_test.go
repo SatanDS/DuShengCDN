@@ -177,6 +177,16 @@ func TestConvertTLSCertificateToAcmePreservesUploadUntilSuccess(t *testing.T) {
 	if finalCert.PrimaryDomain != "managed.example.com" || finalCert.OtherDomains != "www.managed.example.com" {
 		t.Fatalf("expected converted certificate to persist ACME domains, got %+v", finalCert)
 	}
+	managedDomains, err := ListManagedDomains()
+	if err != nil {
+		t.Fatalf("ListManagedDomains failed: %v", err)
+	}
+	if len(managedDomains) != 1 {
+		t.Fatalf("expected converted certificate to sync managed domain, got %d", len(managedDomains))
+	}
+	if managedDomains[0].Domain != "managed.example.com" || managedDomains[0].CertID == nil || *managedDomains[0].CertID != finalCert.ID {
+		t.Fatalf("unexpected synced managed domain: %+v", managedDomains[0])
+	}
 }
 
 func TestConvertTLSCertificateToAcmePreservesUploadOnFailure(t *testing.T) {
@@ -251,6 +261,78 @@ func TestConvertTLSCertificateToAcmeRejectsInvalidStates(t *testing.T) {
 	}
 	if _, err := ConvertTLSCertificateToAcme(cert.ID, TLSApplyInput{Name: "manual-cert"}); err == nil || !strings.Contains(err.Error(), "already applying") {
 		t.Fatalf("expected applying conversion to fail, got %v", err)
+	}
+}
+
+func TestSyncManagedDomainForCertificateCreatesAndUpdatesDomainAsset(t *testing.T) {
+	setupServiceTestDB(t)
+
+	certPEM, keyPEM := generateCertificatePair(t, []string{"www.example.com"})
+	cert, err := CreateTLSCertificate(TLSCertificateInput{
+		Name:    "www-cert",
+		CertPEM: certPEM,
+		KeyPEM:  keyPEM,
+	})
+	if err != nil {
+		t.Fatalf("CreateTLSCertificate failed: %v", err)
+	}
+	cert.PrimaryDomain = "www.example.com"
+	cert.OtherDomains = "*.example.com"
+	if err := cert.Update(); err != nil {
+		t.Fatalf("update certificate domains failed: %v", err)
+	}
+
+	if err := SyncManagedDomainForCertificate(cert); err != nil {
+		t.Fatalf("SyncManagedDomainForCertificate failed: %v", err)
+	}
+	domains, err := ListManagedDomains()
+	if err != nil {
+		t.Fatalf("ListManagedDomains failed: %v", err)
+	}
+	if len(domains) != 1 {
+		t.Fatalf("expected one managed domain, got %d", len(domains))
+	}
+	if domains[0].Domain != "www.example.com" || domains[0].CertID == nil || *domains[0].CertID != cert.ID || !domains[0].Enabled {
+		t.Fatalf("unexpected synced domain: %+v", domains[0])
+	}
+
+	secondCertPEM, secondKeyPEM := generateCertificatePair(t, []string{"www.example.com"})
+	secondCert, err := CreateTLSCertificate(TLSCertificateInput{
+		Name:    "second-www-cert",
+		CertPEM: secondCertPEM,
+		KeyPEM:  secondKeyPEM,
+	})
+	if err != nil {
+		t.Fatalf("CreateTLSCertificate second failed: %v", err)
+	}
+	secondCert.PrimaryDomain = "www.example.com"
+	if err := secondCert.Update(); err != nil {
+		t.Fatalf("update second certificate domains failed: %v", err)
+	}
+
+	if err := SyncManagedDomainForCertificate(secondCert); err != nil {
+		t.Fatalf("SyncManagedDomainForCertificate second failed: %v", err)
+	}
+	domains, err = ListManagedDomains()
+	if err != nil {
+		t.Fatalf("ListManagedDomains after update failed: %v", err)
+	}
+	if len(domains) != 1 {
+		t.Fatalf("expected existing managed domain to update, got %d", len(domains))
+	}
+	if domains[0].CertID == nil || *domains[0].CertID != secondCert.ID {
+		t.Fatalf("expected managed domain cert to update to %d, got %+v", secondCert.ID, domains[0])
+	}
+
+	if err := DeleteTLSCertificate(secondCert.ID); err != nil {
+		t.Fatalf("DeleteTLSCertificate second failed: %v", err)
+	}
+	domains, err = ListManagedDomains()
+	if err != nil {
+		t.Fatalf("ListManagedDomains after certificate delete failed: %v", err)
+	}
+	if len(domains) != 1 || domains[0].CertID != nil {
+		t.Fatalf("expected certificate delete to clear managed domain reference, got %+v", domains)
 	}
 }
 

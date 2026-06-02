@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"gorm.io/gorm"
 )
 
 const (
@@ -78,6 +80,61 @@ func DeleteManagedDomain(id uint) error {
 		return err
 	}
 	return domain.Delete()
+}
+
+func ClearManagedDomainCertificateReferences(certificateID uint) error {
+	if certificateID == 0 {
+		return nil
+	}
+	return model.DB.Model(&model.ManagedDomain{}).
+		Where("cert_id = ?", certificateID).
+		Update("cert_id", nil).Error
+}
+
+func SyncManagedDomainForCertificate(certificate *model.TLSCertificate) error {
+	if certificate == nil || certificate.ID == 0 {
+		return errors.New("证书不存在")
+	}
+	domain := firstManagedDomainFromCertificate(certificate)
+	if domain == "" {
+		return nil
+	}
+	if err := validateManagedDomainPattern(domain); err != nil {
+		return err
+	}
+
+	var existing model.ManagedDomain
+	err := model.DB.Where("domain = ?", domain).First(&existing).Error
+	if err == nil {
+		existing.CertID = &certificate.ID
+		existing.Enabled = true
+		if strings.TrimSpace(existing.Remark) == "" {
+			existing.Remark = "由 TLS 证书申请自动同步"
+		}
+		return existing.Update()
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	_, err = CreateManagedDomain(ManagedDomainInput{
+		Domain:  domain,
+		CertID:  &certificate.ID,
+		Enabled: true,
+		Remark:  "由 TLS 证书申请自动同步",
+	})
+	return err
+}
+
+func firstManagedDomainFromCertificate(certificate *model.TLSCertificate) string {
+	domains, err := parseTLSCertificateDomains(
+		certificate.PrimaryDomain,
+		certificate.OtherDomains,
+	)
+	if err != nil || len(domains) == 0 {
+		return ""
+	}
+	return domains[0]
 }
 
 func MatchManagedDomainCertificate(rawDomain string) (*ManagedDomainMatchResult, error) {

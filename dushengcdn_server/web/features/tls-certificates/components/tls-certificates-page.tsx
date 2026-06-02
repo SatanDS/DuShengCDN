@@ -17,6 +17,7 @@ import {
   getTlsCertificates,
   renewTlsCertificate,
 } from '@/features/tls-certificates/api/tls-certificates';
+import { useCertificateApplicationRefresh } from '@/features/tls-certificates/hooks/use-certificate-application-refresh';
 import type { TlsCertificateItem } from '@/features/tls-certificates/types';
 import { CertificateDetailModal } from '@/features/websites/components/certificate-detail-modal';
 import { CertificateEditorModal } from '@/features/websites/components/certificate-editor-modal';
@@ -90,6 +91,7 @@ export function TlsCertificatesPage() {
     () => certificatesQuery.data ?? [],
     [certificatesQuery.data],
   );
+  useCertificateApplicationRefresh(certificates);
 
   const handleDeleteCertificate = async (certificate: TlsCertificateItem) => {
     const confirmed = await confirmDialog({

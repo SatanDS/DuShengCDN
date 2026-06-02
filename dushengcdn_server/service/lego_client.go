@@ -391,7 +391,14 @@ func ObtainSSL(cert *model.TLSCertificate) error {
 
 	cert.ApplyStatus = "ready"
 	cert.ApplyMessage = ""
-	return model.DB.Save(cert).Error
+	if err := model.DB.Save(cert).Error; err != nil {
+		return err
+	}
+	if err := SyncManagedDomainForCertificate(cert); err != nil {
+		cert.ApplyMessage = fmt.Sprintf("证书已签发，但同步域名资产失败：%v", err)
+		_ = model.DB.Save(cert).Error
+	}
+	return nil
 }
 
 func updateCertError(cert *model.TLSCertificate, message string) {

@@ -197,7 +197,10 @@ func DeleteTLSCertificate(id uint) error {
 	if err != nil {
 		return err
 	}
-	return certificate.Delete()
+	if err := certificate.Delete(); err != nil {
+		return err
+	}
+	return ClearManagedDomainCertificateReferences(id)
 }
 
 func ApplyTLSCertificate(input TLSApplyInput) (*model.TLSCertificate, error) {
@@ -351,7 +354,13 @@ func ConvertTLSCertificateToAcme(id uint, input TLSApplyInput) (*model.TLSCertif
 		latest.Provider = "acme"
 		latest.ApplyStatus = "ready"
 		latest.ApplyMessage = ""
-		_ = latest.Update()
+		if err := latest.Update(); err != nil {
+			return
+		}
+		if err := SyncManagedDomainForCertificate(latest); err != nil {
+			latest.ApplyMessage = fmt.Sprintf("证书已签发，但同步域名资产失败：%v", err)
+			_ = latest.Update()
+		}
 	}(cert)
 
 	return cert, nil

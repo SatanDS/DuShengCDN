@@ -22,6 +22,7 @@ import {
   deleteTlsCertificate,
   getTlsCertificates,
 } from '@/features/tls-certificates/api/tls-certificates';
+import { useCertificateApplicationRefresh } from '@/features/tls-certificates/hooks/use-certificate-application-refresh';
 import { CertificateDetailModal } from '@/features/websites/components/certificate-detail-modal';
 import { CertificateEditorModal } from '@/features/websites/components/certificate-editor-modal';
 import { CertificateImportModal } from '@/features/websites/components/certificate-import-modal';
@@ -113,6 +114,7 @@ export function WebsiteDetailPage({ websiteId }: { websiteId: string }) {
     () => certificatesQuery.data ?? [],
     [certificatesQuery.data],
   );
+  useCertificateApplicationRefresh(certificates);
   const certificateMap = useMemo(
     () => new Map(certificates.map((item) => [item.id, item])),
     [certificates],

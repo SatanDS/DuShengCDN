@@ -17,6 +17,8 @@ function renderWithQueryClient(ui: ReactNode) {
   render(
     <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
   );
+
+  return queryClient;
 }
 
 describe('CertificateApplyModal', () => {
@@ -198,13 +200,14 @@ describe('CertificateApplyModal', () => {
       }),
     );
 
-    renderWithQueryClient(
+    const queryClient = renderWithQueryClient(
       <CertificateApplyModal
         isOpen
         onClose={onClose}
         onApplied={onApplied}
       />,
     );
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText('证书名称'), 'example-cert');
@@ -224,6 +227,12 @@ describe('CertificateApplyModal', () => {
         dns_zone_id_ref: 11,
         dns_account_id: 0,
       });
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['tls-certificates'],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['managed-domains'],
     });
     expect(onApplied).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
