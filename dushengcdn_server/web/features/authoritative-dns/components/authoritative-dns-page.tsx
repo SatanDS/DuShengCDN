@@ -160,7 +160,7 @@ const migrationRecheckStepTemplates: Array<{
   key: MigrationRecheckStepKey;
   label: string;
 }> = [
-  { key: 'mode', label: '网站 DNS 模式' },
+  { key: 'mode', label: '网站解析模式' },
   { key: 'delegation', label: '托管域名指向检查' },
   { key: 'worker_probe', label: '响应端公网探测' },
   { key: 'simulation', label: '智能解析复测' },
@@ -513,6 +513,25 @@ function formatSourceScopeBaseLabel(value: string) {
 
 function isProbeSchedulingGateMessage(message: string) {
   return message.includes('Agent 探测未达到调度门槛');
+}
+
+function formatDiagnosticMessage(message: string) {
+  return message
+    .replaceAll('节点负载超过 GSLB 阈值', '节点压力超过上限')
+    .replaceAll('当前 Server 生成的权威 DNS 快照', '当前面板生成的本地解析配置快照')
+    .replaceAll('OpenResty 健康', '代理服务是否正常')
+    .replaceAll('GSLB 阈值', '压力上限')
+    .replaceAll('GSLB 负载阈值', '压力上限')
+    .replaceAll('GSLB', '多节点智能解析')
+    .replaceAll('DNS Worker 多点探测', '响应端多地探测')
+    .replaceAll('DNS Worker', 'DNS 响应端')
+    .replaceAll('调度防抖状态', '切换冷却状态')
+    .replaceAll('DNS 防抖状态', '解析切换冷却状态')
+    .replaceAll('Agent 探测未达到调度门槛', '节点到响应端探测未达要求')
+    .replaceAll('调度门槛', '选择要求')
+    .replaceAll('来源 CIDR', '来源网段')
+    .replaceAll('到 响应端', '到响应端')
+    .replaceAll('的 响应端', '的响应端');
 }
 
 function formatDurationSeconds(value: number) {
@@ -966,7 +985,7 @@ export function AuthoritativeDNSPage() {
       createMigrationRecheckResult(route, zone),
       'mode',
       'running',
-      '正在刷新网站 DNS 模式',
+      '正在刷新网站解析模式',
     );
     setMigrationRecheck(result);
     setRecheckingRouteId(route.id);
@@ -1373,7 +1392,7 @@ export function AuthoritativeDNSPage() {
         {showNoAuthoritativeRoutesNotice ? (
           <InlineMessage
             tone="warning"
-            message="DNS 响应端已经能拉取解析配置，但当前没有启用的网站绑定到本地自建解析。此时响应端只能回答基础记录和静态记录；业务域名的 A/AAAA 自动选 IP 需要到网站详情「自动 DNS」切换为本地自建解析并选择对应托管域名，或使用迁移向导一键切换。"
+            message="DNS 响应端已经能拉取解析配置，但当前没有启用的网站绑定到本地自建解析。此时响应端只能回答基础记录和静态记录；业务域名需要到网站详情「自动解析域名」切换为本地自建解析并选择对应托管域名，或使用迁移向导一键切换。"
           />
         ) : null}
 
@@ -1650,7 +1669,7 @@ function ZonesPanel({
       {zones.length === 0 ? (
         <EmptyState
           title="暂无托管域名"
-          description="创建托管域名后，再到网站配置的自动 DNS 分区切换为本地自建解析。"
+          description="创建托管域名后，再到网站配置的自动解析域名分区切换为本地自建解析。"
         />
       ) : (
         <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -2303,7 +2322,7 @@ function GSLBSchedulingStateCard({ state }: { state: DNSGSLBSchedulingState }) {
       ) : null}
       {state.last_reason ? (
         <p className="mt-3 text-xs leading-5 break-all text-[var(--foreground-secondary)]">
-          {state.last_reason}
+          {formatDiagnosticMessage(state.last_reason)}
         </p>
       ) : null}
       <p className="mt-3 text-xs text-[var(--foreground-muted)]">
@@ -2393,7 +2412,7 @@ function GSLBSimulationPanel({
       ) : routes.length === 0 ? (
         <EmptyState
           title="暂无本地自建解析站点"
-          description="把网站配置的自动 DNS 模式切换为本地自建解析后，可在这里模拟系统会返回哪个边缘 IP。"
+          description="把网站配置的自动解析域名切换为本地自建解析后，可在这里模拟系统会返回哪个边缘 IP。"
         />
       ) : (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
@@ -2487,7 +2506,7 @@ function GSLBSimulationPanel({
                     value={formatSourceScopeLabel(result.source_scope)}
                     helper={result.source_scope}
                   />
-                  <InfoTile label="TTL" value={`${result.ttl} 秒`} />
+                  <InfoTile label="缓存时间" value={`${result.ttl} 秒`} />
                   <InfoTile
                     label="策略"
                     value={
@@ -2527,7 +2546,7 @@ function GSLBSimulationPanel({
                         ? 'warning'
                         : 'info'
                     }
-                    message={result.message}
+                    message={formatDiagnosticMessage(result.message)}
                   />
                 ) : null}
                 <GSLBSimulationDiagnostics result={result} />
@@ -2640,7 +2659,7 @@ function GSLBSimulationDiagnostics({
                     value={node.score > 0 ? node.score.toFixed(2) : '—'}
                   />
                   <InfoTile
-                    label="Agent 探测"
+                    label="响应端探测"
                     value={`${node.node_probe_healthy_count ?? 0} / ${
                       node.node_probe_checked_count ?? 0
                     }`}
@@ -2671,7 +2690,7 @@ function GSLBSimulationDiagnostics({
                   />
                   {node.node_probe_message ? (
                     <span className="text-xs text-[var(--foreground-secondary)]">
-                      {node.node_probe_message}
+                      {formatDiagnosticMessage(node.node_probe_message)}
                     </span>
                   ) : null}
                 </div>
@@ -2681,7 +2700,7 @@ function GSLBSimulationDiagnostics({
                       key={`${node.node_id}-${reason}`}
                       className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-2.5 py-1 text-xs text-[var(--foreground-secondary)]"
                     >
-                      {reason}
+                      {formatDiagnosticMessage(reason)}
                     </span>
                   ))}
                 </div>
@@ -2834,7 +2853,7 @@ function DNSMigrationGuidePanel({
                         <StatusBadge
                           label={
                             candidate.dns_auto_sync
-                              ? 'Cloudflare 自动 DNS'
+                              ? 'Cloudflare 自动解析'
                               : 'Cloudflare 模式'
                           }
                           variant={candidate.dns_auto_sync ? 'info' : 'warning'}
@@ -2944,7 +2963,7 @@ function DNSMigrationGuidePanel({
                 2. 部署至少两个 DNS 响应端，确认响应端在线、能拉取解析配置，并通过公网 UDP/TCP 53 探测。
               </li>
               <li>
-                3. 在网站详情的「自动 DNS」里切换为本地自建解析并选择托管域名。
+                3. 在网站详情的「自动解析域名」里切换为本地自建解析并选择托管域名。
               </li>
               <li>
                 4. 到注册商把域名 NS 指向 DNS 响应端，再回到托管域名详情检查指向。
@@ -2956,8 +2975,8 @@ function DNSMigrationGuidePanel({
               回滚路径
             </h3>
             <p className="mt-3 text-sm leading-6 text-[var(--foreground-secondary)]">
-              如需回退，在网站详情把 DNS 模式改回 Cloudflare 同步，并在注册商把
-              NS 改回原 DNS 服务商；DNS 缓存时间到期后解析会逐步回到原模式。
+              如需回退，在网站详情把解析模式改回 Cloudflare 同步，并在注册商把
+              NS 改回原 DNS 服务商；解析缓存时间到期后解析会逐步回到原模式。
             </p>
           </div>
         </div>

@@ -1167,14 +1167,14 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('节点诊断')).toBeInTheDocument();
     expect(screen.getByText('hk-edge')).toBeInTheDocument();
     expect(screen.getByText('hot-edge')).toBeInTheDocument();
-    expect(screen.getByText('节点负载超过 GSLB 阈值')).toBeInTheDocument();
+    expect(screen.getByText('节点压力超过上限')).toBeInTheDocument();
     expect(screen.getAllByText('负载数据时间').length).toBeGreaterThan(0);
     expect(
       screen.getByText(formatDateTime('2026-05-31T08:19:10Z')),
     ).toBeInTheDocument();
-    expect(screen.getAllByText('Agent 探测').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('响应端探测').length).toBeGreaterThan(0);
     expect(
-      screen.getAllByText('该节点到 DNS Worker 多点探测全部可达（1/1）').length,
+      screen.getAllByText('该节点到响应端多地探测全部可达（1/1）').length,
     ).toBeGreaterThan(0);
     expect(screen.getByText('21 ms')).toBeInTheDocument();
     expect(screen.getAllByText('最大 24 ms').length).toBeGreaterThan(0);
@@ -1191,7 +1191,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText(/snapshot-d/)).toBeInTheDocument();
     expect(screen.getByText('eu-hot')).toBeInTheDocument();
     expect(
-      screen.getAllByText('节点负载超过 GSLB 阈值').length,
+      screen.getAllByText('节点压力超过上限').length,
     ).toBeGreaterThan(0);
     await user.clear(screen.getByPlaceholderText('HK'));
     await user.type(
@@ -1223,11 +1223,11 @@ describe('Authoritative DNS page', () => {
     });
     expect(screen.getByText('当前没有可返回目标。')).toBeInTheDocument();
     expect(
-      screen.getAllByText(/Agent 探测未达到调度门槛/).length,
+      screen.getAllByText(/节点到响应端探测未达要求/).length,
     ).toBeGreaterThan(0);
     expect(screen.getByText('jp-stale')).toBeInTheDocument();
     expect(
-      screen.getByText('Agent 探测未达到调度门槛：探测结果已过期'),
+      screen.getByText('节点到响应端探测未达要求：探测结果已过期'),
     ).toBeInTheDocument();
     expect(screen.getAllByText('1 个过期').length).toBeGreaterThan(0);
 
@@ -1261,7 +1261,7 @@ describe('Authoritative DNS page', () => {
       expect(screen.getByText(/“edge-site”切换后复测完成/)).toBeInTheDocument();
     });
     expect(screen.getByText('切换后复测')).toBeInTheDocument();
-    expect(screen.getByText('网站 DNS 模式')).toBeInTheDocument();
+    expect(screen.getByText('网站解析模式')).toBeInTheDocument();
     expect(screen.getByText('托管域名指向检查')).toBeInTheDocument();
     expect(screen.getByText('响应端公网探测')).toBeInTheDocument();
     expect(screen.getByText('智能解析复测')).toBeInTheDocument();
@@ -1621,7 +1621,7 @@ describe('Authoritative DNS page', () => {
       screen.getByText(/只能回答基础记录和静态记录/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/业务域名的 A\/AAAA 自动选 IP 需要/),
+      screen.getByText(/业务域名需要到网站详情/),
     ).toBeInTheDocument();
     expect(screen.getByText('暂无本地自建解析站点')).toBeInTheDocument();
   });

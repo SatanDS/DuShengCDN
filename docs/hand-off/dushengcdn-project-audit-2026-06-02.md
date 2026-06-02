@@ -19,6 +19,7 @@
 - 通用 `!` 说明图标保留悬停/聚焦说明，但不再抢占表单控件 label，避免辅助标签和测试误判。
 - 左侧入口继续简化：`DNS 账号` 改为 `Cloudflare 账号`，`节点/IP池` 改为 `节点和IP池`，`OpenResty配置` 改为 `代理服务配置`；Cloudflare 账号页同步替换成功提示、删除确认、空状态和 API 密钥说明。
 - 网站配置的自动解析域名创建/编辑文案继续新手化：主界面使用 `解析模式`、`Cloudflare 账号`、`解析缓存时间`、`多节点智能解析`、`最大处理器压力`、`清洗池` 等直观中文，`DNS`、`TTL`、`GSLB`、`CNAME`、`CPU` 等术语放进 `!` 说明里解释。
+- 本地自建解析页继续白话化：`网站 DNS 模式` 改成 `网站解析模式`，迁移提示中的 `自动 DNS` 改成 `自动解析域名`，模拟结果的 `TTL` 显示为 `缓存时间`；后端返回的 `GSLB 阈值`、`OpenResty 健康`、`DNS Worker 多点探测` 等诊断原因在面板上会转换成 `压力上限`、`代理服务是否正常`、`响应端多地探测` 等说明。
 - 自动 DNS 的攻击防护三段式配置已落地：关闭/自动，提供方 Cloudflare/自定义，目标随提供方变化。
 - 面板部署脚本默认可自动创建并安装同机 DNS Worker，且安装前检查本机是否已有 Worker，避免覆盖。
 - DNS Worker 诊断脚本、部署文档、配置文档已补充同机部署、端口、快照、排障路径。
@@ -35,6 +36,7 @@
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/certificate-apply-modal.test.tsx tests/unit/website-detail-page.test.tsx --reporter=dot`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/proxy-routes-page.test.tsx --reporter=dot`
 - `cd dushengcdn_server/web; pnpm vitest run tests/unit/navigation-utils.test.ts --reporter=dot`
+- `cd dushengcdn_server/web; pnpm vitest run tests/unit/authoritative-dns-page.test.tsx --reporter=dot`
 - `cd dushengcdn_server/web; pnpm tsc --noEmit --pretty false`
 - `cd dushengcdn_server/web; pnpm lint`
 - `cd dushengcdn_server; go test ./model`
