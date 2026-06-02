@@ -37,7 +37,6 @@ import {
   buildNodePoolOptions,
   formatNodeName,
   getNodesForPool,
-  NodePoolSelect,
 } from '@/features/proxy-routes/components/node-pool-select';
 import {
   buildPayloadFromRoute,
@@ -967,6 +966,7 @@ export function DNSAutomationSection({
   dnsZones = [],
   dnsZonesLoading = false,
   nodePoolOptions = [],
+  nodes = [],
   nodePoolsLoading = false,
   saving,
   onSave,
@@ -978,6 +978,7 @@ export function DNSAutomationSection({
   dnsZones?: DNSZoneItem[];
   dnsZonesLoading?: boolean;
   nodePoolOptions?: string[];
+  nodes?: NodeItem[];
   nodePoolsLoading?: boolean;
   saving: boolean;
   onSave: SaveHandler;
@@ -1017,6 +1018,9 @@ export function DNSAutomationSection({
         (route.dns_account_id ? String(route.dns_account_id) : ''),
     },
   });
+  const [selectedGSLBNodeIDs, setSelectedGSLBNodeIDs] = useState<
+    Record<string, string>
+  >({});
 
   useEffect(() => {
     form.reset({
@@ -1052,6 +1056,7 @@ export function DNSAutomationSection({
         route.ddos_protection_target ||
         (route.dns_account_id ? String(route.dns_account_id) : ''),
     });
+    setSelectedGSLBNodeIDs({});
   }, [form, route]);
 
   const providerMode = form.watch('dns_provider_mode');
@@ -1543,111 +1548,195 @@ export function DNSAutomationSection({
                       return (
                         <div className="space-y-3">
                           <div className="hidden gap-3 pl-[56px] text-xs font-medium text-[var(--foreground-secondary)] md:grid md:grid-cols-[minmax(0,1fr)_110px_minmax(0,0.9fr)_minmax(0,1.2fr)]">
-                            <span>池名</span>
+                            <span>池名 / 池内节点</span>
                             <span>权重</span>
                             <span>国家或地区</span>
                             <span>来源网段</span>
                           </div>
 
-                          {rows.map((row, index) => (
-                            <div
-                              key={row.id}
-                              className="grid gap-3 md:grid-cols-[44px_minmax(0,1fr)_110px_minmax(0,0.9fr)_minmax(0,1.2fr)] md:items-start"
-                            >
-                              <SecondaryButton
-                                type="button"
-                                aria-label={`删除节点池 ${index + 1}`}
-                                className={`${gslbPoolActionButtonClassName} ${gslbPoolRemoveButtonClassName}`}
-                                disabled={!autoSyncEnabled || rows.length === 1}
-                                onClick={() => {
-                                  if (rows.length === 1) {
-                                    updateRows([createGSLBPoolRow()]);
-                                    return;
-                                  }
+                          {rows.map((row, index) => {
+                            const normalizedRowPoolName = row.name.trim();
+                            const rowPoolUnknown =
+                              normalizedRowPoolName !== '' &&
+                              !gslbPoolOptions.includes(normalizedRowPoolName);
+                            const rowPoolNodes =
+                              normalizedRowPoolName === '' || rowPoolUnknown
+                                ? []
+                                : getNodesForPool(nodes, normalizedRowPoolName);
+                            const selectedRowNodeIDCandidate =
+                              selectedGSLBNodeIDs[row.id] || '';
+                            const selectedRowNodeID =
+                              selectedRowNodeIDCandidate &&
+                              rowPoolNodes.some(
+                                (node) =>
+                                  (node.node_id || String(node.id)) ===
+                                  selectedRowNodeIDCandidate,
+                              )
+                                ? selectedRowNodeIDCandidate
+                                : rowPoolNodes[0]
+                                  ? rowPoolNodes[0].node_id ||
+                                    String(rowPoolNodes[0].id)
+                                  : '';
 
-                                  updateRows(
-                                    rows.filter(
-                                      (_, rowIndex) => rowIndex !== index,
-                                    ),
-                                  );
-                                }}
+                            return (
+                              <div
+                                key={row.id}
+                                className="grid gap-3 md:grid-cols-[44px_minmax(0,1fr)_110px_minmax(0,0.9fr)_minmax(0,1.2fr)] md:items-start"
                               >
-                                <Minus
-                                  aria-hidden="true"
-                                  className="h-[14px] w-[14px]"
+                                <SecondaryButton
+                                  type="button"
+                                  aria-label={`删除节点池 ${index + 1}`}
+                                  className={`${gslbPoolActionButtonClassName} ${gslbPoolRemoveButtonClassName}`}
+                                  disabled={
+                                    !autoSyncEnabled || rows.length === 1
+                                  }
+                                  onClick={() => {
+                                    if (rows.length === 1) {
+                                      updateRows([createGSLBPoolRow()]);
+                                      return;
+                                    }
+
+                                    updateRows(
+                                      rows.filter(
+                                        (_, rowIndex) => rowIndex !== index,
+                                      ),
+                                    );
+                                  }}
+                                >
+                                  <Minus
+                                    aria-hidden="true"
+                                    className="h-[14px] w-[14px]"
+                                  />
+                                </SecondaryButton>
+
+                                <div className="grid gap-2">
+                                  <ResourceSelect
+                                    name={`gslb_pool_${index + 1}`}
+                                    aria-label={`节点池选择 ${index + 1}`}
+                                    value={normalizedRowPoolName}
+                                    disabled={!autoSyncEnabled}
+                                    onChange={(event) => {
+                                      const nextRows = rows.slice();
+                                      nextRows[index] = {
+                                        ...row,
+                                        name: event.target.value,
+                                      };
+                                      updateRows(nextRows);
+                                      setSelectedGSLBNodeIDs((current) => {
+                                        const next = { ...current };
+                                        delete next[row.id];
+                                        return next;
+                                      });
+                                    }}
+                                  >
+                                    {normalizedRowPoolName === '' ? (
+                                      <option value="" disabled>
+                                        请选择现有节点池
+                                      </option>
+                                    ) : null}
+                                    {rowPoolUnknown ? (
+                                      <option value={normalizedRowPoolName}>
+                                        {normalizedRowPoolName}（未找到）
+                                      </option>
+                                    ) : null}
+                                    {gslbPoolOptions.map((option) => (
+                                      <option key={option} value={option}>
+                                        {option}
+                                      </option>
+                                    ))}
+                                  </ResourceSelect>
+
+                                  <ResourceSelect
+                                    aria-label={`节点池内节点 ${index + 1}`}
+                                    value={selectedRowNodeID}
+                                    disabled={
+                                      !autoSyncEnabled ||
+                                      nodePoolsLoading ||
+                                      rowPoolNodes.length === 0
+                                    }
+                                    onChange={(event) =>
+                                      setSelectedGSLBNodeIDs((current) => ({
+                                        ...current,
+                                        [row.id]: event.target.value,
+                                      }))
+                                    }
+                                  >
+                                    {rowPoolNodes.length === 0 ? (
+                                      <option value="">暂无节点</option>
+                                    ) : (
+                                      rowPoolNodes.map((node) => (
+                                        <option
+                                          key={node.node_id || node.id}
+                                          value={
+                                            node.node_id || String(node.id)
+                                          }
+                                        >
+                                          {formatNodeName(node)}
+                                        </option>
+                                      ))
+                                    )}
+                                  </ResourceSelect>
+
+                                  {rowPoolUnknown ? (
+                                    <p className="text-xs text-[var(--status-warning-foreground)]">
+                                      {`当前填写的“${normalizedRowPoolName}”不在现有节点池里，请从下拉选择或先到边缘节点 / IP 池创建对应节点池。`}
+                                    </p>
+                                  ) : null}
+                                </div>
+
+                                <ResourceInput
+                                  type="number"
+                                  min={1}
+                                  max={1000}
+                                  value={row.weight}
+                                  aria-label={`节点池权重 ${index + 1}`}
+                                  placeholder="100"
+                                  disabled={!autoSyncEnabled}
+                                  onChange={(event) => {
+                                    const nextRows = rows.slice();
+                                    nextRows[index] = {
+                                      ...row,
+                                      weight: event.target.value,
+                                    };
+                                    updateRows(nextRows);
+                                  }}
+                                  className="h-11"
                                 />
-                              </SecondaryButton>
 
-                              <NodePoolSelect
-                                value={row.name}
-                                options={gslbPoolOptions}
-                                compact
-                                name={`gslb_pool_${index + 1}`}
-                                selectAriaLabel={`节点池选择 ${index + 1}`}
-                                inputAriaLabel={`节点池名称 ${index + 1}`}
-                                disabled={!autoSyncEnabled}
-                                onChange={(value) => {
-                                  const nextRows = rows.slice();
-                                  nextRows[index] = {
-                                    ...row,
-                                    name: value,
-                                  };
-                                  updateRows(nextRows);
-                                }}
-                              />
+                                <ResourceInput
+                                  value={row.countries}
+                                  aria-label={`节点池国家或地区 ${index + 1}`}
+                                  placeholder="HK,TW"
+                                  disabled={!autoSyncEnabled}
+                                  onChange={(event) => {
+                                    const nextRows = rows.slice();
+                                    nextRows[index] = {
+                                      ...row,
+                                      countries: event.target.value,
+                                    };
+                                    updateRows(nextRows);
+                                  }}
+                                  className="h-11"
+                                />
 
-                              <ResourceInput
-                                type="number"
-                                min={1}
-                                max={1000}
-                                value={row.weight}
-                                aria-label={`节点池权重 ${index + 1}`}
-                                placeholder="100"
-                                disabled={!autoSyncEnabled}
-                                onChange={(event) => {
-                                  const nextRows = rows.slice();
-                                  nextRows[index] = {
-                                    ...row,
-                                    weight: event.target.value,
-                                  };
-                                  updateRows(nextRows);
-                                }}
-                                className="h-11"
-                              />
-
-                              <ResourceInput
-                                value={row.countries}
-                                aria-label={`节点池国家或地区 ${index + 1}`}
-                                placeholder="HK,TW"
-                                disabled={!autoSyncEnabled}
-                                onChange={(event) => {
-                                  const nextRows = rows.slice();
-                                  nextRows[index] = {
-                                    ...row,
-                                    countries: event.target.value,
-                                  };
-                                  updateRows(nextRows);
-                                }}
-                                className="h-11"
-                              />
-
-                              <ResourceInput
-                                value={row.sourceCidrs}
-                                aria-label={`节点池来源网段 ${index + 1}`}
-                                placeholder="203.0.113.0/24"
-                                disabled={!autoSyncEnabled}
-                                onChange={(event) => {
-                                  const nextRows = rows.slice();
-                                  nextRows[index] = {
-                                    ...row,
-                                    sourceCidrs: event.target.value,
-                                  };
-                                  updateRows(nextRows);
-                                }}
-                                className="h-11"
-                              />
-                            </div>
-                          ))}
+                                <ResourceInput
+                                  value={row.sourceCidrs}
+                                  aria-label={`节点池来源网段 ${index + 1}`}
+                                  placeholder="203.0.113.0/24"
+                                  disabled={!autoSyncEnabled}
+                                  onChange={(event) => {
+                                    const nextRows = rows.slice();
+                                    nextRows[index] = {
+                                      ...row,
+                                      sourceCidrs: event.target.value,
+                                    };
+                                    updateRows(nextRows);
+                                  }}
+                                  className="h-11"
+                                />
+                              </div>
+                            );
+                          })}
 
                           <SecondaryButton
                             type="button"
@@ -3502,6 +3591,7 @@ export function ProxyRouteConfigPage({
               dnsZones={dnsZones}
               dnsZonesLoading={dnsZonesQuery.isLoading}
               nodePoolOptions={nodePoolOptions}
+              nodes={nodes}
               nodePoolsLoading={nodesQuery.isLoading}
               saving={saveMutation.isPending}
               onSave={(payload, context) =>

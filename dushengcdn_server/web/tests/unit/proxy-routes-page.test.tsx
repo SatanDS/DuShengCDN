@@ -1270,8 +1270,20 @@ describe('Proxy route website pages', () => {
                 success: true,
                 message: '',
                 data: [
-                  { id: 1, pool_name: 'hk' },
-                  { id: 2, pool_name: 'eu' },
+                  {
+                    id: 1,
+                    node_id: 'node-hk',
+                    name: 'HK Edge',
+                    ip: '203.0.113.10',
+                    pool_name: 'hk',
+                  },
+                  {
+                    id: 2,
+                    node_id: 'node-eu',
+                    name: 'EU Edge',
+                    ip: '203.0.113.20',
+                    pool_name: 'eu',
+                  },
                 ],
               }),
             ),
@@ -1307,14 +1319,15 @@ describe('Proxy route website pages', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/2-29 秒会在保存时提升到 30 秒/)).toBeInTheDocument();
 
-    await user.clear(screen.getByLabelText('节点池名称 1'));
-    await user.type(screen.getByLabelText('节点池名称 1'), 'hk');
+    await user.selectOptions(screen.getByLabelText('节点池选择 1'), 'hk');
+    expect(screen.getByLabelText('节点池内节点 1')).toHaveValue('node-hk');
     await user.clear(screen.getByLabelText('节点池权重 1'));
     await user.type(screen.getByLabelText('节点池权重 1'), '80');
     await user.type(screen.getByLabelText('节点池国家或地区 1'), 'HK,TW');
 
     await user.click(screen.getByLabelText('新增节点池'));
-    await user.type(screen.getByLabelText('节点池名称 2'), 'eu');
+    await user.selectOptions(screen.getByLabelText('节点池选择 2'), 'eu');
+    expect(screen.getByLabelText('节点池内节点 2')).toHaveValue('node-eu');
     await user.clear(screen.getByLabelText('节点池权重 2'));
     await user.type(screen.getByLabelText('节点池权重 2'), '20');
     await user.type(screen.getByLabelText('节点池国家或地区 2'), 'DE FR');
@@ -1450,8 +1463,20 @@ describe('Proxy route website pages', () => {
                 success: true,
                 message: '',
                 data: [
-                  { id: 1, pool_name: '香港' },
-                  { id: 2, pool_name: '欧洲' },
+                  {
+                    id: 1,
+                    node_id: 'node-hk',
+                    name: '香港节点',
+                    ip: '203.0.113.10',
+                    pool_name: '香港',
+                  },
+                  {
+                    id: 2,
+                    node_id: 'node-eu',
+                    name: '欧洲节点',
+                    ip: '203.0.113.20',
+                    pool_name: '欧洲',
+                  },
                 ],
               }),
             ),
@@ -1485,7 +1510,6 @@ describe('Proxy route website pages', () => {
     expect(
       await screen.findByRole('heading', { name: '负载均衡' }),
     ).toBeInTheDocument();
-    expect(screen.getByDisplayValue('jp')).toBeInTheDocument();
     expect(
       screen.getByText(/当前填写的“jp”不在现有节点池里/),
     ).toBeInTheDocument();
@@ -1505,9 +1529,16 @@ describe('Proxy route website pages', () => {
 
     await user.click(screen.getByRole('button', { name: '同步现有节点池' }));
 
-    expect(screen.queryByDisplayValue('jp')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/当前填写的“jp”不在现有节点池里/),
+    ).not.toBeInTheDocument();
     expect(screen.getAllByDisplayValue('香港').length).toBeGreaterThan(0);
     expect(screen.getAllByDisplayValue('欧洲').length).toBeGreaterThan(0);
+    const syncedNodeValues = screen
+      .getAllByLabelText(/节点池内节点/)
+      .map((element) => (element as HTMLSelectElement).value);
+    expect(syncedNodeValues).toContain('node-hk');
+    expect(syncedNodeValues).toContain('node-eu');
   });
 
   it('saves authoritative DNS mode from automatic DNS config page', async () => {
