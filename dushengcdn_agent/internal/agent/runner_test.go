@@ -418,6 +418,62 @@ func TestRunnerHeartbeatPayloadIncludesObservabilityExtensions(t *testing.T) {
 	}
 }
 
+func TestRunnerRefreshesDNSProbeResultsForEachPayload(t *testing.T) {
+	originalProbe := probeDNSTargetsFunc
+	var probeCalls int
+	probeDNSTargetsFunc = func(ctx context.Context, targets []protocol.DNSProbeTarget) []protocol.DNSProbeReport {
+		probeCalls++
+		return []protocol.DNSProbeReport{{
+			WorkerID:      "worker-a",
+			PublicAddress: targets[0].PublicAddress,
+			QueryName:     targets[0].QueryName,
+			QueryType:     targets[0].QueryType,
+			Results: []protocol.DNSProbeResult{{
+				Network:    "UDP",
+				Reachable:  true,
+				DurationMs: int64(probeCalls),
+				RCode:      "NOERROR",
+			}},
+		}}
+	}
+	t.Cleanup(func() {
+		probeDNSTargetsFunc = originalProbe
+	})
+
+	tempDir := t.TempDir()
+	runner := &Runner{
+		Config: &config.Config{
+			NodeName:          "edge-dnsprobe-1",
+			NodeIP:            "10.0.0.53",
+			AgentVersion:      config.AgentVersion,
+			NginxVersion:      "1.27.1.2",
+			DataDir:           tempDir,
+			RouteConfigPath:   filepath.Join(tempDir, "conf.d", "dushengcdn_routes.conf"),
+			HeartbeatInterval: config.MillisecondDuration(10 * time.Millisecond),
+		},
+		StateStore: state.NewStore(filepath.Join(tempDir, "state.json")),
+		dnsProbeTargets: []protocol.DNSProbeTarget{{
+			WorkerID:      "worker-a",
+			PublicAddress: "ns1.example.net",
+			QueryName:     "example.com.",
+			QueryType:     "SOA",
+		}},
+	}
+
+	firstPayload := runner.nodePayload("node-dnsprobe")
+	secondPayload := runner.nodePayload("node-dnsprobe")
+
+	if probeCalls != 2 {
+		t.Fatalf("expected DNS probe to refresh for each payload, got %d calls", probeCalls)
+	}
+	if len(firstPayload.DNSProbeResults) != 1 || firstPayload.DNSProbeResults[0].Results[0].DurationMs != 1 {
+		t.Fatalf("unexpected first DNS probe payload: %+v", firstPayload.DNSProbeResults)
+	}
+	if len(secondPayload.DNSProbeResults) != 1 || secondPayload.DNSProbeResults[0].Results[0].DurationMs != 2 {
+		t.Fatalf("unexpected second DNS probe payload: %+v", secondPayload.DNSProbeResults)
+	}
+}
+
 func TestRunnerReplaysBufferedObservabilityAfterHeartbeatRecovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

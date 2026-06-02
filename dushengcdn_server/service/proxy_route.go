@@ -428,9 +428,6 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 			if _, err := precheckAuthoritativeRouteDNSTargets(precheckRoute, dnsRecordType); err != nil {
 				return nil, err
 			}
-			if err := validateAuthoritativeDNSReadyWorkers(); err != nil {
-				return nil, err
-			}
 		}
 	}
 	if input.Enabled && (dnsProviderMode == DNSProviderModeAuthoritative || input.DNSAutoSync) && gslbEnabled {

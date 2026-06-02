@@ -110,6 +110,21 @@ local uri = ngx.var.uri or ""
 local ua = ngx.var.http_user_agent or ""
 local remote_ip = ngx.var.remote_addr or ""
 
+-- Internal panel endpoints already require Agent/DNS Worker tokens. Let them
+-- reach the upstream so PoW cannot block heartbeats, config pulls, or DNS probe
+-- reports when the panel hostname itself is protected.
+local agent_api_prefix = "/api/agent/"
+if string.sub(uri, 1, #agent_api_prefix) == agent_api_prefix and ngx.var.http_x_agent_token and ngx.var.http_x_agent_token ~= "" then
+    return
+end
+local authorization_header = ngx.var.http_authorization or ""
+if (uri == "/api/dns-snapshot" or uri == "/api/dns-worker-heartbeat") and (
+    (ngx.var.http_x_dns_worker_token and ngx.var.http_x_dns_worker_token ~= "") or
+    string.find(string.lower(authorization_header), "^bearer%s+")
+) then
+    return
+end
+
 -- Check whitelist: if matched, skip PoW
 local whitelist = config.whitelist or {}
 if policy.match_any(remote_ip, ua, uri, whitelist) then

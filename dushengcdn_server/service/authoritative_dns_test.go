@@ -745,7 +745,7 @@ func TestCreateProxyRouteAuthoritativeAllowsDisabledDraftWithoutTargets(t *testi
 	}
 }
 
-func TestCreateProxyRouteAuthoritativeRequiresReadyDNSWorker(t *testing.T) {
+func TestCreateProxyRouteAuthoritativeAllowsMissingDNSWorkerReadiness(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldThreshold := common.NodeOfflineThreshold
@@ -775,7 +775,7 @@ func TestCreateProxyRouteAuthoritativeRequiresReadyDNSWorker(t *testing.T) {
 		t.Fatalf("insert hk node: %v", err)
 	}
 
-	_, err = CreateProxyRoute(ProxyRouteInput{
+	view, err := CreateProxyRoute(ProxyRouteInput{
 		Domain:          "www.example.com",
 		OriginURL:       "https://origin.internal",
 		NodePool:        "hk",
@@ -787,12 +787,18 @@ func TestCreateProxyRouteAuthoritativeRequiresReadyDNSWorker(t *testing.T) {
 		DNSScheduleMode: "weighted",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "DNS 响应端") {
-		t.Fatalf("expected missing DNS response worker readiness error, got %v", err)
+	if err != nil {
+		t.Fatalf("CreateProxyRoute should allow saving before DNS response worker readiness: %v", err)
+	}
+	if view.DNSProviderMode != DNSProviderModeAuthoritative || !view.Enabled {
+		t.Fatalf("unexpected authoritative route view: %+v", view)
+	}
+	if err := validateAuthoritativeDNSReadyWorkers(); err == nil || !strings.Contains(err.Error(), "DNS 响应端") {
+		t.Fatalf("expected DNS response worker readiness check to remain unhealthy, got %v", err)
 	}
 }
 
-func TestCreateProxyRouteAuthoritativeRequiresFreshDNSWorkerSnapshot(t *testing.T) {
+func TestCreateProxyRouteAuthoritativeAllowsStaleDNSWorkerSnapshot(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldThreshold := common.NodeOfflineThreshold
@@ -829,7 +835,7 @@ func TestCreateProxyRouteAuthoritativeRequiresFreshDNSWorkerSnapshot(t *testing.
 		t.Fatalf("update stale worker snapshot: %v", err)
 	}
 
-	_, err = CreateProxyRoute(ProxyRouteInput{
+	view, err := CreateProxyRoute(ProxyRouteInput{
 		Domain:          "www.example.com",
 		OriginURL:       "https://origin.internal",
 		NodePool:        "hk",
@@ -841,12 +847,18 @@ func TestCreateProxyRouteAuthoritativeRequiresFreshDNSWorkerSnapshot(t *testing.
 		DNSScheduleMode: "weighted",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "解析配置") {
-		t.Fatalf("expected stale DNS response worker snapshot error, got %v", err)
+	if err != nil {
+		t.Fatalf("CreateProxyRoute should allow saving with stale DNS response worker snapshot: %v", err)
+	}
+	if view.DNSProviderMode != DNSProviderModeAuthoritative || !view.Enabled {
+		t.Fatalf("unexpected authoritative route view: %+v", view)
+	}
+	if err := validateAuthoritativeDNSReadyWorkers(); err == nil || !strings.Contains(err.Error(), "解析配置") {
+		t.Fatalf("expected stale DNS response worker readiness check to remain unhealthy, got %v", err)
 	}
 }
 
-func TestCreateProxyRouteAuthoritativeRejectsPartialPublicWorkerStaleSnapshot(t *testing.T) {
+func TestCreateProxyRouteAuthoritativeAllowsPartialPublicWorkerStaleSnapshot(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldThreshold := common.NodeOfflineThreshold
@@ -884,7 +896,7 @@ func TestCreateProxyRouteAuthoritativeRejectsPartialPublicWorkerStaleSnapshot(t 
 		t.Fatalf("update stale worker snapshot: %v", err)
 	}
 
-	_, err = CreateProxyRoute(ProxyRouteInput{
+	view, err := CreateProxyRoute(ProxyRouteInput{
 		Domain:          "www.example.com",
 		OriginURL:       "https://origin.internal",
 		NodePool:        "hk",
@@ -896,12 +908,18 @@ func TestCreateProxyRouteAuthoritativeRejectsPartialPublicWorkerStaleSnapshot(t 
 		DNSScheduleMode: "weighted",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "部分公网可达") {
-		t.Fatalf("expected partial stale DNS Worker snapshot error, got %v", err)
+	if err != nil {
+		t.Fatalf("CreateProxyRoute should allow saving with partial stale DNS Worker snapshot: %v", err)
+	}
+	if view.DNSProviderMode != DNSProviderModeAuthoritative || !view.Enabled {
+		t.Fatalf("unexpected authoritative route view: %+v", view)
+	}
+	if err := validateAuthoritativeDNSReadyWorkers(); err == nil || !strings.Contains(err.Error(), "部分公网可达") {
+		t.Fatalf("expected partial stale DNS Worker readiness check to remain unhealthy, got %v", err)
 	}
 }
 
-func TestCreateProxyRouteAuthoritativeRejectsDivergentPublicWorkerSnapshots(t *testing.T) {
+func TestCreateProxyRouteAuthoritativeAllowsDivergentPublicWorkerSnapshots(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldThreshold := common.NodeOfflineThreshold
@@ -937,7 +955,7 @@ func TestCreateProxyRouteAuthoritativeRejectsDivergentPublicWorkerSnapshots(t *t
 		t.Fatalf("update divergent worker snapshot: %v", err)
 	}
 
-	_, err = CreateProxyRoute(ProxyRouteInput{
+	view, err := CreateProxyRoute(ProxyRouteInput{
 		Domain:          "www.example.com",
 		OriginURL:       "https://origin.internal",
 		NodePool:        "hk",
@@ -949,8 +967,14 @@ func TestCreateProxyRouteAuthoritativeRejectsDivergentPublicWorkerSnapshots(t *t
 		DNSScheduleMode: "weighted",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "解析配置版本不一致") {
-		t.Fatalf("expected divergent DNS response worker snapshot error, got %v", err)
+	if err != nil {
+		t.Fatalf("CreateProxyRoute should allow saving with divergent DNS response worker snapshots: %v", err)
+	}
+	if view.DNSProviderMode != DNSProviderModeAuthoritative || !view.Enabled {
+		t.Fatalf("unexpected authoritative route view: %+v", view)
+	}
+	if err := validateAuthoritativeDNSReadyWorkers(); err == nil || !strings.Contains(err.Error(), "解析配置版本不一致") {
+		t.Fatalf("expected divergent DNS response worker readiness check to remain unhealthy, got %v", err)
 	}
 }
 
@@ -1086,7 +1110,7 @@ func TestUpdateProxyRouteAuthoritativeSkipsWorkerReadinessForNonDNSChange(t *tes
 	}
 }
 
-func TestUpdateProxyRouteAuthoritativeChecksWorkerReadinessForDNSChange(t *testing.T) {
+func TestUpdateProxyRouteAuthoritativeAllowsDNSChangeBeforeWorkerReadiness(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldThreshold := common.NodeOfflineThreshold
@@ -1139,7 +1163,7 @@ func TestUpdateProxyRouteAuthoritativeChecksWorkerReadinessForDNSChange(t *testi
 		t.Fatalf("stale DNS worker probe: %v", err)
 	}
 
-	_, err = UpdateProxyRoute(view.ID, ProxyRouteInput{
+	updated, err := UpdateProxyRoute(view.ID, ProxyRouteInput{
 		SiteName:        "www.example.com",
 		Domain:          "www.example.com",
 		OriginURL:       "https://origin.internal",
@@ -1152,8 +1176,14 @@ func TestUpdateProxyRouteAuthoritativeChecksWorkerReadinessForDNSChange(t *testi
 		DNSScheduleMode: "weighted",
 		DNSTTL:          60,
 	})
-	if err == nil || !strings.Contains(err.Error(), "公网 UDP/TCP 53") {
-		t.Fatalf("expected DNS change to require worker readiness, got %v", err)
+	if err != nil {
+		t.Fatalf("UpdateProxyRoute should allow saving DNS changes before worker readiness: %v", err)
+	}
+	if updated.DNSTTL != 60 || updated.DNSProviderMode != DNSProviderModeAuthoritative {
+		t.Fatalf("unexpected updated authoritative route: %+v", updated)
+	}
+	if err := validateAuthoritativeDNSReadyWorkers(); err == nil || !strings.Contains(err.Error(), "公网 UDP/TCP 53") {
+		t.Fatalf("expected worker readiness check to remain unhealthy after DNS change, got %v", err)
 	}
 }
 

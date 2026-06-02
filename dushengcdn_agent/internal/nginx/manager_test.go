@@ -775,6 +775,15 @@ func TestManagedPowLuaFilesUseInternalChallengeFlow(t *testing.T) {
 	if !strings.Contains(openRestyPowCheckLua, `ngx.header["Set-Cookie"] = session_cookie(cookie_val, session_ttl)`) {
 		t.Fatal("expected check.lua to refresh the browser session cookie on each valid request")
 	}
+	if !strings.Contains(openRestyPowCheckLua, `string.sub(uri, 1, #agent_api_prefix) == agent_api_prefix and ngx.var.http_x_agent_token`) {
+		t.Fatal("expected check.lua to bypass authenticated agent API calls")
+	}
+	if !strings.Contains(openRestyPowCheckLua, `uri == "/api/dns-snapshot" or uri == "/api/dns-worker-heartbeat"`) {
+		t.Fatal("expected check.lua to recognize DNS Worker API calls")
+	}
+	if !strings.Contains(openRestyPowCheckLua, `ngx.var.http_x_dns_worker_token`) {
+		t.Fatal("expected check.lua to require DNS Worker token header for DNS Worker API bypass")
+	}
 	if !strings.Contains(openRestyPowChallengeLua, `local session_ttl = config.session_ttl or 600`) {
 		t.Fatal("expected challenge.lua to default session TTL to 10 minutes")
 	}

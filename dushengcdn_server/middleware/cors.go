@@ -11,7 +11,7 @@ import (
 func CORS() gin.HandlerFunc {
 	config := cors.DefaultConfig()
 	config.AllowCredentials = true
-	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization", "X-Agent-Token", "Accept"}
+	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization", "X-Agent-Token", "X-DNS-Worker-Token", "Accept"}
 	config.AllowOriginFunc = func(origin string) bool {
 		serverAddr := strings.TrimRight(common.ServerAddress, "/")
 		if serverAddr == "" {

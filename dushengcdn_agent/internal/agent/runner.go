@@ -58,6 +58,7 @@ const autoUpdateCheckInterval = 6 * time.Hour
 
 var runSelfUninstallFunc = runSelfUninstall
 var selfUninstallDelay = 2 * time.Second
+var probeDNSTargetsFunc = dnsprobe.ProbeTargets
 
 type Runner struct {
 	Config              *config.Config
@@ -162,7 +163,7 @@ func (r *Runner) Run(ctx context.Context) error {
 
 func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, startup bool) (bool, error) {
 	r.refreshOpenrestyHealth(ctx)
-	payload, ackWindows := r.prepareHeartbeatPayload(nodeID)
+	payload, ackWindows := r.prepareHeartbeatPayload(ctx, nodeID)
 	heartbeatResult, err := r.HeartbeatService.Heartbeat(ctx, payload)
 	if err != nil {
 		return false, err
@@ -176,7 +177,7 @@ func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, start
 		mode = "startup"
 	}
 	slog.Debug("agent heartbeat succeeded", "mode", mode, "node_id", nodeID)
-	changed := r.applySettings(ctx, heartbeatResult.AgentSettings)
+	changed := r.applySettings(heartbeatResult.AgentSettings)
 	if startup {
 		if err = r.SyncService.SyncOnStartup(ctx, heartbeatResult.ActiveConfig); err != nil {
 			r.recordSyncError(err)
@@ -275,7 +276,7 @@ func (r *Runner) runWebSocket(ctx context.Context, nodeID string, conn protocol.
 
 func (r *Runner) sendWebSocketStatus(ctx context.Context, nodeID string, conn protocol.WebSocketConnection) error {
 	r.refreshOpenrestyHealth(ctx)
-	payload, ackWindows := r.prepareHeartbeatPayload(nodeID)
+	payload, ackWindows := r.prepareHeartbeatPayload(ctx, nodeID)
 	if err := conn.SendStatus(payload); err != nil {
 		return err
 	}
@@ -291,7 +292,7 @@ func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WS
 			slog.Debug("agent ws settings decode failed", "error", err)
 			return false, nil
 		}
-		changed := r.applySettings(ctx, &settings)
+		changed := r.applySettings(&settings)
 		r.tryRestartOpenresty(ctx)
 		r.tryAutoUpdate(ctx)
 		if !r.websocketUpgradeEnabled {
@@ -500,7 +501,7 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func (r *Runner) applySettings(ctx context.Context, settings *protocol.AgentSettings) bool {
+func (r *Runner) applySettings(settings *protocol.AgentSettings) bool {
 	if settings == nil {
 		return false
 	}
@@ -524,7 +525,9 @@ func (r *Runner) applySettings(ctx context.Context, settings *protocol.AgentSett
 	r.updateTag = strings.TrimSpace(settings.UpdateTag)
 	r.restartOpenrestyNow = settings.RestartOpenrestyNow
 	r.dnsProbeTargets = normalizeDNSProbeTargets(settings.DNSProbeTargets)
-	r.refreshDNSProbeResults(ctx)
+	if len(r.dnsProbeTargets) == 0 {
+		r.dnsProbeResults = nil
+	}
 	return changed
 }
 
@@ -533,7 +536,7 @@ func (r *Runner) refreshDNSProbeResults(ctx context.Context) {
 		r.dnsProbeResults = nil
 		return
 	}
-	r.dnsProbeResults = dnsprobe.ProbeTargets(ctx, r.dnsProbeTargets)
+	r.dnsProbeResults = probeDNSTargetsFunc(ctx, r.dnsProbeTargets)
 }
 
 func (r *Runner) consumeDNSProbeResults() []protocol.DNSProbeReport {
@@ -628,7 +631,7 @@ func (r *Runner) tryRegister(ctx context.Context, nodeID *string) error {
 		return errors.New("agent_token 为空且未配置 discovery_token")
 	}
 	slog.Info("agent discovery registration started")
-	response, err := r.HeartbeatService.Register(ctx, r.nodePayload(*nodeID))
+	response, err := r.HeartbeatService.Register(ctx, r.nodePayloadWithContext(ctx, *nodeID))
 	if err != nil {
 		return err
 	}
@@ -655,7 +658,7 @@ func (r *Runner) tryRegister(ctx context.Context, nodeID *string) error {
 	*nodeID = response.NodeID
 	slog.Info("agent discovery registration succeeded", "node_id", response.NodeID)
 	r.refreshOpenrestyHealth(ctx)
-	payload, ackWindows := r.prepareHeartbeatPayload(*nodeID)
+	payload, ackWindows := r.prepareHeartbeatPayload(ctx, *nodeID)
 	heartbeatResult, heartbeatErr := r.HeartbeatService.Heartbeat(ctx, payload)
 	if heartbeatErr != nil {
 		slog.Error("agent post-register heartbeat failed", "error", heartbeatErr)
@@ -665,7 +668,7 @@ func (r *Runner) tryRegister(ctx context.Context, nodeID *string) error {
 	if heartbeatResult == nil {
 		heartbeatResult = &protocol.HeartbeatResult{}
 	}
-	r.applySettings(ctx, heartbeatResult.AgentSettings)
+	r.applySettings(heartbeatResult.AgentSettings)
 	if err = r.SyncService.SyncOnStartup(ctx, heartbeatResult.ActiveConfig); err != nil {
 		r.recordSyncError(err)
 		slog.Error("agent post-register startup sync failed", "error", err)
@@ -746,6 +749,11 @@ func (r *Runner) recordOpenrestyUnhealthy(err error, fallbackOnly bool) {
 }
 
 func (r *Runner) nodePayload(nodeID string) protocol.NodePayload {
+	return r.nodePayloadWithContext(context.Background(), nodeID)
+}
+
+func (r *Runner) nodePayloadWithContext(ctx context.Context, nodeID string) protocol.NodePayload {
+	r.refreshDNSProbeResults(ctx)
 	snapshot, _ := r.StateStore.Load()
 	openrestyStatus := strings.TrimSpace(snapshot.OpenrestyStatus)
 	if openrestyStatus == "" {
@@ -779,8 +787,8 @@ func (r *Runner) nodePayload(nodeID string) protocol.NodePayload {
 	}
 }
 
-func (r *Runner) prepareHeartbeatPayload(nodeID string) (protocol.NodePayload, []int64) {
-	payload := r.nodePayload(nodeID)
+func (r *Runner) prepareHeartbeatPayload(ctx context.Context, nodeID string) (protocol.NodePayload, []int64) {
+	payload := r.nodePayloadWithContext(ctx, nodeID)
 	if r.ObservabilityBuffer == nil || (payload.Snapshot == nil && payload.TrafficReport == nil && len(payload.AccessLogs) == 0) {
 		return payload, nil
 	}
