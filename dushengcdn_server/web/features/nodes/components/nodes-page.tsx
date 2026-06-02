@@ -149,7 +149,7 @@ export function NodesPage() {
       case 'offline':
         return '当前仅展示离线节点。';
       case 'unhealthy':
-        return '当前仅展示 OpenResty 异常节点。';
+        return '当前仅展示代理服务异常节点。';
       case 'lagging':
         return activeVersion
           ? `当前仅展示未追平激活版本 ${activeVersion} 的节点。`
@@ -285,7 +285,7 @@ export function NodesPage() {
                       : 'border-[var(--border-default)] text-[var(--foreground-secondary)] hover:bg-[var(--control-background-hover)]'
                   }`}
                 >
-                  OpenResty 异常
+                  代理服务异常
                 </Link>
                 <Link
                   href="/node?risk=lagging"
@@ -307,7 +307,7 @@ export function NodesPage() {
                       <th className="px-3 py-3 font-medium">状态</th>
                       <th className="px-3 py-3 font-medium">调度</th>
                       <th className="px-3 py-3 font-medium">
-                        Agent / OpenResty
+                        Agent / 代理服务版本
                       </th>
                       <th className="px-3 py-3 font-medium">运行健康</th>
                       <th className="px-3 py-3 font-medium">当前版本</th>

@@ -358,7 +358,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     onSuccess: async (updatedNode) => {
       setFeedback({
         tone: 'success',
-        message: `已向节点 ${updatedNode.name} 下发 OpenResty 重启指令。`,
+        message: `已向节点 ${updatedNode.name} 下发代理服务重启指令。`,
       });
       await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
     },
@@ -442,8 +442,8 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     }
 
     const confirmed = await confirmDialog({
-      title: '重启 OpenResty',
-      message: `确认向节点“${node.name}”下发 OpenResty 重启指令吗？该指令会在下一次心跳后执行。`,
+      title: '重启代理服务',
+      message: `确认向节点“${node.name}”下发代理服务重启指令吗？该指令会在下一次心跳后执行。`,
       confirmLabel: '下发重启',
     });
     if (!confirmed) {
@@ -921,7 +921,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                             : '—'
                         }
                         progress={null}
-                        hint="OpenResty 当前连接"
+                        hint="代理服务当前连接"
                       />
                     </div>
                   </div>
@@ -971,7 +971,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                         <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                          OpenResty 吞吐
+                          代理服务吞吐
                         </p>
                         <div className="mt-3 space-y-2 text-sm text-[var(--foreground-secondary)]">
                           <p>
@@ -1155,7 +1155,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
             <div className="grid gap-6 xl:grid-cols-2">
               <AppCard
                 title="24 小时网络趋势"
-                description="观察 OpenResty 入站/出站吞吐的变化，辅助识别回源压力、突发流量或出口异常。"
+                description="观察代理服务入站/出站吞吐的变化，辅助识别回源压力、突发流量或出口异常。"
               >
                 <TrendChart
                   labels={
@@ -1168,7 +1168,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   }
                   series={[
                     {
-                      label: 'OpenResty 入站',
+                      label: '代理服务入站',
                       color: '#22c55e',
                       fillColor: 'rgba(34, 197, 94, 0.14)',
                       variant: 'area',
@@ -1180,7 +1180,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                         formatBytesPerSecond(value, 3600),
                     },
                     {
-                      label: 'OpenResty 出站',
+                      label: '代理服务出站',
                       color: '#38bdf8',
                       values:
                         observability?.trends.network_24h.map(
@@ -1545,8 +1545,8 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
             </AppCard>
 
             <AppCard
-              title="OpenResty 健康与控制"
-              description="OpenResty 当前健康状态。"
+              title="代理服务健康与控制"
+              description="显示节点本机代理服务当前健康状态，并可下发重启指令。"
               action={
                 <div className="flex flex-wrap gap-3">
                   <PrimaryButton
@@ -1557,8 +1557,8 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                     {restartOpenrestyMutation.isPending
                       ? '下发重启中...'
                       : node.restart_openresty_requested
-                        ? '等待 OpenResty 重启'
-                        : '重启 OpenResty'}
+                        ? '等待代理服务重启'
+                        : '重启代理服务'}
                   </PrimaryButton>
                 </div>
               }
@@ -1579,7 +1579,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   </div>
                   <p className="mt-3 text-sm text-[var(--foreground-secondary)]">
                     {node.restart_openresty_requested
-                      ? '已等待节点在下一次心跳后执行 OpenResty 重启。'
+                      ? '已等待节点在下一次心跳后执行代理服务重启。'
                       : '系统会在每次心跳前自动采集健康状态。'}
                   </p>
                 </div>
@@ -1697,7 +1697,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   </div>
                   <div>
                     <p className="font-medium text-[var(--foreground-primary)]">
-                      OpenResty 状态消息
+                      代理服务状态消息
                     </p>
                     <p className="mt-1 break-words whitespace-pre-wrap">
                       {node.openresty_message || '无'}
