@@ -37,14 +37,20 @@ export function NodePoolSelect({
   value,
   options,
   disabled,
+  compact = false,
   onChange,
   onBlur,
   name,
+  selectAriaLabel = '节点池选择',
+  inputAriaLabel = '节点池名称',
 }: {
   value: string;
   options: string[];
   disabled?: boolean;
+  compact?: boolean;
   name?: string;
+  selectAriaLabel?: string;
+  inputAriaLabel?: string;
   onChange: (value: string) => void;
   onBlur?: () => void;
 }) {
@@ -54,13 +60,19 @@ export function NodePoolSelect({
       : options;
 
   return (
-    <div className="grid gap-3 md:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
+    <div
+      className={
+        compact
+          ? 'grid gap-2'
+          : 'grid gap-3 md:grid-cols-[minmax(0,280px)_minmax(0,1fr)]'
+      }
+    >
       <ResourceSelect
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
-        aria-label="节点池选择"
+        aria-label={selectAriaLabel}
       >
         {selectOptions.map((option) => (
           <option key={option} value={option}>
@@ -75,7 +87,7 @@ export function NodePoolSelect({
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
         placeholder="default"
-        aria-label="节点池名称"
+        aria-label={inputAriaLabel}
       />
     </div>
   );

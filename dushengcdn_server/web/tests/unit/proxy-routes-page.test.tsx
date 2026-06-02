@@ -1150,10 +1150,24 @@ describe('Proxy route website pages', () => {
           );
         }
 
+        if (url.includes('/nodes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  { id: 1, pool_name: 'hk' },
+                  { id: 2, pool_name: 'eu' },
+                ],
+              }),
+            ),
+          );
+        }
+
         if (
           url.includes('/tls-certificates/') ||
-          url.includes('/managed-domains/') ||
-          url.includes('/nodes/')
+          url.includes('/managed-domains/')
         ) {
           return Promise.resolve(
             new Response(

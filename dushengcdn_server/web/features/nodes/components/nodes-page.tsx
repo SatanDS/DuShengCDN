@@ -196,7 +196,7 @@ export function NodesPage() {
       <div className="space-y-6">
         <PageHeader
           title="边缘节点 / IP 池"
-          description="统一维护边缘节点、节点池、公网 IP 池、调度权重和排空状态。"
+          description="统一维护边缘节点、节点池、公网 IP 池、池内权重和排空状态。"
           action={
             <>
               <SecondaryButton type="button" onClick={handleCreate}>
@@ -344,7 +344,7 @@ export function NodesPage() {
                         <td className="px-3 py-4">
                           <div className="space-y-2">
                             <p className="text-xs text-[var(--foreground-secondary)]">
-                              池：{node.pool_name || 'default'} · 权重 {node.weight}
+                              池：{node.pool_name || 'default'} · 池内权重 {node.weight}
                             </p>
                             <div className="flex flex-wrap gap-2">
                               <StatusBadge

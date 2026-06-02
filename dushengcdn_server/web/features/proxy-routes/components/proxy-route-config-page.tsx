@@ -310,7 +310,7 @@ const dnsScheduleModeHints: Record<
   healthy:
     '健康优先只看节点是否在线、代理服务是否正常、是否允许调度；旧目标仍可用且处于冷却期时会保持不动。',
   weighted:
-    '权重优先会先排除不可用节点，再按节点池权重和节点权重选择。',
+    '权重优先会先排除不可用节点，再按节点池权重和节点池内权重选择。',
   load_aware:
     '按压力优先会参考连接数和主机压力，并可按阈值跳过压力过高的节点。',
 };
@@ -427,6 +427,23 @@ function parseGSLBPoolRows(rows: GSLBPoolRow[]) {
     };
   });
   return pools.filter((pool) => pool.name !== '');
+}
+
+function findUnknownGSLBPoolNames(rows: GSLBPoolRow[], options: string[]) {
+  const knownPools = new Set(
+    options.map((option) => option.trim().toLowerCase()).filter(Boolean),
+  );
+  const unknownPools = new Set<string>();
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (!name) {
+      continue;
+    }
+    if (!knownPools.has(name.toLowerCase())) {
+      unknownPools.add(name);
+    }
+  }
+  return Array.from(unknownPools);
 }
 
 function ConfigSectionShell({
@@ -964,6 +981,14 @@ export function DNSAutomationSection({
       ),
     [nodePoolOptions, route.ddos_protection_target, route.node_pool],
   );
+  const gslbPoolOptions = useMemo(
+    () =>
+      buildNodePoolOptions(
+        nodePoolOptions.map((poolName) => ({ pool_name: poolName })),
+        route.node_pool,
+      ),
+    [nodePoolOptions, route.node_pool],
+  );
 
   return (
     <ConfigSectionShell
@@ -982,6 +1007,9 @@ export function DNSAutomationSection({
           const baseGSLBPolicy =
             route.gslb_policy || buildDefaultGSLBPolicy(route.node_pool);
           const gslbPools = parseGSLBPoolRows(values.gslb_pool_rows);
+          const unknownGSLBPools = values.gslb_enabled
+            ? findUnknownGSLBPoolNames(values.gslb_pool_rows, gslbPoolOptions)
+            : [];
           const authoritativeMode = values.dns_provider_mode === 'authoritative';
           const ddosAuto =
             !authoritativeMode && values.ddos_protection_mode === 'auto';
@@ -1001,6 +1029,20 @@ export function DNSAutomationSection({
             form.setError('ddos_protection_target', {
               type: 'manual',
               message: '请选择清洗池',
+            });
+            return;
+          }
+          if (unknownGSLBPools.length > 0) {
+            form.setError('gslb_pool_rows', {
+              type: 'manual',
+              message: `节点池不存在：${unknownGSLBPools.join('、')}。请从已有节点池下拉选择。`,
+            });
+            return;
+          }
+          if (values.gslb_enabled && gslbPools.length === 0) {
+            form.setError('gslb_pool_rows', {
+              type: 'manual',
+              message: '请至少选择一个用于多节点智能解析的节点池。',
             });
             return;
           }
@@ -1365,8 +1407,9 @@ export function DNSAutomationSection({
               <>
                 <ResourceField
                   label="节点池权重"
-                  hint="池名填写已有节点池；国家或地区填写两位代码，可逗号分隔，例如 HK,TW，留空表示全局兜底。来源网段会优先于国家或地区匹配。"
-                  tooltip="来源网段用于把某些用户 IP 段固定到指定节点池，适合有明确区域或线路规划的场景。"
+                  hint="请选择节点详情里真实存在的节点池；不要填写节点名称。国家或地区填写两位代码，留空表示全局兜底。"
+                  tooltip="来源网段用于把某些用户 IP 段固定到指定节点池，适合有明确区域或线路规划的场景。节点池名要和节点详情里的节点池完全一致。"
+                  error={form.formState.errors.gslb_pool_rows?.message}
                   container="div"
                 >
                   <Controller
@@ -1416,20 +1459,22 @@ export function DNSAutomationSection({
                                 />
                               </SecondaryButton>
 
-                              <ResourceInput
+                              <NodePoolSelect
                                 value={row.name}
-                                aria-label={`节点池名称 ${index + 1}`}
-                                placeholder={index === 0 ? 'hk' : 'eu'}
+                                options={gslbPoolOptions}
+                                compact
+                                name={`gslb_pool_${index + 1}`}
+                                selectAriaLabel={`节点池选择 ${index + 1}`}
+                                inputAriaLabel={`节点池名称 ${index + 1}`}
                                 disabled={!autoSyncEnabled}
-                                onChange={(event) => {
+                                onChange={(value) => {
                                   const nextRows = rows.slice();
                                   nextRows[index] = {
                                     ...row,
-                                    name: event.target.value,
+                                    name: value,
                                   };
                                   updateRows(nextRows);
                                 }}
-                                className="h-11"
                               />
 
                               <ResourceInput

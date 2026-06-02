@@ -414,6 +414,11 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 			}
 		}
 	}
+	if input.Enabled && (dnsProviderMode == DNSProviderModeAuthoritative || input.DNSAutoSync) && gslbEnabled {
+		if err := validateGSLBPolicyPoolTargets(gslbPolicy, dnsRecordType); err != nil {
+			return nil, err
+		}
+	}
 
 	if route == nil {
 		route = &model.ProxyRoute{}

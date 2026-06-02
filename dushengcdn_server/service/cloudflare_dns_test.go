@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -691,6 +692,83 @@ func TestSelectGSLBDNSTargetsPrefersFreshMetricsForLoadAware(t *testing.T) {
 	}
 	if len(selection.Targets) != 1 || selection.Targets[0] != "8.8.4.4" {
 		t.Fatalf("expected fresh metric node before missing metric fallback, got %#v", selection.Targets)
+	}
+}
+
+func TestUpdateProxyRouteRejectsGSLBPoolWithoutAvailableTargets(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	account := &model.DnsAccount{
+		Name:          "cf",
+		Type:          "cloudflare",
+		Authorization: `{"api_token":"token"}`,
+	}
+	if err := account.Insert(); err != nil {
+		t.Fatalf("insert account: %v", err)
+	}
+	now := time.Now()
+	if err := (&model.Node{
+		NodeID:          "node-jp",
+		Name:            "JP",
+		IP:              "8.8.4.4",
+		PoolName:        "jp",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-jp",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "jp",
+		Enabled:         false,
+		DNSProviderMode: DNSProviderModeCloudflare,
+		DNSRecordType:   "A",
+		DNSTargetCount:  20,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	policy := defaultGSLBPolicy("jp", 20, "weighted", 30)
+	policy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "jp", Weight: 1, Enabled: true},
+		{Name: "aliyun hk", Weight: 99, Enabled: true},
+	}
+
+	_, err := UpdateProxyRoute(route.ID, ProxyRouteInput{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		OriginURL:       "https://origin.internal",
+		NodePool:        "jp",
+		Enabled:         true,
+		DNSAutoSync:     true,
+		DNSAccountID:    &account.ID,
+		DNSZoneID:       "zone-a",
+		DNSRecordType:   "A",
+		DNSTargetCount:  20,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      policy,
+	})
+	if err == nil || !strings.Contains(err.Error(), "aliyun hk") {
+		t.Fatalf("expected missing GSLB pool target error, got %v", err)
 	}
 }
 

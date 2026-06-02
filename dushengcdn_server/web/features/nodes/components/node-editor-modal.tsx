@@ -351,7 +351,7 @@ export function NodeEditorModal({
         <div className="grid gap-5 md:grid-cols-2">
           <ResourceField
             label="节点池"
-            hint="同一节点池会作为 DNS 调度和缓存操作的默认目标范围。"
+            hint="同一节点池会作为 DNS 调度和缓存操作的默认目标范围；跨节点池比例在网站配置的负载均衡里设置。"
             error={form.formState.errors.pool_name?.message}
           >
             <ResourceInput
@@ -361,8 +361,8 @@ export function NodeEditorModal({
           </ResourceField>
 
           <ResourceField
-            label="调度权重"
-            hint="加权模式下优先选择权重更高的节点。"
+            label="池内权重"
+            hint="只影响同一节点池里的多个节点谁多接流量；跨节点池权重请到网站配置的负载均衡里设置。"
             error={form.formState.errors.weight?.message}
           >
             <ResourceInput

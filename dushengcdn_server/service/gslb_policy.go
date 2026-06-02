@@ -3,8 +3,12 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
+
+	"dushengcdn/model"
+	"dushengcdn/utils/geoip/iputil"
 )
 
 const (
@@ -181,6 +185,63 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 		return nil, errors.New("gslb_policy.pools requires at least one enabled node pool")
 	}
 	return result, nil
+}
+
+func validateGSLBPolicyPoolTargets(policy ProxyRouteGSLBPolicy, recordType string) error {
+	recordType = normalizeDNSRecordType(recordType)
+	if recordType != "A" && recordType != "AAAA" {
+		return errors.New("GSLB scheduling only supports A/AAAA records")
+	}
+	if len(policy.Pools) == 0 {
+		return errors.New("gslb_policy.pools requires at least one enabled node pool")
+	}
+	nodes, err := model.ListNodes()
+	if err != nil {
+		return err
+	}
+	availablePools := make(map[string]int, len(policy.Pools))
+	for _, node := range nodes {
+		if !isNodeSchedulableForDNS(node) || !isNodeOnlineAndOpenRestyHealthy(node) {
+			continue
+		}
+		poolName := normalizeNodePoolName(node.PoolName)
+		for _, value := range resolveNodePublicIPs(node) {
+			ip := iputil.NormalizeIP(value)
+			parsed := net.ParseIP(ip)
+			if parsed == nil || !iputil.IsPublicString(ip) {
+				continue
+			}
+			if recordType == "A" && parsed.To4() == nil {
+				continue
+			}
+			if recordType == "AAAA" && parsed.To4() != nil {
+				continue
+			}
+			availablePools[poolName]++
+		}
+	}
+	missingPools := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, pool := range policy.Pools {
+		if !pool.Enabled {
+			continue
+		}
+		name := normalizeNodePoolName(pool.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		if availablePools[name] == 0 {
+			missingPools = append(missingPools, name)
+		}
+	}
+	if len(missingPools) > 0 {
+		return fmt.Errorf("多节点智能解析节点池没有可用于 %s 记录的在线公网 IP：%s。请确认填写的是节点池名称，不是节点名称", recordType, strings.Join(missingPools, "、"))
+	}
+	return nil
 }
 
 func normalizeGSLBCountryList(values []string) []string {

@@ -709,6 +709,57 @@ func TestSchedulerWeightedSpreadUsesSourceBuckets(t *testing.T) {
 	}
 }
 
+func TestSchedulerWeightedSpreadReturnsAvailableTargetsUpToTargetCount(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           29,
+			Domains:      []string{"cdn.example.com"},
+			ZoneID:       1,
+			NodePool:     "hk",
+			RecordType:   "A",
+			TargetCount:  20,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 20,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "jp", Weight: 1, Enabled: true},
+					{Name: "hk", Weight: 99, Enabled: true},
+				},
+				Debounce: GSLBDebounce{CooldownSeconds: 600},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("jp-node", "jp", "8.8.4.4", 100, 1),
+		testNode("hk-node", "hk", "1.1.1.1", 100, 1),
+	}
+	scheduler := NewScheduler()
+	scheduler.now = func() time.Time { return time.Unix(100, 0) }
+
+	targets, _, scope, err := scheduler.Select(snapshot, &snapshot.Routes[0], "A", SourceContext{IP: "175.8.66.28"}, true)
+	if err != nil {
+		t.Fatalf("select weighted targets: %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("expected both available targets when target count exceeds candidates, got targets=%v scope=%s", targets, scope)
+	}
+	targetSet := map[string]struct{}{}
+	for _, target := range targets {
+		targetSet[target] = struct{}{}
+	}
+	if _, ok := targetSet["8.8.4.4"]; !ok {
+		t.Fatalf("missing jp target, got %v", targets)
+	}
+	if _, ok := targetSet["1.1.1.1"]; !ok {
+		t.Fatalf("missing hk target, got %v", targets)
+	}
+}
+
 func TestSchedulerRestoresDebounceFromSnapshotState(t *testing.T) {
 	now := time.Unix(200, 0).UTC()
 	snapshot := baseSnapshot()
