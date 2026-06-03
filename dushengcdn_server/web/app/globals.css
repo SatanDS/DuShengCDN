@@ -377,8 +377,8 @@ button {
   pointer-events: none;
   visibility: hidden;
   opacity: 0;
-  filter: blur(14px) saturate(1.18);
-  transform: translate3d(16vw, -1.8vh, 0) scale(0.58);
+  filter: blur(12px) saturate(1.16);
+  transform: translate3d(11vw, -1.2vh, 0) scale(0.72);
   transform-origin: calc(100% - 3rem) 2rem;
   transition:
     opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1),
@@ -399,7 +399,7 @@ button {
 }
 
 .public-login-stage.is-open .auth-liquid-card {
-  animation: auth-liquid-unfurl 1.02s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: auth-liquid-unfurl 1.12s cubic-bezier(0.18, 1, 0.22, 1) both;
   transform-origin: calc(100% - 3rem) 2rem;
   will-change: clip-path, opacity, transform, filter;
 }
@@ -603,42 +603,48 @@ button {
 
 @keyframes auth-liquid-unfurl {
   0% {
-    clip-path: inset(0 0 82% 72% round 999px);
-    opacity: 0.34;
-    filter: blur(10px) saturate(1.24);
-    transform: translate3d(0, 0, 0) scale(0.985);
+    clip-path: inset(0 0 83% 78% round 999px);
+    opacity: 0.28;
+    filter: blur(12px) saturate(1.24);
+    transform: translate3d(0.85rem, -0.42rem, 0) scale(0.965, 0.9);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.22),
       inset 0 -1px 0 rgba(255, 255, 255, 0.055),
       0 0 0 1px rgba(106, 140, 255, 0.06);
   }
-  24% {
-    clip-path: inset(0 0 55% 48% round 2.6rem);
-    opacity: 0.64;
-    filter: blur(6px) saturate(1.18);
-    transform: scale(0.994);
+  16% {
+    clip-path: inset(0 0 71% 52% round 3.2rem);
+    opacity: 0.46;
+    filter: blur(8px) saturate(1.22);
+    transform: translate3d(0.42rem, -0.22rem, 0) scale(1.012, 0.94);
   }
-  48% {
-    clip-path: inset(-1% 0 -1% 18% round 1.9rem);
-    opacity: 0.9;
+  32% {
+    clip-path: inset(0 0 46% 22% round 2.5rem);
+    opacity: 0.7;
+    filter: blur(5px) saturate(1.18);
+    transform: translate3d(0.12rem, -0.06rem, 0) scale(1.018, 0.982);
+  }
+  52% {
+    clip-path: inset(-1% -1% 10% 4% round 2rem);
+    opacity: 0.92;
     filter: blur(2px) saturate(1.12);
-    transform: scale(1.006);
+    transform: translate3d(-0.06rem, 0.03rem, 0) scale(1.006, 1.012);
   }
-  68% {
-    clip-path: inset(-1% -1% -1% -1% round 1.7rem);
+  70% {
+    clip-path: inset(-1% -1% -1% -1% round 1.6rem);
     opacity: 1;
     filter: blur(0) saturate(1.06);
-    transform: scale(1.002);
+    transform: translate3d(0.03rem, -0.02rem, 0) scale(0.998, 1.002);
   }
-  84% {
+  86% {
     clip-path: inset(0 0 0 0 round var(--radius-xl));
-    transform: scale(0.998);
+    transform: translate3d(-0.015rem, 0.01rem, 0) scale(1.001);
   }
   100% {
     clip-path: inset(0 0 0 0 round var(--radius-xl));
     opacity: 1;
     filter: blur(0) saturate(1);
-    transform: scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.22),
       inset 0 -1px 0 rgba(255, 255, 255, 0.055),
@@ -676,7 +682,8 @@ button {
   .public-login-trigger,
   .public-login-stage,
   .public-login-hero,
-  .public-login-panel {
+  .public-login-panel,
+  .auth-liquid-card {
     animation: none;
     transition: none;
   }
