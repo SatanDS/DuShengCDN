@@ -213,6 +213,13 @@ function normalizeSelectedCertificateIDs(rows: DomainListRow[]) {
   );
 }
 
+function hasAnyCertificateSelection(rows: DomainListRow[]) {
+  return rows.some((item) => {
+    const certificateID = Number(item.certificateId);
+    return Number.isFinite(certificateID) && certificateID > 0;
+  });
+}
+
 function buildDomainCertificateIDs(rows: DomainListRow[]) {
   return rows
     .filter((item) => item.domain.trim() !== '')
@@ -284,6 +291,14 @@ export function ProxyRouteCreateDrawer({
   const selectedCertificateIDs = normalizeSelectedCertificateIDs(
     form.watch('domain_rows'),
   );
+  const hasCertificateSelection = hasAnyCertificateSelection(
+    form.watch('domain_rows'),
+  );
+  useEffect(() => {
+    if (!hasCertificateSelection && form.getValues('redirect_http')) {
+      form.setValue('redirect_http', false, { shouldDirty: true });
+    }
+  }, [form, hasCertificateSelection]);
   const nodePoolOptions = useMemo(
     () => buildNodePoolOptions(nodesQuery.data ?? []),
     [nodesQuery.data],

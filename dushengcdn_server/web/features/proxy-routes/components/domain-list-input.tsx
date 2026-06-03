@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useMemo } from 'react';
+import { useEffect, useId, useMemo } from 'react';
 import { Minus, Plus } from 'lucide-react';
 
 import type { TlsCertificateItem } from '@/features/tls-certificates/types';
@@ -88,6 +88,54 @@ function buildDomainSuggestions(
   });
 }
 
+function splitCertificateDomains(certificate: TlsCertificateItem) {
+  return [certificate.primary_domain, certificate.other_domains]
+    .join('\n')
+    .split(/[\s,，;；]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function certificateCoversDomain(
+  certificate: TlsCertificateItem,
+  rawDomain: string,
+) {
+  const domain = rawDomain.trim().toLowerCase();
+  if (!domain) {
+    return true;
+  }
+
+  const certificateDomains = splitCertificateDomains(certificate);
+  if (certificateDomains.length === 0) {
+    return true;
+  }
+
+  return certificateDomains.some((pattern) => {
+    if (pattern === domain) {
+      return true;
+    }
+    if (!pattern.startsWith('*.')) {
+      return false;
+    }
+
+    const suffix = pattern.slice(2);
+    if (!domain.endsWith(`.${suffix}`)) {
+      return false;
+    }
+
+    const prefix = domain.slice(0, -(suffix.length + 1));
+    return prefix !== '' && !prefix.includes('.');
+  });
+}
+
+function getCertificateDomainsLabel(certificate: TlsCertificateItem) {
+  const domains = splitCertificateDomains(certificate);
+  if (domains.length === 0) {
+    return '';
+  }
+  return domains.slice(0, 2).join(' / ');
+}
+
 export function buildDomainRowsFromRoute(
   domains: string[],
   domainCertIDs: number[],
@@ -139,11 +187,36 @@ export function DomainListInput({
   domainPlaceholder?: string;
 }) {
   const listId = useId();
-  const safeRows = ensureRows(rows);
+  const safeRows = useMemo(() => ensureRows(rows), [rows]);
   const normalizedSources = useMemo(
     () => buildSuggestionSources(suggestionSources),
     [suggestionSources],
   );
+
+  useEffect(() => {
+    if (certificates.length === 0) {
+      return;
+    }
+
+    let changed = false;
+    const nextRows = safeRows.map((row) => {
+      if (!row.certificateId) {
+        return row;
+      }
+      const certificate = certificates.find(
+        (item) => String(item.id) === row.certificateId,
+      );
+      if (certificate && certificateCoversDomain(certificate, row.domain)) {
+        return row;
+      }
+      changed = true;
+      return { ...row, certificateId: '' };
+    });
+
+    if (changed) {
+      onChange(nextRows);
+    }
+  }, [certificates, onChange, safeRows]);
 
   const updateRows = (nextRows: DomainListRow[]) => {
     onChange(ensureRows(nextRows));
@@ -157,6 +230,17 @@ export function DomainListInput({
           normalizedSources,
           safeRows,
         ).slice(0, 4);
+        const matchingCertificates = certificates.filter((certificate) =>
+          certificateCoversDomain(certificate, row.domain),
+        );
+        const selectedCertificate = certificates.find(
+          (certificate) => String(certificate.id) === row.certificateId,
+        );
+        const selectedCertificateMismatch = Boolean(
+          row.certificateId &&
+            selectedCertificate &&
+            !certificateCoversDomain(selectedCertificate, row.domain),
+        );
 
         return (
           <div key={`${index}-${safeRows.length}`} className="space-y-2">
@@ -189,9 +273,20 @@ export function DomainListInput({
                   onBlur={onBlur}
                   onChange={(event) => {
                     const nextRows = safeRows.slice();
+                    const nextDomain = event.target.value;
+                    const currentCertificate = certificates.find(
+                      (certificate) =>
+                        String(certificate.id) ===
+                        nextRows[index].certificateId,
+                    );
                     nextRows[index] = {
                       ...nextRows[index],
-                      domain: event.target.value,
+                      domain: nextDomain,
+                      certificateId:
+                        currentCertificate &&
+                        !certificateCoversDomain(currentCertificate, nextDomain)
+                          ? ''
+                          : nextRows[index].certificateId,
                     };
                     updateRows(nextRows);
                   }}
@@ -212,9 +307,22 @@ export function DomainListInput({
                         className="inline-flex items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-panel)] px-3 py-1 text-xs text-[var(--foreground-secondary)] transition hover:border-[var(--border-strong)] hover:text-[var(--foreground-primary)]"
                         onClick={() => {
                           const nextRows = safeRows.slice();
+                          const currentCertificate = certificates.find(
+                            (certificate) =>
+                              String(certificate.id) ===
+                              nextRows[index].certificateId,
+                          );
                           nextRows[index] = {
                             ...nextRows[index],
                             domain: suggestion,
+                            certificateId:
+                              currentCertificate &&
+                              !certificateCoversDomain(
+                                currentCertificate,
+                                suggestion,
+                              )
+                                ? ''
+                                : nextRows[index].certificateId,
                           };
                           updateRows(nextRows);
                         }}
@@ -240,14 +348,26 @@ export function DomainListInput({
                 className="h-12"
               >
                 <option value="">
-                  {certificates.length === 0 ? '暂无可选证书' : '选择证书'}
+                  {certificates.length === 0
+                    ? '暂无可选证书'
+                    : matchingCertificates.length === 0 && row.domain.trim()
+                      ? '当前域名暂无匹配证书'
+                      : '不启用 HTTPS'}
                 </option>
-                {certificates.map((certificate) => (
+                {matchingCertificates.map((certificate) => (
                   <option key={certificate.id} value={certificate.id}>
                     {certificate.name}
+                    {getCertificateDomainsLabel(certificate)
+                      ? ` (${getCertificateDomainsLabel(certificate)})`
+                      : ''}
                   </option>
                 ))}
               </ResourceSelect>
+              {selectedCertificateMismatch ? (
+                <p className="text-xs leading-5 text-[var(--status-warning-foreground)] md:col-start-3">
+                  已清除此行不匹配的证书，请选择覆盖当前域名的证书。
+                </p>
+              ) : null}
             </div>
           </div>
         );

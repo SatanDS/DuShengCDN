@@ -375,30 +375,31 @@ button {
 .public-login-panel {
   grid-area: 1 / 1;
   pointer-events: none;
-  visibility: hidden;
   opacity: 0;
-  filter: blur(20px) saturate(1.25);
-  transform: translate3d(18vw, -2vh, 0) scale(0.52);
+  filter: saturate(1.12);
+  transform: translate3d(14vw, -1.6vh, 0) scale(0.72);
   transform-origin: calc(100% - 3rem) 2rem;
   transition:
     opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1),
     transform 0.9s cubic-bezier(0.16, 1, 0.3, 1),
-    filter 0.72s cubic-bezier(0.16, 1, 0.3, 1),
-    visibility 0s linear 0.9s;
+    filter 0.72s cubic-bezier(0.16, 1, 0.3, 1);
+  contain: layout paint;
   will-change: opacity, transform, filter;
 }
 
 .public-login-stage.is-open .public-login-panel {
   pointer-events: auto;
-  visibility: visible;
   opacity: 1;
   filter: blur(0) saturate(1);
   transform: translate3d(0, 0, 0) scale(1);
-  transition-delay: 0s;
 }
 
 .public-login-stage.is-open .auth-liquid-card {
-  animation: auth-liquid-unfurl 0.92s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: auth-liquid-unfurl 1.16s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: calc(100% - 3rem) 2rem;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: opacity, transform, filter;
 }
 
 .public-login-stage.is-open .public-login-hero {
@@ -601,23 +602,50 @@ button {
 
 @keyframes auth-liquid-unfurl {
   0% {
-    clip-path: inset(0 0 82% 72% round 999px);
+    opacity: 0.28;
+    filter: saturate(1.26);
+    transform: translate3d(2.4rem, -1.35rem, 0) scale(0.72, 0.54);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.34),
       inset 0 -1px 0 rgba(255, 255, 255, 0.08),
       0 16px 54px rgba(0, 0, 0, 0.18),
       0 0 42px rgba(255, 79, 173, 0.12);
   }
+  14% {
+    opacity: 0.46;
+    filter: saturate(1.25);
+    transform: translate3d(1.85rem, -1.02rem, 0) scale(0.86, 0.66);
+  }
+  28% {
+    opacity: 0.66;
+    filter: saturate(1.22);
+    transform: translate3d(1.05rem, -0.52rem, 0) scale(1.02, 0.82);
+  }
+  42% {
+    opacity: 0.86;
+    filter: saturate(1.18);
+    transform: translate3d(0.34rem, -0.12rem, 0) scale(1.04, 0.94);
+  }
   58% {
-    clip-path: inset(-2% -1% -2% -1% round 1.7rem);
+    opacity: 1;
+    filter: saturate(1.12);
+    transform: translate3d(-0.2rem, 0.07rem, 0) scale(1.016, 1.018);
+  }
+  72% {
+    transform: translate3d(0.09rem, -0.04rem, 0) scale(0.996, 0.998);
+  }
+  86% {
+    transform: translate3d(-0.03rem, 0.02rem, 0) scale(1.002, 1.001);
+  }
+  100% {
+    opacity: 1;
+    filter: saturate(1);
+    transform: translate3d(0, 0, 0) scale(1);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.34),
       inset 0 -1px 0 rgba(255, 255, 255, 0.08),
       0 30px 82px rgba(0, 0, 0, 0.28),
       0 0 54px rgba(255, 79, 173, 0.16);
-  }
-  100% {
-    clip-path: inset(0 0 0 0 round var(--radius-xl));
   }
 }
 

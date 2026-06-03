@@ -596,7 +596,15 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [{ id: 1, name: 'example-cert', not_after: null }],
+                data: [
+                  {
+                    id: 1,
+                    name: 'example-cert',
+                    primary_domain: '*.example.com',
+                    other_domains: '',
+                    not_after: null,
+                  },
+                ],
               }),
             ),
           );
@@ -747,6 +755,223 @@ describe('Proxy route website pages', () => {
       ddos_protection_mode: 'auto',
       ddos_protection_provider: 'cloudflare',
       ddos_protection_target: '7',
+    });
+  });
+
+  it('only offers certificates that cover the typed website domain', async () => {
+    const routes: Array<Record<string, unknown>> = [];
+    const createRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body));
+          createRequests.push(payload);
+          const created = buildRoute({
+            id: 23,
+            site_name: payload.site_name,
+            domain: payload.domain,
+            domains: payload.domains,
+            primary_domain: payload.domain,
+            domain_count: payload.domains.length,
+            origin_url: payload.origin_url,
+            upstreams: JSON.stringify([payload.origin_url]),
+            upstream_list: [payload.origin_url],
+            enabled: payload.enabled,
+            enable_https: payload.enable_https,
+            cert_id: payload.cert_id,
+            cert_ids: payload.cert_ids ?? [],
+            domain_cert_ids: payload.domain_cert_ids ?? [],
+            node_pool: payload.node_pool ?? 'default',
+            redirect_http: payload.redirect_http,
+            remark: payload.remark,
+          });
+          routes.splice(0, routes.length, created);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: created,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: routes,
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/config-versions/diff')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildDiff(),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/managed-domains/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  { id: 1, domain: '*.satandu.com', cert_id: 1, enabled: true },
+                  { id: 2, domain: '*.satancu.com', cert_id: 2, enabled: true },
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/tls-certificates/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    id: 1,
+                    name: 'satandu-cert',
+                    primary_domain: '*.satandu.com',
+                    other_domains: '',
+                    not_after: null,
+                  },
+                  {
+                    id: 2,
+                    name: 'satancu-cert',
+                    primary_domain: '*.satancu.com',
+                    other_domains: '',
+                    not_after: null,
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-accounts/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/dns-zones/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/nodes/')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [
+                  {
+                    id: 1,
+                    node_id: 'node-default',
+                    name: 'Default Edge',
+                    ip: '203.0.113.10',
+                    pool_name: 'default',
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(<ProxyRoutesPage />);
+
+    const user = userEvent.setup();
+    const pageButtons = await screen.findAllByRole('button');
+    await user.click(pageButtons[1]);
+
+    const dialog = await screen.findByRole('dialog');
+    const domainInput = within(dialog).getByLabelText('域名 1');
+    await user.type(domainInput, '2fa.satancu.com');
+
+    const certificateSelect = within(dialog).getByLabelText('证书 1');
+    await waitFor(() => {
+      expect(
+        within(certificateSelect).getByRole('option', {
+          name: 'satancu-cert (*.satancu.com)',
+        }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      within(certificateSelect).queryByRole('option', {
+        name: 'satandu-cert (*.satandu.com)',
+      }),
+    ).not.toBeInTheDocument();
+
+    await user.selectOptions(certificateSelect, '2');
+    await user.click(
+      within(dialog).getByRole('checkbox', {
+        name: /HTTP 自动跳转到 HTTPS/,
+      }),
+    );
+    await user.type(
+      within(dialog).getByLabelText('源站地址'),
+      'http://145.239.140.145:8070',
+    );
+
+    const submitButton = document.querySelector(
+      'button[form="create-website-form"]',
+    ) as HTMLButtonElement | null;
+    expect(submitButton).toBeInstanceOf(HTMLButtonElement);
+    if (!submitButton) {
+      throw new Error('missing create submit button');
+    }
+    await user.click(submitButton);
+
+    await waitFor(() => {
+      expect(createRequests).toHaveLength(1);
+    });
+    expect(createRequests[0]).toMatchObject({
+      domain: '2fa.satancu.com',
+      domains: ['2fa.satancu.com'],
+      enable_https: true,
+      cert_id: 2,
+      cert_ids: [2],
+      domain_cert_ids: [2],
+      redirect_http: true,
     });
   });
 
@@ -1150,7 +1375,15 @@ describe('Proxy route website pages', () => {
               JSON.stringify({
                 success: true,
                 message: '',
-                data: [{ id: 1, name: 'example-cert', not_after: null }],
+                data: [
+                  {
+                    id: 1,
+                    name: 'example-cert',
+                    primary_domain: '*.example.com',
+                    other_domains: '',
+                    not_after: null,
+                  },
+                ],
               }),
             ),
           );
