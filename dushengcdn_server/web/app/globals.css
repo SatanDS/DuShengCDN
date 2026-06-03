@@ -377,31 +377,28 @@ button {
   pointer-events: none;
   visibility: hidden;
   opacity: 0;
-  filter: blur(12px) saturate(1.16);
-  transform: translate3d(11vw, -1.2vh, 0) scale(0.72);
+  transform: translate3d(8vw, -1vh, 0) scale(0.78);
   transform-origin: calc(100% - 3rem) 2rem;
   transition:
-    opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1),
-    transform 0.9s cubic-bezier(0.16, 1, 0.3, 1),
-    filter 0.72s cubic-bezier(0.16, 1, 0.3, 1),
-    visibility 0s linear 0.9s;
+    opacity 0.26s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.82s cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 0.82s;
   contain: layout paint;
-  will-change: opacity, transform, filter;
+  will-change: opacity, transform;
 }
 
 .public-login-stage.is-open .public-login-panel {
   pointer-events: auto;
   visibility: visible;
   opacity: 1;
-  filter: blur(0) saturate(1);
   transform: translate3d(0, 0, 0) scale(1);
   transition-delay: 0s;
 }
 
 .public-login-stage.is-open .auth-liquid-card {
-  animation: auth-liquid-unfurl 1.12s cubic-bezier(0.18, 1, 0.22, 1) both;
+  animation: auth-liquid-unfurl 0.96s cubic-bezier(0.18, 1, 0.22, 1) both;
   transform-origin: calc(100% - 3rem) 2rem;
-  will-change: clip-path, opacity, transform, filter;
+  will-change: opacity, transform;
 }
 
 .public-login-stage.is-open .public-login-hero {
@@ -421,6 +418,8 @@ button {
     0 0 0 1px rgba(106, 140, 255, 0.08);
   backdrop-filter: blur(48px) saturate(1.85);
   -webkit-backdrop-filter: blur(48px) saturate(1.85);
+  backface-visibility: hidden;
+  transform: translateZ(0);
 }
 
 .auth-liquid-card::before {
@@ -457,10 +456,19 @@ button {
   border-color: rgba(255, 255, 255, 0.16);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.009));
+  transform: translateZ(0);
 }
 
 .auth-liquid-card > div {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent);
+  transform: translateZ(0);
+}
+
+.public-login-stage.is-open .auth-liquid-card > header,
+.public-login-stage.is-open .auth-liquid-card > div {
+  animation: auth-liquid-content-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.2s
+    both;
+  will-change: opacity, transform;
 }
 
 .auth-liquid-input {
@@ -603,52 +611,43 @@ button {
 
 @keyframes auth-liquid-unfurl {
   0% {
-    clip-path: inset(0 0 83% 78% round 999px);
-    opacity: 0.28;
-    filter: blur(12px) saturate(1.24);
-    transform: translate3d(0.85rem, -0.42rem, 0) scale(0.965, 0.9);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.22),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.055),
-      0 0 0 1px rgba(106, 140, 255, 0.06);
+    opacity: 0.34;
+    transform: translate3d(1.8rem, -0.8rem, 0) scale3d(0.2, 0.11, 1);
   }
   16% {
-    clip-path: inset(0 0 71% 52% round 3.2rem);
-    opacity: 0.46;
-    filter: blur(8px) saturate(1.22);
-    transform: translate3d(0.42rem, -0.22rem, 0) scale(1.012, 0.94);
+    opacity: 0.56;
+    transform: translate3d(1.1rem, -0.48rem, 0) scale3d(0.62, 0.16, 1);
   }
   32% {
-    clip-path: inset(0 0 46% 22% round 2.5rem);
-    opacity: 0.7;
-    filter: blur(5px) saturate(1.18);
-    transform: translate3d(0.12rem, -0.06rem, 0) scale(1.018, 0.982);
+    opacity: 0.78;
+    transform: translate3d(0.38rem, -0.16rem, 0) scale3d(1.03, 0.42, 1);
   }
   52% {
-    clip-path: inset(-1% -1% 10% 4% round 2rem);
-    opacity: 0.92;
-    filter: blur(2px) saturate(1.12);
-    transform: translate3d(-0.06rem, 0.03rem, 0) scale(1.006, 1.012);
+    opacity: 0.94;
+    transform: translate3d(-0.08rem, 0.04rem, 0) scale3d(1.012, 1.055, 1);
   }
   70% {
-    clip-path: inset(-1% -1% -1% -1% round 1.6rem);
     opacity: 1;
-    filter: blur(0) saturate(1.06);
-    transform: translate3d(0.03rem, -0.02rem, 0) scale(0.998, 1.002);
+    transform: translate3d(0.04rem, -0.02rem, 0) scale3d(0.994, 0.988, 1);
   }
   86% {
-    clip-path: inset(0 0 0 0 round var(--radius-xl));
-    transform: translate3d(-0.015rem, 0.01rem, 0) scale(1.001);
+    transform: translate3d(-0.015rem, 0.01rem, 0) scale3d(1.002, 1.004, 1);
   }
   100% {
-    clip-path: inset(0 0 0 0 round var(--radius-xl));
     opacity: 1;
-    filter: blur(0) saturate(1);
-    transform: translate3d(0, 0, 0) scale(1);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.22),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.055),
-      0 0 0 1px rgba(106, 140, 255, 0.08);
+    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+  }
+}
+
+@keyframes auth-liquid-content-in {
+  0%,
+  24% {
+    opacity: 0;
+    transform: translate3d(0, 0.55rem, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
   }
 }
 
@@ -683,7 +682,9 @@ button {
   .public-login-stage,
   .public-login-hero,
   .public-login-panel,
-  .auth-liquid-card {
+  .auth-liquid-card,
+  .auth-liquid-card > header,
+  .auth-liquid-card > div {
     animation: none;
     transition: none;
   }
