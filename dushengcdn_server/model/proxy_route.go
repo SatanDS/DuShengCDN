@@ -30,6 +30,9 @@ type ProxyRoute struct {
 	WAFEnabled                 bool       `json:"waf_enabled" gorm:"column:waf_enabled;not null;default:false"`
 	WAFMode                    string     `json:"waf_mode" gorm:"column:waf_mode;size:16;not null;default:'block'"`
 	WAFConfig                  string     `json:"waf_config" gorm:"column:waf_config;type:text;not null;default:'{}'"`
+	CCEnabled                  bool       `json:"cc_enabled" gorm:"column:cc_enabled;not null;default:false"`
+	CCMode                     string     `json:"cc_mode" gorm:"column:cc_mode;size:16;not null;default:'block'"`
+	CCConfig                   string     `json:"cc_config" gorm:"column:cc_config;type:text;not null;default:'{}'"`
 	BasicAuthEnabled           bool       `json:"basic_auth_enabled" gorm:"not null;default:false"`
 	BasicAuthUsername          string     `json:"basic_auth_username" gorm:"size:255;not null;default:''"`
 	BasicAuthPassword          string     `json:"basic_auth_password" gorm:"size:255;not null;default:''"`
@@ -126,6 +129,9 @@ func (route *ProxyRoute) Update() error {
 		"waf_enabled":                  route.WAFEnabled,
 		"waf_mode":                     route.WAFMode,
 		"waf_config":                   route.WAFConfig,
+		"cc_enabled":                   route.CCEnabled,
+		"cc_mode":                      route.CCMode,
+		"cc_config":                    route.CCConfig,
 		"basic_auth_enabled":           route.BasicAuthEnabled,
 		"basic_auth_username":          route.BasicAuthUsername,
 		"basic_auth_password":          route.BasicAuthPassword,

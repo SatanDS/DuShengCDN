@@ -341,6 +341,10 @@ function M.run_access()
     if ok_waf and waf and waf.run then
         waf.run()
     end
+    local ok_cc, cc = pcall(require, "cc.check")
+    if ok_cc and cc and cc.run then
+        cc.run()
+    end
     local ok_pow, pow = pcall(require, "pow.check")
     if ok_pow and pow and pow.run then
         return pow.run()

@@ -92,6 +92,9 @@ type snapshotRoute struct {
 	WAFEnabled                 bool                          `json:"waf_enabled,omitempty"`
 	WAFMode                    string                        `json:"waf_mode,omitempty"`
 	WAFConfig                  *ProxyRouteWAFConfig          `json:"waf_config,omitempty"`
+	CCEnabled                  bool                          `json:"cc_enabled,omitempty"`
+	CCMode                     string                        `json:"cc_mode,omitempty"`
+	CCConfig                   *ProxyRouteCCConfig           `json:"cc_config,omitempty"`
 	BasicAuthEnabled           bool                          `json:"basic_auth_enabled,omitempty"`
 	BasicAuthUsername          string                        `json:"basic_auth_username,omitempty"`
 	BasicAuthPassword          string                        `json:"basic_auth_password,omitempty"`
@@ -120,6 +123,11 @@ type routeRegionRestrictionConfig struct {
 }
 
 type routeWAFConfig struct {
+	Enabled bool
+	Mode    string
+}
+
+type routeCCConfig struct {
 	Enabled bool
 	Mode    string
 }
@@ -511,10 +519,16 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 		return nil, err
 	}
 	supportFiles = append(supportFiles, wafSupportFiles...)
+	ccConfigJSON, ccSupportFiles, err := renderCCConfigBundle(routes)
+	if err != nil {
+		return nil, err
+	}
+	supportFiles = append(supportFiles, ccSupportFiles...)
 	mainConfig := renderMainConfig(openRestyConfig)
 	supportFiles = append(supportFiles, SupportFile{Path: "pow_config.json", Content: powConfigJSON})
 	supportFiles = append(supportFiles, SupportFile{Path: "region_config.json", Content: regionConfigJSON})
 	supportFiles = append(supportFiles, SupportFile{Path: "waf_config.json", Content: wafConfigJSON})
+	supportFiles = append(supportFiles, SupportFile{Path: "cc_config.json", Content: ccConfigJSON})
 	return &configBundle{
 		Routes:            routes,
 		SnapshotRoutes:    snapshotRoutes,
@@ -561,6 +575,13 @@ func buildSnapshotRoutes(routes []*model.ProxyRoute) ([]snapshotRoute, error) {
 		if !route.WAFEnabled {
 			wafConfig = nil
 		}
+		ccConfig, err := decodeStoredCCConfig(route.CCEnabled, route.CCConfig)
+		if err != nil {
+			return nil, fmt.Errorf("路由 %s CC 防护配置无效", route.Domain)
+		}
+		if !route.CCEnabled {
+			ccConfig = nil
+		}
 		regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 地区限制配置无效", route.Domain)
@@ -591,6 +612,9 @@ func buildSnapshotRoutes(routes []*model.ProxyRoute) ([]snapshotRoute, error) {
 			WAFEnabled:                 route.WAFEnabled,
 			WAFMode:                    normalizeWAFMode(route.WAFMode),
 			WAFConfig:                  wafConfig,
+			CCEnabled:                  route.CCEnabled,
+			CCMode:                     normalizeCCMode(route.CCMode),
+			CCConfig:                   ccConfig,
 			BasicAuthEnabled:           route.BasicAuthEnabled,
 			BasicAuthUsername:          route.BasicAuthUsername,
 			BasicAuthPassword:          route.BasicAuthPassword,
@@ -725,6 +749,19 @@ func normalizeSnapshotRoutes(routes []snapshotRoute) []snapshotRoute {
 			routes[index].WAFConfig = nil
 			routes[index].WAFMode = proxyRouteWAFModeBlock
 		}
+		if routes[index].CCEnabled {
+			raw, err := json.Marshal(routes[index].CCConfig)
+			if err == nil {
+				normalizedCCConfig, err := normalizeCCConfig(true, string(raw))
+				if err == nil {
+					routes[index].CCConfig = &normalizedCCConfig
+					routes[index].CCMode = normalizeCCMode(routes[index].CCMode)
+				}
+			}
+		} else {
+			routes[index].CCConfig = nil
+			routes[index].CCMode = proxyRouteCCModeBlock
+		}
 		if !routes[index].BasicAuthEnabled {
 			routes[index].BasicAuthUsername = ""
 			routes[index].BasicAuthPassword = ""
@@ -768,7 +805,7 @@ func flattenSnapshotRoutesByDomain(routes []snapshotRoute) map[string]snapshotRo
 }
 
 func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
-	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPassword != right.BasicAuthPassword || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
+	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPassword != right.BasicAuthPassword || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
 		return false
 	}
 	if len(left.Domains) != len(right.Domains) {
@@ -820,6 +857,9 @@ func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
 		return false
 	}
 	if !snapshotWAFConfigEqual(left.WAFEnabled, left.WAFMode, left.WAFConfig, right.WAFEnabled, right.WAFMode, right.WAFConfig) {
+		return false
+	}
+	if !snapshotCCConfigEqual(left.CCEnabled, left.CCMode, left.CCConfig, right.CCEnabled, right.CCMode, right.CCConfig) {
 		return false
 	}
 	return true
@@ -887,6 +927,31 @@ func snapshotWAFConfigEqual(leftEnabled bool, leftMode string, left *ProxyRouteW
 		stringSliceEqual(left.BlockRules.QueryContains, right.BlockRules.QueryContains) &&
 		stringSliceEqual(left.BlockRules.HeaderContains, right.BlockRules.HeaderContains) &&
 		stringSliceEqual(left.BlockRules.UserAgents, right.BlockRules.UserAgents)
+}
+
+func snapshotCCConfigEqual(leftEnabled bool, leftMode string, left *ProxyRouteCCConfig, rightEnabled bool, rightMode string, right *ProxyRouteCCConfig) bool {
+	if !leftEnabled && !rightEnabled {
+		return true
+	}
+	if leftEnabled != rightEnabled || normalizeCCMode(leftMode) != normalizeCCMode(rightMode) {
+		return false
+	}
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.WindowSeconds == right.WindowSeconds &&
+		left.MaxRequests == right.MaxRequests &&
+		left.PathWindowSeconds == right.PathWindowSeconds &&
+		left.PathMaxRequests == right.PathMaxRequests &&
+		left.BlockDurationSeconds == right.BlockDurationSeconds &&
+		stringSliceEqual(left.Whitelist.IPs, right.Whitelist.IPs) &&
+		stringSliceEqual(left.Whitelist.IPCidrs, right.Whitelist.IPCidrs) &&
+		stringSliceEqual(left.Whitelist.Paths, right.Whitelist.Paths) &&
+		stringSliceEqual(left.Whitelist.UserAgents, right.Whitelist.UserAgents) &&
+		stringSliceEqual(left.Exclude.IPs, right.Exclude.IPs) &&
+		stringSliceEqual(left.Exclude.IPCidrs, right.Exclude.IPCidrs) &&
+		stringSliceEqual(left.Exclude.Paths, right.Exclude.Paths) &&
+		stringSliceEqual(left.Exclude.UserAgents, right.Exclude.UserAgents)
 }
 
 func stringSliceEqual(left []string, right []string) bool {
@@ -1097,12 +1162,17 @@ func renderRouteConfig(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot) 
 			Enabled: route.WAFEnabled,
 			Mode:    normalizeWAFMode(route.WAFMode),
 		}
+		ccConfig := routeCCConfig{
+			Enabled: route.CCEnabled,
+			Mode:    normalizeCCMode(route.CCMode),
+		}
+		powRequired := route.PoWEnabled || (ccConfig.Enabled && ccConfig.Mode == proxyRouteCCModePoW)
 		upstreamConfig := buildRouteUpstreamConfig(route, upstreams)
 		if upstreamConfig.UsesNamedUpstream {
 			builder.WriteString(renderNamedUpstreamBlock(upstreamConfig))
 		}
 		if !route.EnableHTTPS {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, upstreamConfig, route.PoWEnabled, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
 			continue
 		}
 		certIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
@@ -1163,24 +1233,24 @@ func renderRouteConfig(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot) 
 
 		if route.RedirectHTTP {
 			if len(httpOnlyDomains) > 0 {
-				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, upstreamConfig, route.PoWEnabled, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
 			}
 			for _, certID := range certIDs {
 				assignedDomains := domainsByCertID[certID]
 				if len(assignedDomains) == 0 {
 					continue
 				}
-				builder.WriteString(renderHTTPRedirectServer(renderServerNames(assignedDomains), regionConfig, wafConfig))
+				builder.WriteString(renderHTTPRedirectServer(renderServerNames(assignedDomains), regionConfig, wafConfig, ccConfig))
 			}
 		} else {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, upstreamConfig, route.PoWEnabled, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
 		}
 		for _, certID := range certIDs {
 			assignedDomains := domainsByCertID[certID]
 			if len(assignedDomains) == 0 {
 				continue
 			}
-			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), route.OriginURL, route.OriginHost, certID, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, upstreamConfig, route.PoWEnabled, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), route.OriginURL, route.OriginHost, certID, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
 		}
 	}
 	return builder.String(), dedupeSupportFiles(supportFiles), nil
@@ -1301,8 +1371,8 @@ func renderPowAccessBlock(powEnabled bool) string {
 	return renderUnifiedAccessBlock(powEnabled)
 }
 
-func renderRouteAccessBlock(powEnabled bool, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig) string {
-	return renderUnifiedAccessBlock(powEnabled || wafConfig.Enabled || (regionConfig.Enabled && len(regionConfig.Countries) > 0))
+func renderRouteAccessBlock(powEnabled bool, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
+	return renderUnifiedAccessBlock(powEnabled || wafConfig.Enabled || ccConfig.Enabled || (regionConfig.Enabled && len(regionConfig.Countries) > 0))
 }
 
 func renderUnifiedAccessBlock(enabled bool) string {
@@ -1328,8 +1398,8 @@ func renderBasicAuthBlock(enabled bool, username, password string) string {
 `, encoded)
 }
 
-func renderRegionRestrictionBlock(config routeRegionRestrictionConfig, wafConfig routeWAFConfig) string {
-	return renderUnifiedAccessBlock(wafConfig.Enabled || (config.Enabled && len(config.Countries) > 0))
+func renderRegionRestrictionBlock(config routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
+	return renderUnifiedAccessBlock(wafConfig.Enabled || ccConfig.Enabled || (config.Enabled && len(config.Countries) > 0))
 }
 
 func renderPowLocationBlocks(powEnabled bool) string {
@@ -1472,18 +1542,18 @@ func nextVersionNumber(now time.Time) (string, error) {
 	return fmt.Sprintf("%s-%03d", prefix, sequence+1), nil
 }
 
-func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
+	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
-func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s\n    return 301 https://$host$request_uri;\n}\n\n", serverNames, renderRegionRestrictionBlock(regionConfig, wafConfig))
+func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
+	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s\n    return 301 https://$host$request_uri;\n}\n\n", serverNames, renderRegionRestrictionBlock(regionConfig, wafConfig, ccConfig))
 }
 
-func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
+func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
 	certPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateCertFileName(certificateID))
 	keyPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateKeyFileName(certificateID))
-	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderServerNames(domains []string) string {
@@ -1861,7 +1931,9 @@ func renderPowConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, e
 	entries := make([]domainEntry, 0)
 	hasPow := false
 	for _, route := range routes {
-		if !route.PoWEnabled {
+		ccMode := normalizeCCMode(route.CCMode)
+		ccRequiresPow := route.CCEnabled && ccMode == proxyRouteCCModePoW
+		if !route.PoWEnabled && !ccRequiresPow {
 			continue
 		}
 		hasPow = true
@@ -1870,8 +1942,20 @@ func renderPowConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, e
 			return "", nil, err
 		}
 		var cfg map[string]interface{}
-		if err := json.Unmarshal([]byte(route.PoWConfig), &cfg); err != nil {
+		powConfig := route.PoWConfig
+		if strings.TrimSpace(powConfig) == "" || strings.TrimSpace(powConfig) == "{}" {
+			defaultCfg := defaultPoWConfig()
+			data, err := json.Marshal(defaultCfg)
+			if err != nil {
+				return "", nil, err
+			}
+			powConfig = string(data)
+		}
+		if err := json.Unmarshal([]byte(powConfig), &cfg); err != nil {
 			return "", nil, fmt.Errorf("route %s pow_config is invalid", route.Domain)
+		}
+		if !route.PoWEnabled && ccRequiresPow {
+			cfg["force_only"] = true
 		}
 		entries = append(entries, domainEntry{
 			Domains: domains,
@@ -1880,6 +1964,45 @@ func renderPowConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, e
 		})
 	}
 	if !hasPow {
+		return "{}", nil, nil
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return "", nil, err
+	}
+	return string(data), nil, nil
+}
+
+func renderCCConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, error) {
+	type domainEntry struct {
+		Domains []string            `json:"domains"`
+		Enabled bool                `json:"enabled"`
+		Mode    string              `json:"mode"`
+		Config  *ProxyRouteCCConfig `json:"config"`
+	}
+	entries := make([]domainEntry, 0)
+	hasCC := false
+	for _, route := range routes {
+		if !route.CCEnabled {
+			continue
+		}
+		domains, err := decodeStoredDomains(route.Domains, route.Domain)
+		if err != nil {
+			return "", nil, err
+		}
+		cfg, err := decodeStoredCCConfig(route.CCEnabled, route.CCConfig)
+		if err != nil {
+			return "", nil, fmt.Errorf("route %s cc_config is invalid", route.Domain)
+		}
+		hasCC = true
+		entries = append(entries, domainEntry{
+			Domains: domains,
+			Enabled: true,
+			Mode:    normalizeCCMode(route.CCMode),
+			Config:  cfg,
+		})
+	}
+	if !hasCC {
 		return "{}", nil, nil
 	}
 	data, err := json.Marshal(entries)

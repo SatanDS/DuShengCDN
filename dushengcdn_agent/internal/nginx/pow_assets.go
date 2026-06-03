@@ -109,6 +109,7 @@ local session_ttl = config.session_ttl or 600
 local uri = ngx.var.uri or ""
 local ua = ngx.var.http_user_agent or ""
 local remote_ip = ngx.var.remote_addr or ""
+local force_pow = ngx.ctx and ngx.ctx.dushengcdn_force_pow
 
 -- Internal panel endpoints already require Agent/DNS Worker tokens. Let them
 -- reach the upstream so PoW cannot block heartbeats, config pulls, or DNS probe
@@ -135,7 +136,11 @@ end
 local blacklist = config.blacklist or {}
 local has_blacklist = policy.has_entries(blacklist)
 local need_pow = false
-if has_blacklist then
+if force_pow then
+    need_pow = true
+elseif config.force_only then
+    return
+elseif has_blacklist then
     need_pow = policy.match_any(remote_ip, ua, uri, blacklist)
 else
     -- No blacklist means all non-whitelisted need PoW

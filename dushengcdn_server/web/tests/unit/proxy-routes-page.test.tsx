@@ -110,6 +110,27 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
         user_agents: [],
       },
     },
+    cc_enabled: false,
+    cc_mode: 'block',
+    cc_config: {
+      window_seconds: 10,
+      max_requests: 120,
+      path_window_seconds: 10,
+      path_max_requests: 60,
+      block_duration_seconds: 300,
+      whitelist: {
+        ips: [],
+        ip_cidrs: [],
+        paths: [],
+        user_agents: [],
+      },
+      exclude: {
+        ips: [],
+        ip_cidrs: [],
+        paths: [],
+        user_agents: [],
+      },
+    },
     basic_auth_enabled: false,
     basic_auth_username: '',
     basic_auth_password: '',
@@ -2218,7 +2239,7 @@ describe('Proxy route website pages', () => {
     ).toBeInTheDocument();
   });
 
-  it('saves WAF settings from config page', async () => {
+  it('saves WAF settings from CC protection config page', async () => {
     const updateRequests: Array<Record<string, unknown>> = [];
 
     vi.stubGlobal(
@@ -2306,16 +2327,16 @@ describe('Proxy route website pages', () => {
     );
 
     renderWithProviders(
-      <ProxyRouteConfigPage routeId="9" initialSection="waf" />,
+      <ProxyRouteConfigPage routeId="9" initialSection="cc" />,
     );
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: '恶意请求防护' }),
+      await screen.findByRole('heading', { name: 'CC 防护' }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole('checkbox', { name: /启用恶意请求防护/ }));
-    await user.selectOptions(screen.getByLabelText('运行模式'), 'log');
+    await user.click(screen.getByRole('checkbox', { name: /启用恶意请求规则/ }));
+    await user.selectOptions(screen.getByLabelText('恶意请求规则运行模式'), 'log');
     await user.click(screen.getByRole('checkbox', { name: /恶意工具 UA/ }));
 
     expect(screen.queryByPlaceholderText('1.2.3.4')).not.toBeInTheDocument();
@@ -2323,17 +2344,17 @@ describe('Proxy route website pages', () => {
       '按需添加白名单或拦截规则',
     );
     const addWAFRuleButton = screen.getByRole('button', {
-      name: '添加恶意请求防护规则',
+      name: '添加恶意请求规则',
     });
     for (const ruleKey of [
-      'whitelist.ips',
-      'whitelist.ip_cidrs',
-      'whitelist.paths',
-      'block_rules.path_contains',
-      'block_rules.path_regexes',
-      'block_rules.query_contains',
-      'block_rules.header_contains',
-      'block_rules.user_agents',
+      'waf_whitelist.ips',
+      'waf_whitelist.ip_cidrs',
+      'waf_whitelist.paths',
+      'waf_block_rules.path_contains',
+      'waf_block_rules.path_regexes',
+      'waf_block_rules.query_contains',
+      'waf_block_rules.header_contains',
+      'waf_block_rules.user_agents',
     ]) {
       await user.selectOptions(wafRuleSelect, ruleKey);
       await user.click(addWAFRuleButton);
@@ -2349,11 +2370,11 @@ describe('Proxy route website pages', () => {
     await user.type(screen.getByPlaceholderText('sqlmap'), 'curl');
 
     const saveButton = document.querySelector(
-      'button[form="proxy-route-waf-form"]',
+      'button[form="proxy-route-cc-form"]',
     ) as HTMLButtonElement | null;
     expect(saveButton).toBeInstanceOf(HTMLButtonElement);
     if (!saveButton) {
-      throw new Error('missing WAF save button');
+      throw new Error('missing CC save button');
     }
     await user.click(saveButton);
 
@@ -2382,7 +2403,146 @@ describe('Proxy route website pages', () => {
     });
   });
 
-  it('saves PoW settings from config page', async () => {
+  it('saves CC frequency settings from config page', async () => {
+    const updateRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method?.toUpperCase() ?? 'GET';
+
+        if (url.includes('/proxy-routes/9/update') && method === 'POST') {
+          const payload = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          updateRequests.push(payload);
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute({
+                  cc_enabled: payload.cc_enabled,
+                  cc_mode: payload.cc_mode,
+                  cc_config: JSON.parse(String(payload.cc_config)),
+                }),
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/proxy-routes/9')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: buildRoute(),
+              }),
+            ),
+          );
+        }
+
+        if (
+          url.includes('/tls-certificates/') ||
+          url.includes('/managed-domains/') ||
+          url.includes('/dns-accounts/')
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: [],
+              }),
+            ),
+          );
+        }
+
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderWithProviders(
+      <ProxyRouteConfigPage routeId="9" initialSection="cc" />,
+    );
+
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('heading', { name: 'CC 防护' }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: /启用 CC 频率防护/ }));
+    await user.selectOptions(screen.getByLabelText('CC 触发动作'), 'pow');
+
+    const numberInputs = screen.getAllByRole('spinbutton');
+    await user.clear(numberInputs[0]);
+    await user.type(numberInputs[0], '20');
+    await user.clear(numberInputs[1]);
+    await user.type(numberInputs[1], '200');
+    await user.clear(numberInputs[2]);
+    await user.type(numberInputs[2], '15');
+    await user.clear(numberInputs[3]);
+    await user.type(numberInputs[3], '80');
+    await user.clear(numberInputs[4]);
+    await user.type(numberInputs[4], '600');
+
+    const ccRuleSelect = screen.getByLabelText('按需添加 CC 规则');
+    const addCCRuleButton = screen.getByRole('button', {
+      name: '添加 CC 防护规则',
+    });
+    for (const ruleKey of ['cc_whitelist.paths', 'cc_exclude.user_agents']) {
+      await user.selectOptions(ccRuleSelect, ruleKey);
+      await user.click(addCCRuleButton);
+    }
+
+    const textareas = Array.from(document.querySelectorAll('textarea'));
+    expect(textareas).toHaveLength(2);
+    await user.type(textareas[0], '/api/internal/*');
+    await user.type(textareas[1], 'monitor');
+
+    const saveButton = document.querySelector(
+      'button[form="proxy-route-cc-form"]',
+    ) as HTMLButtonElement | null;
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    if (!saveButton) {
+      throw new Error('missing CC save button');
+    }
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateRequests).toHaveLength(1);
+    });
+
+    expect(updateRequests[0]).toMatchObject({
+      cc_enabled: true,
+      cc_mode: 'pow',
+    });
+    expect(JSON.parse(String(updateRequests[0].cc_config))).toEqual({
+      window_seconds: 20,
+      max_requests: 200,
+      path_window_seconds: 15,
+      path_max_requests: 80,
+      block_duration_seconds: 600,
+      whitelist: {
+        ips: [],
+        ip_cidrs: [],
+        paths: ['/api/internal/*'],
+        user_agents: [],
+      },
+      exclude: {
+        ips: [],
+        ip_cidrs: [],
+        paths: [],
+        user_agents: ['monitor'],
+      },
+    });
+  });
+
+  it('saves PoW settings from CC protection config page', async () => {
     const updateRequests: Array<Record<string, unknown>> = [];
 
     vi.stubGlobal(
@@ -2467,18 +2627,27 @@ describe('Proxy route website pages', () => {
     );
 
     renderWithProviders(
-      <ProxyRouteConfigPage routeId="9" initialSection="pow" />,
+      <ProxyRouteConfigPage routeId="9" initialSection="cc" />,
     );
 
     const user = userEvent.setup();
     expect(
-      await screen.findByRole('heading', { name: '计算验证防护' }),
+      await screen.findByRole('heading', { name: 'CC 防护' }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole('checkbox', { name: /启用计算验证防护/ }));
+    await user.click(screen.getByRole('checkbox', { name: /启用计算验证/ }));
     await user.selectOptions(screen.getByLabelText('验证算法'), 'slow');
 
-    const [difficultyInput, sessionTTLInput, challengeTTLInput] =
+    const [
+      ,
+      ,
+      ,
+      ,
+      ,
+      difficultyInput,
+      sessionTTLInput,
+      challengeTTLInput,
+    ] =
       screen.getAllByRole('spinbutton');
 
     await user.clear(difficultyInput);
@@ -2490,23 +2659,22 @@ describe('Proxy route website pages', () => {
     await user.clear(challengeTTLInput);
     await user.type(challengeTTLInput, '120');
 
-    expect(screen.queryAllByRole('textbox')).toHaveLength(0);
-    const powRuleSelect = screen.getByLabelText('按需添加规则');
+    const powRuleSelect = screen.getByLabelText('按需添加计算验证规则');
     const addPowRuleButton = screen.getByRole('button', {
       name: '添加计算验证规则',
     });
     for (const ruleKey of [
-      'whitelist.ips',
-      'whitelist.paths',
-      'whitelist.user_agents',
-      'blacklist.ip_cidrs',
-      'blacklist.path_regexes',
+      'pow_whitelist.ips',
+      'pow_whitelist.paths',
+      'pow_whitelist.user_agents',
+      'pow_blacklist.ip_cidrs',
+      'pow_blacklist.path_regexes',
     ]) {
       await user.selectOptions(powRuleSelect, ruleKey);
       await user.click(addPowRuleButton);
     }
 
-    const powTextareas = screen.getAllByRole('textbox');
+    const powTextareas = Array.from(document.querySelectorAll('textarea'));
     expect(powTextareas).toHaveLength(5);
 
     await user.type(powTextareas[0], '203.0.113.8');
@@ -2516,11 +2684,11 @@ describe('Proxy route website pages', () => {
     await user.type(powTextareas[4], '^/private/');
 
     const saveButton = document.querySelector(
-      'button[form="proxy-route-pow-form"]',
+      'button[form="proxy-route-cc-form"]',
     ) as HTMLButtonElement | null;
     expect(saveButton).toBeInstanceOf(HTMLButtonElement);
     if (!saveButton) {
-      throw new Error('missing PoW save button');
+      throw new Error('missing CC save button');
     }
     await user.click(saveButton);
 

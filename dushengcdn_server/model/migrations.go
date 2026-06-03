@@ -1810,6 +1810,28 @@ func validateDatabaseSchemaV27(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV28 adds node-side CC protection fields to proxy_routes.
+func migrateV28(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV28(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV27(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "cc_enabled") {
+		return fmt.Errorf("column proxy_routes.cc_enabled is missing")
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "cc_mode") {
+		return fmt.Errorf("column proxy_routes.cc_mode is missing")
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "cc_config") {
+		return fmt.Errorf("column proxy_routes.cc_config is missing")
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1838,6 +1860,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 24, toVersion: 25, migrate: migrateV25, validate: validateDatabaseSchemaV25},
 		{fromVersion: 25, toVersion: 26, migrate: migrateV26, validate: validateDatabaseSchemaV26},
 		{fromVersion: 26, toVersion: 27, migrate: migrateV27, validate: validateDatabaseSchemaV27},
+		{fromVersion: 27, toVersion: 28, migrate: migrateV28, validate: validateDatabaseSchemaV28},
 	}
 }
 
@@ -1926,7 +1949,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV27(db, backend); err != nil {
+	if err := validateDatabaseSchemaV28(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

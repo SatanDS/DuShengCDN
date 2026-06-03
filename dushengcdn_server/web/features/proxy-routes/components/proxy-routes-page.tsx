@@ -31,10 +31,9 @@ import { ProxyRouteCreateDrawer } from '@/features/proxy-routes/components/proxy
 import {
   BasicAuthSection,
   CacheSection,
+  CCProtectionSection,
   DNSAutomationSection,
-  PowSection,
   RegionRestrictionSection,
-  WAFSection,
   type SaveContext,
 } from '@/features/proxy-routes/components/proxy-route-config-page';
 import {
@@ -70,8 +69,7 @@ type FeedbackState = {
 const featureSectionKeys = [
   'dns',
   'cache',
-  'pow',
-  'waf',
+  'cc',
   'region',
   'auth',
 ] as const;
@@ -194,10 +192,15 @@ function isFeatureEnabled(route: ProxyRouteItem, section: FeatureSectionKey) {
       );
     case 'cache':
       return route.cache_enabled;
-    case 'pow':
-      return route.pow_enabled;
-    case 'waf':
-      return route.waf_enabled;
+    case 'cc':
+      return (
+        route.cc_enabled ||
+        route.pow_enabled ||
+        route.waf_enabled ||
+        route.limit_conn_per_server > 0 ||
+        route.limit_conn_per_ip > 0 ||
+        Boolean(route.limit_rate)
+      );
     case 'region':
       return route.region_restriction_enabled;
     case 'auth':
@@ -225,24 +228,25 @@ function getFeatureStatus(route: ProxyRouteItem, section: FeatureSectionKey) {
         label: route.cache_enabled ? '缓存已启用' : '缓存未启用',
         variant: route.cache_enabled ? 'success' : 'warning',
       } as const;
-    case 'pow':
+    case 'cc': {
+      const enabledItems = [
+        route.cc_enabled ? '频率' : '',
+        route.pow_enabled ? '计算验证' : '',
+        route.waf_enabled ? '恶意规则' : '',
+        route.limit_conn_per_server > 0 ||
+        route.limit_conn_per_ip > 0 ||
+        Boolean(route.limit_rate)
+          ? '限流'
+          : '',
+      ].filter(Boolean);
       return {
-        label: route.pow_enabled ? '计算验证已启用' : '计算验证未启用',
-        variant: route.pow_enabled ? 'success' : 'warning',
+        label:
+          enabledItems.length > 0
+            ? `已启用 ${enabledItems.join(' / ')}`
+            : 'CC 防护未启用',
+        variant: enabledItems.length > 0 ? 'success' : 'warning',
       } as const;
-    case 'waf':
-      return {
-        label: route.waf_enabled
-          ? route.waf_mode === 'log'
-            ? '恶意请求观察模式'
-            : '恶意请求拦截模式'
-          : '恶意请求防护未启用',
-        variant: route.waf_enabled
-          ? route.waf_mode === 'log'
-            ? 'info'
-            : 'success'
-          : 'warning',
-      } as const;
+    }
     case 'region':
       return {
         label: route.region_restriction_enabled
@@ -521,19 +525,9 @@ function FeatureRouteForm({
           embedded
         />
       );
-    case 'pow':
+    case 'cc':
       return (
-        <PowSection
-          route={route}
-          saving={saving}
-          onSave={onSave}
-          formId={formId}
-          embedded
-        />
-      );
-    case 'waf':
-      return (
-        <WAFSection
+        <CCProtectionSection
           route={route}
           saving={saving}
           onSave={onSave}

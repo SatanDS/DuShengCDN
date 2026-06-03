@@ -12,11 +12,6 @@ export const websiteConfigSections = [
     description: '维护站点标识、域名列表和证书绑定。',
   },
   {
-    key: 'limits',
-    label: '流量限制',
-    description: '设置连接数和限速。',
-  },
-  {
     key: 'proxy',
     label: '反向代理',
     description: '配置源站地址和默认节点池。',
@@ -32,14 +27,9 @@ export const websiteConfigSections = [
     description: '配置站点缓存策略。',
   },
   {
-    key: 'pow',
-    label: '计算验证防护',
-    description: '配置浏览器计算验证，拦住自动化爬虫。',
-  },
-  {
-    key: 'waf',
-    label: '恶意请求防护',
-    description: '配置节点本地恶意请求拦截规则。',
+    key: 'cc',
+    label: 'CC 防护',
+    description: '统一配置频率拦截、连接限流、计算验证和恶意请求规则。',
   },
   {
     key: 'region',
@@ -105,8 +95,10 @@ export function getErrorMessage(error: unknown) {
 export function getWebsiteConfigSection(
   value: string | null | undefined,
 ): WebsiteConfigSectionKey {
-  return websiteConfigSections.some((section) => section.key === value)
-    ? (value as WebsiteConfigSectionKey)
+  const normalizedValue =
+    value === 'limits' || value === 'pow' || value === 'waf' ? 'cc' : value;
+  return websiteConfigSections.some((section) => section.key === normalizedValue)
+    ? (normalizedValue as WebsiteConfigSectionKey)
     : 'domains';
 }
 
@@ -352,6 +344,9 @@ export function buildPayloadFromRoute(
     waf_enabled: route.waf_enabled,
     waf_mode: route.waf_mode,
     waf_config: JSON.stringify(route.waf_config),
+    cc_enabled: route.cc_enabled,
+    cc_mode: route.cc_mode,
+    cc_config: JSON.stringify(route.cc_config),
     basic_auth_enabled: route.basic_auth_enabled,
     basic_auth_username: route.basic_auth_username,
     basic_auth_password: route.basic_auth_password,

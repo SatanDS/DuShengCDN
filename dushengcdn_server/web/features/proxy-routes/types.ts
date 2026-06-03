@@ -42,6 +42,23 @@ export interface ProxyRouteWAFConfig {
   block_rules: ProxyRouteWAFCustomRules;
 }
 
+export interface ProxyRouteCCListConfig {
+  ips: string[];
+  ip_cidrs: string[];
+  paths: string[];
+  user_agents: string[];
+}
+
+export interface ProxyRouteCCConfig {
+  window_seconds: number;
+  max_requests: number;
+  path_window_seconds: number;
+  path_max_requests: number;
+  block_duration_seconds: number;
+  whitelist: ProxyRouteCCListConfig;
+  exclude: ProxyRouteCCListConfig;
+}
+
 export interface ProxyRouteGSLBPoolPolicy {
   name: string;
   weight: number;
@@ -107,6 +124,9 @@ export interface ProxyRouteItem {
   waf_enabled: boolean;
   waf_mode: 'log' | 'block';
   waf_config: ProxyRouteWAFConfig;
+  cc_enabled: boolean;
+  cc_mode: 'log' | 'block' | 'pow';
+  cc_config: ProxyRouteCCConfig;
   basic_auth_enabled: boolean;
   basic_auth_username: string;
   basic_auth_password: string;
@@ -171,6 +191,9 @@ export interface ProxyRouteMutationPayload {
   waf_enabled?: boolean;
   waf_mode?: 'log' | 'block';
   waf_config?: string;
+  cc_enabled?: boolean;
+  cc_mode?: 'log' | 'block' | 'pow';
+  cc_config?: string;
   basic_auth_enabled: boolean;
   basic_auth_username?: string;
   basic_auth_password?: string;

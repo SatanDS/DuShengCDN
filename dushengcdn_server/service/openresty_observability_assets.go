@@ -13,6 +13,8 @@ func renderOpenRestyObservabilityTemplateBlock() string {
 		"    lua_shared_dict dushengcdn_observability 10m;",
 		"    lua_shared_dict dushengcdn_pow_config 1m;",
 		"    lua_shared_dict dushengcdn_waf_config 1m;",
+		"    lua_shared_dict dushengcdn_cc_config 1m;",
+		"    lua_shared_dict dushengcdn_cc_counters 20m;",
 		"    lua_shared_dict dushengcdn_pow_challenges 10m;",
 		"    lua_shared_dict dushengcdn_pow_sessions 20m;",
 		"    lua_shared_dict dushengcdn_geoip_cache 20m;",

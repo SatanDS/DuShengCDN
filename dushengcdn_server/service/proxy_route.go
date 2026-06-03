@@ -29,6 +29,9 @@ const (
 	proxyRouteRegionModeBlock         = "block"
 	proxyRouteWAFModeLog              = "log"
 	proxyRouteWAFModeBlock            = "block"
+	proxyRouteCCModeLog               = "log"
+	proxyRouteCCModeBlock             = "block"
+	proxyRouteCCModePoW               = "pow"
 	DNSProviderModeCloudflare         = "cloudflare"
 	DNSProviderModeAuthoritative      = "authoritative"
 )
@@ -69,6 +72,9 @@ type ProxyRouteInput struct {
 	WAFEnabled                 bool                          `json:"waf_enabled"`
 	WAFMode                    string                        `json:"waf_mode"`
 	WAFConfig                  string                        `json:"waf_config"`
+	CCEnabled                  bool                          `json:"cc_enabled"`
+	CCMode                     string                        `json:"cc_mode"`
+	CCConfig                   string                        `json:"cc_config"`
 	BasicAuthEnabled           bool                          `json:"basic_auth_enabled"`
 	BasicAuthUsername          string                        `json:"basic_auth_username"`
 	BasicAuthPassword          string                        `json:"basic_auth_password"`
@@ -129,6 +135,9 @@ type ProxyRouteView struct {
 	WAFEnabled                 bool                          `json:"waf_enabled"`
 	WAFMode                    string                        `json:"waf_mode"`
 	WAFConfig                  *ProxyRouteWAFConfig          `json:"waf_config"`
+	CCEnabled                  bool                          `json:"cc_enabled"`
+	CCMode                     string                        `json:"cc_mode"`
+	CCConfig                   *ProxyRouteCCConfig           `json:"cc_config"`
 	BasicAuthEnabled           bool                          `json:"basic_auth_enabled"`
 	BasicAuthUsername          string                        `json:"basic_auth_username"`
 	BasicAuthPassword          string                        `json:"basic_auth_password"`
@@ -316,6 +325,15 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
+	ccMode := normalizeCCMode(input.CCMode)
+	ccConfig, err := normalizeCCConfig(input.CCEnabled, input.CCConfig)
+	if err != nil {
+		return nil, err
+	}
+	ccConfigJSON, err := json.Marshal(ccConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	if !input.EnableHTTPS {
 		input.RedirectHTTP = false
@@ -465,6 +483,9 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.WAFEnabled = input.WAFEnabled
 	route.WAFMode = wafMode
 	route.WAFConfig = string(wafConfigJSON)
+	route.CCEnabled = input.CCEnabled
+	route.CCMode = ccMode
+	route.CCConfig = string(ccConfigJSON)
 	route.BasicAuthEnabled = input.BasicAuthEnabled
 	route.BasicAuthUsername = input.BasicAuthUsername
 	route.BasicAuthPassword = input.BasicAuthPassword
@@ -610,6 +631,10 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 	if err != nil {
 		return nil, err
 	}
+	ccConfig, err := decodeStoredCCConfig(route.CCEnabled, route.CCConfig)
+	if err != nil {
+		return nil, err
+	}
 	regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
 	if err != nil {
 		return nil, err
@@ -664,6 +689,9 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		WAFEnabled:                 route.WAFEnabled,
 		WAFMode:                    normalizeWAFMode(route.WAFMode),
 		WAFConfig:                  wafConfig,
+		CCEnabled:                  route.CCEnabled,
+		CCMode:                     normalizeCCMode(route.CCMode),
+		CCConfig:                   ccConfig,
 		BasicAuthEnabled:           route.BasicAuthEnabled,
 		BasicAuthUsername:          route.BasicAuthUsername,
 		BasicAuthPassword:          route.BasicAuthPassword,
@@ -2080,6 +2108,135 @@ func normalizeWAFConfig(enabled bool, raw string) (ProxyRouteWAFConfig, error) {
 
 func decodeStoredWAFConfig(enabled bool, raw string) (*ProxyRouteWAFConfig, error) {
 	cfg, err := normalizeWAFConfig(enabled, raw)
+	if err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// CC protection configuration types and validation
+
+type ProxyRouteCCListConfig struct {
+	IPs        []string `json:"ips"`
+	IPCidrs    []string `json:"ip_cidrs"`
+	Paths      []string `json:"paths"`
+	UserAgents []string `json:"user_agents"`
+}
+
+type ProxyRouteCCConfig struct {
+	WindowSeconds        int                    `json:"window_seconds"`
+	MaxRequests          int                    `json:"max_requests"`
+	PathWindowSeconds    int                    `json:"path_window_seconds"`
+	PathMaxRequests      int                    `json:"path_max_requests"`
+	BlockDurationSeconds int                    `json:"block_duration_seconds"`
+	Whitelist            ProxyRouteCCListConfig `json:"whitelist"`
+	Exclude              ProxyRouteCCListConfig `json:"exclude"`
+}
+
+func defaultCCConfig() ProxyRouteCCConfig {
+	return ProxyRouteCCConfig{
+		WindowSeconds:        10,
+		MaxRequests:          120,
+		PathWindowSeconds:    10,
+		PathMaxRequests:      60,
+		BlockDurationSeconds: 300,
+		Whitelist:            ProxyRouteCCListConfig{IPs: []string{}, IPCidrs: []string{}, Paths: []string{}, UserAgents: []string{}},
+		Exclude:              ProxyRouteCCListConfig{IPs: []string{}, IPCidrs: []string{}, Paths: []string{}, UserAgents: []string{}},
+	}
+}
+
+func normalizeCCMode(raw string) string {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case proxyRouteCCModeLog, proxyRouteCCModeBlock, proxyRouteCCModePoW:
+		return mode
+	default:
+		return proxyRouteCCModeBlock
+	}
+}
+
+func normalizeCCConfig(enabled bool, raw string) (ProxyRouteCCConfig, error) {
+	cfg := defaultCCConfig()
+	if !enabled {
+		return cfg, nil
+	}
+	text := strings.TrimSpace(raw)
+	if text != "" && text != "{}" {
+		if err := json.Unmarshal([]byte(text), &cfg); err != nil {
+			return cfg, errors.New("cc_config 格式无效")
+		}
+	}
+
+	if cfg.WindowSeconds < 1 || cfg.WindowSeconds > 3600 {
+		return cfg, errors.New("cc_config.window_seconds 必须在 1-3600 秒之间")
+	}
+	if cfg.MaxRequests < 1 || cfg.MaxRequests > 1000000 {
+		return cfg, errors.New("cc_config.max_requests 必须在 1-1000000 之间")
+	}
+	if cfg.PathWindowSeconds < 1 || cfg.PathWindowSeconds > 3600 {
+		return cfg, errors.New("cc_config.path_window_seconds 必须在 1-3600 秒之间")
+	}
+	if cfg.PathMaxRequests < 1 || cfg.PathMaxRequests > 1000000 {
+		return cfg, errors.New("cc_config.path_max_requests 必须在 1-1000000 之间")
+	}
+	if cfg.BlockDurationSeconds < 1 || cfg.BlockDurationSeconds > 86400 {
+		return cfg, errors.New("cc_config.block_duration_seconds 必须在 1-86400 秒之间")
+	}
+
+	cfg.Whitelist.IPs = normalizeStringList(cfg.Whitelist.IPs)
+	cfg.Whitelist.IPCidrs = normalizeStringList(cfg.Whitelist.IPCidrs)
+	cfg.Whitelist.Paths = normalizeStringList(cfg.Whitelist.Paths)
+	cfg.Whitelist.UserAgents = normalizeStringList(cfg.Whitelist.UserAgents)
+	cfg.Exclude.IPs = normalizeStringList(cfg.Exclude.IPs)
+	cfg.Exclude.IPCidrs = normalizeStringList(cfg.Exclude.IPCidrs)
+	cfg.Exclude.Paths = normalizeStringList(cfg.Exclude.Paths)
+	cfg.Exclude.UserAgents = normalizeStringList(cfg.Exclude.UserAgents)
+
+	for _, item := range []struct {
+		name string
+		ips  []string
+	}{
+		{name: "白名单", ips: cfg.Whitelist.IPs},
+		{name: "排除", ips: cfg.Exclude.IPs},
+	} {
+		for _, ip := range item.ips {
+			if net.ParseIP(ip) == nil {
+				return cfg, fmt.Errorf("cc_config %s IP 格式无效: %s", item.name, ip)
+			}
+		}
+	}
+	for _, item := range []struct {
+		name  string
+		cidrs []string
+	}{
+		{name: "白名单", cidrs: cfg.Whitelist.IPCidrs},
+		{name: "排除", cidrs: cfg.Exclude.IPCidrs},
+	} {
+		for _, cidr := range item.cidrs {
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				return cfg, fmt.Errorf("cc_config %s IP CIDR 格式无效: %s", item.name, cidr)
+			}
+		}
+	}
+	for _, item := range []struct {
+		name  string
+		paths []string
+	}{
+		{name: "白名单", paths: cfg.Whitelist.Paths},
+		{name: "排除", paths: cfg.Exclude.Paths},
+	} {
+		for _, path := range item.paths {
+			if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "\r\n") {
+				return cfg, fmt.Errorf("cc_config %s路径格式无效: %s", item.name, path)
+			}
+		}
+	}
+
+	return cfg, nil
+}
+
+func decodeStoredCCConfig(enabled bool, raw string) (*ProxyRouteCCConfig, error) {
+	cfg, err := normalizeCCConfig(enabled, raw)
 	if err != nil {
 		return nil, err
 	}
