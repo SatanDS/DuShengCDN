@@ -11,6 +11,7 @@ import { z } from 'zod';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
+import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
@@ -22,6 +23,7 @@ import type { DnsAccountItem } from '@/features/dns-accounts/types';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
 import { getNodes } from '@/features/nodes/api/nodes';
 import type { NodeItem } from '@/features/nodes/types';
+import { getOptions } from '@/features/settings/api/settings';
 import {
   getProxyRoute,
   purgeProxyRouteCache,
@@ -76,6 +78,12 @@ type FeedbackState = {
   tone: 'success' | 'danger';
   message: string;
 };
+
+function optionValueEnabled(value: string | undefined) {
+  return ['1', 'true', 'yes', 'on'].includes(
+    (value ?? '').trim().toLowerCase(),
+  );
+}
 
 export type SaveContext = {
   message: string;
@@ -1929,6 +1937,11 @@ export function CacheSection({
 } & ConfigSectionPresentationProps) {
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const optionsQuery = useQuery({
+    queryKey: ['settings', 'options'],
+    queryFn: getOptions,
+    staleTime: 60_000,
+  });
   const form = useForm<CacheValues>({
     resolver: zodResolver(cacheSchema),
     defaultValues: {
@@ -1953,6 +1966,10 @@ export function CacheSection({
   const watchedEnabled = form.watch('cache_enabled');
   const watchedPolicy = form.watch('cache_policy');
   const watchedRules = form.watch('cache_rules');
+  const globalCacheEnabled = optionValueEnabled(
+    optionsQuery.data?.find((item) => item.key === 'OpenRestyCacheEnabled')
+      ?.value,
+  );
   const cacheRulesError = form.formState.errors.cache_rules;
   const cacheRulePlaceholder =
     watchedPolicy === 'suffix'
@@ -2034,6 +2051,12 @@ export function CacheSection({
             form.setValue('cache_enabled', checked, { shouldDirty: true })
           }
         />
+        {watchedEnabled && optionsQuery.data && !globalCacheEnabled ? (
+          <InlineMessage
+            tone="warning"
+            message="当前站点已开启缓存，但代理服务配置里的全局缓存基础设施未开启；发布后 OpenResty 不会生成缓存区，缓存命中率会一直没有数据。请到「代理服务配置 / 性能参数」启用缓存基础设施并重新发布配置。"
+          />
+        ) : null}
 
         <ResourceField label="缓存策略">
           <ResourceSelect
@@ -2057,7 +2080,7 @@ export function CacheSection({
               : watchedPolicy === 'path_prefix'
                 ? '每条填写一个路径前缀，例如 /assets、/static。'
                 : watchedPolicy === 'path_contains'
-                  ? '每条填写一个会出现在路径中的片段，例如 /Images、/thumb。'
+                  ? '每条填写一个会出现在路径中的片段，例如 /Images、/thumb；/Images 会匹配 /emby/Items/12039/Images，数字变化不影响。'
                   : watchedPolicy === 'path_exact'
                     ? '每条填写一个精确路径，例如 /robots.txt。'
                     : '按 URL 缓存时无需额外规则。'

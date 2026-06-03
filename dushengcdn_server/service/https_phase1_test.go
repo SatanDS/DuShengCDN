@@ -344,8 +344,11 @@ func TestPublishConfigVersionRendersPathContainsCachePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishConfigVersion failed: %v", err)
 	}
-	if !strings.Contains(result.Version.RenderedConfig, `if ($uri !~ "(?:/Images|/thumb)")`) {
+	if !strings.Contains(result.Version.RenderedConfig, `if ($uri !~* "(?:/Images|/thumb)")`) {
 		t.Fatalf("expected rendered config to include path contains cache rule, got %s", result.Version.RenderedConfig)
+	}
+	if !strings.Contains(result.Version.RenderedConfig, `add_header X-DuShengCDN-Cache $upstream_cache_status always;`) {
+		t.Fatalf("expected rendered config to expose cache status header, got %s", result.Version.RenderedConfig)
 	}
 	if !strings.Contains(result.Version.SnapshotJSON, `"cache_policy":"path_contains"`) {
 		t.Fatal("expected snapshot to include path contains cache policy")

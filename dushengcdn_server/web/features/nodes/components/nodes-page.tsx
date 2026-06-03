@@ -288,7 +288,7 @@ function NodeVersionStack({ nodes }: { nodes: NodeItem[] }) {
       {versions.map((item) => (
         <div
           key={`${item.id}-${item.label}`}
-          className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-2.5 py-2"
+          className="rounded-xl border border-[color-mix(in_srgb,var(--border-default)_62%,transparent)] bg-[color-mix(in_srgb,var(--surface-panel)_92%,transparent)] px-2.5 py-2 shadow-none"
         >
           <p className="truncate text-xs font-medium text-[var(--foreground-primary)]">
             {item.name}

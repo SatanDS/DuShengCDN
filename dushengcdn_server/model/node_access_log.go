@@ -78,6 +78,7 @@ type NodeAccessLogIPSummaryQuery struct {
 
 type NodeAccessLogIPSummaryRow struct {
 	RemoteAddr     string `json:"remote_addr"`
+	Region         string `json:"region"`
 	TotalRequests  int64  `json:"total_requests"`
 	RecentRequests int64  `json:"recent_requests"`
 	LastSeenEpoch  int64  `json:"last_seen_epoch"`
@@ -460,6 +461,7 @@ func buildNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, recentSi
 		totalRequests  int64
 		recentRequests int64
 		lastSeenAt     time.Time
+		region         string
 	}
 	accumulators := make(map[string]*accumulator)
 	for _, item := range logs {
@@ -481,12 +483,18 @@ func buildNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, recentSi
 		}
 		if item.LoggedAt.After(acc.lastSeenAt) {
 			acc.lastSeenAt = item.LoggedAt
+			if region := strings.TrimSpace(item.Region); region != "" {
+				acc.region = region
+			}
+		} else if acc.region == "" {
+			acc.region = strings.TrimSpace(item.Region)
 		}
 	}
 	rows := make([]*NodeAccessLogIPSummaryRow, 0, len(accumulators))
 	for remoteAddr, acc := range accumulators {
 		rows = append(rows, &NodeAccessLogIPSummaryRow{
 			RemoteAddr:     remoteAddr,
+			Region:         acc.region,
 			TotalRequests:  acc.totalRequests,
 			RecentRequests: acc.recentRequests,
 			LastSeenEpoch:  acc.lastSeenAt.Unix(),

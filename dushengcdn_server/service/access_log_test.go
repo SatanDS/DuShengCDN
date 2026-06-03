@@ -156,6 +156,7 @@ func TestListFoldedAccessLogsAndIPSummaries(t *testing.T) {
 			NodeID:     "node-folded",
 			LoggedAt:   now.Add(-4 * time.Minute),
 			RemoteAddr: "203.0.113.1",
+			Region:     "Hong Kong",
 			Host:       "alpha.example.com",
 			Path:       "/first",
 			StatusCode: 200,
@@ -164,6 +165,7 @@ func TestListFoldedAccessLogsAndIPSummaries(t *testing.T) {
 			NodeID:     "node-folded",
 			LoggedAt:   now.Add(-3 * time.Minute),
 			RemoteAddr: "203.0.113.1",
+			Region:     "Hong Kong",
 			Host:       "alpha.example.com",
 			Path:       "/second",
 			StatusCode: 502,
@@ -172,6 +174,7 @@ func TestListFoldedAccessLogsAndIPSummaries(t *testing.T) {
 			NodeID:     "node-folded",
 			LoggedAt:   now.Add(-2 * time.Minute),
 			RemoteAddr: "203.0.113.2",
+			Region:     "Singapore",
 			Host:       "beta.example.com",
 			Path:       "/third",
 			StatusCode: 404,
@@ -213,6 +216,9 @@ func TestListFoldedAccessLogsAndIPSummaries(t *testing.T) {
 	}
 	if ipSummaries.Items[0].RemoteAddr != "203.0.113.1" || ipSummaries.Items[0].TotalRequests != 2 {
 		t.Fatalf("unexpected top ip summary row: %+v", ipSummaries.Items[0])
+	}
+	if ipSummaries.Items[0].Region != "Hong Kong" {
+		t.Fatalf("expected top ip summary to include latest region, got %+v", ipSummaries.Items[0])
 	}
 }
 
@@ -261,8 +267,8 @@ func TestBuildObservabilityMeteringOverviewAggregatesBillingSignals(t *testing.T
 	view := buildObservabilityMeteringOverview(meteringOverviewDataSource{
 		now: now,
 		nodes: []*model.Node{
-			{NodeID: "node-a", Status: NodeStatusOnline, LastSeenAt: now},
-			{NodeID: "node-b", Status: NodeStatusOffline, LastSeenAt: now.Add(-3 * time.Hour)},
+			{NodeID: "node-a", Name: "AKKO HK", Status: NodeStatusOnline, LastSeenAt: now},
+			{NodeID: "node-b", Name: "AKKO DE", Status: NodeStatusOffline, LastSeenAt: now.Add(-3 * time.Hour)},
 		},
 		logs: []*model.NodeAccessLog{
 			{
@@ -329,6 +335,9 @@ func TestBuildObservabilityMeteringOverviewAggregatesBillingSignals(t *testing.T
 	}
 	if len(view.SiteTraffic) == 0 || view.SiteTraffic[0].Key != "app.example.com" || view.SiteTraffic[0].ResponseBytes != 3000 {
 		t.Fatalf("unexpected site traffic: %+v", view.SiteTraffic)
+	}
+	if len(view.NodeTraffic) == 0 || view.NodeTraffic[0].Key != "AKKO DE" {
+		t.Fatalf("expected node traffic to use node display names, got %+v", view.NodeTraffic)
 	}
 	if len(view.TopURLs) == 0 || view.TopURLs[0].Key == "" {
 		t.Fatalf("expected top URLs, got %+v", view.TopURLs)

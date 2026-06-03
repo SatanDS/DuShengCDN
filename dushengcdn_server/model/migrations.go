@@ -127,7 +127,7 @@ func applyCurrentSchema(db *gorm.DB, backend string) error {
 	if err := migrateObservabilityLegacyColumns(db); err != nil {
 		return err
 	}
-	return nil
+	return ensureDNSRollupObservabilityIndex(db)
 }
 
 func loadDatabaseSchemaVersion(db *gorm.DB) (int, bool, error) {
@@ -1600,6 +1600,20 @@ func ensureGSLBSchedulingStateScopeIndex(db *gorm.DB) error {
 				return fmt.Errorf("drop legacy gslb scheduling state index %s failed: %w", indexName, err)
 			}
 		}
+	}
+	return nil
+}
+
+func ensureDNSRollupObservabilityIndex(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&DNSQueryRollup{}) {
+		return nil
+	}
+	const indexName = "idx_dns_rollups_observability"
+	if db.Migrator().HasIndex(&DNSQueryRollup{}, indexName) {
+		return nil
+	}
+	if err := db.Migrator().CreateIndex(&DNSQueryRollup{}, indexName); err != nil {
+		return fmt.Errorf("create dns query rollup observability index failed: %w", err)
 	}
 	return nil
 }

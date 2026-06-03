@@ -39,6 +39,7 @@ import {
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
+import { formatCountryName, formatRegionWithCode } from '@/lib/utils/countries';
 import {
   formatBytes,
   formatBytesPerSecond,
@@ -966,7 +967,7 @@ function MeteringTab({
         <AppCard title="TOP 地区">
           <RankChart
             items={data.top_regions.map((item) => ({
-              label: item.key,
+              label: formatCountryName(item.key, item.key || '未识别地区'),
               value: item.value,
             }))}
             color="#14b8a6"
@@ -1237,7 +1238,7 @@ function DetailTab({
                         {item.region ? (
                           <div className="mt-2">
                             <span className="inline-flex rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-1 text-[11px] font-medium text-[var(--foreground-secondary)]">
-                              {item.region}
+                              {formatRegionWithCode(item.region)}
                             </span>
                           </div>
                         ) : null}
@@ -1358,7 +1359,15 @@ function IPTab({
                     onClick={() => onSelectIP(item)}
                   >
                     <td className="px-3 py-4 font-medium text-[var(--foreground-primary)]">
-                      {item.remote_addr}
+                      <div>{item.remote_addr}</div>
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-normal">
+                        <span className="inline-flex rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-1 text-[var(--foreground-secondary)]">
+                          地区：{formatRegionWithCode(item.region)}
+                        </span>
+                        <span className="inline-flex rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-1 text-[var(--foreground-secondary)]">
+                          运营商：{item.operator || '未采集'}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-3 py-4 text-[var(--foreground-secondary)]">
                       {formatCompactNumber(item.total_requests)}

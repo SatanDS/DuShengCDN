@@ -1689,6 +1689,8 @@ func renderRouteCacheBlock(cacheConfig routeCacheConfig, cfg openRestyConfigSnap
 	}
 	builder.WriteString("        proxy_cache dushengcdn_cache;\n")
 	builder.WriteString("        proxy_cache_methods GET;\n")
+	builder.WriteString("        proxy_cache_valid 200 206 301 302 10m;\n")
+	builder.WriteString("        add_header X-DuShengCDN-Cache $upstream_cache_status always;\n")
 	builder.WriteString("        proxy_cache_bypass $dushengcdn_skip_cache;\n")
 	builder.WriteString("        proxy_no_cache $dushengcdn_skip_cache;\n")
 	return builder.String()
@@ -1718,7 +1720,7 @@ func renderRouteCachePolicyCondition(cacheConfig routeCacheConfig) string {
 	case proxyRouteCachePolicyPathPrefix:
 		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathPrefixMatchPattern(cacheConfig.Rules)))
 	case proxyRouteCachePolicyPathContains:
-		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathContainsMatchPattern(cacheConfig.Rules)))
+		return fmt.Sprintf("        if ($uri !~* %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathContainsMatchPattern(cacheConfig.Rules)))
 	case proxyRouteCachePolicyPathExact:
 		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathExactMatchPattern(cacheConfig.Rules)))
 	default:

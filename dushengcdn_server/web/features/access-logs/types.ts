@@ -68,6 +68,8 @@ export interface AccessLogIPSummaryFilters {
 
 export interface AccessLogIPSummaryItem {
   remote_addr: string;
+  region?: string;
+  operator?: string;
   total_requests: number;
   recent_requests: number;
   last_seen_at: string;

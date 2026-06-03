@@ -52,10 +52,10 @@ type DNSWorker struct {
 
 type DNSQueryRollup struct {
 	ID              uint      `json:"id" gorm:"primaryKey"`
-	WindowStart     time.Time `json:"window_start" gorm:"index;not null"`
+	WindowStart     time.Time `json:"window_start" gorm:"index;index:idx_dns_rollups_observability,priority:1;not null"`
 	WindowMinutes   int       `json:"window_minutes" gorm:"not null;default:1"`
-	WorkerID        string    `json:"worker_id" gorm:"index;size:64;not null"`
-	ZoneID          uint      `json:"zone_id" gorm:"index"`
+	WorkerID        string    `json:"worker_id" gorm:"index;index:idx_dns_rollups_observability,priority:2;size:64;not null"`
+	ZoneID          uint      `json:"zone_id" gorm:"index;index:idx_dns_rollups_observability,priority:3"`
 	ProxyRouteID    uint      `json:"proxy_route_id" gorm:"index"`
 	SourceScope     string    `json:"source_scope" gorm:"index;size:64;not null;default:'global'"`
 	QName           string    `json:"qname" gorm:"index;size:255"`

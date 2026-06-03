@@ -1114,7 +1114,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
     expect(screen.getByText('edge-site')).toBeInTheDocument();
     expect(screen.getByText('来源作用域')).toBeInTheDocument();
-    expect(screen.getByText('国家 HK')).toBeInTheDocument();
+    expect(screen.getByText('香港')).toBeInTheDocument();
     expect(await screen.findByText('查询趋势')).toBeInTheDocument();
     expect(screen.getByText('解析配置不一致')).toBeInTheDocument();
     expect(
@@ -1126,6 +1126,7 @@ describe('Authoritative DNS page', () => {
     expect(
       screen.getByText(/重启响应端重新拉取配置/),
     ).toBeInTheDocument();
+    expect(screen.getByText('重新拉取解析配置')).toBeInTheDocument();
     expect(screen.getByText('snapshot-a')).toBeInTheDocument();
     expect(screen.getAllByText('snapshot-b').length).toBeGreaterThan(0);
     expect(screen.getByText('响应端可用性')).toBeInTheDocument();
@@ -1163,7 +1164,7 @@ describe('Authoritative DNS page', () => {
     await waitFor(() => {
       expect(screen.getAllByText('8.8.4.4').length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText('国家 HK').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('香港').length).toBeGreaterThan(0);
     expect(screen.getByText(/snapshot-c/)).toBeInTheDocument();
     expect(screen.getByText('节点池匹配')).toBeInTheDocument();
     expect(screen.getByText('节点诊断')).toBeInTheDocument();
@@ -1189,7 +1190,7 @@ describe('Authoritative DNS page', () => {
     expect(
       screen.getByText(/当前来源没有可用于 A 记录的边缘节点/),
     ).toBeInTheDocument();
-    expect(screen.getAllByText('国家 DE').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('德国').length).toBeGreaterThan(0);
     expect(screen.getByText(/snapshot-d/)).toBeInTheDocument();
     expect(screen.getByText('eu-hot')).toBeInTheDocument();
     expect(

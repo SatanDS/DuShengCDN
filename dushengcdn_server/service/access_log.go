@@ -90,6 +90,8 @@ type AccessLogIPSummaryQuery struct {
 
 type AccessLogIPSummaryView struct {
 	RemoteAddr     string    `json:"remote_addr"`
+	Region         string    `json:"region"`
+	Operator       string    `json:"operator"`
 	TotalRequests  int64     `json:"total_requests"`
 	RecentRequests int64     `json:"recent_requests"`
 	LastSeenAt     time.Time `json:"last_seen_at"`
@@ -312,6 +314,7 @@ func ListAccessLogIPSummaries(input AccessLogIPSummaryQuery) (*AccessLogIPSummar
 		}
 		views = append(views, AccessLogIPSummaryView{
 			RemoteAddr:     item.RemoteAddr,
+			Region:         item.Region,
 			TotalRequests:  item.TotalRequests,
 			RecentRequests: item.RecentRequests,
 			LastSeenAt:     time.Unix(item.LastSeenEpoch, 0).UTC(),
@@ -430,6 +433,7 @@ func buildObservabilityMeteringOverview(source meteringOverviewDataSource) *Obse
 	topIPCounts := make(distributionAccumulator)
 	topRegionCounts := make(distributionAccumulator)
 	statusCounts := make(distributionAccumulator)
+	nodeNames := buildMeteringNodeNameMap(source.nodes)
 
 	for _, item := range source.logs {
 		if item == nil {
@@ -448,6 +452,9 @@ func buildObservabilityMeteringOverview(source meteringOverviewDataSource) *Obse
 		}
 		accumulateMeteringTraffic(siteAccumulators, siteKey, item)
 		nodeKey := strings.TrimSpace(item.NodeID)
+		if displayName := strings.TrimSpace(nodeNames[nodeKey]); displayName != "" {
+			nodeKey = displayName
+		}
 		if nodeKey == "" {
 			nodeKey = "未识别节点"
 		}
@@ -500,6 +507,25 @@ func buildObservabilityMeteringOverview(source meteringOverviewDataSource) *Obse
 	overview.TopIPs = toDistributionItems(topIPCounts, limit)
 	overview.TopRegions = toDistributionItems(topRegionCounts, limit)
 	return overview
+}
+
+func buildMeteringNodeNameMap(nodes []*model.Node) map[string]string {
+	result := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		nodeID := strings.TrimSpace(node.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		name := strings.TrimSpace(node.Name)
+		if name == "" {
+			name = nodeID
+		}
+		result[nodeID] = name
+	}
+	return result
 }
 
 func CleanupAccessLogs(input AccessLogCleanupInput) (*AccessLogCleanupResult, error) {

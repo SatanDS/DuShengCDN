@@ -1279,6 +1279,19 @@ func TestEnsureDatabaseSchemaUpToDateAddsDNSRollupSourceScope(t *testing.T) {
 	}
 }
 
+func TestAutoMigrateCreatesDNSRollupObservabilityIndex(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "dns-rollup-observability-index.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateAll(db); err != nil {
+		t.Fatalf("auto migrate current schema: %v", err)
+	}
+	if !db.Migrator().HasIndex(&DNSQueryRollup{}, "idx_dns_rollups_observability") {
+		t.Fatal("expected dns_query_rollups observability index to exist")
+	}
+}
+
 func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerGeoIPFields(t *testing.T) {
 	db := openBareTestSQLiteDB(t, "dns-worker-geoip-fields.db")
 	if err := registerSharding(db, "sqlite"); err != nil {

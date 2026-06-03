@@ -79,6 +79,7 @@ import {
 } from '@/features/shared/components/resource-primitives';
 import { cn } from '@/lib/utils/cn';
 import { copyToClipboard } from '@/lib/utils/clipboard';
+import { formatCountryName } from '@/lib/utils/countries';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
 
 type FeedbackState = {
@@ -507,7 +508,7 @@ function formatSourceScopeBaseLabel(value: string) {
       .slice(text.indexOf(':') + 1)
       .trim()
       .toUpperCase();
-    return country ? `国家 ${country}` : text;
+    return country ? formatCountryName(country, country) : text;
   }
   if (lower.startsWith('cidr:')) {
     const cidr = text.slice(text.indexOf(':') + 1).trim();
@@ -837,6 +838,9 @@ export function AuthoritativeDNSPage() {
       dnsObservabilityWindowHours,
     ],
     queryFn: () => getDNSObservability(dnsObservabilityWindowHours),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData) => previousData,
   });
   const schedulingStatesQuery = useQuery({
     queryKey: ['authoritative-dns', 'scheduling-states'],
@@ -866,6 +870,14 @@ export function AuthoritativeDNSPage() {
         .filter((route) => route.enabled || route.gslb_enabled),
     [proxyRoutes],
   );
+  const handleCopyDNSWorkerCommand = async (value: string, message: string) => {
+    try {
+      await copyToClipboard(value);
+      setFeedback({ tone: 'success', message });
+    } catch (error) {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    }
+  };
   const showNoAuthoritativeRoutesNotice = shouldShowNoAuthoritativeRoutesNotice(
     {
       zones,
@@ -1423,6 +1435,7 @@ export function AuthoritativeDNSPage() {
               ? getErrorMessage(observabilityQuery.error)
               : ''
           }
+          onCopyCommand={handleCopyDNSWorkerCommand}
         />
 
         <GSLBSimulationPanel
@@ -3209,10 +3222,12 @@ function DNSObservabilityPanel({
   summary,
   isLoading,
   error,
+  onCopyCommand,
 }: {
   summary: DNSObservabilitySummary | null;
   isLoading: boolean;
   error: string;
+  onCopyCommand: (value: string, message: string) => void;
 }) {
   if (isLoading) {
     return (
@@ -3265,6 +3280,7 @@ function DNSObservabilityPanel({
         <DNSQueryTrendPanel summary={summary} />
         <DNSSnapshotConsistencyPanel
           consistency={summary.snapshot_consistency}
+          onCopyCommand={onCopyCommand}
         />
         <DNSWorkerHealthPanel summary={summary} />
         <CounterChart
@@ -3405,6 +3421,10 @@ function DNSWorkerHealthPanel({
 }
 
 function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
+  const visibleNodeProbes = (worker.node_probes ?? []).filter((probe) =>
+    probe.node_name?.trim(),
+  );
+
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3450,8 +3470,13 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           value={formatLatencyMs(worker.max_latency_ms)}
         />
         <InfoTile
-          label="解析配置年龄"
+          label="响应端配置年龄"
           value={formatDurationSeconds(worker.snapshot_age_seconds)}
+          helper={
+            worker.snapshot_stale
+              ? '超过 DNS 响应端过期阈值，需要检查响应端访问面板或重启重新拉取。'
+              : '响应端当前缓存解析配置的时间。'
+          }
         />
         <InfoTile
           label="最近心跳"
@@ -3512,13 +3537,13 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           ))}
         </div>
       ) : null}
-      {(worker.node_probes ?? []).length > 0 ? (
+      {visibleNodeProbes.length > 0 ? (
         <div className="mt-4 space-y-2">
           <p className="text-xs font-medium text-[var(--foreground-primary)]">
             Agent 多节点探测
           </p>
           <div className="grid gap-2">
-            {(worker.node_probes ?? []).map((probe) => (
+            {visibleNodeProbes.map((probe) => (
               <div
                 key={`${worker.worker_id}-${probe.node_id}`}
                 className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-3 py-2"
@@ -3629,8 +3654,10 @@ function DNSQueryTrendPanel({ summary }: { summary: DNSObservabilitySummary }) {
 
 function DNSSnapshotConsistencyPanel({
   consistency,
+  onCopyCommand,
 }: {
   consistency?: DNSWorkerSnapshotConsistency;
+  onCopyCommand: (value: string, message: string) => void;
 }) {
   if (!consistency) {
     return (
@@ -3666,6 +3693,42 @@ function DNSSnapshotConsistencyPanel({
           message={getSnapshotConsistencyMessage(consistency)}
         />
       ) : null}
+      <div className="mt-3 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-[var(--foreground-primary)]">
+              重新拉取解析配置
+            </p>
+            <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
+              响应端会定时拉取；如果版本不一致或长时间过期，可在响应端服务器执行重启命令强制重新拉取。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <SecondaryButton
+              type="button"
+              onClick={() =>
+                onCopyCommand(
+                  'systemctl restart dushengcdn-dns-worker',
+                  'systemd 重启命令已复制。',
+                )
+              }
+            >
+              复制 systemd 命令
+            </SecondaryButton>
+            <SecondaryButton
+              type="button"
+              onClick={() =>
+                onCopyCommand(
+                  'docker restart dushengcdn-dns-worker',
+                  'Docker 重启命令已复制。',
+                )
+              }
+            >
+              复制 Docker 命令
+            </SecondaryButton>
+          </div>
+        </div>
+      </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <InfoTile
           label="在线响应端"
