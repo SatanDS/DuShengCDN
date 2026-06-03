@@ -97,10 +97,10 @@ export function PublicShell({ children }: PublicShellProps) {
     <div className="public-portal relative min-h-screen overflow-hidden px-4 py-6 text-[var(--foreground-primary)] sm:px-6 lg:px-8">
       <MapleBackdrop />
 
-      <header className="relative z-10 mx-auto flex w-full max-w-6xl items-center justify-between gap-4">
+      <header className="pointer-events-none fixed inset-0 z-20">
         <Link
           href="/"
-          className="flex min-w-0 items-center gap-3"
+          className="pointer-events-auto absolute left-5 top-5 flex min-w-0 items-center gap-3 sm:left-7 sm:top-7"
           aria-label="DuShengCDN 首页"
         >
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--surface-panel)]/78 shadow-[var(--shadow-soft)] backdrop-blur">
@@ -115,17 +115,15 @@ export function PublicShell({ children }: PublicShellProps) {
           </span>
         </Link>
 
-        <div className="flex items-center gap-3 text-sm text-[var(--foreground-secondary)]">
-          <Link
-            href="/about"
-            className="rounded-full border border-[var(--border-default)] bg-[var(--surface-panel)]/70 px-3 py-1.5 text-[var(--brand-primary)] transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-panel)]"
-          >
-            关于
-          </Link>
-        </div>
+        <Link
+          href="/about"
+          className="pointer-events-auto absolute bottom-5 right-5 rounded-full border border-[var(--border-default)] bg-[var(--surface-panel)]/70 px-3 py-1.5 text-sm text-[var(--brand-primary)] shadow-[var(--shadow-soft)] backdrop-blur transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-panel)] sm:bottom-7 sm:right-7"
+        >
+          关于
+        </Link>
       </header>
 
-      <main className="relative z-10 mx-auto grid w-full max-w-6xl items-start gap-8 py-8 lg:min-h-[calc(100vh-7.25rem)] lg:grid-cols-[1.06fr_0.94fr] lg:items-center lg:gap-10 lg:py-10">
+      <main className="relative z-10 mx-auto grid w-full max-w-6xl items-start gap-8 py-16 lg:min-h-screen lg:grid-cols-[1.06fr_0.94fr] lg:items-center lg:gap-10 lg:py-20">
         <section className="flex flex-col items-center text-center lg:items-start lg:text-left">
           <div className="public-hero-mark flex h-28 w-48 items-center justify-center sm:h-44 sm:w-72 lg:h-48 lg:w-80">
             <Image

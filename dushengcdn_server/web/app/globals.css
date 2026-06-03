@@ -204,28 +204,42 @@ button {
 
 .public-portal::before {
   position: absolute;
-  inset: -18%;
+  inset: -30%;
   z-index: 0;
   content: '';
   background:
     radial-gradient(
-      circle at 50% 42%,
-      rgba(255, 255, 255, 0.72),
-      transparent 22%
-    ),
-    radial-gradient(circle at 18% 20%, rgba(0, 56, 255, 0.16), transparent 25%),
-    radial-gradient(
-      circle at 80% 16%,
-      rgba(255, 0, 127, 0.14),
-      transparent 28%
+      ellipse at 44% 46%,
+      rgba(255, 255, 255, 0.62),
+      rgba(255, 255, 255, 0.18) 18%,
+      transparent 36%
     ),
     radial-gradient(
-      circle at 78% 82%,
+      ellipse at 16% 22%,
+      rgba(0, 56, 255, 0.2),
+      rgba(95, 125, 255, 0.08) 26%,
+      transparent 48%
+    ),
+    radial-gradient(
+      ellipse at 84% 18%,
+      rgba(255, 0, 127, 0.2),
+      rgba(255, 79, 173, 0.08) 28%,
+      transparent 52%
+    ),
+    radial-gradient(
+      ellipse at 76% 84%,
       rgba(245, 158, 11, 0.08),
-      transparent 22%
+      rgba(255, 180, 120, 0.04) 28%,
+      transparent 50%
     );
-  filter: blur(8px);
-  animation: public-glow-shift 18s ease-in-out infinite alternate;
+  background-size:
+    140% 140%,
+    130% 130%,
+    135% 135%,
+    150% 150%;
+  filter: blur(14px);
+  transform: translate3d(0, 0, 0);
+  animation: public-glow-drift 34s ease-in-out infinite alternate;
 }
 
 .public-maple-field {
@@ -373,12 +387,30 @@ button {
     linear-gradient(135deg, rgba(95, 125, 255, 0.16), rgba(166, 107, 255, 0.1));
 }
 
-@keyframes public-glow-shift {
+@keyframes public-glow-drift {
   0% {
+    background-position:
+      48% 42%,
+      16% 18%,
+      82% 16%,
+      74% 82%;
     transform: translate3d(-1.5%, -1%, 0) scale(1);
   }
+  50% {
+    background-position:
+      52% 47%,
+      20% 24%,
+      78% 22%,
+      78% 76%;
+    transform: translate3d(0.5%, 0.2%, 0) scale(1.025);
+  }
   100% {
-    transform: translate3d(1.5%, 1%, 0) scale(1.04);
+    background-position:
+      46% 52%,
+      22% 28%,
+      86% 24%,
+      70% 78%;
+    transform: translate3d(1.6%, 1.1%, 0) scale(1.05);
   }
 }
 
