@@ -199,19 +199,25 @@ button {
 
 .public-portal {
   isolation: isolate;
-  background: var(--body-background);
+  --foreground-primary: rgba(248, 250, 252, 0.96);
+  --foreground-secondary: rgba(226, 232, 240, 0.76);
+  --foreground-muted: rgba(203, 213, 225, 0.58);
+  background:
+    linear-gradient(115deg, #070a1f 0%, #11163f 26%, #3b1d49 58%, #5c0737 100%);
+  background-size: 260% 260%;
+  animation: public-base-flow 18s ease-in-out infinite alternate;
 }
 
 .public-portal::before {
   position: absolute;
   inset: -30%;
-  z-index: 0;
+  z-index: 1;
   content: '';
   background:
     radial-gradient(
       ellipse at 44% 46%,
-      rgba(255, 255, 255, 0.62),
-      rgba(255, 255, 255, 0.18) 18%,
+      rgba(255, 255, 255, 0.42),
+      rgba(255, 255, 255, 0.12) 18%,
       transparent 36%
     ),
     radial-gradient(
@@ -239,7 +245,34 @@ button {
     150% 150%;
   filter: blur(14px);
   transform: translate3d(0, 0, 0);
-  animation: public-glow-drift 34s ease-in-out infinite alternate;
+  animation: public-glow-drift 24s ease-in-out infinite alternate;
+  will-change: background-position, transform;
+}
+
+.public-portal::after {
+  position: absolute;
+  inset: -45%;
+  z-index: 0;
+  content: '';
+  background:
+    linear-gradient(
+      120deg,
+      rgba(7, 12, 39, 0.92) 0%,
+      rgba(36, 51, 109, 0.78) 22%,
+      rgba(123, 80, 139, 0.74) 45%,
+      rgba(112, 22, 79, 0.78) 68%,
+      rgba(12, 8, 24, 0.94) 100%
+    ),
+    radial-gradient(circle at 18% 68%, rgba(106, 140, 255, 0.18), transparent 28%),
+    radial-gradient(circle at 82% 24%, rgba(255, 79, 173, 0.2), transparent 30%);
+  background-size:
+    240% 240%,
+    150% 150%,
+    160% 160%;
+  filter: blur(18px) saturate(1.14);
+  transform: translate3d(0, 0, 0);
+  animation: public-color-flow 16s ease-in-out infinite alternate;
+  will-change: background-position, transform;
 }
 
 .public-maple-field {
@@ -387,6 +420,42 @@ button {
     linear-gradient(135deg, rgba(95, 125, 255, 0.16), rgba(166, 107, 255, 0.1));
 }
 
+@keyframes public-base-flow {
+  0% {
+    background-position: 0% 46%;
+  }
+  45% {
+    background-position: 54% 52%;
+  }
+  100% {
+    background-position: 100% 58%;
+  }
+}
+
+@keyframes public-color-flow {
+  0% {
+    background-position:
+      0% 44%,
+      16% 62%,
+      86% 20%;
+    transform: translate3d(-2%, -1%, 0) scale(1.02);
+  }
+  50% {
+    background-position:
+      52% 50%,
+      22% 56%,
+      78% 28%;
+    transform: translate3d(1%, 0.5%, 0) scale(1.05);
+  }
+  100% {
+    background-position:
+      100% 56%,
+      28% 50%,
+      72% 34%;
+    transform: translate3d(2%, 1.5%, 0) scale(1.08);
+  }
+}
+
 @keyframes public-glow-drift {
   0% {
     background-position:
@@ -427,6 +496,7 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .public-portal::before,
+  .public-portal::after,
   .public-maple-leaf {
     animation: none;
   }
