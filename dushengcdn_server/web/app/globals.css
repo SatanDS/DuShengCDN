@@ -375,31 +375,33 @@ button {
 .public-login-panel {
   grid-area: 1 / 1;
   pointer-events: none;
+  visibility: hidden;
   opacity: 0;
-  filter: saturate(1.12);
-  transform: translate3d(14vw, -1.6vh, 0) scale(0.72);
+  filter: blur(14px) saturate(1.18);
+  transform: translate3d(16vw, -1.8vh, 0) scale(0.58);
   transform-origin: calc(100% - 3rem) 2rem;
   transition:
     opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1),
     transform 0.9s cubic-bezier(0.16, 1, 0.3, 1),
-    filter 0.72s cubic-bezier(0.16, 1, 0.3, 1);
+    filter 0.72s cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 0.9s;
   contain: layout paint;
   will-change: opacity, transform, filter;
 }
 
 .public-login-stage.is-open .public-login-panel {
   pointer-events: auto;
+  visibility: visible;
   opacity: 1;
   filter: blur(0) saturate(1);
   transform: translate3d(0, 0, 0) scale(1);
+  transition-delay: 0s;
 }
 
 .public-login-stage.is-open .auth-liquid-card {
-  animation: auth-liquid-unfurl 1.16s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: auth-liquid-unfurl 1.02s cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: calc(100% - 3rem) 2rem;
-  backface-visibility: hidden;
-  transform: translateZ(0);
-  will-change: opacity, transform, filter;
+  will-change: clip-path, opacity, transform, filter;
 }
 
 .public-login-stage.is-open .public-login-hero {
@@ -409,15 +411,15 @@ button {
 .auth-liquid-card {
   position: relative;
   overflow: hidden;
-  border-color: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.2);
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.014)),
-    linear-gradient(180deg, rgba(20, 21, 42, 0.19), rgba(13, 12, 31, 0.14));
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    linear-gradient(180deg, rgba(20, 21, 42, 0.15), rgba(13, 12, 31, 0.1));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.26),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.07),
-    0 24px 70px rgba(0, 0, 0, 0.28),
-    0 0 0 1px rgba(106, 140, 255, 0.12);
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.055),
+    0 18px 54px rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(106, 140, 255, 0.08);
   backdrop-filter: blur(48px) saturate(1.85);
   -webkit-backdrop-filter: blur(48px) saturate(1.85);
 }
@@ -602,50 +604,48 @@ button {
 
 @keyframes auth-liquid-unfurl {
   0% {
-    opacity: 0.28;
-    filter: saturate(1.26);
-    transform: translate3d(2.4rem, -1.35rem, 0) scale(0.72, 0.54);
+    clip-path: inset(0 0 82% 72% round 999px);
+    opacity: 0.34;
+    filter: blur(10px) saturate(1.24);
+    transform: translate3d(0, 0, 0) scale(0.985);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.34),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.08),
-      0 16px 54px rgba(0, 0, 0, 0.18),
-      0 0 42px rgba(255, 79, 173, 0.12);
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.055),
+      0 12px 34px rgba(0, 0, 0, 0.1),
+      0 0 24px rgba(255, 79, 173, 0.08);
   }
-  14% {
-    opacity: 0.46;
-    filter: saturate(1.25);
-    transform: translate3d(1.85rem, -1.02rem, 0) scale(0.86, 0.66);
+  24% {
+    clip-path: inset(0 0 55% 48% round 2.6rem);
+    opacity: 0.64;
+    filter: blur(6px) saturate(1.18);
+    transform: scale(0.994);
   }
-  28% {
-    opacity: 0.66;
-    filter: saturate(1.22);
-    transform: translate3d(1.05rem, -0.52rem, 0) scale(1.02, 0.82);
+  48% {
+    clip-path: inset(-1% 0 -1% 18% round 1.9rem);
+    opacity: 0.9;
+    filter: blur(2px) saturate(1.12);
+    transform: scale(1.006);
   }
-  42% {
-    opacity: 0.86;
-    filter: saturate(1.18);
-    transform: translate3d(0.34rem, -0.12rem, 0) scale(1.04, 0.94);
-  }
-  58% {
+  68% {
+    clip-path: inset(-1% -1% -1% -1% round 1.7rem);
     opacity: 1;
-    filter: saturate(1.12);
-    transform: translate3d(-0.2rem, 0.07rem, 0) scale(1.016, 1.018);
+    filter: blur(0) saturate(1.06);
+    transform: scale(1.002);
   }
-  72% {
-    transform: translate3d(0.09rem, -0.04rem, 0) scale(0.996, 0.998);
-  }
-  86% {
-    transform: translate3d(-0.03rem, 0.02rem, 0) scale(1.002, 1.001);
+  84% {
+    clip-path: inset(0 0 0 0 round var(--radius-xl));
+    transform: scale(0.998);
   }
   100% {
+    clip-path: inset(0 0 0 0 round var(--radius-xl));
     opacity: 1;
-    filter: saturate(1);
-    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0) saturate(1);
+    transform: scale(1);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.34),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.08),
-      0 30px 82px rgba(0, 0, 0, 0.28),
-      0 0 54px rgba(255, 79, 173, 0.16);
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.055),
+      0 18px 54px rgba(0, 0, 0, 0.15),
+      0 0 0 1px rgba(106, 140, 255, 0.08);
   }
 }
 
