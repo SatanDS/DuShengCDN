@@ -308,7 +308,9 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		return nil, err
 	}
 
-	powConfig, err := normalizePoWConfig(input.PoWEnabled, input.PoWConfig)
+	ccMode := normalizeCCMode(input.CCMode)
+	powConfigEnabled := input.PoWEnabled || (input.CCEnabled && ccMode == proxyRouteCCModePoW)
+	powConfig, err := normalizePoWConfig(powConfigEnabled, input.PoWConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +327,6 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
-	ccMode := normalizeCCMode(input.CCMode)
 	ccConfig, err := normalizeCCConfig(input.CCEnabled, input.CCConfig)
 	if err != nil {
 		return nil, err
@@ -2213,8 +2214,12 @@ func normalizeCCConfig(enabled bool, raw string) (ProxyRouteCCConfig, error) {
 		{name: "排除", cidrs: cfg.Exclude.IPCidrs},
 	} {
 		for _, cidr := range item.cidrs {
-			if _, _, err := net.ParseCIDR(cidr); err != nil {
+			ip, _, err := net.ParseCIDR(cidr)
+			if err != nil {
 				return cfg, fmt.Errorf("cc_config %s IP CIDR 格式无效: %s", item.name, cidr)
+			}
+			if ip.To4() == nil {
+				return cfg, fmt.Errorf("cc_config %s IP CIDR 目前仅支持 IPv4 网段: %s", item.name, cidr)
 			}
 		}
 	}

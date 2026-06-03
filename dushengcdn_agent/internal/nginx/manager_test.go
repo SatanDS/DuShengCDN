@@ -503,6 +503,9 @@ func TestEnsureLuaAssetsKeepsBaseDirAndRemovesStaleFiles(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(luaDir, "waf", "check.lua")); err != nil {
 		t.Fatalf("expected managed waf lua file to exist, stat err = %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(luaDir, "cc", "check.lua")); err != nil {
+		t.Fatalf("expected managed cc lua file to exist, stat err = %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(luaDir, "geoip", "access.lua")); err != nil {
 		t.Fatalf("expected managed geoip lua file to exist, stat err = %v", err)
 	}
@@ -566,6 +569,13 @@ func TestManagerEnsureLuaAssetsWritesReadableFiles(t *testing.T) {
 	if !strings.Contains(string(wafData), filepath.ToSlash(manager.RuntimeConfigDir)+"/waf_config.json") {
 		t.Fatalf("expected waf lua to read runtime config dir, got %s", string(wafData))
 	}
+	ccData, err := os.ReadFile(filepath.Join(manager.LuaDir, "cc", "check.lua"))
+	if err != nil {
+		t.Fatalf("failed to read cc lua file: %v", err)
+	}
+	if !strings.Contains(string(ccData), filepath.ToSlash(manager.RuntimeConfigDir)+"/cc_config.json") {
+		t.Fatalf("expected cc lua to read runtime config dir, got %s", string(ccData))
+	}
 	geoipData, err := os.ReadFile(filepath.Join(manager.LuaDir, "geoip", "access.lua"))
 	if err != nil {
 		t.Fatalf("failed to read geoip lua file: %v", err)
@@ -616,8 +626,13 @@ func TestEnsureLuaAssetsLeavesRuntimePowConfigOutsideLuaDir(t *testing.T) {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
 	powConfigPath := filepath.Join(runtimeConfigDir, "pow_config.json")
-	want := `[{"domains":["pow.example.com"],"enabled":true}]`
-	if err := os.WriteFile(powConfigPath, []byte(want), 0o644); err != nil {
+	ccConfigPath := filepath.Join(runtimeConfigDir, "cc_config.json")
+	wantPow := `[{"domains":["pow.example.com"],"enabled":true}]`
+	wantCC := `[{"domains":["cc.example.com"],"enabled":true}]`
+	if err := os.WriteFile(powConfigPath, []byte(wantPow), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.WriteFile(ccConfigPath, []byte(wantCC), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 	manager := &Manager{LuaDir: luaDir, RuntimeConfigDir: runtimeConfigDir}
@@ -630,8 +645,15 @@ func TestEnsureLuaAssetsLeavesRuntimePowConfigOutsideLuaDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected pow_config.json to remain after EnsureLuaAssets: %v", err)
 	}
-	if string(got) != want {
-		t.Fatalf("unexpected pow_config.json content: got %s want %s", string(got), want)
+	if string(got) != wantPow {
+		t.Fatalf("unexpected pow_config.json content: got %s want %s", string(got), wantPow)
+	}
+	got, err = os.ReadFile(ccConfigPath)
+	if err != nil {
+		t.Fatalf("expected cc_config.json to remain after EnsureLuaAssets: %v", err)
+	}
+	if string(got) != wantCC {
+		t.Fatalf("unexpected cc_config.json content: got %s want %s", string(got), wantCC)
 	}
 	if _, err := os.Stat(filepath.Join(luaDir, "pow_config.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected lua pow_config.json to stay absent, stat err = %v", err)
@@ -641,6 +663,9 @@ func TestEnsureLuaAssetsLeavesRuntimePowConfigOutsideLuaDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(luaDir, "waf_config.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected lua waf_config.json to stay absent, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(luaDir, "cc_config.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected lua cc_config.json to stay absent, stat err = %v", err)
 	}
 }
 
@@ -671,6 +696,7 @@ func TestManagerApplyWritesRuntimeConfigFilesAndCleansLegacyCopies(t *testing.T)
 		{Path: "pow_config.json", Content: "pow-runtime"},
 		{Path: "region_config.json", Content: "region-runtime"},
 		{Path: "waf_config.json", Content: "waf-runtime"},
+		{Path: "cc_config.json", Content: "cc-runtime"},
 	})
 	if outcome.Status != ApplyStatusSuccess {
 		t.Fatalf("Apply failed: %#v", outcome)
@@ -695,6 +721,13 @@ func TestManagerApplyWritesRuntimeConfigFilesAndCleansLegacyCopies(t *testing.T)
 	}
 	if string(data) != "waf-runtime" {
 		t.Fatalf("unexpected runtime waf config: %s", string(data))
+	}
+	data, err = os.ReadFile(filepath.Join(runtimeConfigDir, "cc_config.json"))
+	if err != nil {
+		t.Fatalf("failed to read runtime cc config: %v", err)
+	}
+	if string(data) != "cc-runtime" {
+		t.Fatalf("unexpected runtime cc config: %s", string(data))
 	}
 	for _, path := range []string{filepath.Join(certDir, "pow_config.json"), filepath.Join(luaDir, "pow_config.json")} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -726,6 +759,7 @@ func TestManagerCurrentChecksumIncludesRuntimeConfigFiles(t *testing.T) {
 			{Path: "pow_config.json", Content: `[{"domains":["pow.example.com"],"enabled":true}]`},
 			{Path: "region_config.json", Content: `[{"domains":["region.example.com"],"enabled":true}]`},
 			{Path: "waf_config.json", Content: `[{"domains":["waf.example.com"],"enabled":true}]`},
+			{Path: "cc_config.json", Content: `[{"domains":["cc.example.com"],"enabled":true}]`},
 		},
 	)
 	if outcome.Status != ApplyStatusSuccess {
@@ -743,6 +777,7 @@ func TestManagerCurrentChecksumIncludesRuntimeConfigFiles(t *testing.T) {
 			{Path: "pow_config.json", Content: `[{"domains":["pow.example.com"],"enabled":true}]`},
 			{Path: "region_config.json", Content: `[{"domains":["region.example.com"],"enabled":true}]`},
 			{Path: "waf_config.json", Content: `[{"domains":["waf.example.com"],"enabled":true}]`},
+			{Path: "cc_config.json", Content: `[{"domains":["cc.example.com"],"enabled":true}]`},
 		},
 	)
 	if value != expected {
@@ -818,15 +853,16 @@ func TestGeoIPAccessLuaUsesLocalDatabaseThenFallbackAPIAndCache(t *testing.T) {
 	}
 }
 
-func TestWAFLuaRunsAfterGeoIPAndBeforePoW(t *testing.T) {
+func TestUnifiedAccessLuaRunsGeoIPWAFCCBeforePoW(t *testing.T) {
 	regionIndex := strings.Index(openRestyGeoIPAccessLua, "M.check_region()")
 	wafIndex := strings.Index(openRestyGeoIPAccessLua, `pcall(require, "waf.check")`)
+	ccIndex := strings.Index(openRestyGeoIPAccessLua, `pcall(require, "cc.check")`)
 	powIndex := strings.Index(openRestyGeoIPAccessLua, `pcall(require, "pow.check")`)
-	if regionIndex < 0 || wafIndex < 0 || powIndex < 0 {
-		t.Fatalf("expected access lua to include GeoIP, WAF, and PoW hooks")
+	if regionIndex < 0 || wafIndex < 0 || ccIndex < 0 || powIndex < 0 {
+		t.Fatalf("expected access lua to include GeoIP, WAF, CC, and PoW hooks")
 	}
-	if !(regionIndex < wafIndex && wafIndex < powIndex) {
-		t.Fatalf("expected access order to be GeoIP -> WAF -> PoW")
+	if !(regionIndex < wafIndex && wafIndex < ccIndex && ccIndex < powIndex) {
+		t.Fatalf("expected access order to be GeoIP -> WAF -> CC -> PoW")
 	}
 	for _, expected := range []string{
 		`local waf_config_dict = ngx.shared.dushengcdn_waf_config`,
@@ -840,6 +876,23 @@ func TestWAFLuaRunsAfterGeoIPAndBeforePoW(t *testing.T) {
 		if !strings.Contains(openRestyWAFCheckLua, expected) {
 			t.Fatalf("expected waf lua to contain %q", expected)
 		}
+	}
+	for _, expected := range []string{
+		`local cc_config_dict = ngx.shared.dushengcdn_cc_config`,
+		`local cc_counters = ngx.shared.dushengcdn_cc_counters`,
+		`"__DUSHENGCDN_RUNTIME_CONFIG_DIR__/cc_config.json"`,
+		`function M.run()`,
+		`ngx.ctx.dushengcdn_force_pow = true`,
+		`ngx.header["X-DuShengCDN-CC"] = "matched; mode=pow; rule=" .. reason`,
+		`return ngx.exit(429)`,
+		`CC 防护：同一来源`,
+	} {
+		if !strings.Contains(openRestyCCCheckLua, expected) {
+			t.Fatalf("expected cc lua to contain %q", expected)
+		}
+	}
+	if strings.Index(openRestyPowCheckLua, `if force_pow then`) > strings.Index(openRestyPowCheckLua, `if not force_pow then`) {
+		t.Fatal("expected PoW force flag to be evaluated before normal whitelist bypass")
 	}
 }
 

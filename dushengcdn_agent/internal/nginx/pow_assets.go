@@ -126,12 +126,6 @@ if (uri == "/api/dns-snapshot" or uri == "/api/dns-worker-heartbeat") and (
     return
 end
 
--- Check whitelist: if matched, skip PoW
-local whitelist = config.whitelist or {}
-if policy.match_any(remote_ip, ua, uri, whitelist) then
-    return
-end
-
 -- Check blacklist: if matched, require PoW
 local blacklist = config.blacklist or {}
 local has_blacklist = policy.has_entries(blacklist)
@@ -145,6 +139,15 @@ elseif has_blacklist then
 else
     -- No blacklist means all non-whitelisted need PoW
     need_pow = true
+end
+
+-- Check whitelist after force_only/force_pow decisions. CC-triggered force_pow
+-- must still challenge even when the normal PoW whitelist would skip it.
+if not force_pow then
+    local whitelist = config.whitelist or {}
+    if policy.match_any(remote_ip, ua, uri, whitelist) then
+        return
+    end
 end
 
 if not need_pow then

@@ -99,6 +99,99 @@ func TestGetActiveConfigForAgentIncludesWAFConfig(t *testing.T) {
 	t.Fatal("expected agent config to include waf_config.json support file")
 }
 
+func TestGetActiveConfigForAgentIncludesCCConfigAndForceOnlyPoW(t *testing.T) {
+	setupServiceTestDB(t)
+
+	_, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:     "cc-agent.example.com",
+		OriginURL:  "https://origin.internal",
+		Enabled:    true,
+		CCEnabled:  true,
+		CCMode:     proxyRouteCCModePoW,
+		CCConfig:   `{"window_seconds":5,"max_requests":10,"path_window_seconds":7,"path_max_requests":3,"block_duration_seconds":120,"whitelist":{"ips":["1.2.3.4"],"ip_cidrs":["10.0.0.0/8"],"paths":["/api/health"],"user_agents":["monitor"]},"exclude":{"ips":["5.6.7.8"],"ip_cidrs":["172.16.0.0/12"],"paths":["/assets/*"],"user_agents":["uptime"]}}`,
+		PoWEnabled: false,
+		PoWConfig:  `{"difficulty":5,"algorithm":"fast","session_ttl":600,"challenge_ttl":300,"whitelist":{"paths":["/public/*"]},"blacklist":{"user_agents":["badbot"]}}`,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	release, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	for _, expected := range []string{
+		"access_by_lua_file __DUSHENGCDN_LUA_DIR__/access.lua;",
+		"location /.within.website/x/cmd/anubis/static/ {",
+		"set $dushengcdn_request_reason \"\";",
+	} {
+		if !strings.Contains(release.Version.RenderedConfig, expected) {
+			t.Fatalf("expected rendered config to contain %q, got %s", expected, release.Version.RenderedConfig)
+		}
+	}
+	for _, expected := range []string{
+		"lua_shared_dict dushengcdn_cc_config 1m;",
+		"lua_shared_dict dushengcdn_cc_counters 20m;",
+		"lua_shared_dict dushengcdn_pow_config 1m;",
+	} {
+		if !strings.Contains(release.Version.MainConfig, expected) {
+			t.Fatalf("expected main config to contain %q, got %s", expected, release.Version.MainConfig)
+		}
+	}
+
+	activeConfig, err := GetActiveConfigForAgent()
+	if err != nil {
+		t.Fatalf("GetActiveConfigForAgent failed: %v", err)
+	}
+	files := supportFilesByPath(activeConfig.SupportFiles)
+	ccConfig := files["cc_config.json"]
+	if ccConfig == "" {
+		t.Fatal("expected agent config to include cc_config.json support file")
+	}
+	for _, expected := range []string{
+		`"mode":"pow"`,
+		`"max_requests":10`,
+		`"path_max_requests":3`,
+		`"/assets/*"`,
+	} {
+		if !strings.Contains(ccConfig, expected) {
+			t.Fatalf("expected cc_config.json to contain %q, got %s", expected, ccConfig)
+		}
+	}
+	powConfig := files["pow_config.json"]
+	if powConfig == "" {
+		t.Fatal("expected CC pow mode to include pow_config.json support file")
+	}
+	for _, expected := range []string{
+		`"force_only":true`,
+		`"difficulty":5`,
+		`"/public/*"`,
+		`"badbot"`,
+	} {
+		if !strings.Contains(powConfig, expected) {
+			t.Fatalf("expected pow_config.json to contain %q, got %s", expected, powConfig)
+		}
+	}
+}
+
+func TestCreateProxyRouteRejectsIPv6CCCIDR(t *testing.T) {
+	setupServiceTestDB(t)
+
+	_, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:    "cc-ipv6.example.com",
+		OriginURL: "https://origin.internal",
+		Enabled:   true,
+		CCEnabled: true,
+		CCConfig:  `{"window_seconds":10,"max_requests":120,"path_window_seconds":10,"path_max_requests":60,"block_duration_seconds":300,"whitelist":{"ip_cidrs":["2001:db8::/32"]}}`,
+	})
+	if err == nil {
+		t.Fatal("expected IPv6 CIDR in CC config to be rejected")
+	}
+	if !strings.Contains(err.Error(), "仅支持 IPv4") {
+		t.Fatalf("expected IPv4-only validation error, got %v", err)
+	}
+}
+
 func TestGetActiveConfigForAgentUsesTenMinutePoWSessionDefault(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -131,6 +224,14 @@ func TestGetActiveConfigForAgentUsesTenMinutePoWSessionDefault(t *testing.T) {
 		}
 	}
 	t.Fatal("expected agent config to include pow_config.json support file")
+}
+
+func supportFilesByPath(files []SupportFile) map[string]string {
+	result := make(map[string]string, len(files))
+	for _, file := range files {
+		result[file.Path] = file.Content
+	}
+	return result
 }
 
 func TestBuildAgentDNSProbeTargetsLimitsOnlineWorkers(t *testing.T) {
