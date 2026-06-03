@@ -801,8 +801,9 @@ func TestAgentWSConnectionMarksNodeViewOnline(t *testing.T) {
 func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	setupServiceTestDB(t)
 	withFakeAccessLogGeoProvider(t, &geoip.GeoInfo{
-		ISOCode: "US",
-		Name:    "United States",
+		ISOCode:  "US",
+		Name:     "United States",
+		Operator: "Example Transit",
 	})
 
 	node := &model.Node{
@@ -931,6 +932,9 @@ func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	}
 	if accessLogs[0].Region == "" || accessLogs[1].Region == "" {
 		t.Fatalf("expected access log region to persist: %+v", accessLogs)
+	}
+	if accessLogs[0].Operator != "Example Transit" || accessLogs[1].Operator != "Example Transit" {
+		t.Fatalf("expected access log operator to persist: %+v", accessLogs)
 	}
 	if accessLogs[0].Reason != "恶意请求防护拦截: bad_bots" {
 		t.Fatalf("expected access log reason to persist, got %+v", accessLogs)

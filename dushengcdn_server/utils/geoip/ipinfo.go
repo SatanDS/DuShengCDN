@@ -79,6 +79,7 @@ func (s *IPInfoService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	return &GeoInfo{
 		ISOCode:   apiResp.Country,
 		Name:      apiResp.Country,
+		Operator:  normalizeGeoOperator(apiResp.Org),
 		Latitude:  latitude,
 		Longitude: longitude,
 	}, nil

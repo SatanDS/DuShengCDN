@@ -403,6 +403,7 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 			LoggedAt:      timeFromUnix(item.LoggedAtUnix, reportedAt),
 			RemoteAddr:    strings.TrimSpace(item.RemoteAddr),
 			Region:        "",
+			Operator:      "",
 			Host:          strings.TrimSpace(item.Host),
 			Path:          truncateForDatabase(strings.TrimSpace(item.Path), nodeAccessLogPathMaxLength),
 			StatusCode:    item.StatusCode,
@@ -412,7 +413,9 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 			UpstreamBytes: nonNegativeInt64(item.UpstreamBytes),
 		}
 		if resolver != nil {
-			record.Region = resolver.Resolve(record.RemoteAddr)
+			geoResult := resolver.ResolveInfo(record.RemoteAddr)
+			record.Region = geoResult.region
+			record.Operator = truncateForDatabase(geoResult.operator, 255)
 		}
 		exists, err := model.NodeAccessLogExists(tx, record)
 		if err != nil {

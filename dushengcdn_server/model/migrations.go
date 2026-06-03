@@ -127,6 +127,9 @@ func applyCurrentSchema(db *gorm.DB, backend string) error {
 	if err := migrateObservabilityLegacyColumns(db); err != nil {
 		return err
 	}
+	if err := ensureNodeAccessLogOperatorColumn(db); err != nil {
+		return err
+	}
 	return ensureDNSRollupObservabilityIndex(db)
 }
 
@@ -1538,6 +1541,7 @@ func validateDatabaseSchemaV17(db *gorm.DB, backend string) error {
 		"request_bytes",
 		"response_bytes",
 		"upstream_bytes",
+		"operator",
 	}
 	for _, table := range observabilityShardTables("node_access_logs") {
 		for _, column := range accessLogColumns {
@@ -1614,6 +1618,21 @@ func ensureDNSRollupObservabilityIndex(db *gorm.DB) error {
 	}
 	if err := db.Migrator().CreateIndex(&DNSQueryRollup{}, indexName); err != nil {
 		return fmt.Errorf("create dns query rollup observability index failed: %w", err)
+	}
+	return nil
+}
+
+func ensureNodeAccessLogOperatorColumn(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	for _, table := range observabilityShardTables("node_access_logs") {
+		if !db.Migrator().HasTable(table) || db.Migrator().HasColumn(table, "operator") {
+			continue
+		}
+		if err := sessionIgnoringSharding(db).Table(table).Migrator().AddColumn(&NodeAccessLog{}, "Operator"); err != nil {
+			return fmt.Errorf("add node access log operator column to %s failed: %w", table, err)
+		}
 	}
 	return nil
 }
@@ -1816,8 +1835,10 @@ func validateDatabaseSchemaV27(db *gorm.DB, backend string) error {
 		return err
 	}
 	for _, table := range observabilityShardTables("node_access_logs") {
-		if !db.Migrator().HasColumn(table, "reason") {
-			return fmt.Errorf("column %s.reason is missing", table)
+		for _, column := range []string{"reason", "operator"} {
+			if !db.Migrator().HasColumn(table, column) {
+				return fmt.Errorf("column %s.%s is missing", table, column)
+			}
 		}
 	}
 	_ = backend

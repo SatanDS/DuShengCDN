@@ -13,7 +13,12 @@ var accessLogGeoProviderFactory = func() (geoip.GeoIPService, error) {
 
 type accessLogRegionResolver struct {
 	provider geoip.GeoIPService
-	cache    map[string]string
+	cache    map[string]accessLogGeoResult
+}
+
+type accessLogGeoResult struct {
+	region   string
+	operator string
 }
 
 func newAccessLogRegionResolver() (*accessLogRegionResolver, error) {
@@ -23,7 +28,7 @@ func newAccessLogRegionResolver() (*accessLogRegionResolver, error) {
 	}
 	return &accessLogRegionResolver{
 		provider: provider,
-		cache:    make(map[string]string),
+		cache:    make(map[string]accessLogGeoResult),
 	}, nil
 }
 
@@ -37,12 +42,16 @@ func (r *accessLogRegionResolver) Close() {
 }
 
 func (r *accessLogRegionResolver) Resolve(rawIP string) string {
+	return r.ResolveInfo(rawIP).region
+}
+
+func (r *accessLogRegionResolver) ResolveInfo(rawIP string) accessLogGeoResult {
 	if r == nil || r.provider == nil {
-		return ""
+		return accessLogGeoResult{}
 	}
 	normalizedIP := normalizeAccessLogIP(rawIP)
 	if normalizedIP == "" {
-		return ""
+		return accessLogGeoResult{}
 	}
 	if cached, ok := r.cache[normalizedIP]; ok {
 		return cached
@@ -50,16 +59,20 @@ func (r *accessLogRegionResolver) Resolve(rawIP string) string {
 
 	info, err := r.provider.GetGeoInfo(net.ParseIP(normalizedIP))
 	if err != nil || info == nil {
-		r.cache[normalizedIP] = ""
-		return ""
+		r.cache[normalizedIP] = accessLogGeoResult{}
+		return accessLogGeoResult{}
 	}
 
 	region := strings.TrimSpace(info.Name)
 	if region == "" {
 		region = strings.TrimSpace(info.ISOCode)
 	}
-	r.cache[normalizedIP] = region
-	return region
+	result := accessLogGeoResult{
+		region:   region,
+		operator: strings.TrimSpace(info.Operator),
+	}
+	r.cache[normalizedIP] = result
+	return result
 }
 
 func normalizeAccessLogIP(raw string) string {

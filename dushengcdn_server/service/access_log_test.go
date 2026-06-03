@@ -157,6 +157,7 @@ func TestListFoldedAccessLogsAndIPSummaries(t *testing.T) {
 			LoggedAt:   now.Add(-4 * time.Minute),
 			RemoteAddr: "203.0.113.1",
 			Region:     "Hong Kong",
+			Operator:   "ExampleNet HK",
 			Host:       "alpha.example.com",
 			Path:       "/first",
 			StatusCode: 200,
@@ -166,6 +167,7 @@ func TestListFoldedAccessLogsAndIPSummaries(t *testing.T) {
 			LoggedAt:   now.Add(-3 * time.Minute),
 			RemoteAddr: "203.0.113.1",
 			Region:     "Hong Kong",
+			Operator:   "ExampleNet HK",
 			Host:       "alpha.example.com",
 			Path:       "/second",
 			StatusCode: 502,
@@ -219,6 +221,9 @@ func TestListFoldedAccessLogsAndIPSummaries(t *testing.T) {
 	}
 	if ipSummaries.Items[0].Region != "Hong Kong" {
 		t.Fatalf("expected top ip summary to include latest region, got %+v", ipSummaries.Items[0])
+	}
+	if ipSummaries.Items[0].Operator != "ExampleNet HK" {
+		t.Fatalf("expected top ip summary to include latest operator, got %+v", ipSummaries.Items[0])
 	}
 }
 

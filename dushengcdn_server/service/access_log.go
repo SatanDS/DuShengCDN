@@ -315,6 +315,7 @@ func ListAccessLogIPSummaries(input AccessLogIPSummaryQuery) (*AccessLogIPSummar
 		views = append(views, AccessLogIPSummaryView{
 			RemoteAddr:     item.RemoteAddr,
 			Region:         item.Region,
+			Operator:       item.Operator,
 			TotalRequests:  item.TotalRequests,
 			RecentRequests: item.RecentRequests,
 			LastSeenAt:     time.Unix(item.LastSeenEpoch, 0).UTC(),

@@ -29,6 +29,7 @@ const (
 type GeoInfo struct {
 	ISOCode   string
 	Name      string
+	Operator  string
 	Latitude  *float64
 	Longitude *float64
 }

@@ -15,6 +15,7 @@ type NodeAccessLog struct {
 	LoggedAt      time.Time `json:"logged_at" gorm:"index;index:,composite:node_logged_at,priority:2"`
 	RemoteAddr    string    `json:"remote_addr" gorm:"index;size:128"`
 	Region        string    `json:"region" gorm:"size:128"`
+	Operator      string    `json:"operator" gorm:"size:255"`
 	Host          string    `json:"host" gorm:"index;size:255"`
 	Path          string    `json:"path" gorm:"size:2048"`
 	StatusCode    int       `json:"status_code" gorm:"index"`
@@ -79,6 +80,7 @@ type NodeAccessLogIPSummaryQuery struct {
 type NodeAccessLogIPSummaryRow struct {
 	RemoteAddr     string `json:"remote_addr"`
 	Region         string `json:"region"`
+	Operator       string `json:"operator"`
 	TotalRequests  int64  `json:"total_requests"`
 	RecentRequests int64  `json:"recent_requests"`
 	LastSeenEpoch  int64  `json:"last_seen_epoch"`
@@ -462,6 +464,7 @@ func buildNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, recentSi
 		recentRequests int64
 		lastSeenAt     time.Time
 		region         string
+		operator       string
 	}
 	accumulators := make(map[string]*accumulator)
 	for _, item := range logs {
@@ -486,8 +489,16 @@ func buildNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, recentSi
 			if region := strings.TrimSpace(item.Region); region != "" {
 				acc.region = region
 			}
+			if operator := strings.TrimSpace(item.Operator); operator != "" {
+				acc.operator = operator
+			}
 		} else if acc.region == "" {
 			acc.region = strings.TrimSpace(item.Region)
+			if acc.operator == "" {
+				acc.operator = strings.TrimSpace(item.Operator)
+			}
+		} else if acc.operator == "" {
+			acc.operator = strings.TrimSpace(item.Operator)
 		}
 	}
 	rows := make([]*NodeAccessLogIPSummaryRow, 0, len(accumulators))
@@ -495,6 +506,7 @@ func buildNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, recentSi
 		rows = append(rows, &NodeAccessLogIPSummaryRow{
 			RemoteAddr:     remoteAddr,
 			Region:         acc.region,
+			Operator:       acc.operator,
 			TotalRequests:  acc.totalRequests,
 			RecentRequests: acc.recentRequests,
 			LastSeenEpoch:  acc.lastSeenAt.Unix(),
