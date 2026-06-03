@@ -1,8 +1,13 @@
+'use client';
+
 import Image from 'next/image';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 
 import { MapleMark } from '@/components/brand/maple-mark';
+import { cn } from '@/lib/utils/cn';
 
 interface PublicShellProps {
   children: ReactNode;
@@ -93,6 +98,14 @@ function MapleBackdrop() {
 }
 
 export function PublicShell({ children }: PublicShellProps) {
+  const pathname = usePathname();
+  const isLoginPage = pathname === '/login';
+  const [isLoginOpen, setIsLoginOpen] = useState(!isLoginPage);
+
+  useEffect(() => {
+    setIsLoginOpen(!isLoginPage);
+  }, [isLoginPage]);
+
   return (
     <div className="public-portal relative min-h-screen overflow-hidden px-4 py-6 text-[var(--foreground-primary)] sm:px-6 lg:px-8">
       <MapleBackdrop />
@@ -115,6 +128,21 @@ export function PublicShell({ children }: PublicShellProps) {
           </span>
         </Link>
 
+        {isLoginPage ? (
+          <button
+            type="button"
+            className={cn(
+              'public-login-trigger pointer-events-auto absolute right-5 top-5 sm:right-7 sm:top-7',
+              isLoginOpen && 'is-hidden',
+            )}
+            onClick={() => setIsLoginOpen(true)}
+            aria-expanded={isLoginOpen}
+            aria-controls="public-login-panel"
+          >
+            登录
+          </button>
+        ) : null}
+
         <Link
           href="/about"
           className="pointer-events-auto absolute bottom-5 right-5 rounded-full border border-[var(--border-default)] bg-[var(--surface-panel)]/70 px-3 py-1.5 text-sm text-[var(--brand-primary)] shadow-[var(--shadow-soft)] backdrop-blur transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-panel)] sm:bottom-7 sm:right-7"
@@ -123,8 +151,22 @@ export function PublicShell({ children }: PublicShellProps) {
         </Link>
       </header>
 
-      <main className="relative z-10 mx-auto grid w-full max-w-6xl items-start gap-8 py-16 lg:min-h-screen lg:grid-cols-[1.06fr_0.94fr] lg:items-center lg:gap-10 lg:py-20">
-        <section className="flex flex-col items-center text-center lg:items-start lg:text-left">
+      <main
+        className={cn(
+          'relative z-10 mx-auto w-full max-w-6xl py-16 lg:min-h-screen lg:py-20',
+          isLoginPage
+            ? ['public-login-stage', isLoginOpen && 'is-open']
+            : 'grid items-start gap-8 lg:grid-cols-[1.06fr_0.94fr] lg:items-center lg:gap-10',
+        )}
+      >
+        <section
+          className={cn(
+            'flex flex-col items-center text-center',
+            isLoginPage
+              ? 'public-login-hero'
+              : 'lg:items-start lg:text-left',
+          )}
+        >
           <div className="public-hero-mark flex h-28 w-48 items-center justify-center sm:h-44 sm:w-72 lg:h-48 lg:w-80">
             <Image
               src="/satan-du-logo.png"
@@ -141,7 +183,15 @@ export function PublicShell({ children }: PublicShellProps) {
           <div className="brand-gradient-bar mt-6 h-1 w-32 rounded-full" />
         </section>
 
-        <section className="w-full max-w-xl justify-self-center lg:justify-self-end">
+        <section
+          id="public-login-panel"
+          className={cn(
+            isLoginPage
+              ? 'public-login-panel w-full max-w-xl'
+              : 'w-full max-w-xl justify-self-center lg:justify-self-end',
+          )}
+          aria-hidden={isLoginPage && !isLoginOpen ? true : undefined}
+        >
           {children}
         </section>
       </main>

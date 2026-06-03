@@ -300,6 +300,111 @@ button {
   filter: drop-shadow(0 22px 52px rgba(217, 0, 146, 0.2));
 }
 
+.public-login-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 5rem;
+  min-height: 2.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  color: rgba(248, 250, 252, 0.96);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035)),
+    rgba(13, 12, 31, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 18px 46px rgba(0, 0, 0, 0.2),
+    0 0 0 1px rgba(106, 140, 255, 0.08);
+  backdrop-filter: blur(34px) saturate(1.75);
+  -webkit-backdrop-filter: blur(34px) saturate(1.75);
+  transition:
+    opacity 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.44s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.public-login-trigger:hover {
+  border-color: rgba(255, 255, 255, 0.36);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.055)),
+    rgba(13, 12, 31, 0.2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.36),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+    0 22px 58px rgba(0, 0, 0, 0.22),
+    0 0 34px rgba(255, 79, 173, 0.1);
+}
+
+.public-login-trigger.is-hidden {
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(0, -10px, 0) scale(0.92);
+}
+
+.public-login-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  justify-items: center;
+  min-height: calc(100vh - 8rem);
+  transition:
+    max-width 0.9s cubic-bezier(0.16, 1, 0.3, 1),
+    gap 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.public-login-stage.is-open {
+  gap: 2rem;
+}
+
+.public-login-hero {
+  grid-area: 1 / 1;
+  max-width: min(42rem, 92vw);
+  transform: translate3d(0, 0, 0) scale(1);
+  transform-origin: center;
+  transition:
+    transform 0.95s cubic-bezier(0.16, 1, 0.3, 1),
+    max-width 0.95s cubic-bezier(0.16, 1, 0.3, 1),
+    filter 0.95s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, filter;
+}
+
+.public-login-panel {
+  grid-area: 1 / 1;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  filter: blur(20px) saturate(1.25);
+  transform: translate3d(18vw, -2vh, 0) scale(0.52);
+  transform-origin: calc(100% - 3rem) 2rem;
+  transition:
+    opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.9s cubic-bezier(0.16, 1, 0.3, 1),
+    filter 0.72s cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 0.9s;
+  will-change: opacity, transform, filter;
+}
+
+.public-login-stage.is-open .public-login-panel {
+  pointer-events: auto;
+  visibility: visible;
+  opacity: 1;
+  filter: blur(0) saturate(1);
+  transform: translate3d(0, 0, 0) scale(1);
+  transition-delay: 0s;
+}
+
+.public-login-stage.is-open .auth-liquid-card {
+  animation: auth-liquid-unfurl 0.92s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.public-login-stage.is-open .public-login-hero {
+  filter: saturate(1.04);
+}
+
 .auth-liquid-card {
   position: relative;
   overflow: hidden;
@@ -494,10 +599,60 @@ button {
   }
 }
 
+@keyframes auth-liquid-unfurl {
+  0% {
+    clip-path: inset(0 0 82% 72% round 999px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.34),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+      0 16px 54px rgba(0, 0, 0, 0.18),
+      0 0 42px rgba(255, 79, 173, 0.12);
+  }
+  58% {
+    clip-path: inset(-2% -1% -2% -1% round 1.7rem);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.34),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+      0 30px 82px rgba(0, 0, 0, 0.28),
+      0 0 54px rgba(255, 79, 173, 0.16);
+  }
+  100% {
+    clip-path: inset(0 0 0 0 round var(--radius-xl));
+  }
+}
+
+@media (min-width: 1024px) {
+  .public-login-stage.is-open {
+    grid-template-columns: minmax(0, 1.06fr) minmax(26rem, 0.94fr);
+    align-items: center;
+    justify-items: stretch;
+    min-height: calc(100vh - 10rem);
+  }
+
+  .public-login-stage.is-open .public-login-hero {
+    grid-area: 1 / 1;
+    align-items: flex-start;
+    text-align: left;
+    max-width: 40rem;
+    transform: translate3d(-2rem, 0, 0) scale(0.98);
+  }
+
+  .public-login-stage.is-open .public-login-panel {
+    grid-area: 1 / 2;
+    justify-self: end;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .public-portal::before,
   .public-portal::after,
-  .public-maple-leaf {
+  .public-maple-leaf,
+  .public-portal,
+  .public-login-trigger,
+  .public-login-stage,
+  .public-login-hero,
+  .public-login-panel {
     animation: none;
+    transition: none;
   }
 }
