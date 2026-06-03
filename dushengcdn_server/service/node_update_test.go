@@ -1679,6 +1679,8 @@ func TestGetDashboardOverview(t *testing.T) {
 		RequestCount:       600,
 		ErrorCount:         6,
 		UniqueVisitorCount: 120,
+		CacheHitCount:      48,
+		CacheMissCount:     12,
 		StatusCodesJSON:    `{"200":570,"502":6,"304":24}`,
 		TopDomainsJSON:     `{"app.example.com":420,"api.example.com":180}`,
 	}).Insert(); err != nil {
@@ -1691,6 +1693,8 @@ func TestGetDashboardOverview(t *testing.T) {
 		RequestCount:       300,
 		ErrorCount:         30,
 		UniqueVisitorCount: 80,
+		CacheHitCount:      24,
+		CacheMissCount:     6,
 		StatusCodesJSON:    `{"200":240,"500":18,"502":12,"404":30}`,
 		TopDomainsJSON:     `{"app.example.com":140,"edge.example.com":160}`,
 	}).Insert(); err != nil {
@@ -1755,6 +1759,9 @@ func TestGetDashboardOverview(t *testing.T) {
 	}
 	if view.Traffic.RequestCount != 900 || view.Traffic.ErrorCount != 36 {
 		t.Fatalf("unexpected dashboard traffic: %+v", view.Traffic)
+	}
+	if view.Traffic.CacheHitCount != 72 || view.Traffic.CacheClassifiedCount != 90 || view.Traffic.CacheHitRatePercent != 80 {
+		t.Fatalf("unexpected dashboard cache traffic: %+v", view.Traffic)
 	}
 	if view.Capacity.HighCPUNodes != 1 || view.Capacity.HighMemoryNodes != 1 {
 		t.Fatalf("unexpected dashboard capacity summary: %+v", view.Capacity)

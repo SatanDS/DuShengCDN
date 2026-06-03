@@ -196,7 +196,17 @@ function normalizeDashboardOverview(
   }
 
   const summary = (overview.summary ?? {}) as DashboardSummary;
-  const traffic = (overview.traffic ?? {}) as DashboardTraffic;
+  const rawTraffic = (overview.traffic ?? {}) as Partial<DashboardTraffic>;
+  const traffic: DashboardTraffic = {
+    request_count: Number(rawTraffic.request_count ?? 0),
+    unique_visitors: Number(rawTraffic.unique_visitors ?? 0),
+    error_count: Number(rawTraffic.error_count ?? 0),
+    estimated_qps: Number(rawTraffic.estimated_qps ?? 0),
+    reported_nodes: Number(rawTraffic.reported_nodes ?? 0),
+    cache_hit_count: Number(rawTraffic.cache_hit_count ?? 0),
+    cache_classified_count: Number(rawTraffic.cache_classified_count ?? 0),
+    cache_hit_rate_percent: Number(rawTraffic.cache_hit_rate_percent ?? 0),
+  };
   const capacity = (overview.capacity ?? {}) as DashboardCapacity;
 
   return {

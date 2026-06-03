@@ -263,6 +263,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const [agentUpdateFeedback, setAgentUpdateFeedback] =
     useState<FeedbackState | null>(null);
   const [serverUrl, setServerUrl] = useState('');
+  const [isServerUrlOverridden, setIsServerUrlOverridden] = useState(false);
   const [healthEventFilter, setHealthEventFilter] =
     useState<HealthEventFilter>('all');
   const [activeTab, setActiveTab] = useState<NodeDetailTab>('dashboard');
@@ -326,7 +327,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   });
 
   useEffect(() => {
-    if (serverUrl) {
+    if (isServerUrlOverridden) {
       return;
     }
     const optionMap = optionsToMap(optionsQuery.data);
@@ -338,7 +339,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     if (typeof window !== 'undefined') {
       setServerUrl(window.location.origin);
     }
-  }, [optionsQuery.data, serverUrl]);
+  }, [isServerUrlOverridden, optionsQuery.data]);
 
   const saveMutation = useMutation({
     mutationFn: async (payload: Parameters<typeof updateNode>[1]) =>
@@ -1678,11 +1679,14 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
                   <ResourceField
                     label="面板访问地址"
-                    hint="默认使用当前面板来源地址，可按需改为外部访问地址。"
+                    hint="默认跟随系统设置里的面板访问地址；临时修改这里只影响下方复制命令。"
                   >
                     <ResourceInput
                       value={serverUrl}
-                      onChange={(event) => setServerUrl(event.target.value)}
+                      onChange={(event) => {
+                        setIsServerUrlOverridden(true);
+                        setServerUrl(event.target.value);
+                      }}
                     />
                   </ResourceField>
 

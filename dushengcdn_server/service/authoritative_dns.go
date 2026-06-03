@@ -3260,7 +3260,7 @@ func evaluateDNSWorkerProbeState(now time.Time, checkedAt *time.Time, results []
 		return dnsWorkerProbeState{
 			status:     dnsWorkerProbeStale,
 			ageSeconds: ageSeconds,
-			message:    "最近一次公网探测已过期",
+			message:    fmt.Sprintf("最近一次公网 UDP/TCP 53 探测超过 %s 未刷新", formatDNSWorkerNodeProbeMaxAge(defaultDNSWorkerProbeMaxAge)),
 		}
 	}
 	reachableByNetwork := map[string]bool{}
@@ -3914,19 +3914,18 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 		if workerID == "" || nodeID == "" {
 			continue
 		}
+		node := nodesByID[nodeID]
+		if !shouldExpectAgentDNSProbeForNode(node) {
+			continue
+		}
 		stats := statsByWorker[workerID]
 		if stats == nil {
 			stats = &dnsWorkerNodeProbeStats{probes: []DNSWorkerNodeProbeView{}}
 			statsByWorker[workerID] = stats
 		}
-		nodeName := nodeID
-		poolName := ""
-		nodeStatus := NodeStatusOffline
-		if node := nodesByID[nodeID]; node != nil {
-			nodeName = displayNodeName(node)
-			poolName = strings.TrimSpace(node.PoolName)
-			nodeStatus = computeNodeStatus(node)
-		}
+		nodeName := displayNodeName(node)
+		poolName := strings.TrimSpace(node.PoolName)
+		nodeStatus := computeNodeStatus(node)
 		probeState := evaluateDNSWorkerNodeProbeState(now, probe)
 		checkedAt := normalizeDNSWorkerCheckedAt(&probe.CheckedAt, now, probe.UpdatedAt, probe.CreatedAt)
 		existingIndex := findDNSWorkerNodeProbeViewIndex(stats.probes, nodeID)
@@ -3975,6 +3974,25 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 		})
 	}
 	return statsByWorker
+}
+
+func currentSchedulableDNSProbeNodeIDs() map[string]struct{} {
+	nodes, err := model.ListNodes()
+	if err != nil {
+		return map[string]struct{}{}
+	}
+	result := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		if !shouldExpectAgentDNSProbeForNode(node) {
+			continue
+		}
+		nodeID := strings.TrimSpace(node.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		result[nodeID] = struct{}{}
+	}
+	return result
 }
 
 func recomputeDNSWorkerNodeProbeStats(stats *dnsWorkerNodeProbeStats) {
@@ -4086,6 +4104,7 @@ func buildDNSWorkerNodeProbeStatsByNode(now time.Time) map[string]*dnsWorkerNode
 	if err != nil || len(probes) == 0 {
 		return map[string]*dnsWorkerNodeProbeStats{}
 	}
+	currentNodeIDs := currentSchedulableDNSProbeNodeIDs()
 	statsByNode := make(map[string]*dnsWorkerNodeProbeStats)
 	for _, probe := range probes {
 		if probe == nil {
@@ -4093,6 +4112,9 @@ func buildDNSWorkerNodeProbeStatsByNode(now time.Time) map[string]*dnsWorkerNode
 		}
 		nodeID := strings.TrimSpace(probe.NodeID)
 		if nodeID == "" {
+			continue
+		}
+		if _, ok := currentNodeIDs[nodeID]; !ok {
 			continue
 		}
 		stats := statsByNode[nodeID]

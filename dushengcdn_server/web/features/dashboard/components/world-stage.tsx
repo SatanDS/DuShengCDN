@@ -190,7 +190,9 @@ export function WorldStage({
       ? formatPercent(metering.cache_hit_rate_percent)
       : '暂无数据';
   const cacheHitHint = metering
-    ? `命中 ${metering.cache_hit_count.toLocaleString('zh-CN')} / 可分类 ${metering.cache_classified_count.toLocaleString('zh-CN')}`
+    ? metering.cache_classified_count > 0
+      ? `命中 ${metering.cache_hit_count.toLocaleString('zh-CN')} / 可分类 ${metering.cache_classified_count.toLocaleString('zh-CN')}`
+      : '还没有收到 HIT/MISS 等缓存状态；需要命中缓存规则的请求上报后才会统计'
     : '等待观测计量上报';
 
   return (

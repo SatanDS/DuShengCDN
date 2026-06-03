@@ -137,8 +137,15 @@ describe('NodesPage', () => {
 
     const hongkongRow = (await screen.findByText('hongkong')).closest('tr');
     expect(hongkongRow).not.toBeNull();
-    expect(within(hongkongRow as HTMLElement).getByText('HK Edge 1')).toBeInTheDocument();
-    expect(within(hongkongRow as HTMLElement).getByText('HK Edge 2')).toBeInTheDocument();
+    expect(
+      within(hongkongRow as HTMLElement).getAllByText('HK Edge 1').length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(hongkongRow as HTMLElement).getAllByText('HK Edge 2').length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(hongkongRow as HTMLElement).getAllByText('1.0.0 / 1.29.2').length,
+    ).toBeGreaterThanOrEqual(2);
     expect(
       within(hongkongRow as HTMLElement).getByRole('link', { name: '详情' }),
     ).toHaveAttribute('href', '/node?pool=hongkong');

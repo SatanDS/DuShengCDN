@@ -181,13 +181,28 @@ export function DashboardOverview() {
     );
   }
 
+  const dashboardCacheMetering = {
+    bandwidth_p95_bps: 0,
+    cache_hit_count: overview.traffic.cache_hit_count,
+    cache_classified_count: overview.traffic.cache_classified_count,
+    cache_hit_rate_percent: overview.traffic.cache_hit_rate_percent,
+  };
+  const cacheMetering =
+    meteringQuery.data && meteringQuery.data.cache_classified_count > 0
+      ? meteringQuery.data
+      : dashboardCacheMetering;
+  const worldStageMetering = {
+    ...cacheMetering,
+    bandwidth_p95_bps: meteringQuery.data?.bandwidth_p95_bps ?? 0,
+  };
+
   return (
     <div className="space-y-6">
       <WorldStage
         summary={overview.summary}
         traffic={overview.traffic}
         capacity={overview.capacity}
-        metering={meteringQuery.data ?? null}
+        metering={worldStageMetering}
         nodes={overview.nodes}
         sourceCountries={overview.distributions.source_countries}
       />

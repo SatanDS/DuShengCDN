@@ -516,6 +516,20 @@ function formatSourceScopeBaseLabel(value: string) {
   return text;
 }
 
+function formatDNSRCodeLabel(item: DNSObservabilityCounterItem) {
+  const code = (item.key || item.label || '').trim().toUpperCase();
+  const labels: Record<string, string> = {
+    NOERROR: '正常响应',
+    NODATA: '无记录数据',
+    NXDOMAIN: '域名不存在',
+    SERVFAIL: '响应端故障',
+    REFUSED: '拒绝查询',
+    FORMERR: '请求格式错误',
+    NOTIMP: '暂不支持',
+  };
+  return labels[code] || item.label || item.key || '未命名';
+}
+
 function isProbeSchedulingGateMessage(message: string) {
   return message.includes('Agent 探测未达到调度门槛');
 }
@@ -565,7 +579,7 @@ function getProbeStatusLabel(status: DNSWorkerProbeStatus) {
     case 'failed':
       return '探测失败';
     case 'stale':
-      return '探测过期';
+      return '公网探测过期';
     case 'unknown':
       return '未探测';
   }
@@ -593,7 +607,7 @@ function getNodeDNSProbeStatusLabel(status: DNSWorkerProbeStatus) {
     case 'failed':
       return '探测失败';
     case 'stale':
-      return '探测过期';
+      return '多节点探测过期';
     case 'unknown':
       return '未探测';
   }
@@ -3257,6 +3271,7 @@ function DNSObservabilityPanel({
           title="返回码"
           items={summary.rcode_breakdown}
           total={summary.total_queries}
+          formatLabel={formatDNSRCodeLabel}
           color="#2563eb"
         />
         <CounterChart
@@ -3435,7 +3450,7 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           value={formatLatencyMs(worker.max_latency_ms)}
         />
         <InfoTile
-          label="配置年龄"
+          label="解析配置年龄"
           value={formatDurationSeconds(worker.snapshot_age_seconds)}
         />
         <InfoTile

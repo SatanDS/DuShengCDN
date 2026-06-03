@@ -12,6 +12,9 @@ export interface DashboardTraffic {
   error_count: number;
   estimated_qps: number;
   reported_nodes: number;
+  cache_hit_count: number;
+  cache_classified_count: number;
+  cache_hit_rate_percent: number;
 }
 
 export interface DashboardCapacity {

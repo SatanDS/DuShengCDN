@@ -269,6 +269,39 @@ function NodeStack({ nodes }: { nodes: NodeItem[] }) {
   );
 }
 
+function NodeVersionStack({ nodes }: { nodes: NodeItem[] }) {
+  const versions = nodes
+    .map((node) => ({
+      id: node.id,
+      name: node.name || node.node_id,
+      label: `${node.agent_version || 'unknown'} / ${
+        node.nginx_version || 'unknown'
+      }`,
+    }));
+
+  if (versions.length === 0) {
+    return <span>unknown</span>;
+  }
+
+  return (
+    <div className="scrollbar-none max-h-28 min-w-[180px] space-y-2 overflow-y-auto pr-1">
+      {versions.map((item) => (
+        <div
+          key={`${item.id}-${item.label}`}
+          className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-2.5 py-2"
+        >
+          <p className="truncate text-xs font-medium text-[var(--foreground-primary)]">
+            {item.name}
+          </p>
+          <p className="mt-1 break-all text-xs text-[var(--foreground-secondary)]">
+            {item.label}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PoolCreateModal({
   isOpen,
   isSubmitting,
@@ -905,19 +938,7 @@ export function NodesPage() {
                               </div>
                             </td>
                             <td className="px-3 py-4 text-[var(--foreground-secondary)]">
-                              {pool.nodes
-                                .map(
-                                  (node) =>
-                                    `${node.agent_version || 'unknown'} / ${
-                                      node.nginx_version || 'unknown'
-                                    }`,
-                                )
-                                .filter(
-                                  (value, index, list) =>
-                                    list.indexOf(value) === index,
-                                )
-                                .slice(0, 3)
-                                .join('、') || 'unknown'}
+                              <NodeVersionStack nodes={pool.nodes} />
                             </td>
                             <td className="px-3 py-4">
                               <StatusBadge

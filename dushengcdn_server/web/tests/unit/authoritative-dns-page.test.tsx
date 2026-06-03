@@ -1109,6 +1109,8 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('ns1.example.net').length).toBeGreaterThan(0);
     expect(await screen.findByText('www.example.com')).toBeInTheDocument();
     expect(await screen.findByText('DNS 查询观测')).toBeInTheDocument();
+    expect(screen.getByText('正常响应')).toBeInTheDocument();
+    expect(screen.getByText('响应端故障')).toBeInTheDocument();
     expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
     expect(screen.getByText('edge-site')).toBeInTheDocument();
     expect(screen.getByText('来源作用域')).toBeInTheDocument();
