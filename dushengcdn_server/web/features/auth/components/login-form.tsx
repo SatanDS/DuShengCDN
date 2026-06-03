@@ -96,7 +96,7 @@ export function LoginForm() {
 
   return (
     <PublicAuthGuard>
-      <AppCard title={TEXT.title}>
+      <AppCard title={TEXT.title} className="auth-liquid-card">
         <form className="space-y-4" onSubmit={handleSubmit}>
           <AuthFormField label={TEXT.username}>
             <AuthInput

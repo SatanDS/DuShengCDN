@@ -3,7 +3,6 @@ import Link from 'next/link';
 import type { CSSProperties, ReactNode } from 'react';
 
 import { MapleMark } from '@/components/brand/maple-mark';
-import { publicEnv } from '@/lib/env/public-env';
 
 interface PublicShellProps {
   children: ReactNode;
@@ -117,9 +116,6 @@ export function PublicShell({ children }: PublicShellProps) {
         </Link>
 
         <div className="flex items-center gap-3 text-sm text-[var(--foreground-secondary)]">
-          <span className="rounded-full border border-[var(--border-default)] bg-[var(--surface-panel)]/70 px-3 py-1.5 backdrop-blur">
-            {publicEnv.appVersion}
-          </span>
           <Link
             href="/about"
             className="rounded-full border border-[var(--border-default)] bg-[var(--surface-panel)]/70 px-3 py-1.5 text-[var(--brand-primary)] transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-panel)]"

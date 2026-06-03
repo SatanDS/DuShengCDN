@@ -25,7 +25,7 @@ export function AuthInput(props: InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className={cn(
-        'w-full rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--foreground-primary)] outline-none transition placeholder:text-[var(--foreground-muted)] focus:border-[var(--border-strong)] focus:ring-2 focus:ring-[var(--accent-soft)]',
+        'auth-liquid-input w-full rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--foreground-primary)] outline-none transition placeholder:text-[var(--foreground-muted)] focus:border-[var(--border-strong)] focus:ring-2 focus:ring-[var(--accent-soft)]',
         props.className,
       )}
     />
@@ -40,7 +40,7 @@ export function AuthButton({
     <button
       {...props}
       className={cn(
-        'inline-flex w-full items-center justify-center rounded-2xl bg-[var(--brand-primary)] px-4 py-3 text-sm font-medium text-[var(--foreground-inverse)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60',
+        'auth-liquid-button inline-flex w-full items-center justify-center rounded-2xl bg-[var(--brand-primary)] px-4 py-3 text-sm font-medium text-[var(--foreground-inverse)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60',
         className,
       )}
     />
