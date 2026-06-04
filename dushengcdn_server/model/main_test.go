@@ -987,7 +987,7 @@ func TestEnsureDatabaseSchemaUpToDateAddsAccessLogByteFields(t *testing.T) {
 	}
 
 	for _, table := range observabilityShardTables("node_access_logs") {
-		for _, column := range []string{"request_bytes", "response_bytes", "upstream_bytes", "reason", "operator"} {
+		for _, column := range []string{"request_bytes", "response_bytes", "upstream_bytes", "reason", "operator", "cache_status"} {
 			if !db.Migrator().HasColumn(table, column) {
 				t.Fatalf("expected column %s.%s to exist", table, column)
 			}

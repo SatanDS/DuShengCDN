@@ -20,6 +20,7 @@ export interface AccessLogItem {
   path: string;
   status_code: number;
   reason?: string;
+  cache_status?: string;
 }
 
 export interface AccessLogList {

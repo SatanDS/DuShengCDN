@@ -76,6 +76,7 @@ type AgentNodeAccessLog struct {
 	Path          string `json:"path"`
 	StatusCode    int    `json:"status_code"`
 	Reason        string `json:"reason,omitempty"`
+	CacheStatus   string `json:"cache_status,omitempty"`
 	RequestBytes  int64  `json:"request_bytes"`
 	ResponseBytes int64  `json:"response_bytes"`
 	UpstreamBytes int64  `json:"upstream_bytes"`
@@ -408,6 +409,7 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 			Path:          truncateForDatabase(strings.TrimSpace(item.Path), nodeAccessLogPathMaxLength),
 			StatusCode:    item.StatusCode,
 			Reason:        truncateForDatabase(strings.TrimSpace(item.Reason), 512),
+			CacheStatus:   normalizeAccessLogCacheStatus(item.CacheStatus),
 			RequestBytes:  nonNegativeInt64(item.RequestBytes),
 			ResponseBytes: nonNegativeInt64(item.ResponseBytes),
 			UpstreamBytes: nonNegativeInt64(item.UpstreamBytes),

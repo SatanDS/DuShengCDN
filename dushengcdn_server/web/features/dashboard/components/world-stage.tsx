@@ -192,7 +192,7 @@ export function WorldStage({
   const cacheHitHint = metering
     ? metering.cache_classified_count > 0
       ? `命中 ${metering.cache_hit_count.toLocaleString('zh-CN')} / 可分类 ${metering.cache_classified_count.toLocaleString('zh-CN')}`
-      : '还没有收到 HIT/MISS 等缓存状态；需要命中缓存规则的请求上报后才会统计'
+      : '还没有收到缓存状态；需启用代理服务缓存、发布站点缓存策略，并产生命中规则的 GET 请求'
     : '等待观测计量上报';
 
   return (

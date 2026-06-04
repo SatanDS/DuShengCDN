@@ -390,6 +390,36 @@ func TestPersistNodeAccessLogsTruncatesLongPath(t *testing.T) {
 	}
 }
 
+func TestPersistNodeAccessLogsStoresCacheStatus(t *testing.T) {
+	setupServiceTestDB(t)
+
+	reportedAt := time.Now().UTC()
+	if err := persistNodeAccessLogs(model.DB, "node-cache-status", []AgentNodeAccessLog{
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "203.0.113.20",
+			Host:         "cache.example.com",
+			Path:         "/emby/Items/12039/Images/Primary",
+			StatusCode:   200,
+			CacheStatus:  "hit",
+		},
+	}, reportedAt); err != nil {
+		t.Fatalf("persistNodeAccessLogs failed: %v", err)
+	}
+
+	view, err := ListAccessLogs(AccessLogQuery{
+		NodeID:   "node-cache-status",
+		Page:     0,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogs failed: %v", err)
+	}
+	if len(view.Items) != 1 || view.Items[0].CacheStatus != "HIT" {
+		t.Fatalf("expected cache status in access log view, got %+v", view.Items)
+	}
+}
+
 func seedNodeAccessLogs(t *testing.T, logs []*model.NodeAccessLog) {
 	t.Helper()
 	for _, item := range logs {

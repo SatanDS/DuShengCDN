@@ -130,6 +130,9 @@ func applyCurrentSchema(db *gorm.DB, backend string) error {
 	if err := ensureNodeAccessLogOperatorColumn(db); err != nil {
 		return err
 	}
+	if err := ensureNodeAccessLogCacheStatusColumn(db); err != nil {
+		return err
+	}
 	return ensureDNSRollupObservabilityIndex(db)
 }
 
@@ -1637,6 +1640,21 @@ func ensureNodeAccessLogOperatorColumn(db *gorm.DB) error {
 	return nil
 }
 
+func ensureNodeAccessLogCacheStatusColumn(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	for _, table := range observabilityShardTables("node_access_logs") {
+		if !db.Migrator().HasTable(table) || db.Migrator().HasColumn(table, "cache_status") {
+			continue
+		}
+		if err := sessionIgnoringSharding(db).Table(table).Migrator().AddColumn(&NodeAccessLog{}, "CacheStatus"); err != nil {
+			return fmt.Errorf("add node access log cache_status column to %s failed: %w", table, err)
+		}
+	}
+	return nil
+}
+
 // migrateV19 adds authoritative DNS control-plane tables and source-scoped GSLB state.
 func migrateV19(db *gorm.DB, backend string) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
@@ -1867,6 +1885,24 @@ func validateDatabaseSchemaV28(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV29 adds per-request cache status to access logs for cache diagnostics.
+func migrateV29(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV29(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV28(db, backend); err != nil {
+		return err
+	}
+	for _, table := range observabilityShardTables("node_access_logs") {
+		if !db.Migrator().HasColumn(table, "cache_status") {
+			return fmt.Errorf("column %s.cache_status is missing", table)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1896,6 +1932,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 25, toVersion: 26, migrate: migrateV26, validate: validateDatabaseSchemaV26},
 		{fromVersion: 26, toVersion: 27, migrate: migrateV27, validate: validateDatabaseSchemaV27},
 		{fromVersion: 27, toVersion: 28, migrate: migrateV28, validate: validateDatabaseSchemaV28},
+		{fromVersion: 28, toVersion: 29, migrate: migrateV29, validate: validateDatabaseSchemaV29},
 	}
 }
 
@@ -1984,7 +2021,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV28(db, backend); err != nil {
+	if err := validateDatabaseSchemaV29(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

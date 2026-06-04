@@ -203,6 +203,7 @@ func (aggregate *trafficAggregate) consume(line []byte) {
 		Path:          normalizeAccessLogPath(record.Path),
 		StatusCode:    record.Status,
 		Reason:        normalizeAccessLogReason(record.Reason),
+		CacheStatus:   normalizeCacheStatus(record.CacheStatus),
 		RequestBytes:  nonNegativeInt64(record.RequestLength),
 		ResponseBytes: nonNegativeInt64(record.BytesSent),
 		UpstreamBytes: nonNegativeInt64(record.UpstreamBytes),
@@ -303,7 +304,7 @@ func (aggregate *trafficAggregate) report() *protocol.NodeTrafficReport {
 }
 
 func (aggregate *trafficAggregate) consumeCacheStatus(status string) {
-	switch strings.ToUpper(strings.TrimSpace(status)) {
+	switch normalizeCacheStatus(status) {
 	case "HIT":
 		aggregate.cacheHitCount++
 	case "MISS":
@@ -314,6 +315,16 @@ func (aggregate *trafficAggregate) consumeCacheStatus(status string) {
 		aggregate.cacheExpiredCount++
 	case "STALE", "UPDATING", "REVALIDATED":
 		aggregate.cacheStaleCount++
+	}
+}
+
+func normalizeCacheStatus(status string) string {
+	status = strings.ToUpper(strings.TrimSpace(status))
+	switch status {
+	case "HIT", "MISS", "BYPASS", "EXPIRED", "STALE", "UPDATING", "REVALIDATED":
+		return status
+	default:
+		return ""
 	}
 }
 

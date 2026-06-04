@@ -36,16 +36,17 @@ type AccessLogQuery struct {
 }
 
 type AccessLogView struct {
-	ID         uint      `json:"id"`
-	NodeID     string    `json:"node_id"`
-	NodeName   string    `json:"node_name"`
-	LoggedAt   time.Time `json:"logged_at"`
-	RemoteAddr string    `json:"remote_addr"`
-	Region     string    `json:"region"`
-	Host       string    `json:"host"`
-	Path       string    `json:"path"`
-	StatusCode int       `json:"status_code"`
-	Reason     string    `json:"reason"`
+	ID          uint      `json:"id"`
+	NodeID      string    `json:"node_id"`
+	NodeName    string    `json:"node_name"`
+	LoggedAt    time.Time `json:"logged_at"`
+	RemoteAddr  string    `json:"remote_addr"`
+	Region      string    `json:"region"`
+	Host        string    `json:"host"`
+	Path        string    `json:"path"`
+	StatusCode  int       `json:"status_code"`
+	Reason      string    `json:"reason"`
+	CacheStatus string    `json:"cache_status"`
 }
 
 type AccessLogList struct {
@@ -205,16 +206,17 @@ func ListAccessLogs(input AccessLogQuery) (*AccessLogList, error) {
 			continue
 		}
 		views = append(views, AccessLogView{
-			ID:         item.ID,
-			NodeID:     item.NodeID,
-			NodeName:   nodeNames[item.NodeID],
-			LoggedAt:   item.LoggedAt,
-			RemoteAddr: item.RemoteAddr,
-			Region:     item.Region,
-			Host:       item.Host,
-			Path:       item.Path,
-			StatusCode: item.StatusCode,
-			Reason:     item.Reason,
+			ID:          item.ID,
+			NodeID:      item.NodeID,
+			NodeName:    nodeNames[item.NodeID],
+			LoggedAt:    item.LoggedAt,
+			RemoteAddr:  item.RemoteAddr,
+			Region:      item.Region,
+			Host:        item.Host,
+			Path:        item.Path,
+			StatusCode:  item.StatusCode,
+			Reason:      item.Reason,
+			CacheStatus: item.CacheStatus,
 		})
 	}
 	return &AccessLogList{
@@ -623,6 +625,16 @@ func buildAccessLogURLKey(item *model.NodeAccessLog) string {
 		return host
 	}
 	return host + path
+}
+
+func normalizeAccessLogCacheStatus(status string) string {
+	status = strings.ToUpper(strings.TrimSpace(status))
+	switch status {
+	case "HIT", "MISS", "BYPASS", "EXPIRED", "STALE", "UPDATING", "REVALIDATED":
+		return status
+	default:
+		return ""
+	}
 }
 
 func formatStatusCode(statusCode int) string {

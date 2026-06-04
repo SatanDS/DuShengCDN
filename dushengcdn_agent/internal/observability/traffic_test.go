@@ -155,6 +155,15 @@ func TestBuildTrafficReportAggregatesCacheAndUpstreamFields(t *testing.T) {
 	if report.CacheHitCount != 1 || report.CacheMissCount != 1 || report.CacheStaleCount != 1 {
 		t.Fatalf("unexpected cache counters: %+v", report)
 	}
+	_, accessLogs, _ := BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
+	if len(accessLogs) != 0 {
+		t.Fatalf("expected no duplicate logs after offset advance, got %+v", accessLogs)
+	}
+	stateStore = state.NewStore(filepath.Join(tempDir, "state-readable.json"))
+	_, accessLogs, _ = BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
+	if len(accessLogs) != 3 || accessLogs[0].CacheStatus != "HIT" || accessLogs[1].CacheStatus != "MISS" || accessLogs[2].CacheStatus != "STALE" {
+		t.Fatalf("expected cache status in access logs, got %+v", accessLogs)
+	}
 	if report.UpstreamErrorCount != 2 {
 		t.Fatalf("expected two upstream 5xx statuses, got %d", report.UpstreamErrorCount)
 	}

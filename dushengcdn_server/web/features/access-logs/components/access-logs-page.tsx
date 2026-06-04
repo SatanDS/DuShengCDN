@@ -102,6 +102,47 @@ const wafReasonLabels: Record<string, string> = {
   custom_user_agent: '自定义 User-Agent',
 };
 
+const cacheStatusMeta: Record<
+  string,
+  { label: string; variant: 'success' | 'warning' | 'danger' | 'info'; hint: string }
+> = {
+  HIT: {
+    label: '命中',
+    variant: 'success',
+    hint: 'HIT：本次请求直接使用节点缓存。若命中率一直没有数据，说明还没有出现这类缓存状态。',
+  },
+  MISS: {
+    label: '未命中',
+    variant: 'warning',
+    hint: 'MISS：请求符合缓存链路但本地暂无对象，已回源获取。通常第二次相同缓存 Key 的 GET 请求才可能变成命中。',
+  },
+  BYPASS: {
+    label: '跳过',
+    variant: 'info',
+    hint: 'BYPASS：请求被跳过缓存，常见原因是非 GET、携带 Authorization、登录 Cookie、请求头要求 no-cache，或没有命中站点缓存规则。',
+  },
+  EXPIRED: {
+    label: '过期',
+    variant: 'warning',
+    hint: 'EXPIRED：缓存对象已过期，本次重新回源刷新。',
+  },
+  STALE: {
+    label: '旧缓存',
+    variant: 'success',
+    hint: 'STALE：源站异常或刷新期间返回旧缓存，属于缓存系统参与处理。',
+  },
+  UPDATING: {
+    label: '更新中',
+    variant: 'success',
+    hint: 'UPDATING：缓存正在刷新，本次复用旧缓存响应。',
+  },
+  REVALIDATED: {
+    label: '已复验',
+    variant: 'success',
+    hint: 'REVALIDATED：缓存重新验证后继续使用。',
+  },
+};
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
 }
@@ -182,6 +223,11 @@ function getStatusReason(item: { status_code: number; reason?: string }) {
     return '没有记录到具体防护规则。403 通常表示请求被认证、地区限制、恶意请求防护或源站权限策略拒绝；命中恶意请求防护时，这里会显示具体规则。';
   }
   return '';
+}
+
+function getCacheStatusMeta(status?: string) {
+  const normalized = status?.trim().toUpperCase() ?? '';
+  return cacheStatusMeta[normalized] ?? null;
 }
 
 export function AccessLogsPage() {
@@ -877,7 +923,11 @@ function MeteringTab({
                 ? formatPercent(data.cache_hit_rate_percent)
                 : '暂无数据'
             }
-            hint={`${formatCompactNumber(data.cache_hit_count)} 次 HIT / ${formatCompactNumber(data.cache_classified_count)} 次可分类缓存请求。`}
+            hint={
+              data.cache_classified_count > 0
+                ? `${formatCompactNumber(data.cache_hit_count)} 次 HIT / ${formatCompactNumber(data.cache_classified_count)} 次可分类缓存请求。`
+                : '需要启用代理服务缓存、站点缓存策略命中、发布配置，并产生 GET 请求；首个请求通常是 MISS，第二次才可能 HIT。'
+            }
           />
           <MetricPanel
             label="出站流量"
@@ -1218,6 +1268,7 @@ function DetailTab({
                   <th className="px-3 py-3 font-medium">访问域名</th>
                   <th className="px-3 py-3 font-medium">路径</th>
                   <th className="px-3 py-3 font-medium">节点</th>
+                  <th className="px-3 py-3 font-medium">缓存状态</th>
                   <th className="px-3 py-3 font-medium">状态码</th>
                 </tr>
               </thead>
@@ -1225,6 +1276,7 @@ function DetailTab({
                 {data.items.map((item) => {
                   const statusMeta = getStatusMeta(item.status_code);
                   const statusReason = getStatusReason(item);
+                  const cacheMeta = getCacheStatusMeta(item.cache_status);
                   return (
                     <tr key={item.id} className="align-top">
                       <td className="px-3 py-4 text-[var(--foreground-secondary)]">
@@ -1257,6 +1309,30 @@ function DetailTab({
                         <div className="mt-1 text-xs text-[var(--foreground-muted)]">
                           {item.node_id}
                         </div>
+                      </td>
+                      <td className="px-3 py-4">
+                        {cacheMeta ? (
+                          <div className="inline-flex items-center gap-1.5">
+                            <StatusBadge
+                              label={cacheMeta.label}
+                              variant={cacheMeta.variant}
+                            />
+                            <span
+                              aria-label="查看缓存状态说明"
+                              title={cacheMeta.hint}
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[11px] font-semibold text-[var(--foreground-secondary)]"
+                            >
+                              !
+                            </span>
+                          </div>
+                        ) : (
+                          <span
+                            title="这条日志没有缓存状态。常见原因是该站点未启用缓存、配置尚未发布到节点、请求没有进入缓存 location，或来自旧 Agent/旧配置生成的历史日志。"
+                            className="text-xs text-[var(--foreground-muted)]"
+                          >
+                            未记录
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-4">
                         <div className="inline-flex items-center gap-1.5">

@@ -178,6 +178,7 @@ type NodeAccessLog struct {
 	Path          string `json:"path"`
 	StatusCode    int    `json:"status_code"`
 	Reason        string `json:"reason,omitempty"`
+	CacheStatus   string `json:"cache_status,omitempty"`
 	RequestBytes  int64  `json:"request_bytes"`
 	ResponseBytes int64  `json:"response_bytes"`
 	UpstreamBytes int64  `json:"upstream_bytes"`
