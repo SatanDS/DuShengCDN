@@ -141,7 +141,13 @@ local function parse_ipv6(ip)
         bytes[#bytes + 1] = math.floor(word / 256)
         bytes[#bytes + 1] = word % 256
     end
-    return { family = 6, bits = 128, bytes = bytes }
+    local mapped_v4 = nil
+    if bytes[1] == 0 and bytes[2] == 0 and bytes[3] == 0 and bytes[4] == 0 and
+        bytes[5] == 0 and bytes[6] == 0 and bytes[7] == 0 and bytes[8] == 0 and
+        bytes[9] == 0 and bytes[10] == 0 and bytes[11] == 255 and bytes[12] == 255 then
+        mapped_v4 = { family = 4, bits = 32, bytes = { bytes[13], bytes[14], bytes[15], bytes[16] } }
+    end
+    return { family = 6, bits = 128, bytes = bytes, mapped_v4 = mapped_v4 }
 end
 
 local function parse_ip(ip)
@@ -202,6 +208,16 @@ function M.cidr_match(ip, cidr)
         return false
     end
     if parsed_ip.family ~= parsed_network.family then
+        if parsed_ip.mapped_v4 and parsed_network.family == 4 then
+            return bytes_match(parsed_ip.mapped_v4.bytes, parsed_network.bytes, prefix)
+        end
+        if parsed_network.mapped_v4 and parsed_ip.family == 4 then
+            local mapped_prefix = prefix - 96
+            if mapped_prefix < 0 then
+                mapped_prefix = 0
+            end
+            return bytes_match(parsed_ip.bytes, parsed_network.mapped_v4.bytes, mapped_prefix)
+        end
         return false
     end
     return bytes_match(parsed_ip.bytes, parsed_network.bytes, prefix)
@@ -222,7 +238,16 @@ end
 function M.ip_equal(left, right)
     local parsed_left = parse_ip(left)
     local parsed_right = parse_ip(right)
-    if not parsed_left or not parsed_right or parsed_left.family ~= parsed_right.family then
+    if not parsed_left or not parsed_right then
+        return false
+    end
+    if parsed_left.family ~= parsed_right.family then
+        if parsed_left.mapped_v4 and parsed_right.family == 4 then
+            return bytes_match(parsed_left.mapped_v4.bytes, parsed_right.bytes, 32)
+        end
+        if parsed_right.mapped_v4 and parsed_left.family == 4 then
+            return bytes_match(parsed_left.bytes, parsed_right.mapped_v4.bytes, 32)
+        end
         return false
     end
     for i = 1, #parsed_left.bytes do

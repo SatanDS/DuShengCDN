@@ -843,6 +843,11 @@ func TestProtectionLuaUsesSharedIPv4IPv6Matcher(t *testing.T) {
 		`local function parse_ipv6`,
 		`prefix > parsed.bits`,
 		`function M.match_cidrs`,
+		`mapped_v4`,
+		`bytes[11] == 255 and bytes[12] == 255`,
+		`parsed_ip.mapped_v4 and parsed_network.family == 4`,
+		`parsed_network.mapped_v4 and parsed_ip.family == 4`,
+		`prefix - 96`,
 		`bit.band`,
 	} {
 		if !strings.Contains(openRestyIPMatcherLua, expected) {
