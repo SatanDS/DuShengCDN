@@ -20,9 +20,10 @@ ENV GO111MODULE=on \
     GOOS=linux
 
 WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
 COPY --from=builder /build/build ./web/build
-RUN go mod download
 RUN go build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION'" -o dushengcdn
 
 FROM alpine

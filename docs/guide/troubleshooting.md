@@ -62,6 +62,8 @@ ls -ld "$(dirname /path/to/dushengcdn.db)"
 
 Docker Compose 部署时如只想改宿主机访问端口，可把 `ports` 改成 `3010:3000`；容器内应用仍监听 `3000`。
 
+如果 `docker compose up -d --build` 用了很久，先区分“构建慢”和“启动慢”：Docker 输出中 `load build context` 表示把源码目录打包发给 Docker，`pnpm build` / `go build` 表示编译，最后 `Container ... Started` 才是容器启动。`load build context` 如果显示数 GB，通常是仓库目录里混入了 `postgres-data`、`dushengcdn-data`、`backups`、`upload`、`logs` 等运行数据；这些目录应被 `.dockerignore` 排除。清理或移动这些目录后再构建，升级时间会明显下降，生产数据仍通过 Compose volume 挂载，不需要打进镜像。
+
 如果旧源码部署原先没有 `.env`，升级后第一次运行 `scripts/install-server.sh` 创建了随机数据库密码，旧 `postgres-data` 中的 PostgreSQL 密码不会自动变化。可先按旧默认密码恢复连接：
 
 ```bash

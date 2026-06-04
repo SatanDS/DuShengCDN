@@ -2,9 +2,31 @@ web/node_modules
 web/.next
 web/build
 web/out
+web/tsconfig.tsbuildinfo
+web/playwright-report
+web/test-results
 
+postgres-data
+postgres-data/**
+dushengcdn-data
+dushengcdn-data/**
+backups
+backups/**
 upload
+upload/**
 logs
+logs/**
+tmp
+tmp/**
+
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+.env
+.env.local
+.env.*.local
 
 .git
 .github

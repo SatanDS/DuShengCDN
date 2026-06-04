@@ -59,6 +59,8 @@ Common causes:
 | SQLite cannot create file | Check that the `SQLITE_PATH` directory exists and is writable |
 | Port is already in use | Change `PORT` or `--port`, or stop the process using the port |
 
+If `docker compose up -d --build` takes a long time, separate build time from startup time: `load build context` is Docker packaging the source directory, `pnpm build` / `go build` are compilation steps, and `Container ... Started` is the actual container startup. When `load build context` is several GB, runtime data such as `postgres-data`, `dushengcdn-data`, `backups`, `upload`, or `logs` has likely entered the build context; these paths should be excluded by `.dockerignore`. Clean up or move those directories and rebuild. Production data is still mounted through Compose volumes and does not need to be copied into the image.
+
 If an old source deployment did not have `.env`, and the first installer run generated a new random database password while `postgres-data` already existed, restore the old default value first:
 
 ```bash
