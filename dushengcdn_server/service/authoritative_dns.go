@@ -354,6 +354,46 @@ type DNSObservabilityTrendPointView struct {
 	ServfailQueries   int64     `json:"servfail_queries"`
 }
 
+type dnsObservabilityWindow struct {
+	Hours       int
+	WindowStart time.Time
+	WindowEnd   time.Time
+	QueryStart  time.Time
+}
+
+type dnsObservabilityStringCountRow struct {
+	Key   string
+	Count int64
+}
+
+type dnsObservabilityUintCountRow struct {
+	Key   uint
+	Count int64
+}
+
+type dnsObservabilityTrendRow struct {
+	Bucket  string
+	RCode   string
+	Dynamic int
+	Count   int64
+}
+
+type dnsObservabilityTargetSummaryRow struct {
+	TargetSummary string
+}
+
+type dnsObservabilityLastRollupRow struct {
+	LastRollupAt string
+}
+
+type dnsWorkerHealthRollupRow struct {
+	WorkerID        string
+	QueryCount      int64
+	ErrorQueries    int64
+	TotalDurationMs int64
+	MaxDurationMs   int64
+}
+
 type DNSWorkerSnapshotConsistencyView struct {
 	Status                string                         `json:"status"`
 	CheckedAt             time.Time                      `json:"checked_at"`
@@ -895,63 +935,63 @@ func ListAuthoritativeDNSGSLBSchedulingStates() (*DNSGSLBSchedulingStatesView, e
 }
 
 func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput) (*DNSObservabilitySummaryView, error) {
-	hours := input.Hours
-	if hours <= 0 {
-		hours = 24
-	}
-	if hours > 168 {
-		hours = 168
-	}
-	windowEnd := time.Now().UTC()
-	windowStart := windowEnd.Add(-time.Duration(hours) * time.Hour)
-	var rollups []model.DNSQueryRollup
-	queryStart := windowStart.Add(-time.Duration(defaultDNSMaxRollupWindowMinutes) * time.Minute)
-	query := model.DB.Where("window_start >= ? AND window_start <= ?", queryStart, windowEnd)
-	if input.ZoneID > 0 {
-		query = query.Where("zone_id = ?", input.ZoneID)
-	}
-	if strings.TrimSpace(input.WorkerID) != "" {
-		query = query.Where("worker_id = ?", strings.TrimSpace(input.WorkerID))
-	}
-	if err := query.Order("window_start asc").Find(&rollups).Error; err != nil {
-		return nil, err
-	}
+	window := normalizeDNSObservabilityWindow(input.Hours)
 
 	summary := &DNSObservabilitySummaryView{
-		WindowHours: hours,
-		WindowStart: windowStart,
-		WindowEnd:   windowEnd,
+		WindowHours: window.Hours,
+		WindowStart: window.WindowStart,
+		WindowEnd:   window.WindowEnd,
 	}
-	rcodeCounts := map[string]int64{}
-	qtypeCounts := map[string]int64{}
-	qnameCounts := map[string]int64{}
-	targetCounts := map[string]int64{}
-	workerCounts := map[string]int64{}
-	zoneCounts := map[uint]int64{}
-	routeCounts := map[uint]int64{}
-	sourceScopeCounts := map[string]int64{}
-	trendPoints := initDNSObservabilityTrendPoints(windowStart, windowEnd, hours)
-	windowRollups := make([]model.DNSQueryRollup, 0, len(rollups))
+	rcodeCounts, err := queryDNSObservabilityStringCounts(input, window, "rcode", 0)
+	if err != nil {
+		return nil, err
+	}
+	qtypeCounts, err := queryDNSObservabilityStringCounts(input, window, "qtype", 0)
+	if err != nil {
+		return nil, err
+	}
+	qnameCounts, err := queryDNSObservabilityStringCounts(input, window, "qname", 8)
+	if err != nil {
+		return nil, err
+	}
+	workerCounts, err := queryDNSObservabilityStringCounts(input, window, "worker_id", 8)
+	if err != nil {
+		return nil, err
+	}
+	sourceScopeCounts, err := queryDNSObservabilityStringCounts(input, window, "source_scope", 8)
+	if err != nil {
+		return nil, err
+	}
+	zoneCounts, err := queryDNSObservabilityUintCounts(input, window, "zone_id", 0, "zone_id > 0")
+	if err != nil {
+		return nil, err
+	}
+	routeCounts, err := queryDNSObservabilityUintCounts(input, window, "proxy_route_id", 0, "proxy_route_id > 0")
+	if err != nil {
+		return nil, err
+	}
+	targetCounts, err := queryDNSObservabilityTopTargets(input, window, 8)
+	if err != nil {
+		return nil, err
+	}
+	trendPoints, err := queryDNSObservabilityTrendPoints(input, window)
+	if err != nil {
+		return nil, err
+	}
+	workerHealthRollups, err := queryDNSWorkerHealthRollups(input, window)
+	if err != nil {
+		return nil, err
+	}
+	lastRollupAt, err := queryDNSObservabilityLastRollupAt(input, window)
+	if err != nil {
+		return nil, err
+	}
+	summary.LastRollupAt = lastRollupAt
+	summary.TrendPoints = trendPoints
 
-	for _, rollup := range rollups {
-		if rollup.QueryCount <= 0 {
-			continue
-		}
-		rollupStart := rollup.WindowStart.UTC()
-		rollupEnd := rollupStart.Add(time.Duration(normalizeDNSRollupWindow(rollup.WindowMinutes)) * time.Minute)
-		if !rollupEnd.After(windowStart) || rollupStart.After(windowEnd) {
-			continue
-		}
-		windowRollups = append(windowRollups, rollup)
-		count := rollup.QueryCount
-		rcode := normalizeDNSRCode(rollup.RCode)
-		qtype := normalizeAuthoritativeDNSRecordTypeOrDefault(rollup.QType)
-		qname := normalizeDNSRecordName(rollup.QName)
-		if qname == "" {
-			qname = "unknown"
-		}
+	for rcode, count := range rcodeCounts {
 		summary.TotalQueries += count
-		switch rcode {
+		switch normalizeDNSRCode(rcode) {
 		case "NOERROR":
 			summary.SuccessfulQueries += count
 		case "SERVFAIL", "REFUSED":
@@ -959,33 +999,12 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 		default:
 			summary.NegativeQueries += count
 		}
-		if rollup.ProxyRouteID > 0 {
-			summary.DynamicQueries += count
-			routeCounts[rollup.ProxyRouteID] += count
-		} else {
-			summary.StaticQueries += count
-		}
-		sourceScopeCounts[normalizeDNSSourceScope(rollup.SourceScope)] += count
-		applyDNSObservabilityTrendPoint(trendPoints, rollupEnd, rcode, rollup.ProxyRouteID > 0, count)
-		rcodeCounts[rcode] += count
-		qtypeCounts[qtype] += count
-		qnameCounts[qname] += count
-		if strings.TrimSpace(rollup.WorkerID) != "" {
-			workerCounts[strings.TrimSpace(rollup.WorkerID)] += count
-		}
-		if rollup.ZoneID > 0 {
-			zoneCounts[rollup.ZoneID] += count
-		}
-		for target, targetCount := range decodeDNSTargetSummary(rollup.TargetSummary) {
-			if targetCount <= 0 {
-				continue
-			}
-			targetCounts[target] += targetCount
-		}
-		if summary.LastRollupAt == nil || rollupEnd.After(*summary.LastRollupAt) {
-			lastRollupAt := rollupEnd
-			summary.LastRollupAt = &lastRollupAt
-		}
+	}
+	for _, count := range routeCounts {
+		summary.DynamicQueries += count
+	}
+	if summary.TotalQueries > summary.DynamicQueries {
+		summary.StaticQueries = summary.TotalQueries - summary.DynamicQueries
 	}
 
 	workerLabels, err := dnsWorkerLabels()
@@ -1009,10 +1028,9 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 	summary.ZoneBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(zoneCounts), zoneLabels, 8)
 	summary.RouteBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(routeCounts), routeLabels, 8)
 	summary.SourceScopeBreakdown = buildDNSObservabilityCounters(sourceScopeCounts, nil, 8)
-	summary.TrendPoints = trendPoints
 	checkedAt := time.Now().UTC()
 	summary.SnapshotConsistency = buildDNSWorkerSnapshotConsistency(checkedAt)
-	summary.WorkerHealth = buildDNSWorkerHealthSummary(checkedAt, windowRollups)
+	summary.WorkerHealth = buildDNSWorkerHealthSummary(checkedAt, workerHealthRollups)
 	return summary, nil
 }
 
@@ -3464,6 +3482,283 @@ func uintCountsToStringCounts(input map[uint]int64) map[string]int64 {
 	return result
 }
 
+func normalizeDNSObservabilityWindow(hours int) dnsObservabilityWindow {
+	if hours <= 0 {
+		hours = 24
+	}
+	if hours > 168 {
+		hours = 168
+	}
+	windowEnd := time.Now().UTC()
+	windowStart := windowEnd.Add(-time.Duration(hours) * time.Hour)
+	return dnsObservabilityWindow{
+		Hours:       hours,
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
+		QueryStart:  windowStart.Add(-time.Duration(defaultDNSMaxRollupWindowMinutes) * time.Minute),
+	}
+}
+
+func dnsObservabilityBaseQuery(input DNSObservabilitySummaryInput, window dnsObservabilityWindow) *gorm.DB {
+	query := model.DB.Model(&model.DNSQueryRollup{}).
+		Where("query_count > 0").
+		Where("window_start >= ? AND window_start <= ?", window.QueryStart, window.WindowEnd)
+	endExpression, endArgs := dnsRollupEndAfterWindowStartCondition(window.WindowStart)
+	query = query.Where(endExpression, endArgs...)
+	if input.ZoneID > 0 {
+		query = query.Where("zone_id = ?", input.ZoneID)
+	}
+	if workerID := strings.TrimSpace(input.WorkerID); workerID != "" {
+		query = query.Where("worker_id = ?", workerID)
+	}
+	return query
+}
+
+func dnsRollupEndAfterWindowStartCondition(windowStart time.Time) (string, []any) {
+	normalizedWindow := "CASE WHEN window_minutes <= 0 THEN 1 WHEN window_minutes > ? THEN ? ELSE window_minutes END"
+	switch model.DB.Dialector.Name() {
+	case "postgres":
+		return "window_start + ((" + normalizedWindow + ") * INTERVAL '1 minute') > ?", []any{defaultDNSMaxRollupWindowMinutes, defaultDNSMaxRollupWindowMinutes, windowStart}
+	default:
+		return "datetime(window_start, '+' || (" + normalizedWindow + ") || ' minutes') > datetime(?)", []any{defaultDNSMaxRollupWindowMinutes, defaultDNSMaxRollupWindowMinutes, windowStart}
+	}
+}
+
+func dnsRollupEndSelectExpression() string {
+	normalizedWindow := "CASE WHEN window_minutes <= 0 THEN 1 WHEN window_minutes > " + strconv.Itoa(defaultDNSMaxRollupWindowMinutes) + " THEN " + strconv.Itoa(defaultDNSMaxRollupWindowMinutes) + " ELSE window_minutes END"
+	switch model.DB.Dialector.Name() {
+	case "postgres":
+		return "window_start + ((" + normalizedWindow + ") * INTERVAL '1 minute')"
+	default:
+		return "datetime(window_start, '+' || (" + normalizedWindow + ") || ' minutes')"
+	}
+}
+
+func dnsRollupEndHourExpression() string {
+	endExpression := dnsRollupEndSelectExpression()
+	switch model.DB.Dialector.Name() {
+	case "postgres":
+		return "to_char(date_trunc('hour', " + endExpression + "), 'YYYY-MM-DD HH24:MI:SS')"
+	default:
+		return "strftime('%Y-%m-%d %H:00:00', " + endExpression + ")"
+	}
+}
+
+func dnsRollupEndMaxSelectExpression() string {
+	endExpression := dnsRollupEndSelectExpression()
+	switch model.DB.Dialector.Name() {
+	case "postgres":
+		return "to_char(MAX(" + endExpression + "), 'YYYY-MM-DD HH24:MI:SS')"
+	default:
+		return "MAX(" + endExpression + ")"
+	}
+}
+
+func queryDNSObservabilityStringCounts(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, field string, limit int) (map[string]int64, error) {
+	expression := dnsObservabilityStringCountExpression(field)
+	if expression == "" {
+		return map[string]int64{}, nil
+	}
+	var rows []dnsObservabilityStringCountRow
+	query := dnsObservabilityBaseQuery(input, window).
+		Select(expression + " AS key, SUM(query_count) AS count").
+		Group("key").
+		Order("count DESC").
+		Order("key ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		key := normalizeDNSObservabilityStringCountKey(field, row.Key)
+		if key == "" || row.Count <= 0 {
+			continue
+		}
+		result[key] += row.Count
+	}
+	return result, nil
+}
+
+func dnsObservabilityStringCountExpression(field string) string {
+	switch field {
+	case "rcode":
+		return "COALESCE(NULLIF(TRIM(r_code), ''), 'NOERROR')"
+	case "qtype":
+		return "COALESCE(NULLIF(TRIM(q_type), ''), 'A')"
+	case "qname":
+		return "COALESCE(NULLIF(TRIM(q_name), ''), 'unknown')"
+	case "worker_id":
+		return "COALESCE(NULLIF(TRIM(worker_id), ''), '')"
+	case "source_scope":
+		return "COALESCE(NULLIF(TRIM(source_scope), ''), '" + defaultGSLBScopeKey + "')"
+	default:
+		return ""
+	}
+}
+
+func normalizeDNSObservabilityStringCountKey(field string, value string) string {
+	value = strings.TrimSpace(value)
+	switch field {
+	case "rcode":
+		return normalizeDNSRCode(value)
+	case "qtype":
+		return normalizeAuthoritativeDNSRecordTypeOrDefault(value)
+	case "qname":
+		if normalized := normalizeDNSRecordName(value); normalized != "" {
+			return normalized
+		}
+		return "unknown"
+	case "worker_id":
+		return value
+	case "source_scope":
+		return normalizeDNSSourceScope(value)
+	default:
+		return value
+	}
+}
+
+func queryDNSObservabilityUintCounts(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, field string, limit int, nonZeroClause string) (map[uint]int64, error) {
+	if field != "zone_id" && field != "proxy_route_id" {
+		return map[uint]int64{}, nil
+	}
+	var rows []dnsObservabilityUintCountRow
+	query := dnsObservabilityBaseQuery(input, window).
+		Select(field + " AS key, SUM(query_count) AS count").
+		Where(nonZeroClause).
+		Group(field).
+		Order("count DESC").
+		Order(field + " ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[uint]int64, len(rows))
+	for _, row := range rows {
+		if row.Key == 0 || row.Count <= 0 {
+			continue
+		}
+		result[row.Key] += row.Count
+	}
+	return result, nil
+}
+
+func queryDNSObservabilityTopTargets(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, limit int) (map[string]int64, error) {
+	var rows []dnsObservabilityTargetSummaryRow
+	if err := dnsObservabilityBaseQuery(input, window).
+		Select("target_summary").
+		Where("target_summary IS NOT NULL AND TRIM(target_summary) <> '' AND TRIM(target_summary) <> '{}'").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	for _, row := range rows {
+		for target, targetCount := range decodeDNSTargetSummary(row.TargetSummary) {
+			if targetCount <= 0 {
+				continue
+			}
+			counts[target] += targetCount
+		}
+	}
+	return limitDNSObservabilityCounterMap(counts, limit), nil
+}
+
+func limitDNSObservabilityCounterMap(counts map[string]int64, limit int) map[string]int64 {
+	if limit <= 0 || len(counts) <= limit {
+		return counts
+	}
+	items := buildDNSObservabilityCounters(counts, nil, limit)
+	limited := make(map[string]int64, len(items))
+	for _, item := range items {
+		limited[item.Key] = item.Count
+	}
+	return limited
+}
+
+func queryDNSObservabilityTrendPoints(input DNSObservabilitySummaryInput, window dnsObservabilityWindow) ([]DNSObservabilityTrendPointView, error) {
+	trendPoints := initDNSObservabilityTrendPoints(window.WindowStart, window.WindowEnd, window.Hours)
+	bucketExpression := dnsRollupEndHourExpression()
+	rcodeExpression := "COALESCE(NULLIF(TRIM(r_code), ''), 'NOERROR')"
+	dynamicExpression := "CASE WHEN proxy_route_id > 0 THEN 1 ELSE 0 END"
+	var rows []dnsObservabilityTrendRow
+	if err := dnsObservabilityBaseQuery(input, window).
+		Select(bucketExpression + " AS bucket, " + rcodeExpression + " AS r_code, " + dynamicExpression + " AS dynamic, SUM(query_count) AS count").
+		Group(bucketExpression).
+		Group(rcodeExpression).
+		Group(dynamicExpression).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.Count <= 0 {
+			continue
+		}
+		bucket, ok := parseDNSObservabilityTime(row.Bucket)
+		if !ok {
+			continue
+		}
+		applyDNSObservabilityTrendPoint(trendPoints, bucket, normalizeDNSRCode(row.RCode), row.Dynamic > 0, row.Count)
+	}
+	return trendPoints, nil
+}
+
+func queryDNSWorkerHealthRollups(input DNSObservabilitySummaryInput, window dnsObservabilityWindow) ([]dnsWorkerHealthRollupRow, error) {
+	var rows []dnsWorkerHealthRollupRow
+	if err := dnsObservabilityBaseQuery(input, window).
+		Select("worker_id, SUM(query_count) AS query_count, SUM(CASE WHEN r_code IN ('SERVFAIL', 'REFUSED') THEN query_count ELSE 0 END) AS error_queries, SUM(total_duration_ms) AS total_duration_ms, MAX(max_duration_ms) AS max_duration_ms").
+		Where("TRIM(worker_id) <> ''").
+		Group("worker_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func queryDNSObservabilityLastRollupAt(input DNSObservabilitySummaryInput, window dnsObservabilityWindow) (*time.Time, error) {
+	var rows []dnsObservabilityLastRollupRow
+	if err := dnsObservabilityBaseQuery(input, window).
+		Select(dnsRollupEndMaxSelectExpression() + " AS last_rollup_at").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	value, ok := parseDNSObservabilityTime(rows[0].LastRollupAt)
+	if !ok {
+		return nil, nil
+	}
+	return &value, nil
+}
+
+func parseDNSObservabilityTime(raw string) (time.Time, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
 func buildDNSObservabilityCounters(counts map[string]int64, labels map[string]string, limit int) []DNSObservabilityCounterView {
 	items := make([]DNSObservabilityCounterView, 0, len(counts))
 	for key, count := range counts {
@@ -3677,7 +3972,7 @@ type dnsWorkerProbeTargetNode struct {
 	Status   string
 }
 
-func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) DNSWorkerHealthSummaryView {
+func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupRow) DNSWorkerHealthSummaryView {
 	snapshotMaxAge := authoritativeDNSSnapshotMaxAge()
 	workers, err := model.ListDNSWorkers()
 	view := DNSWorkerHealthSummaryView{
@@ -3718,13 +4013,17 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []model.DNSQueryRollup) 
 			statsByWorker[workerID] = stats
 		}
 		count := rollup.QueryCount
-		stats.queryCount += count
-		totalQueries += count
-		rcode := normalizeDNSRCode(rollup.RCode)
-		if rcode == "SERVFAIL" || rcode == "REFUSED" {
-			stats.errorQueries += count
-			totalErrors += count
+		errorCount := rollup.ErrorQueries
+		if errorCount < 0 {
+			errorCount = 0
 		}
+		if errorCount > count {
+			errorCount = count
+		}
+		stats.queryCount += count
+		stats.errorQueries += errorCount
+		totalQueries += count
+		totalErrors += errorCount
 		durationMs, rollupMaxDurationMs := normalizeDNSRollupDurations(rollup.TotalDurationMs, rollup.MaxDurationMs)
 		stats.totalDurationMs += durationMs
 		totalDurationMs += durationMs
