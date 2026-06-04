@@ -236,6 +236,16 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | `--dns-worker-source-ref` | DNS Worker 无 Release 资产时源码构建使用的分支、标签或 commit | `main` |
 | `--dns-worker-no-geoip-download` | 不自动下载 Country MMDB | `false` |
 
+## 安装脚本源码构建变量
+
+Agent 与 DNS Worker 安装脚本都会优先下载 GitHub Release 资产；没有匹配资产时才回退源码构建。源码构建会优先复用当前 `PATH` 或 `/usr/local/go/bin/go` 中的 Go；需要自动安装 Go 时支持以下变量：
+
+| 变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `DUSHENGCDN_GO_VERSION` | 源码构建兜底时自动安装的 Go 版本 | `1.25.0` |
+| `DUSHENGCDN_GO_DOWNLOAD_BASE_URLS` | Go 归档下载源列表，空格分隔；脚本会依次拼接 `goVERSION.linux-ARCH.tar.gz` 并重试 | `https://go.dev/dl https://dl.google.com/go https://golang.google.cn/dl` |
+| `DUSHENGCDN_GO_DOWNLOAD_URL` | Go 归档完整下载地址；设置后会优先尝试该地址 | 空 |
+
 ## Agent 环境变量
 
 | 环境变量 | 作用 | 默认值 |

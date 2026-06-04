@@ -240,7 +240,15 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --token YOUR_DNS_WORKER_TOKEN
 ```
 
-脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，让国家代码节点池匹配开箱可用；下载失败不会阻断安装，Worker 会继续按来源 CIDR 或 `global` 作用域运行。
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。源码构建会优先复用当前 `PATH` 或 `/usr/local/go/bin/go` 里的 Go；确实需要自动安装 Go 时，会按 `go.dev`、`dl.google.com`、`golang.google.cn` 多源重试。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，让国家代码节点池匹配开箱可用；下载失败不会阻断安装，Worker 会继续按来源 CIDR 或 `global` 作用域运行。
+
+如果安装时遇到 `curl: (56) ... unexpected eof while reading` 这类 Go 下载中断，可直接重跑安装命令；也可先指定下载源再执行：
+
+```bash
+export DUSHENGCDN_GO_DOWNLOAD_BASE_URLS="https://golang.google.cn/dl https://dl.google.com/go https://go.dev/dl"
+# 或者指定完整归档地址：
+# export DUSHENGCDN_GO_DOWNLOAD_URL="https://go.dev/dl/go1.25.0.linux-amd64.tar.gz"
+```
 
 如果 Server 面板和 DNS Worker 部署在同一台机器，`--server-url` 可以使用容器或宿主机可访问的面板地址；`--listen` 建议显式写公网地址，例如 `--listen 203.0.113.10:53`，避免只想对公网提供本地自建解析时和本机回环 DNS 服务混淆。
 安装后可在 Worker 主机运行 `bash scripts/diagnose-dns-worker.sh --public-ip PUBLIC_IP --zone example.com`，一次性检查 systemd 服务、安装目录、环境文件、监听端口、快照、GeoIP、日志和 UDP/TCP SOA/NS 查询结果。
@@ -355,7 +363,10 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 | `--install-dir` | 安装目录，默认 `/opt/dushengcdn-agent` |
 | `--openresty-path` | OpenResty 二进制路径，未传时自动查找 `openresty` |
 | `--repo` | 下载 Agent 的 GitHub 仓库，默认 `SatanDS/DuShengCDN` |
+| `--source-ref` | 无 Release 资产时源码构建使用的分支、标签或 commit，默认 `main` |
 | `--no-service` | 不创建 systemd 服务 |
+
+Agent 安装脚本同样会优先下载 GitHub Release 里的二进制；没有匹配资产时才回退源码构建。源码构建会优先复用本机已有 Go；自动安装 Go 时会多源重试。网络环境对 `go.dev` 不稳定时，可在执行安装命令前设置 `DUSHENGCDN_GO_DOWNLOAD_BASE_URLS` 或完整归档地址 `DUSHENGCDN_GO_DOWNLOAD_URL`。
 
 确认状态：
 

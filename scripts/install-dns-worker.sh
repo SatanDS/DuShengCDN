@@ -302,18 +302,47 @@ ensure_curl() {
 }
 
 install_go_linux() {
-  local go_version="1.25.0"
-  local archive="/tmp/go${go_version}.linux-${ARCH}.tar.gz"
+  local go_version="${DUSHENGCDN_GO_VERSION:-1.25.0}"
+  local archive
+  archive="$(mktemp "/tmp/go${go_version}.linux-${ARCH}.XXXXXX.tar.gz")"
+  local default_bases="https://go.dev/dl https://dl.google.com/go https://golang.google.cn/dl"
+  local urls=()
+  local base url attempt
 
-  log "Installing Go ${go_version} via go.dev..."
-  curl -fsSL -o "$archive" "https://go.dev/dl/go${go_version}.linux-${ARCH}.tar.gz"
-  run_as_root rm -rf /usr/local/go
-  run_as_root tar -C /usr/local -xzf "$archive"
+  if [[ -n "${DUSHENGCDN_GO_DOWNLOAD_URL:-}" ]]; then
+    urls+=("$DUSHENGCDN_GO_DOWNLOAD_URL")
+  fi
+  for base in ${DUSHENGCDN_GO_DOWNLOAD_BASE_URLS:-$default_bases}; do
+    urls+=("${base%/}/go${go_version}.linux-${ARCH}.tar.gz")
+  done
+
+  log "Installing Go ${go_version} for linux/${ARCH}..."
+  for url in "${urls[@]}"; do
+    for attempt in 1 2 3; do
+      rm -f "$archive"
+      log "Downloading Go from ${url} (attempt ${attempt}/3)..."
+      if curl --fail --location --show-error --silent --connect-timeout 20 --retry 2 --retry-delay 2 --retry-max-time 300 -o "$archive" "$url" && tar -tzf "$archive" >/dev/null 2>&1; then
+        run_as_root rm -rf /usr/local/go
+        run_as_root tar -C /usr/local -xzf "$archive"
+        rm -f "$archive"
+        return
+      fi
+      log "Go download failed or archive is invalid; trying again if possible."
+    done
+  done
+
   rm -f "$archive"
-  export PATH="/usr/local/go/bin:${PATH}"
+  die "failed to download Go ${go_version}. Install Go manually, set DUSHENGCDN_GO_DOWNLOAD_URL, or publish release assets."
+}
+
+use_local_go_if_available() {
+  if [[ -x /usr/local/go/bin/go ]]; then
+    export PATH="/usr/local/go/bin:${PATH}"
+  fi
 }
 
 ensure_go() {
+  use_local_go_if_available
   if command -v go >/dev/null 2>&1; then
     return
   fi
@@ -333,6 +362,7 @@ ensure_go() {
       ;;
     *) die "unsupported OS for automatic Go installation: $OS" ;;
   esac
+  use_local_go_if_available
   command -v go >/dev/null 2>&1 || die "Go installation completed, but go is still not available in PATH."
 }
 

@@ -266,7 +266,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --geoip-api-token YOUR_API_TOKEN
 ```
 
-安装脚本默认写入 `/opt/dushengcdn-agent`，创建 `dushengcdn-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Agent，避免节点版本显示为 `dev`。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
+安装脚本默认写入 `/opt/dushengcdn-agent`，创建 `dushengcdn-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Agent，避免节点版本显示为 `dev`。源码构建会优先复用本机已有 Go；确实需要下载 Go 时会按多个官方源重试，也可通过 `DUSHENGCDN_GO_DOWNLOAD_BASE_URLS` 或 `DUSHENGCDN_GO_DOWNLOAD_URL` 指定下载源。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
 
 依赖安装兼容性：
 
@@ -286,7 +286,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --token YOUR_DNS_WORKER_TOKEN
 ```
 
-脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，用于国家代码节点池匹配；可用 `--geoip-database` 指向已有文件、用 `--geoip-database-url` 指定自建下载源，或用 `--no-geoip-download` 关闭自动下载。
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。源码构建同样会复用本机已有 Go，并在自动下载 Go 时多源重试。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，用于国家代码节点池匹配；可用 `--geoip-database` 指向已有文件、用 `--geoip-database-url` 指定自建下载源，或用 `--no-geoip-download` 关闭自动下载。
 
 如果 Worker 和面板在同一台机器，`--server-url` 可以使用面板本机可访问地址，`--listen` 建议显式绑定公网地址，例如 `--listen 203.0.113.10:53`。安装后用 `systemctl status dushengcdn-dns-worker`、`ss -lntup | grep ':53'`、`ss -lnuap | grep ':53'` 和 `dig @PUBLIC_IP example.com SOA` 验证。
 
@@ -475,7 +475,7 @@ docker compose -f docker-compose.agent.yaml ps
 
 如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `3010:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token，迁移到 `dushengcdn_server/.env`；确认没有需要保留的源码修改后，再使用 `git fetch origin main && git reset --hard origin/main` 拉回新版。源码 Compose 构建时会通过 `DUSHENGCDN_VERSION` 把当前 Git 版本写入 Server 或 Agent；顶栏“版本”显示当前运行中的后端版本，节点列表显示 Agent 上报的版本。
 
-节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。DNS Worker 使用安装脚本部署时也可重复执行脚本升级，脚本会优先下载对应平台的 DNS Worker Release 资产并校验 `.sha256`。没有 Release 资产时，安装脚本会从源码构建并写入当前 Git 版本。
+节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。DNS Worker 使用安装脚本部署时也可重复执行脚本升级，脚本会优先下载对应平台的 DNS Worker Release 资产并校验 `.sha256`。没有 Release 资产时，安装脚本会从源码构建并写入当前 Git 版本；源码构建会复用本机 Go，自动下载 Go 时会多源重试。
 
 ### 7. 发布 Release 与 latest
 
