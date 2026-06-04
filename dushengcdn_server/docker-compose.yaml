@@ -29,6 +29,9 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-replace-with-random-string}
       SQLITE_PATH: ${SQLITE_PATH:-/data/dushengcdn.db}
       DSN: ${DSN:-postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable}
+      DATABASE_MAX_OPEN_CONNS: ${DATABASE_MAX_OPEN_CONNS:-30}
+      DATABASE_MAX_IDLE_CONNS: ${DATABASE_MAX_IDLE_CONNS:-10}
+      DATABASE_CONN_MAX_LIFETIME_SECONDS: ${DATABASE_CONN_MAX_LIFETIME_SECONDS:-1800}
       GIN_MODE: ${GIN_MODE:-release}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       AGENT_TOKEN: ${AGENT_TOKEN:-}

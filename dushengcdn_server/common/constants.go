@@ -19,6 +19,9 @@ var HomePageLink = ""
 var SessionSecret = uuid.New().String()
 var SQLitePath = "dushengcdn.db"
 var SQLDSN = ""
+var DatabaseMaxOpenConns = 30
+var DatabaseMaxIdleConns = 10
+var DatabaseConnMaxLifetime = 30 * time.Minute
 
 var OptionMap map[string]string
 var OptionMapRWMutex sync.RWMutex

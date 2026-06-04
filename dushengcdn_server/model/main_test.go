@@ -986,19 +986,59 @@ func TestEnsureDatabaseSchemaUpToDateAddsAccessLogByteFields(t *testing.T) {
 		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
 	}
 
-	for _, table := range observabilityShardTables("node_access_logs") {
-		for _, column := range []string{"request_bytes", "response_bytes", "upstream_bytes", "reason", "operator", "cache_status"} {
-			if !db.Migrator().HasColumn(table, column) {
-				t.Fatalf("expected column %s.%s to exist", table, column)
-			}
-		}
-	}
+	expectAccessLogCurrentColumns(t, db)
 	version, exists, err := loadDatabaseSchemaVersion(db)
 	if err != nil {
 		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
 	}
 	if !exists || version != currentDatabaseSchemaVersion {
 		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
+func TestEnsureDatabaseSchemaUpToDateRepairsCurrentAccessLogShardColumns(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "current-access-log-columns.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	rawDB := sessionIgnoringSharding(db)
+	targetTable := "node_access_logs_00"
+	if err := rawDB.Table(targetTable).Migrator().DropColumn(&NodeAccessLog{}, "Operator"); err != nil {
+		t.Fatalf("drop operator column: %v", err)
+	}
+	if rawDB.Migrator().HasColumn(targetTable, "operator") {
+		t.Fatalf("expected %s.operator to be missing before repair", targetTable)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	expectAccessLogCurrentColumns(t, db)
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
+func expectAccessLogCurrentColumns(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	for _, table := range observabilityShardTables("node_access_logs") {
+		for _, column := range []string{"request_bytes", "response_bytes", "upstream_bytes", "reason", "operator", "cache_status"} {
+			if !db.Migrator().HasColumn(table, column) {
+				t.Fatalf("expected column %s.%s to exist", table, column)
+			}
+		}
 	}
 }
 

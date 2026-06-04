@@ -130,20 +130,19 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 		return
 	}
 
+	accessLogs := append([]AgentNodeAccessLog(nil), payload.AccessLogs...)
+	bufferedRecords := append([]AgentBufferedObservabilityRecord(nil), payload.BufferedObservability...)
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := persistNodeSystemProfile(tx, nodeID, payload.Profile, reportedAt); err != nil {
 			return err
 		}
-		if err := persistBufferedObservability(tx, nodeID, payload.BufferedObservability, reportedAt); err != nil {
+		if err := persistBufferedObservability(tx, nodeID, bufferedRecords, reportedAt); err != nil {
 			return err
 		}
 		if err := persistNodeMetricSnapshot(tx, nodeID, payload.Snapshot, reportedAt); err != nil {
 			return err
 		}
 		if err := persistNodeTrafficReport(tx, nodeID, payload.TrafficReport, reportedAt); err != nil {
-			return err
-		}
-		if err := persistNodeAccessLogs(tx, nodeID, payload.AccessLogs, reportedAt); err != nil {
 			return err
 		}
 		if payload.HealthEvents != nil {
@@ -158,6 +157,7 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 	}); err != nil {
 		slog.Error("persist heartbeat observability failed", "node_id", nodeID, "error", err)
 	}
+	persistAccessLogsBestEffort(nodeID, accessLogs, bufferedRecords, reportedAt)
 }
 
 func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSProbeReport, reportedAt time.Time) error {
@@ -290,11 +290,33 @@ func persistBufferedObservability(tx *gorm.DB, nodeID string, records []AgentBuf
 		if err := persistNodeTrafficReport(tx, nodeID, record.TrafficReport, reportedAt); err != nil {
 			return err
 		}
-		if err := persistNodeAccessLogs(tx, nodeID, record.AccessLogs, reportedAt); err != nil {
-			return err
-		}
 	}
 	return nil
+}
+
+func persistAccessLogsBestEffort(nodeID string, logs []AgentNodeAccessLog, bufferedRecords []AgentBufferedObservabilityRecord, reportedAt time.Time) {
+	if len(logs) == 0 && len(bufferedRecords) == 0 {
+		return
+	}
+	if len(logs) > 0 {
+		if err := persistNodeAccessLogsWithTransaction(nodeID, logs, reportedAt); err != nil {
+			slog.Warn("persist access logs failed", "node_id", nodeID, "count", len(logs), "error", err)
+		}
+	}
+	for _, record := range bufferedRecords {
+		if len(record.AccessLogs) == 0 {
+			continue
+		}
+		if err := persistNodeAccessLogsWithTransaction(nodeID, record.AccessLogs, reportedAt); err != nil {
+			slog.Warn("persist buffered access logs failed", "node_id", nodeID, "count", len(record.AccessLogs), "error", err)
+		}
+	}
+}
+
+func persistNodeAccessLogsWithTransaction(nodeID string, logs []AgentNodeAccessLog, reportedAt time.Time) error {
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		return persistNodeAccessLogs(tx, nodeID, logs, reportedAt)
+	})
 }
 
 func persistNodeSystemProfile(tx *gorm.DB, nodeID string, profile *AgentNodeSystemProfile, reportedAt time.Time) error {

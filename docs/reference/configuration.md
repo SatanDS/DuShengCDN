@@ -60,6 +60,9 @@ go run . --port 3000 --log-dir ./logs
 | `SQLITE_PATH` | SQLite 数据库文件路径 | `dushengcdn.db` |
 | `DSN` | PostgreSQL DSN，设置后优先于 SQLite | 空 |
 | `SQL_DSN` | 兼容旧命名的 PostgreSQL DSN，优先级低于 `DSN` | 空 |
+| `DATABASE_MAX_OPEN_CONNS` | Server 到数据库的最大打开连接数 | `30` |
+| `DATABASE_MAX_IDLE_CONNS` | Server 到数据库的最大空闲连接数 | `10` |
+| `DATABASE_CONN_MAX_LIFETIME_SECONDS` | 数据库连接最长复用时间，秒 | `1800` |
 | `REDIS_CONN_STRING` | Redis 连接串 | 空 |
 | `UPLOAD_PATH` | 上传目录 | `upload` |
 | `AGENT_TOKEN` | 兼容旧部署的全局 Agent Token | 空 |
@@ -68,6 +71,7 @@ go run . --port 3000 --log-dir ./logs
 
 * `DSN` 与 `SQL_DSN` 同时存在时优先使用 `DSN`。
 * `DSN` 或 `SQL_DSN` 与 `SQLITE_PATH` 同时存在时优先使用 PostgreSQL。
+* `DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS` 和 `DATABASE_CONN_MAX_LIFETIME_SECONDS` 用于限制 Server 侧连接池。生产环境遇到 PostgreSQL `too many clients already` 时，优先检查是否有异常 SQL 或日志写入错误持续重试，再按数据库容量调整这些值。
 * 当目标 PostgreSQL 数据库为空且本地 `SQLITE_PATH` 文件存在时，Server 启动阶段会自动迁移 SQLite 数据，并在日志中输出按表迁移进度。
 * `SESSION_SECRET` 生产环境必须显式配置。
 * `REDIS_CONN_STRING` 未配置时，相关能力回退为进程内实现。

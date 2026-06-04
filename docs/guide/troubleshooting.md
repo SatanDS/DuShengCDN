@@ -56,6 +56,7 @@ ls -ld "$(dirname /path/to/dushengcdn.db)"
 | --- | --- |
 | 数据库连接失败 | 检查 `DSN` 中用户名、密码、主机、端口、库名和 `sslmode` |
 | `password authentication failed for user "dushengcdn"` | `POSTGRES_PASSWORD` / `DSN` 与已有 PostgreSQL 数据目录中的真实密码不一致。升级旧源码部署时，如果刚执行过 `bash scripts/install-server.sh` 后网页打不开，先把 `.env` 中的数据库密码和 DSN 改回旧值，再重启容器 |
+| `too many clients already` | PostgreSQL 连接数已被打满。先查 `dushengcdn` 日志里是否有持续重复的 SQL 错误，例如 `node_access_logs_xx` 缺少 `operator`、`reason`、`cache_status` 等访问日志字段；再重启 Server 让启动自检修复分表字段，并按需调整 `DATABASE_MAX_OPEN_CONNS` |
 | SQLite 无法创建文件 | 检查 `SQLITE_PATH` 所在目录是否存在且可写 |
 | 端口被占用 | 修改 `PORT` 或 `--port`，或停止占用端口的进程 |
 
@@ -108,6 +109,16 @@ pnpm build
 cd dushengcdn_server/web
 NEXT_DEV_BACKEND_URL=http://127.0.0.1:3000 pnpm dev
 ```
+
+如果页面突然变成反向代理的 `502 Bad Gateway`，但重启 Server 后恢复，优先查看重启前后的 Server 与 PostgreSQL 日志：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+docker compose logs --since "12h" dushengcdn | grep -Ei "node_access_logs|too many clients|ERROR|FATAL"
+docker compose logs --since "12h" postgres | grep -Ei "too many clients|ERROR|FATAL"
+```
+
+`node_access_logs_00` 到 `node_access_logs_09` 是观测访问日志分表。如果日志持续出现 `column "operator" of relation "node_access_logs_xx" does not exist` 这类字段缺失，再叠加 PostgreSQL `too many clients already`，说明访问日志写入错误把数据库连接耗尽，OpenResty 前面的 `502` 只是管理端上游不可用的表现。新版 Server 启动时会重新校验并补齐当前访问日志分表字段；访问日志写入失败也不会再阻断节点心跳、负载指标和 DNS 探测入库。
 
 ## 默认账号或 root 无法登录
 

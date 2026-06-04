@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -57,6 +59,15 @@ func init() {
 	if os.Getenv("DSN") != "" {
 		SQLDSN = os.Getenv("DSN")
 	}
+	if value := readPositiveIntEnv("DATABASE_MAX_OPEN_CONNS"); value > 0 {
+		DatabaseMaxOpenConns = value
+	}
+	if value := readPositiveIntEnv("DATABASE_MAX_IDLE_CONNS"); value > 0 {
+		DatabaseMaxIdleConns = value
+	}
+	if value := readPositiveIntEnv("DATABASE_CONN_MAX_LIFETIME_SECONDS"); value > 0 {
+		DatabaseConnMaxLifetime = time.Duration(value) * time.Second
+	}
 	if os.Getenv("UPLOAD_PATH") != "" {
 		UploadPath = os.Getenv("UPLOAD_PATH")
 	}
@@ -82,4 +93,17 @@ func init() {
 	if _, err := os.Stat(UploadPath); os.IsNotExist(err) {
 		_ = os.Mkdir(UploadPath, 0777)
 	}
+}
+
+func readPositiveIntEnv(key string) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		slog.Warn("ignore invalid positive integer environment value", "key", key, "value", raw)
+		return 0
+	}
+	return value
 }

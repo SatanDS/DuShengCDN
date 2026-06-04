@@ -127,10 +127,7 @@ func applyCurrentSchema(db *gorm.DB, backend string) error {
 	if err := migrateObservabilityLegacyColumns(db); err != nil {
 		return err
 	}
-	if err := ensureNodeAccessLogOperatorColumn(db); err != nil {
-		return err
-	}
-	if err := ensureNodeAccessLogCacheStatusColumn(db); err != nil {
+	if err := ensureNodeAccessLogCurrentColumns(db); err != nil {
 		return err
 	}
 	return ensureDNSRollupObservabilityIndex(db)
@@ -1625,34 +1622,47 @@ func ensureDNSRollupObservabilityIndex(db *gorm.DB) error {
 	return nil
 }
 
-func ensureNodeAccessLogOperatorColumn(db *gorm.DB) error {
+func ensureNodeAccessLogCurrentColumns(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	columns := []struct {
+		field  string
+		column string
+	}{
+		{field: "RequestBytes", column: "request_bytes"},
+		{field: "ResponseBytes", column: "response_bytes"},
+		{field: "UpstreamBytes", column: "upstream_bytes"},
+		{field: "Reason", column: "reason"},
+		{field: "Operator", column: "operator"},
+		{field: "CacheStatus", column: "cache_status"},
+	}
+	db = sessionIgnoringSharding(db)
 	if db == nil {
 		return nil
 	}
 	for _, table := range observabilityShardTables("node_access_logs") {
-		if !db.Migrator().HasTable(table) || db.Migrator().HasColumn(table, "operator") {
+		if !db.Migrator().HasTable(table) {
 			continue
 		}
-		if err := sessionIgnoringSharding(db).Table(table).Migrator().AddColumn(&NodeAccessLog{}, "Operator"); err != nil {
-			return fmt.Errorf("add node access log operator column to %s failed: %w", table, err)
+		for _, column := range columns {
+			if db.Migrator().HasColumn(table, column.column) {
+				continue
+			}
+			if err := db.Table(table).Migrator().AddColumn(&NodeAccessLog{}, column.field); err != nil {
+				return fmt.Errorf("add node access log %s column to %s failed: %w", column.column, table, err)
+			}
 		}
 	}
 	return nil
 }
 
+func ensureNodeAccessLogOperatorColumn(db *gorm.DB) error {
+	return ensureNodeAccessLogCurrentColumns(db)
+}
+
 func ensureNodeAccessLogCacheStatusColumn(db *gorm.DB) error {
-	if db == nil {
-		return nil
-	}
-	for _, table := range observabilityShardTables("node_access_logs") {
-		if !db.Migrator().HasTable(table) || db.Migrator().HasColumn(table, "cache_status") {
-			continue
-		}
-		if err := sessionIgnoringSharding(db).Table(table).Migrator().AddColumn(&NodeAccessLog{}, "CacheStatus"); err != nil {
-			return fmt.Errorf("add node access log cache_status column to %s failed: %w", table, err)
-		}
-	}
-	return nil
+	return ensureNodeAccessLogCurrentColumns(db)
 }
 
 // migrateV19 adds authoritative DNS control-plane tables and source-scoped GSLB state.
@@ -1977,7 +1987,10 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		return fmt.Errorf("database schema version %d is newer than application version %d", version, currentDatabaseSchemaVersion)
 	}
 	if version == currentDatabaseSchemaVersion {
-		return nil
+		if err := applyCurrentSchema(db, backend); err != nil {
+			return err
+		}
+		return validateDatabaseSchemaV29(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -1990,7 +2003,10 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		}
 		version = migration.toVersion
 	}
-	return nil
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return validateDatabaseSchemaV29(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {

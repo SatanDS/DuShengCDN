@@ -5,6 +5,7 @@ import (
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/sharding"
 )
 
 type roundTripFunc func(req *http.Request) (*http.Response, error)
@@ -956,6 +960,70 @@ func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	}
 	if metadata["source"] != "runtime" {
 		t.Fatalf("unexpected metadata json: %+v", metadata)
+	}
+}
+
+func TestHeartbeatNodeKeepsMetricsWhenAccessLogPersistenceFails(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:       "node-access-log-fail",
+		Name:         "observe-edge-fail",
+		IP:           "10.0.0.33",
+		AgentToken:   "token-access-log-fail",
+		AgentVersion: "v0.6.0",
+		NginxVersion: "1.29.2.5",
+		Status:       NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+
+	rawDB := model.DB.Session(&gorm.Session{}).Set(sharding.ShardingIgnoreStoreKey, true)
+	for index := 0; index < 10; index++ {
+		table := fmt.Sprintf("node_access_logs_%02d", index)
+		if err := rawDB.Table(table).Migrator().DropColumn(&model.NodeAccessLog{}, "Operator"); err != nil {
+			t.Fatalf("drop %s.operator column: %v", table, err)
+		}
+		if rawDB.Migrator().HasColumn(table, "operator") {
+			t.Fatalf("expected %s.operator to be missing before heartbeat", table)
+		}
+	}
+
+	reportedAt := time.Now().Add(-30 * time.Second)
+	_, err := HeartbeatNode(node, AgentNodePayload{
+		NodeID:       node.NodeID,
+		Name:         node.Name,
+		IP:           node.IP,
+		AgentVersion: node.AgentVersion,
+		NginxVersion: node.NginxVersion,
+		Snapshot: &AgentNodeMetricSnapshot{
+			CapturedAtUnix:       reportedAt.Unix(),
+			CPUUsagePercent:      12.5,
+			MemoryUsedBytes:      1024,
+			MemoryTotalBytes:     4096,
+			OpenrestyConnections: 7,
+		},
+		AccessLogs: []AgentNodeAccessLog{
+			{
+				LoggedAtUnix: reportedAt.Unix(),
+				RemoteAddr:   "203.0.113.33",
+				Host:         "example.com",
+				Path:         "/health",
+				StatusCode:   200,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected heartbeat to succeed despite access log failure: %v", err)
+	}
+
+	snapshots, err := model.ListNodeMetricSnapshots(node.NodeID, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("expected node snapshots query to succeed: %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].OpenrestyConnections != 7 {
+		t.Fatalf("expected metric snapshot to persist despite access log failure, got %+v", snapshots)
 	}
 }
 

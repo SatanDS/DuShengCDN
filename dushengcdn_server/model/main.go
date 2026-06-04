@@ -110,14 +110,31 @@ func openDatabase() (*gorm.DB, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
+		if err := configureDatabasePool(db); err != nil {
+			return nil, "", err
+		}
 		return db, "postgres", nil
 	}
 	db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{})
 	if err != nil {
 		return nil, "", err
 	}
+	if err := configureDatabasePool(db); err != nil {
+		return nil, "", err
+	}
 	slog.Info("database DSN not set, using SQLite as database", "sqlite_path", common.SQLitePath)
 	return db, "sqlite", nil
+}
+
+func configureDatabasePool(db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	sqlDB.SetMaxOpenConns(common.DatabaseMaxOpenConns)
+	sqlDB.SetMaxIdleConns(common.DatabaseMaxIdleConns)
+	sqlDB.SetConnMaxLifetime(common.DatabaseConnMaxLifetime)
+	return nil
 }
 
 func autoMigrateAll(db *gorm.DB) error {
