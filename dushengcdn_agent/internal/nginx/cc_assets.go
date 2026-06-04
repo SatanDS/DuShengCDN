@@ -5,6 +5,7 @@ import "dushengcdn-agent/internal/protocol"
 const openRestyCCCheckLua = `local M = {}
 
 local ok_cjson, cjson = pcall(require, "cjson.safe")
+local ipmatcher = require "shared.ipmatcher"
 
 local cc_config_dict = ngx.shared.dushengcdn_cc_config
 local cc_counters = ngx.shared.dushengcdn_cc_counters
@@ -77,42 +78,6 @@ local function client_ip()
     return ngx.var.remote_addr or ""
 end
 
-local function ip_to_number(ip)
-    local a, b, c, d = string.match(ip or "", "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
-    if not a then
-        return nil
-    end
-    a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
-    if not a or not b or not c or not d then
-        return nil
-    end
-    if a > 255 or b > 255 or c > 255 or d > 255 then
-        return nil
-    end
-    return (((a * 256) + b) * 256 + c) * 256 + d
-end
-
-local function cidr_match(ip, cidr)
-    local base, bits = string.match(cidr or "", "^([^/]+)/(%d+)$")
-    if not base or not bits then
-        return false
-    end
-    bits = tonumber(bits)
-    if not bits or bits < 0 or bits > 32 then
-        return false
-    end
-    local ip_number = ip_to_number(ip)
-    local base_number = ip_to_number(base)
-    if not ip_number or not base_number then
-        return false
-    end
-    if bits == 0 then
-        return true
-    end
-    local block_size = 2 ^ (32 - bits)
-    return (ip_number - (ip_number % block_size)) == (base_number - (base_number % block_size))
-end
-
 local function path_match(uri, pattern)
     if not pattern or pattern == "" then
         return false
@@ -122,18 +87,6 @@ local function path_match(uri, pattern)
         return string.sub(uri, 1, #prefix) == prefix
     end
     return uri == pattern
-end
-
-local function list_contains(list, value)
-    if not list or not value then
-        return false
-    end
-    for _, item in ipairs(list) do
-        if item == value then
-            return true
-        end
-    end
-    return false
 end
 
 local function list_contains_text(list, value)
@@ -154,15 +107,11 @@ local function match_list(list, ip, ua, uri)
     if not list then
         return false
     end
-    if list_contains(list.ips, ip) then
+    if ipmatcher.match_ips(ip, list.ips) then
         return true
     end
-    if list.ip_cidrs then
-        for _, cidr in ipairs(list.ip_cidrs) do
-            if cidr_match(ip, cidr) then
-                return true
-            end
-        end
+    if ipmatcher.match_cidrs(ip, list.ip_cidrs) then
+        return true
     end
     if list.paths then
         for _, path in ipairs(list.paths) do

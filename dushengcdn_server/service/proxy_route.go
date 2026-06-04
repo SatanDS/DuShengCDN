@@ -2214,12 +2214,9 @@ func normalizeCCConfig(enabled bool, raw string) (ProxyRouteCCConfig, error) {
 		{name: "排除", cidrs: cfg.Exclude.IPCidrs},
 	} {
 		for _, cidr := range item.cidrs {
-			ip, _, err := net.ParseCIDR(cidr)
+			_, _, err := net.ParseCIDR(cidr)
 			if err != nil {
 				return cfg, fmt.Errorf("cc_config %s IP CIDR 格式无效: %s", item.name, cidr)
-			}
-			if ip.To4() == nil {
-				return cfg, fmt.Errorf("cc_config %s IP CIDR 目前仅支持 IPv4 网段: %s", item.name, cidr)
 			}
 		}
 	}

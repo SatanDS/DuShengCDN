@@ -5,6 +5,7 @@ import "dushengcdn-agent/internal/protocol"
 const openRestyWAFCheckLua = `local M = {}
 
 local ok_cjson, cjson = pcall(require, "cjson.safe")
+local ipmatcher = require "shared.ipmatcher"
 local waf_config_dict = ngx.shared.dushengcdn_waf_config
 
 local function first_header_ip(value)
@@ -29,42 +30,6 @@ local function client_ip()
         return forwarded_ip
     end
     return ngx.var.remote_addr or ""
-end
-
-local function ip_to_number(ip)
-    local a, b, c, d = string.match(ip or "", "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
-    if not a then
-        return nil
-    end
-    a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
-    if not a or not b or not c or not d then
-        return nil
-    end
-    if a > 255 or b > 255 or c > 255 or d > 255 then
-        return nil
-    end
-    return a * 16777216 + b * 65536 + c * 256 + d
-end
-
-local function cidr_match(ip, cidr)
-    local base, bits = string.match(cidr or "", "^([^/]+)/(%d+)$")
-    if not base or not bits then
-        return false
-    end
-    bits = tonumber(bits)
-    if not bits or bits < 0 or bits > 32 then
-        return false
-    end
-    local ip_num = ip_to_number(ip)
-    local base_num = ip_to_number(base)
-    if not ip_num or not base_num then
-        return false
-    end
-    if bits == 0 then
-        return true
-    end
-    local mask = 2 ^ 32 - 2 ^ (32 - bits)
-    return (ip_num - (ip_num % (2 ^ (32 - bits)))) == (base_num - (base_num % (2 ^ (32 - bits))))
 end
 
 local function contains_text(haystack, needle)
@@ -155,15 +120,11 @@ end
 local function matched_whitelist(config)
     local whitelist = config.whitelist or {}
     local ip = client_ip()
-    for _, item in ipairs(whitelist.ips or {}) do
-        if item == ip then
-            return true
-        end
+    if ipmatcher.match_ips(ip, whitelist.ips) then
+        return true
     end
-    for _, item in ipairs(whitelist.ip_cidrs or {}) do
-        if cidr_match(ip, item) then
-            return true
-        end
+    if ipmatcher.match_cidrs(ip, whitelist.ip_cidrs) then
+        return true
     end
     local uri = ngx.var.uri or ""
     for _, item in ipairs(whitelist.paths or {}) do

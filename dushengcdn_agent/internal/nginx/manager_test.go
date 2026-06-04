@@ -576,6 +576,13 @@ func TestManagerEnsureLuaAssetsWritesReadableFiles(t *testing.T) {
 	if !strings.Contains(string(ccData), filepath.ToSlash(manager.RuntimeConfigDir)+"/cc_config.json") {
 		t.Fatalf("expected cc lua to read runtime config dir, got %s", string(ccData))
 	}
+	sharedData, err := os.ReadFile(filepath.Join(manager.LuaDir, "shared", "ipmatcher.lua"))
+	if err != nil {
+		t.Fatalf("failed to read shared ip matcher lua file: %v", err)
+	}
+	if !strings.Contains(string(sharedData), "local function parse_ipv6") {
+		t.Fatalf("expected shared ip matcher to support IPv6, got %s", string(sharedData))
+	}
 	geoipData, err := os.ReadFile(filepath.Join(manager.LuaDir, "geoip", "access.lua"))
 	if err != nil {
 		t.Fatalf("failed to read geoip lua file: %v", err)
@@ -827,6 +834,32 @@ func TestManagedPowLuaFilesUseInternalChallengeFlow(t *testing.T) {
 	}
 	if !strings.Contains(openRestyPowVerifyLua, `if ngx.var.scheme == "https" then`) {
 		t.Fatal("expected verify.lua to only mark the session cookie as Secure for HTTPS requests")
+	}
+}
+
+func TestProtectionLuaUsesSharedIPv4IPv6Matcher(t *testing.T) {
+	for _, expected := range []string{
+		`local function parse_ipv4`,
+		`local function parse_ipv6`,
+		`prefix > parsed.bits`,
+		`function M.match_cidrs`,
+		`bit.band`,
+	} {
+		if !strings.Contains(openRestyIPMatcherLua, expected) {
+			t.Fatalf("expected shared IP matcher lua to contain %q", expected)
+		}
+	}
+	for name, lua := range map[string]string{
+		"pow": openRestyPowPolicyLua,
+		"waf": openRestyWAFCheckLua,
+		"cc":  openRestyCCCheckLua,
+	} {
+		if !strings.Contains(lua, `require "shared.ipmatcher"`) {
+			t.Fatalf("expected %s lua to require shared ip matcher", name)
+		}
+		if strings.Contains(lua, "ip_to_number") {
+			t.Fatalf("expected %s lua to avoid IPv4-only ip_to_number matcher", name)
+		}
 	}
 }
 

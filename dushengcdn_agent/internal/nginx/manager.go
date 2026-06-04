@@ -307,7 +307,8 @@ func (m *Manager) EnsureLuaAssets() error {
 	if strings.TrimSpace(m.LuaDir) == "" {
 		return nil
 	}
-	allSupportFiles := append(ManagedObservabilityLuaFiles(), m.managedPowLuaFiles()...)
+	allSupportFiles := append(ManagedObservabilityLuaFiles(), ManagedSharedLuaFiles()...)
+	allSupportFiles = append(allSupportFiles, m.managedPowLuaFiles()...)
 	allSupportFiles = append(allSupportFiles, m.managedGeoIPLuaFiles()...)
 	allSupportFiles = append(allSupportFiles, m.managedWAFLuaFiles()...)
 	allSupportFiles = append(allSupportFiles, m.managedCCLuaFiles()...)

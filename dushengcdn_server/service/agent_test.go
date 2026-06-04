@@ -174,7 +174,7 @@ func TestGetActiveConfigForAgentIncludesCCConfigAndForceOnlyPoW(t *testing.T) {
 	}
 }
 
-func TestCreateProxyRouteRejectsIPv6CCCIDR(t *testing.T) {
+func TestCreateProxyRouteAcceptsIPv6CCCIDR(t *testing.T) {
 	setupServiceTestDB(t)
 
 	_, err := CreateProxyRoute(ProxyRouteInput{
@@ -184,11 +184,21 @@ func TestCreateProxyRouteRejectsIPv6CCCIDR(t *testing.T) {
 		CCEnabled: true,
 		CCConfig:  `{"window_seconds":10,"max_requests":120,"path_window_seconds":10,"path_max_requests":60,"block_duration_seconds":300,"whitelist":{"ip_cidrs":["2001:db8::/32"]}}`,
 	})
-	if err == nil {
-		t.Fatal("expected IPv6 CIDR in CC config to be rejected")
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "仅支持 IPv4") {
-		t.Fatalf("expected IPv4-only validation error, got %v", err)
+	if _, err := PublishConfigVersion("root", false); err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+
+	config, err := GetActiveConfigForAgent()
+	if err != nil {
+		t.Fatalf("GetActiveConfigForAgent failed: %v", err)
+	}
+	files := supportFilesByPath(config.SupportFiles)
+	ccConfig := files["cc_config.json"]
+	if !strings.Contains(ccConfig, `"2001:db8::/32"`) {
+		t.Fatalf("expected cc_config.json to contain IPv6 CIDR, got %s", ccConfig)
 	}
 }
 
