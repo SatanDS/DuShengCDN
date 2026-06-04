@@ -139,7 +139,8 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 * 单源站如带 base path 或 query，会在 `proxy_pass` 中补回原始 URI。
 * 多源站仍要求每个源站都为纯 `scheme://host[:port]`，且同一规则内协议一致。
 * `OpenRestyCacheEnabled` 用于启用缓存基础设施与全局默认参数；实际是否缓存、按 URL / 后缀 / 路径等命中策略由各条 `proxy_routes` 单独决定。
-* 默认缓存 Key 为 `$scheme$host$request_uri`。
+* `OpenRestyCacheLevels` 是缓存文件在磁盘上的分层方式，例如 `1:2`，不是路径匹配规则；一般保持默认。
+* 默认缓存 Key 为 `$scheme$host$request_uri`。缓存 Key 只决定同一请求如何生成缓存对象唯一标识，不决定哪些路径进入缓存；路径、后缀和路径包含规则由网站配置里的缓存策略决定。
 * 默认 `keepalive_timeout` 为 `20` 秒，默认 `proxy_connect_timeout` 为 `3` 秒。
 * 默认事件模型为 `epoll`，并默认开启 `multi_accept`。
 * HTTPS 监听默认使用独立 `http2 on;` 指令，避免新版 Nginx/OpenResty 对 `listen ... http2` 的弃用告警。

@@ -104,12 +104,15 @@ const performanceFieldTooltips: Record<string, string> = {
     gzip_min_length:
         '底层指令：gzip_min_length。只有响应体超过该字节数时才会启用 gzip，避免对极小响应做无意义压缩。',
     gzip_comp_level: '底层指令：gzip_comp_level。gzip 压缩等级，1 更省处理器，9 压缩更高但更耗处理器。',
-    proxy_cache_path: '底层指令：proxy_cache_path。缓存目录在节点磁盘上的位置。',
-    levels: '底层参数：levels。缓存目录层级，例如 1:2，可控制缓存文件的目录分布。',
+    proxy_cache_path:
+        '底层指令：proxy_cache_path。缓存文件保存在节点磁盘上的位置；是否缓存某条路径仍由网站配置里的缓存策略决定。',
+    levels:
+        '底层参数：levels。缓存文件分层，例如 1:2，会把缓存文件按哈希分散到多级目录；一般保持默认，不是路径匹配规则。',
     inactive: '底层参数：inactive。缓存对象在未被访问时的失活时间，例如 30m。',
     max_size:
         '底层参数：max_size。缓存目录允许占用的最大磁盘空间，会渲染到 proxy_cache_path。',
-    cache_key_template: '生成缓存 Key 的模板，决定不同请求如何命中同一缓存对象。',
+    cache_key_template:
+        '底层指令：proxy_cache_key。这里不是选择哪些路径缓存，而是生成缓存对象唯一标识；路径/后缀/包含规则请在网站配置的缓存策略里设置。',
     proxy_cache_lock:
         '底层指令：proxy_cache_lock。启用后，同一缓存 Key 未命中时只允许一个请求回源，减少击穿。',
     proxy_cache_lock_timeout: '底层指令：proxy_cache_lock_timeout。等待缓存锁的最长时间，例如 5s。',
@@ -460,7 +463,7 @@ export function PerformancePage() {
         void runBusyAction('performance-cache', async () => {
             if (performanceFields.OpenRestyCacheEnabled) {
                 if (!performanceFields.OpenRestyCachePath.trim()) {
-                    throw new Error('启用缓存时必须填写 proxy_cache_path 目录。');
+                    throw new Error('启用缓存时必须填写节点缓存目录。');
                 }
                 if (
                     !isCacheLevelsValue(performanceFields.OpenRestyCacheLevels) ||
@@ -469,11 +472,11 @@ export function PerformancePage() {
                     !isDurationToken(performanceFields.OpenRestyCacheLockTimeout)
                 ) {
                     throw new Error(
-                        '缓存 levels、inactive、max_size 或 lock_timeout 格式不合法。',
+                        '缓存文件分层、失活时间、磁盘上限或等待时间格式不合法。',
                     );
                 }
                 if (!performanceFields.OpenRestyCacheKeyTemplate.trim()) {
-                    throw new Error('启用缓存时必须填写缓存 Key 模板。');
+                    throw new Error('启用缓存时必须填写缓存 Key。');
                 }
             }
 
@@ -1148,7 +1151,7 @@ export function PerformancePage() {
                                             tooltip={performanceFieldTooltips.proxy_cache_path}
                                             hint={
                                                 performanceFields.OpenRestyCacheEnabled
-                                                    ? '缓存目录，启用缓存时必填。'
+                                                    ? '节点本地磁盘目录；缓存关闭时不会写入。'
                                                     : '缓存关闭时暂不生效。'
                                             }
                                         >
@@ -1165,8 +1168,9 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="缓存目录层级"
+                                            label="缓存文件分层"
                                             tooltip={performanceFieldTooltips.levels}
+                                            hint="默认 1:2；只是磁盘文件分散方式，不是缓存路径规则。"
                                         >
                                             <ResourceInput
                                                 value={performanceFields.OpenRestyCacheLevels}
@@ -1213,8 +1217,9 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="缓存命中规则"
+                                            label="缓存 Key"
                                             tooltip={performanceFieldTooltips.cache_key_template}
+                                            hint="决定同一缓存对象如何识别；哪些路径缓存请到网站配置的缓存策略设置。"
                                         >
                                             <ResourceInput
                                                 value={performanceFields.OpenRestyCacheKeyTemplate}
