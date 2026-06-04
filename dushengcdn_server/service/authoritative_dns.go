@@ -51,6 +51,7 @@ const (
 
 var dnsLookupNS = net.LookupNS
 var dnsWorkerProbeExchange = exchangeDNSWorkerProbe
+var dnsObservabilityHeavyCounterScanLimit = 20000
 
 type DNSZoneInput struct {
 	Name        string   `json:"name"`
@@ -383,7 +384,8 @@ type dnsObservabilityTargetSummaryRow struct {
 }
 
 type dnsObservabilityLastRollupRow struct {
-	LastRollupAt string
+	WindowStart   time.Time
+	WindowMinutes int
 }
 
 type dnsWorkerHealthRollupRow struct {
@@ -3570,6 +3572,9 @@ func queryDNSObservabilityStringCounts(input DNSObservabilitySummaryInput, windo
 	if expression == "" {
 		return map[string]int64{}, nil
 	}
+	if field == "qname" && limit > 0 {
+		return queryDNSObservabilityStringCountsFromRecentRows(input, window, field, expression, limit)
+	}
 	var rows []dnsObservabilityStringCountRow
 	query := dnsObservabilityBaseQuery(input, window).
 		Select(expression + " AS key, SUM(query_count) AS count").
@@ -3591,6 +3596,28 @@ func queryDNSObservabilityStringCounts(input DNSObservabilitySummaryInput, windo
 		result[key] += row.Count
 	}
 	return result, nil
+}
+
+func queryDNSObservabilityStringCountsFromRecentRows(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, field string, expression string, limit int) (map[string]int64, error) {
+	scanLimit := normalizeDNSObservabilityHeavyCounterScanLimit()
+	var rows []dnsObservabilityStringCountRow
+	if err := dnsObservabilityBaseQuery(input, window).
+		Select(expression + " AS key, query_count AS count").
+		Order("window_start DESC").
+		Order("id DESC").
+		Limit(scanLimit).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		key := normalizeDNSObservabilityStringCountKey(field, row.Key)
+		if key == "" || row.Count <= 0 {
+			continue
+		}
+		result[key] += row.Count
+	}
+	return limitDNSObservabilityCounterMap(result, limit), nil
 }
 
 func dnsObservabilityStringCountExpression(field string) string {
@@ -3663,6 +3690,9 @@ func queryDNSObservabilityTopTargets(input DNSObservabilitySummaryInput, window 
 	if err := dnsObservabilityBaseQuery(input, window).
 		Select("target_summary").
 		Where("target_summary IS NOT NULL AND TRIM(target_summary) <> '' AND TRIM(target_summary) <> '{}'").
+		Order("window_start DESC").
+		Order("id DESC").
+		Limit(normalizeDNSObservabilityHeavyCounterScanLimit()).
 		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -3732,18 +3762,25 @@ func queryDNSWorkerHealthRollups(input DNSObservabilitySummaryInput, window dnsO
 func queryDNSObservabilityLastRollupAt(input DNSObservabilitySummaryInput, window dnsObservabilityWindow) (*time.Time, error) {
 	var rows []dnsObservabilityLastRollupRow
 	if err := dnsObservabilityBaseQuery(input, window).
-		Select(dnsRollupEndMaxSelectExpression() + " AS last_rollup_at").
+		Select("window_start, window_minutes").
+		Order("window_start DESC").
+		Order("id DESC").
+		Limit(1).
 		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	value, ok := parseDNSObservabilityTime(rows[0].LastRollupAt)
-	if !ok {
-		return nil, nil
-	}
+	value := rows[0].WindowStart.UTC().Add(time.Duration(normalizeDNSRollupWindow(rows[0].WindowMinutes)) * time.Minute)
 	return &value, nil
+}
+
+func normalizeDNSObservabilityHeavyCounterScanLimit() int {
+	if dnsObservabilityHeavyCounterScanLimit <= 0 {
+		return 20000
+	}
+	return dnsObservabilityHeavyCounterScanLimit
 }
 
 func parseDNSObservabilityTime(raw string) (time.Time, bool) {

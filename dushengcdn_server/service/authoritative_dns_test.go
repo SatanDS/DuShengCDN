@@ -3006,6 +3006,79 @@ func TestAuthoritativeDNSObservabilityTrendCoversRollingWindowStartHour(t *testi
 	}
 }
 
+func TestAuthoritativeDNSObservabilityLimitsHeavyCounterScans(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldLimit := dnsObservabilityHeavyCounterScanLimit
+	dnsObservabilityHeavyCounterScanLimit = 2
+	t.Cleanup(func() {
+		dnsObservabilityHeavyCounterScanLimit = oldLimit
+	})
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Minute)
+	rollups := []model.DNSQueryRollup{
+		{
+			WindowStart:     now.Add(-3 * time.Minute),
+			WindowMinutes:   1,
+			WorkerID:        worker.WorkerID,
+			QName:           "old.example.com",
+			QType:           "A",
+			RCode:           "NOERROR",
+			QueryCount:      100,
+			TotalDurationMs: 100,
+			MaxDurationMs:   10,
+			TargetSummary:   `{"192.0.2.10":100}`,
+		},
+		{
+			WindowStart:     now.Add(-2 * time.Minute),
+			WindowMinutes:   1,
+			WorkerID:        worker.WorkerID,
+			QName:           "newer.example.com",
+			QType:           "A",
+			RCode:           "NOERROR",
+			QueryCount:      2,
+			TotalDurationMs: 20,
+			MaxDurationMs:   10,
+			TargetSummary:   `{"192.0.2.20":2}`,
+		},
+		{
+			WindowStart:     now.Add(-1 * time.Minute),
+			WindowMinutes:   1,
+			WorkerID:        worker.WorkerID,
+			QName:           "newest.example.com",
+			QType:           "A",
+			RCode:           "NOERROR",
+			QueryCount:      1,
+			TotalDurationMs: 10,
+			MaxDurationMs:   10,
+			TargetSummary:   `{"192.0.2.30":1}`,
+		},
+	}
+	for index := range rollups {
+		if err := rollups[index].Insert(); err != nil {
+			t.Fatalf("insert rollup %d: %v", index, err)
+		}
+	}
+
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 1})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if summary.TotalQueries != 103 {
+		t.Fatalf("expected totals to keep the full window, got %+v", summary)
+	}
+	assertCounter(t, summary.TopQNames, "newest.example.com", "newest.example.com", 1)
+	assertCounter(t, summary.TopQNames, "newer.example.com", "newer.example.com", 2)
+	assertCounter(t, summary.TopTargets, "192.0.2.30", "192.0.2.30", 1)
+	assertCounter(t, summary.TopTargets, "192.0.2.20", "192.0.2.20", 2)
+	assertNoCounter(t, summary.TopQNames, "old.example.com")
+	assertNoCounter(t, summary.TopTargets, "192.0.2.10")
+}
+
 func TestAuthoritativeDNSZoneDelegationCheckMatchedWithGlueHint(t *testing.T) {
 	setupServiceTestDB(t)
 	restoreDNSLookupNS(t, func(name string) ([]*net.NS, error) {
@@ -4818,6 +4891,15 @@ func assertCounter(t *testing.T, counters []DNSObservabilityCounterView, key str
 		}
 	}
 	t.Fatalf("missing counter %s in %+v", key, counters)
+}
+
+func assertNoCounter(t *testing.T, counters []DNSObservabilityCounterView, key string) {
+	t.Helper()
+	for _, counter := range counters {
+		if counter.Key == key {
+			t.Fatalf("unexpected counter %s in %+v", key, counters)
+		}
+	}
 }
 
 func trendTotalQueries(points []DNSObservabilityTrendPointView) int64 {
