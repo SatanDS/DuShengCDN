@@ -3,6 +3,7 @@ package nginx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -254,6 +255,49 @@ func TestManagerApplyAndChecksumIncludeMainConfig(t *testing.T) {
 	)
 	if value != expected {
 		t.Fatalf("unexpected checksum: got %s want %s", value, expected)
+	}
+}
+
+func TestManagerApplyCreatesProxyCachePath(t *testing.T) {
+	tempDir := t.TempDir()
+	cachePath := filepath.Join(tempDir, "var", "cache", "openresty", "dushengcdn")
+	manager := &Manager{
+		MainConfigPath:  filepath.Join(tempDir, "etc", "nginx.conf"),
+		RouteConfigPath: filepath.Join(tempDir, "etc", "routes.conf"),
+		LuaDir:          filepath.Join(tempDir, "lua"),
+		Executor:        &fakeExecutor{},
+	}
+
+	outcome := manager.Apply(
+		context.Background(),
+		fmt.Sprintf("http {\n    proxy_cache_path %s levels=1:2 keys_zone=dushengcdn_cache:10m inactive=30m max_size=1g;\n}\n", filepath.ToSlash(cachePath)),
+		"",
+		nil,
+	)
+	if outcome.Status != ApplyStatusSuccess {
+		t.Fatalf("Apply failed: %#v", outcome)
+	}
+	if info, err := os.Stat(cachePath); err != nil || !info.IsDir() {
+		t.Fatalf("expected proxy cache directory to be created, stat=%v err=%v", info, err)
+	}
+}
+
+func TestProxyCacheDirectoriesFromConfig(t *testing.T) {
+	mainConfig := strings.Join([]string{
+		"http {",
+		"    proxy_cache_path /var/cache/openresty/dushengcdn levels=1:2 keys_zone=dushengcdn_cache:10m;",
+		"    proxy_cache_path '/srv/openresty cache/site-a' levels=1:2 keys_zone=site_a:10m;",
+		"    proxy_cache_path /var/cache/openresty/dushengcdn levels=1:2 keys_zone=duplicate:10m;",
+		"}",
+	}, "\n")
+
+	paths := proxyCacheDirectoriesFromConfig(mainConfig)
+	expected := []string{
+		"/var/cache/openresty/dushengcdn",
+		"/srv/openresty cache/site-a",
+	}
+	if !reflect.DeepEqual(paths, expected) {
+		t.Fatalf("unexpected cache paths: got %#v want %#v", paths, expected)
 	}
 }
 

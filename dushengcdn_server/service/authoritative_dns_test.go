@@ -662,7 +662,7 @@ func TestCreateProxyRouteAuthoritativeRejectsStaticRecordConflict(t *testing.T) 
 		DNSRecordType:   "A",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "静态记录") {
+	if err == nil || !strings.Contains(err.Error(), "静态记录") || !strings.Contains(err.Error(), "左侧「本地自建解析」") || !strings.Contains(err.Error(), "托管域名「example.com」") {
 		t.Fatalf("expected static record conflict, got %v", err)
 	}
 }
@@ -687,7 +687,7 @@ func TestCreateProxyRouteAuthoritativeRejectsWildcardStaticRecordConflict(t *tes
 		DNSRecordType:   "A",
 		DNSTTL:          30,
 	})
-	if err == nil || !strings.Contains(err.Error(), "静态记录") {
+	if err == nil || !strings.Contains(err.Error(), "静态记录") || !strings.Contains(err.Error(), "托管域名「example.com」") {
 		t.Fatalf("expected wildcard static record conflict, got %v", err)
 	}
 }

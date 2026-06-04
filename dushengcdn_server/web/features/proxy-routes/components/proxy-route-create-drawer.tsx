@@ -599,7 +599,7 @@ export function ProxyRouteCreateDrawer({
             {isAuthoritativeMode ? (
               <ResourceField
                 label="托管域名"
-                hint="网站域名必须属于所选托管域名。"
+                hint="网站域名必须属于所选托管域名；如果已有同名 A/AAAA/CNAME 静态记录，请先到左侧「本地自建解析」的托管域名详情里删除或禁用。"
                 error={form.formState.errors.dns_zone_id_ref?.message}
               >
                 <ResourceSelect

@@ -1828,7 +1828,7 @@ func validateAuthoritativeDNSRecordDynamicConflicts(record *model.DNSRecord) err
 		}
 		for _, domain := range domains {
 			if authoritativeDomainMatchesQName(domain, record.Name) {
-				return fmt.Errorf("静态 DNS 记录 %s %s 与本地自建解析网站 %s 的自动 %s 记录冲突", record.Name, recordType, route.SiteName, routeType)
+				return fmt.Errorf("静态 DNS 记录 %s %s 与网站配置「%s」的本地自建解析自动 %s 记录冲突。请到左侧「网站配置」打开该站点的「负载均衡」检查自动解析，或禁用该网站自动解析后再添加静态记录", record.Name, recordType, route.SiteName, routeType)
 			}
 		}
 	}
@@ -1868,9 +1868,20 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 		if staticType != "CNAME" && staticType != recordType {
 			continue
 		}
-		return fmt.Errorf("本地自建解析网站的自动 %s 记录与托管域名中已有静态记录 %s %s 冲突，请先删除或禁用该静态记录", recordType, record.Name, staticType)
+		return fmt.Errorf("本地自建解析网站的自动 %s 记录与托管域名「%s」里的静态记录「%s %s」冲突。位置：左侧「本地自建解析」-> 托管域名「%s」-> 静态记录。请删除或禁用该静态记录后再创建网站配置；如果希望网站配置自动接管解析，不要保留同名 A/AAAA/CNAME 静态记录", recordType, authoritativeDNSZoneDisplayName(zoneID), record.Name, staticType, authoritativeDNSZoneDisplayName(zoneID))
 	}
 	return nil
+}
+
+func authoritativeDNSZoneDisplayName(zoneID uint) string {
+	zone, err := model.GetDNSZoneByID(zoneID)
+	if err == nil && zone != nil && strings.TrimSpace(zone.Name) != "" {
+		return strings.TrimSpace(zone.Name)
+	}
+	if zoneID > 0 {
+		return fmt.Sprintf("ID %d", zoneID)
+	}
+	return "未选择托管域名"
 }
 
 func authoritativeDomainsMatchRecordName(domains []string, recordName string) bool {

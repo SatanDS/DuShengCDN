@@ -1824,7 +1824,7 @@ function ZonesPanel({
                       静态记录
                     </h3>
                     <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
-                      A/AAAA/CNAME/TXT/MX/NS/SOA 会由 DNS 响应端按最新解析配置回答。
+                      手动固定回答的记录；同名 A/AAAA/CNAME 会和网站配置里的本地自建解析自动记录互斥。
                     </p>
                   </div>
                   <PrimaryButton

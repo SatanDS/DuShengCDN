@@ -246,6 +246,9 @@ func (m *Manager) writeTargetFiles(mainConfig string, routeConfig string, suppor
 		slog.Warn("runtime-resolved hostname upstreams detected without available resolvers; hostname origin requests may fail until resolvers are configured")
 	}
 	renderedMainConfig := m.renderMainConfig(mainConfig)
+	if err := ensureProxyCacheDirectories(renderedMainConfig); err != nil {
+		return err
+	}
 	if err := os.WriteFile(m.MainConfigPath, []byte(renderedMainConfig), 0o644); err != nil {
 		return err
 	}
@@ -463,6 +466,44 @@ func safeCacheDirectory(path string) (string, error) {
 	return cleanPath, nil
 }
 
+func ensureProxyCacheDirectories(mainConfig string) error {
+	for _, cachePath := range proxyCacheDirectoriesFromConfig(mainConfig) {
+		cleanPath, err := safeCacheDirectory(cachePath)
+		if err != nil {
+			return fmt.Errorf("proxy_cache_path %q is invalid: %w", cachePath, err)
+		}
+		if err := os.MkdirAll(cleanPath, 0o755); err != nil {
+			return fmt.Errorf("create proxy cache path %s: %w", cleanPath, err)
+		}
+	}
+	return nil
+}
+
+func proxyCacheDirectoriesFromConfig(mainConfig string) []string {
+	matches := proxyCachePathPattern.FindAllStringSubmatch(mainConfig, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(matches))
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		cachePath := strings.Trim(strings.TrimSpace(match[1]), `"'`)
+		if cachePath == "" {
+			continue
+		}
+		cleanKey := filepath.Clean(cachePath)
+		if _, exists := seen[cleanKey]; exists {
+			continue
+		}
+		seen[cleanKey] = struct{}{}
+		result = append(result, cachePath)
+	}
+	return result
+}
+
 func normalizeWarmURLs(values []string) []string {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -613,6 +654,7 @@ func parseNginxVersion(output string) string {
 }
 
 var nginxVersionPattern = regexp.MustCompile(`(?im)(?:nginx|openresty) version:\s*(?:nginx|openresty)/([^\s]+)`)
+var proxyCachePathPattern = regexp.MustCompile(`(?im)^\s*proxy_cache_path\s+("[^"]+"|'[^']+'|[^\s;]+)`)
 
 func isIgnorableOpenrestyStopError(output string) bool {
 	text := strings.ToLower(strings.TrimSpace(output))
