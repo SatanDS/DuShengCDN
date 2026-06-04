@@ -191,6 +191,7 @@ const cacheSchema = z
       'suffix',
       'path_prefix',
       'path_contains',
+      'path_contains_all',
       'path_exact',
     ]),
     cache_rules: z.array(z.string()),
@@ -1978,9 +1979,11 @@ export function CacheSection({
         ? '/assets'
         : watchedPolicy === 'path_contains'
           ? '/Images'
-          : watchedPolicy === 'path_exact'
-            ? '/robots.txt'
-            : '按 URL 缓存时无需额外规则';
+          : watchedPolicy === 'path_contains_all'
+            ? '/emby/Items/'
+            : watchedPolicy === 'path_exact'
+              ? '/robots.txt'
+              : '按 URL 缓存时无需额外规则';
   const purgeMutation = useMutation({
     mutationFn: () => purgeProxyRouteCache(route.id, { scope: 'all' }),
     onSuccess: async (result) => {
@@ -2067,6 +2070,7 @@ export function CacheSection({
             <option value="suffix">按后缀缓存</option>
             <option value="path_prefix">按路径前缀缓存</option>
             <option value="path_contains">按路径包含缓存</option>
+            <option value="path_contains_all">按路径多片段缓存</option>
             <option value="path_exact">按精确路径缓存</option>
           </ResourceSelect>
         </ResourceField>
@@ -2081,9 +2085,11 @@ export function CacheSection({
                 ? '每条填写一个路径前缀，例如 /assets、/static。'
                 : watchedPolicy === 'path_contains'
                   ? '每条填写一个会出现在路径中的片段，例如 /Images、/thumb；/Images 会匹配 /emby/Items/12039/Images，数字变化不影响。'
-                  : watchedPolicy === 'path_exact'
-                    ? '每条填写一个精确路径，例如 /robots.txt。'
-                    : '按 URL 缓存时无需额外规则。'
+                  : watchedPolicy === 'path_contains_all'
+                    ? '每条规则都必须同时出现在路径中，例如填写 /emby/Items/ 和 /Images，可匹配 /emby/Items/12039/Images。'
+                    : watchedPolicy === 'path_exact'
+                      ? '每条填写一个精确路径，例如 /robots.txt。'
+                      : '按 URL 缓存时无需额外规则。'
           }
         >
           <div className="space-y-3">

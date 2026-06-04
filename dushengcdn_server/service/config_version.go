@@ -1721,11 +1721,21 @@ func renderRouteCachePolicyCondition(cacheConfig routeCacheConfig) string {
 		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathPrefixMatchPattern(cacheConfig.Rules)))
 	case proxyRouteCachePolicyPathContains:
 		return fmt.Sprintf("        if ($uri !~* %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathContainsMatchPattern(cacheConfig.Rules)))
+	case proxyRouteCachePolicyPathContainsAll:
+		return renderPathContainsAllCachePolicyCondition(cacheConfig.Rules)
 	case proxyRouteCachePolicyPathExact:
 		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathExactMatchPattern(cacheConfig.Rules)))
 	default:
 		return ""
 	}
+}
+
+func renderPathContainsAllCachePolicyCondition(rules []string) string {
+	var builder strings.Builder
+	for _, rule := range rules {
+		builder.WriteString(fmt.Sprintf("        if ($uri !~* %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(regexp.QuoteMeta(rule))))
+	}
+	return builder.String()
 }
 
 func buildSuffixMatchPattern(rules []string) string {

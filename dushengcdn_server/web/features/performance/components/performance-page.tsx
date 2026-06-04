@@ -107,12 +107,12 @@ const performanceFieldTooltips: Record<string, string> = {
     proxy_cache_path:
         '底层指令：proxy_cache_path。缓存文件保存在节点磁盘上的位置；是否缓存某条路径仍由网站配置里的缓存策略决定。',
     levels:
-        '底层参数：levels。缓存文件分层，例如 1:2，会把缓存文件按哈希分散到多级目录；一般保持默认，不是路径匹配规则。',
+        '底层参数：levels。只控制缓存文件在磁盘里按哈希拆几层目录，例如 1:2；一般保持默认，不是路径匹配规则。',
     inactive: '底层参数：inactive。缓存对象在未被访问时的失活时间，例如 30m。',
     max_size:
         '底层参数：max_size。缓存目录允许占用的最大磁盘空间，会渲染到 proxy_cache_path。',
     cache_key_template:
-        '底层指令：proxy_cache_key。这里不是选择哪些路径缓存，而是生成缓存对象唯一标识；路径/后缀/包含规则请在网站配置的缓存策略里设置。',
+        '底层指令：proxy_cache_key。这里只决定同一个请求如何生成缓存对象唯一标识；哪些路径进入缓存，请在网站配置的缓存策略里设置。',
     proxy_cache_lock:
         '底层指令：proxy_cache_lock。启用后，同一缓存 Key 未命中时只允许一个请求回源，减少击穿。',
     proxy_cache_lock_timeout: '底层指令：proxy_cache_lock_timeout。等待缓存锁的最长时间，例如 5s。',
@@ -1170,7 +1170,7 @@ export function PerformancePage() {
                                         <ResourceField
                                             label="缓存文件分层"
                                             tooltip={performanceFieldTooltips.levels}
-                                            hint="默认 1:2；只是磁盘文件分散方式，不是缓存路径规则。"
+                                            hint="默认 1:2；只影响缓存文件在磁盘里的存放层级，不影响哪些路径会缓存。"
                                         >
                                             <ResourceInput
                                                 value={performanceFields.OpenRestyCacheLevels}
@@ -1217,9 +1217,9 @@ export function PerformancePage() {
                                             />
                                         </ResourceField>
                                         <ResourceField
-                                            label="缓存 Key"
+                                            label="缓存 Key（命中唯一标识）"
                                             tooltip={performanceFieldTooltips.cache_key_template}
-                                            hint="决定同一缓存对象如何识别；哪些路径缓存请到网站配置的缓存策略设置。"
+                                            hint="决定同一个请求如何识别为同一份缓存；哪些路径缓存请到网站配置的缓存策略设置。"
                                         >
                                             <ResourceInput
                                                 value={performanceFields.OpenRestyCacheKeyTemplate}

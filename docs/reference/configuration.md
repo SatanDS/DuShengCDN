@@ -140,7 +140,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 * 多源站仍要求每个源站都为纯 `scheme://host[:port]`，且同一规则内协议一致。
 * `OpenRestyCacheEnabled` 用于启用缓存基础设施与全局默认参数；实际是否缓存、按 URL / 后缀 / 路径等命中策略由各条 `proxy_routes` 单独决定。
 * `OpenRestyCacheLevels` 是缓存文件在磁盘上的分层方式，例如 `1:2`，不是路径匹配规则；一般保持默认。
-* 默认缓存 Key 为 `$scheme$host$request_uri`。缓存 Key 只决定同一请求如何生成缓存对象唯一标识，不决定哪些路径进入缓存；路径、后缀和路径包含规则由网站配置里的缓存策略决定。
+* 默认缓存 Key 为 `$scheme$host$request_uri`。缓存 Key 只决定同一请求如何生成缓存对象唯一标识，不决定哪些路径进入缓存；路径、后缀、路径包含和路径多片段规则由网站配置里的缓存策略决定。路径多片段规则会要求每条规则都同时出现在 `$uri` 中，适合 `/emby/Items/<动态ID>/Images` 这类路径。
 * 访问日志的 `cache_status` 字段来自 OpenResty `$upstream_cache_status`，可取 `HIT`、`MISS`、`BYPASS`、`EXPIRED`、`STALE`、`UPDATING`、`REVALIDATED`。观测计量用它解释缓存命中率；明细日志用它排查某条请求为什么没有命中缓存。
 * 默认 `keepalive_timeout` 为 `20` 秒，默认 `proxy_connect_timeout` 为 `3` 秒。
 * 默认事件模型为 `epoll`，并默认开启 `multi_accept`。
