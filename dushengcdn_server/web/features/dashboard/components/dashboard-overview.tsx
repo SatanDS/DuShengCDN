@@ -184,6 +184,10 @@ export function DashboardOverview() {
   const dashboardCacheMetering = {
     bandwidth_p95_bps: 0,
     cache_hit_count: overview.traffic.cache_hit_count,
+    cache_miss_count: overview.traffic.cache_miss_count,
+    cache_bypass_count: overview.traffic.cache_bypass_count,
+    cache_expired_count: overview.traffic.cache_expired_count,
+    cache_stale_count: overview.traffic.cache_stale_count,
     cache_classified_count: overview.traffic.cache_classified_count,
     cache_hit_rate_percent: overview.traffic.cache_hit_rate_percent,
   };

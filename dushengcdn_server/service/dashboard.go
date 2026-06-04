@@ -31,6 +31,10 @@ type DashboardTraffic struct {
 	EstimatedQPS         float64 `json:"estimated_qps"`
 	ReportedNodes        int     `json:"reported_nodes"`
 	CacheHitCount        int64   `json:"cache_hit_count"`
+	CacheMissCount       int64   `json:"cache_miss_count"`
+	CacheBypassCount     int64   `json:"cache_bypass_count"`
+	CacheExpiredCount    int64   `json:"cache_expired_count"`
+	CacheStaleCount      int64   `json:"cache_stale_count"`
 	CacheClassifiedCount int64   `json:"cache_classified_count"`
 	CacheHitRatePercent  float64 `json:"cache_hit_rate_percent"`
 }
@@ -177,6 +181,10 @@ func GetDashboardOverview() (*DashboardOverviewView, error) {
 			view.Traffic.UniqueVisitors += latestTraffic.UniqueVisitorCount
 			view.Traffic.ErrorCount += latestTraffic.ErrorCount
 			view.Traffic.CacheHitCount += latestTraffic.CacheHitCount
+			view.Traffic.CacheMissCount += latestTraffic.CacheMissCount
+			view.Traffic.CacheBypassCount += latestTraffic.CacheBypassCount
+			view.Traffic.CacheExpiredCount += latestTraffic.CacheExpiredCount
+			view.Traffic.CacheStaleCount += latestTraffic.CacheStaleCount
 			view.Traffic.CacheClassifiedCount += latestTraffic.CacheHitCount + latestTraffic.CacheMissCount + latestTraffic.CacheBypassCount + latestTraffic.CacheExpiredCount + latestTraffic.CacheStaleCount
 			if duration := latestTraffic.WindowEndedAt.Sub(latestTraffic.WindowStartedAt).Seconds(); duration > 0 {
 				view.Traffic.EstimatedQPS += float64(latestTraffic.RequestCount) / duration

@@ -230,6 +230,37 @@ function getCacheStatusMeta(status?: string) {
   return cacheStatusMeta[normalized] ?? null;
 }
 
+function buildCacheMeteringHint(data: ObservabilityMeteringOverview) {
+  const hitCount = data.cache_hit_count ?? 0;
+  const missCount = data.cache_miss_count ?? 0;
+  const bypassCount = data.cache_bypass_count ?? 0;
+  const expiredCount = data.cache_expired_count ?? 0;
+  const staleCount = data.cache_stale_count ?? 0;
+  const classifiedCount =
+    data.cache_classified_count ??
+    hitCount + missCount + bypassCount + expiredCount + staleCount;
+
+  if (classifiedCount <= 0) {
+    return '未收到缓存状态；检查全局缓存基础设施、站点缓存策略、发布版本和 GET 请求是否命中规则。';
+  }
+
+  const staleTotal = expiredCount + staleCount;
+  const hint = [
+    `HIT ${formatCompactNumber(hitCount)}`,
+    `MISS ${formatCompactNumber(missCount)}`,
+    `BYPASS ${formatCompactNumber(bypassCount)}`,
+    staleTotal > 0 ? `过期/重验 ${formatCompactNumber(staleTotal)}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  if (bypassCount > 0 && hitCount === 0) {
+    return `${hint}。BYPASS 常见于非 GET、Authorization、登录 Cookie、no-cache 或路径规则未命中。`;
+  }
+
+  return hint;
+}
+
 export function AccessLogsPage() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -925,8 +956,8 @@ function MeteringTab({
             }
             hint={
               data.cache_classified_count > 0
-                ? `${formatCompactNumber(data.cache_hit_count)} 次 HIT / ${formatCompactNumber(data.cache_classified_count)} 次可分类缓存请求。`
-                : '需要启用代理服务缓存、站点缓存策略命中、发布配置，并产生 GET 请求；首个请求通常是 MISS，第二次才可能 HIT。'
+                ? buildCacheMeteringHint(data)
+                : `${buildCacheMeteringHint(data)} 首个命中规则请求通常是 MISS，第二次才可能 HIT。`
             }
           />
           <MetricPanel

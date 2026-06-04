@@ -148,6 +148,10 @@ type ObservabilityMeteringOverview struct {
 	UpstreamBytes           int64                    `json:"upstream_bytes"`
 	UpstreamBytesSupported  bool                     `json:"upstream_bytes_supported"`
 	CacheHitCount           int64                    `json:"cache_hit_count"`
+	CacheMissCount          int64                    `json:"cache_miss_count"`
+	CacheBypassCount        int64                    `json:"cache_bypass_count"`
+	CacheExpiredCount       int64                    `json:"cache_expired_count"`
+	CacheStaleCount         int64                    `json:"cache_stale_count"`
 	CacheClassifiedCount    int64                    `json:"cache_classified_count"`
 	CacheHitRatePercent     float64                  `json:"cache_hit_rate_percent"`
 	BandwidthP95Bps         float64                  `json:"bandwidth_p95_bps"`
@@ -481,6 +485,10 @@ func buildObservabilityMeteringOverview(source meteringOverviewDataSource) *Obse
 			continue
 		}
 		overview.CacheHitCount += report.CacheHitCount
+		overview.CacheMissCount += report.CacheMissCount
+		overview.CacheBypassCount += report.CacheBypassCount
+		overview.CacheExpiredCount += report.CacheExpiredCount
+		overview.CacheStaleCount += report.CacheStaleCount
 		overview.CacheClassifiedCount += report.CacheHitCount + report.CacheMissCount + report.CacheBypassCount + report.CacheExpiredCount + report.CacheStaleCount
 		if len(statusCounts) == 0 {
 			mergeJSONCounts(statusCounts, report.StatusCodesJSON)

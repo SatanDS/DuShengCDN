@@ -335,6 +335,9 @@ func TestBuildObservabilityMeteringOverviewAggregatesBillingSignals(t *testing.T
 	if view.CacheHitRatePercent != 70 {
 		t.Fatalf("expected cache hit rate 70, got %f", view.CacheHitRatePercent)
 	}
+	if view.CacheHitCount != 7 || view.CacheMissCount != 2 || view.CacheBypassCount != 1 || view.CacheClassifiedCount != 10 {
+		t.Fatalf("expected cache status breakdown, got %+v", view)
+	}
 	if view.NodeAvailabilityPercent != 50 {
 		t.Fatalf("expected availability 50, got %f", view.NodeAvailabilityPercent)
 	}

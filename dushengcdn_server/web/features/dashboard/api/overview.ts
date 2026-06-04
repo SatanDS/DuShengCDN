@@ -204,6 +204,10 @@ function normalizeDashboardOverview(
     estimated_qps: Number(rawTraffic.estimated_qps ?? 0),
     reported_nodes: Number(rawTraffic.reported_nodes ?? 0),
     cache_hit_count: Number(rawTraffic.cache_hit_count ?? 0),
+    cache_miss_count: Number(rawTraffic.cache_miss_count ?? 0),
+    cache_bypass_count: Number(rawTraffic.cache_bypass_count ?? 0),
+    cache_expired_count: Number(rawTraffic.cache_expired_count ?? 0),
+    cache_stale_count: Number(rawTraffic.cache_stale_count ?? 0),
     cache_classified_count: Number(rawTraffic.cache_classified_count ?? 0),
     cache_hit_rate_percent: Number(rawTraffic.cache_hit_rate_percent ?? 0),
   };

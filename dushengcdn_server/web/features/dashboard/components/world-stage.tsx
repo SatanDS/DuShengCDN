@@ -127,6 +127,10 @@ export function WorldStage({
   metering?: {
     bandwidth_p95_bps: number;
     cache_hit_count: number;
+    cache_miss_count?: number;
+    cache_bypass_count?: number;
+    cache_expired_count?: number;
+    cache_stale_count?: number;
     cache_classified_count: number;
     cache_hit_rate_percent: number;
   } | null;
@@ -191,8 +195,8 @@ export function WorldStage({
       : '暂无数据';
   const cacheHitHint = metering
     ? metering.cache_classified_count > 0
-      ? `命中 ${metering.cache_hit_count.toLocaleString('zh-CN')} / 可分类 ${metering.cache_classified_count.toLocaleString('zh-CN')}`
-      : '还没有收到缓存状态；需启用代理服务缓存、发布站点缓存策略，并产生命中规则的 GET 请求'
+      ? `HIT ${metering.cache_hit_count.toLocaleString('zh-CN')} · MISS ${(metering.cache_miss_count ?? 0).toLocaleString('zh-CN')} · BYPASS ${(metering.cache_bypass_count ?? 0).toLocaleString('zh-CN')}`
+      : '未收到缓存状态；检查全局缓存、站点缓存策略、发布版本和 GET 请求是否命中规则'
     : '等待观测计量上报';
 
   return (

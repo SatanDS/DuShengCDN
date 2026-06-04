@@ -145,6 +145,10 @@ export interface ObservabilityMeteringOverview {
   upstream_bytes: number;
   upstream_bytes_supported: boolean;
   cache_hit_count: number;
+  cache_miss_count: number;
+  cache_bypass_count: number;
+  cache_expired_count: number;
+  cache_stale_count: number;
   cache_classified_count: number;
   cache_hit_rate_percent: number;
   bandwidth_p95_bps: number;

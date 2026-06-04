@@ -1835,6 +1835,9 @@ func TestGetDashboardOverview(t *testing.T) {
 	if view.Traffic.CacheHitCount != 72 || view.Traffic.CacheClassifiedCount != 90 || view.Traffic.CacheHitRatePercent != 80 {
 		t.Fatalf("unexpected dashboard cache traffic: %+v", view.Traffic)
 	}
+	if view.Traffic.CacheMissCount != 18 || view.Traffic.CacheBypassCount != 0 || view.Traffic.CacheExpiredCount != 0 || view.Traffic.CacheStaleCount != 0 {
+		t.Fatalf("unexpected dashboard cache status breakdown: %+v", view.Traffic)
+	}
 	if view.Capacity.HighCPUNodes != 1 || view.Capacity.HighMemoryNodes != 1 {
 		t.Fatalf("unexpected dashboard capacity summary: %+v", view.Capacity)
 	}

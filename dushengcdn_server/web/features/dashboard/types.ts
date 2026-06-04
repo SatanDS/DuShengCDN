@@ -13,6 +13,10 @@ export interface DashboardTraffic {
   estimated_qps: number;
   reported_nodes: number;
   cache_hit_count: number;
+  cache_miss_count: number;
+  cache_bypass_count: number;
+  cache_expired_count: number;
+  cache_stale_count: number;
   cache_classified_count: number;
   cache_hit_rate_percent: number;
 }
