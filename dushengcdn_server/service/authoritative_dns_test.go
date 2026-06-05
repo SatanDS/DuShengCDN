@@ -186,6 +186,70 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDNSRejectsWritesAndSnapshotWhenLicenseExpires(t *testing.T) {
+	setupServiceTestDB(t)
+	withCommercialLicenseTestConfig(t, true, "", true)
+
+	activeNow := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	expiresAt := activeNow.Add(24 * time.Hour)
+	restoreNow := setCommercialLicenseNowForTest(t, activeNow)
+	defer restoreNow()
+
+	token := buildUnsignedCommercialLicenseToken(t, CommercialLicensePayload{
+		LicenseID:    "lic-auth-expiry",
+		CustomerName: "Auth DNS Ltd.",
+		Plan:         "business",
+		Features:     []string{CommercialFeatureAuthoritativeDNS},
+		ExpiresAt:    &expiresAt,
+	})
+	if _, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: token}); err != nil {
+		t.Fatalf("InstallCommercialLicense failed: %v", err)
+	}
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	record, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.10"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+	}
+	workerView, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	worker, err := AuthenticateDNSWorkerToken(workerView.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+
+	commercialLicenseNow = func() time.Time {
+		return expiresAt.Add(time.Second)
+	}
+
+	if _, err := UpdateAuthoritativeDNSZone(zone.ID, DNSZoneInput{Name: "example.com", DefaultTTL: 600}); err == nil || !strings.Contains(err.Error(), "过期") {
+		t.Fatalf("expected expired license to block zone update, got %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSRecord(record.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.11"}); err == nil || !strings.Contains(err.Error(), "过期") {
+		t.Fatalf("expected expired license to block record update, got %v", err)
+	}
+	if err := DeleteAuthoritativeDNSRecord(record.ID); err == nil || !strings.Contains(err.Error(), "过期") {
+		t.Fatalf("expected expired license to block record delete, got %v", err)
+	}
+	if _, err := RecordDNSWorkerHeartbeat(worker, DNSWorkerHeartbeatInput{Status: dnsWorkerStatusOnline}); err == nil || !strings.Contains(err.Error(), "过期") {
+		t.Fatalf("expected expired license to block worker heartbeat, got %v", err)
+	}
+	if _, err := GetAuthoritativeDNSSnapshot(worker); err == nil || !strings.Contains(err.Error(), "过期") {
+		t.Fatalf("expected expired license to block DNS snapshot, got %v", err)
+	}
+	if err := DeleteAuthoritativeDNSWorker(worker.ID); err == nil || !strings.Contains(err.Error(), "过期") {
+		t.Fatalf("expected expired license to block worker delete, got %v", err)
+	}
+	if err := DeleteAuthoritativeDNSZone(zone.ID); err == nil || !strings.Contains(err.Error(), "过期") {
+		t.Fatalf("expected expired license to block zone delete, got %v", err)
+	}
+}
+
 func TestAuthoritativeDNSSnapshotReusesTargetSelectionNodeSnapshot(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -2785,6 +2849,53 @@ func TestPersistDNSQueryRollupsBatchesInserts(t *testing.T) {
 	targetSummary := decodeDNSTargetSummary(rollups[1].TargetSummary)
 	if rollups[1].QName != "www.example.com" || targetSummary["8.8.8.8"] != 10 {
 		t.Fatalf("unexpected aggregated target summary: raw=%s decoded=%+v", rollups[1].TargetSummary, targetSummary)
+	}
+}
+
+func TestPersistDNSQueryRollupsRejectsExcessHeartbeatRollups(t *testing.T) {
+	setupServiceTestDB(t)
+
+	inputs := make([]DNSQueryRollupInput, defaultDNSMaxHeartbeatRollups+1)
+	for index := range inputs {
+		inputs[index] = DNSQueryRollupInput{
+			QName:      "www.example.com",
+			QType:      "A",
+			RCode:      "NOERROR",
+			QueryCount: 1,
+		}
+	}
+
+	err := persistDNSQueryRollups("ns1", inputs)
+	if err == nil || !strings.Contains(err.Error(), "rollups exceed limit") {
+		t.Fatalf("expected rollup limit error, got %v", err)
+	}
+	var count int64
+	if err := model.DB.Model(&model.DNSQueryRollup{}).Count(&count).Error; err != nil {
+		t.Fatalf("count rollups: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected rejected heartbeat to persist no rollups, got %d", count)
+	}
+}
+
+func TestNormalizeDNSTargetSummaryKeepsTopTargets(t *testing.T) {
+	values := make(map[string]int64, defaultDNSMaxRollupTargetSummary+5)
+	for index := 0; index < defaultDNSMaxRollupTargetSummary+5; index++ {
+		values[fmt.Sprintf("192.0.2.%d", index)] = int64(index + 1)
+	}
+	values[" 192.0.2.99 "] = 1000
+	values[""] = 5000
+	values["ignored"] = 0
+
+	result := normalizeDNSTargetSummary(values)
+	if len(result) != defaultDNSMaxRollupTargetSummary {
+		t.Fatalf("expected target summary cap %d, got %d", defaultDNSMaxRollupTargetSummary, len(result))
+	}
+	if result["192.0.2.99"] != 1000 {
+		t.Fatalf("expected normalized top target to be kept, got %+v", result)
+	}
+	if _, ok := result["192.0.2.0"]; ok {
+		t.Fatalf("expected lowest target to be trimmed, got %+v", result)
 	}
 }
 

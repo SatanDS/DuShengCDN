@@ -3,11 +3,14 @@ package controller
 import (
 	"dushengcdn/model"
 	"dushengcdn/service"
+	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
+
+const maxDNSWorkerHeartbeatBodyBytes = 8 << 20
 
 func GetDNSZones(c *gin.Context) {
 	zones, err := service.ListAuthoritativeDNSZones()
@@ -260,6 +263,9 @@ func DNSWorkerHeartbeat(c *gin.Context) {
 	worker, ok := authenticateDNSWorker(c)
 	if !ok {
 		return
+	}
+	if c.Request != nil && c.Request.Body != nil {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxDNSWorkerHeartbeatBodyBytes)
 	}
 	var input service.DNSWorkerHeartbeatInput
 	if !decodeJSONRequest(c, &input) {

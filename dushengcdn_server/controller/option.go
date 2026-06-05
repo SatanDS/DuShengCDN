@@ -20,6 +20,7 @@ var (
 	openRestyProxyBuffersPattern  = regexp.MustCompile(`^\d+\s+\d+[kKmMgG]?$`)
 	openRestyCacheLevelsPattern   = regexp.MustCompile(`^\d{1,2}(?::\d{1,2}){0,2}$`)
 	openRestyDurationTokenPattern = regexp.MustCompile(`^\d+[smhdwSMHDW]$`)
+	githubRepoPattern             = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 )
 
 type optionBatchPayload struct {
@@ -113,6 +114,11 @@ func validateCloudflareOption(key string, value string) error {
 
 func validateAgentOption(key string, value string) error {
 	switch key {
+	case "AgentUpdateRepo":
+		if !githubRepoPattern.MatchString(strings.TrimSpace(value)) {
+			return fmt.Errorf("%s 必须为 owner/repo 格式", key)
+		}
+		return nil
 	case "AgentWebsocketUpgradeEnabled":
 		return validateBooleanOption(key, strings.TrimSpace(value))
 	default:
@@ -227,6 +233,9 @@ func validateOpenRestyOption(key string, value string) error {
 	case "OpenRestyCachePath":
 		if strings.ContainsAny(trimmed, "\r\n\t") {
 			return fmt.Errorf("%s 不能包含换行或制表符", key)
+		}
+		if err := service.ValidateAgentCachePath(trimmed); err != nil {
+			return err
 		}
 		return nil
 	case "OpenRestyCacheLevels":

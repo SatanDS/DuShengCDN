@@ -189,9 +189,6 @@ func GetProxyRoute(id uint) (*ProxyRouteView, error) {
 }
 
 func CreateProxyRoute(input ProxyRouteInput) (*ProxyRouteView, error) {
-	if err := EnsureCommercialResourceAvailable("site"); err != nil {
-		return nil, err
-	}
 	if err := ensureCommercialProxyRouteInputFeaturesEnabled(input); err != nil {
 		return nil, err
 	}
@@ -199,7 +196,9 @@ func CreateProxyRoute(input ProxyRouteInput) (*ProxyRouteView, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = route.Insert(); err != nil {
+	if err = withCommercialResourceCreation("site", func(tx *gorm.DB) error {
+		return route.InsertWithDB(tx)
+	}); err != nil {
 		if isUniqueConstraintError(err) {
 			return nil, errors.New("proxy route identity already exists")
 		}

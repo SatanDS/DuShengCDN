@@ -430,6 +430,57 @@ func TestSavePersistsMillisecondsAndOmitsRuntimeVersions(t *testing.T) {
 	}
 }
 
+func TestSaveWritesPrivateConfigFile(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("windows file permissions do not map cleanly to unix mode bits")
+	}
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(configPath, []byte(`{"server_url":"http://127.0.0.1:3000","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8"}`), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	cfg.AgentToken = "new-token"
+	if err = cfg.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("failed to stat saved config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("unexpected config file mode: got %o want 600", got)
+	}
+}
+
+func TestLoadTightensExistingConfigFilePermissions(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("windows file permissions do not map cleanly to unix mode bits")
+	}
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(configPath, []byte(`{"server_url":"http://127.0.0.1:3000","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8"}`), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("failed to stat config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("unexpected config file mode after Load: got %o want 600", got)
+	}
+}
+
 func TestInitialAuthToken(t *testing.T) {
 	tests := []struct {
 		name           string

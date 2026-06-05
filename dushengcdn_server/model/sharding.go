@@ -170,6 +170,10 @@ func databaseDialectorName(db *gorm.DB) string {
 	return dialector.Name()
 }
 
+func DatabaseDialectorName(db *gorm.DB) string {
+	return databaseDialectorName(db)
+}
+
 func nextObservabilityID() (uint, error) {
 	observabilityIDNodeOnce.Do(func() {
 		observabilityIDNode, observabilityIDNodeErr = snowflake.NewNode(0)

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -341,6 +342,113 @@ func TestInstallCommercialLicenseVerifiesSignatureAndAppliesLimits(t *testing.T)
 	}
 	if err := EnsureCommercialResourceAvailable("site"); err == nil {
 		t.Fatal("expected site quota to block creation")
+	}
+}
+
+func TestCommercialLicenseNodeQuotaSerializesConcurrentCreates(t *testing.T) {
+	setupServiceTestDB(t)
+	withCommercialLicenseTestConfig(t, true, "", true)
+
+	token := buildUnsignedCommercialLicenseToken(t, CommercialLicensePayload{
+		LicenseID:    "lic-node-quota",
+		CustomerName: "Quota Ltd.",
+		Plan:         "business",
+		MaxNodes:     1,
+	})
+	if _, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: token}); err != nil {
+		t.Fatalf("InstallCommercialLicense failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, name := range []string{"edge-a", "edge-b"} {
+		wg.Add(1)
+		go func(nodeName string) {
+			defer wg.Done()
+			_, err := CreateNode(NodeInput{Name: nodeName, IP: "203.0.113.10"})
+			errs <- err
+		}(name)
+	}
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+			continue
+		}
+		if !strings.Contains(err.Error(), "节点") {
+			t.Fatalf("expected quota error mentioning node limit, got %v", err)
+		}
+		failures++
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("expected one successful create and one quota failure, got successes=%d failures=%d", successes, failures)
+	}
+
+	var count int64
+	if err := model.DB.Model(&model.Node{}).Count(&count).Error; err != nil {
+		t.Fatalf("count nodes: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one node after concurrent creates, got %d", count)
+	}
+}
+
+func TestCommercialLicenseSiteQuotaSerializesConcurrentCreates(t *testing.T) {
+	setupServiceTestDB(t)
+	withCommercialLicenseTestConfig(t, true, "", true)
+
+	token := buildUnsignedCommercialLicenseToken(t, CommercialLicensePayload{
+		LicenseID:    "lic-site-quota",
+		CustomerName: "Quota Ltd.",
+		Plan:         "business",
+		MaxSites:     1,
+	})
+	if _, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: token}); err != nil {
+		t.Fatalf("InstallCommercialLicense failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, domain := range []string{"a.example.com", "b.example.com"} {
+		wg.Add(1)
+		go func(routeDomain string) {
+			defer wg.Done()
+			_, err := CreateProxyRoute(ProxyRouteInput{
+				Domain:    routeDomain,
+				OriginURL: "http://origin.example.com",
+			})
+			errs <- err
+		}(domain)
+	}
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+			continue
+		}
+		if !strings.Contains(err.Error(), "站点") {
+			t.Fatalf("expected quota error mentioning site limit, got %v", err)
+		}
+		failures++
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("expected one successful create and one quota failure, got successes=%d failures=%d", successes, failures)
+	}
+
+	var count int64
+	if err := model.DB.Model(&model.ProxyRoute{}).Count(&count).Error; err != nil {
+		t.Fatalf("count proxy routes: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one proxy route after concurrent creates, got %d", count)
 	}
 }
 

@@ -1,6 +1,6 @@
 services:
   dushengcdn-agent:
-    image: ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:-latest}
+    image: ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION in .env}
     container_name: dushengcdn-agent
     restart: unless-stopped
     ports:

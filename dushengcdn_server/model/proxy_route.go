@@ -3,6 +3,8 @@ package model
 import (
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type ProxyRoute struct {
@@ -142,12 +144,19 @@ func ListProxyRouteIdentityCandidates(siteName string, domains []string) (routes
 }
 
 func (route *ProxyRoute) Insert() error {
+	return route.InsertWithDB(DB)
+}
+
+func (route *ProxyRoute) InsertWithDB(db *gorm.DB) error {
+	if db == nil {
+		db = DB
+	}
 	enabled := route.Enabled
-	if err := DB.Create(route).Error; err != nil {
+	if err := db.Create(route).Error; err != nil {
 		return err
 	}
 	if !enabled {
-		if err := DB.Model(route).UpdateColumn("enabled", false).Error; err != nil {
+		if err := db.Model(route).UpdateColumn("enabled", false).Error; err != nil {
 			return err
 		}
 		route.Enabled = false

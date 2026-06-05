@@ -88,13 +88,13 @@ export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disab
 
 ## First Login
 
-Default account:
+First login:
 
 | Username | Password |
 | --- | --- |
-| `root` | `123456` |
+| `root` | `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first empty-database Server startup log |
 
-Please change the default password immediately after logging in for the first time.
+Change the root password immediately after logging in for the first time. If it is lost, use `--reset-root-password`.
 
 ## Swagger
 

@@ -65,7 +65,7 @@ If it is a source deployment, confirm that there are no database migration or st
 
 ## DNS Worker Upgrade
 
-DNS Worker installations created by the script can be reinstalled or upgraded by rerunning the install command with the same Server URL and Worker Token. The script prefers GitHub Release binaries and verifies matching `.sha256` files; if no release asset exists, it builds from source and embeds the current Git version.
+DNS Worker installations created by the script can be reinstalled or upgraded by rerunning the install command with the same Server URL and Worker Token. The script prefers GitHub Release binaries and requires matching `.sha256` files; if a matching binary exists without its checksum, the script stops. If no matching binary asset exists, it builds from source and embeds the current Git version.
 
 Uninstall DNS Worker:
 
@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --agent-token YOUR_AGENT_TOKEN
 ```
 
-The script prefers GitHub Release binaries. If no matching asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
+The script prefers GitHub Release binaries and requires same-name `.sha256` files. If no matching binary asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
 
 For Docker Compose Agent deployments:
 

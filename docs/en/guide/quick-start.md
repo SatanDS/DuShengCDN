@@ -49,7 +49,7 @@ services:
     environment:
       POSTGRES_DB: dushengcdn
       POSTGRES_USER: dushengcdn
-      POSTGRES_PASSWORD: replace-with-strong-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -59,7 +59,7 @@ services:
       retries: 5
 
   dushengcdn:
-    image: ghcr.io/satands/dushengcdn:latest
+    image: ghcr.io/satands/dushengcdn:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION in .env}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -68,7 +68,7 @@ services:
       - "3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
-      DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
+      DSN: ${DSN:?set DSN in .env}
       GIN_MODE: release
       LOG_LEVEL: info
 
@@ -79,6 +79,12 @@ volumes:
 Start:
 
 ```bash
+cat > .env <<'EOF'
+DUSHENGCDN_VERSION=v1.0.0
+POSTGRES_PASSWORD=change-this-database-password
+SESSION_SECRET=replace-with-openssl-rand-hex-32
+DSN=postgres://dushengcdn:change-this-database-password@postgres:5432/dushengcdn?sslmode=disable
+EOF
 docker compose up -d
 ```
 
@@ -112,13 +118,13 @@ When the `dushengcdn` container is running and logs show `server listening`, ope
 http://localhost:3000
 ```
 
-Default account:
+First login:
 
 | Username | Password |
 | --- | --- |
-| `root` | `123456` |
+| `root` | `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first empty-database Server startup log |
 
-Change the default password immediately after first login.
+Change the root password immediately after first login, then remove or rotate the bootstrap value in `.env`.
 
 ## 2. Prepare an Agent Token
 
@@ -199,6 +205,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 The script installs to `/opt/dushengcdn-dns-worker`, creates `dushengcdn-dns-worker.service`, listens on UDP/TCP `53`, stores a local snapshot cache, and downloads a Country MMDB by default for country-code GSLB pools. Docker is also supported:
 
 ```bash
+DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp \
   -v dushengcdn-dns-worker-data:/data \
@@ -206,7 +213,7 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
   -e DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \
   -e DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232 \
-  ghcr.io/satands/dushengcdn-dns-worker:latest
+  ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
 After the Worker is online, delegate the zone at your registrar, then switch the site detail **Automatic DNS** section to **Authoritative DNS** and select the Zone. Production should run at least two Workers and allow both UDP and TCP `53`.

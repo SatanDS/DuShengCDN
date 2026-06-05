@@ -163,12 +163,13 @@ type NodeTrafficReport struct {
 }
 
 type CacheOperation struct {
-	OperationID string   `json:"operation_id"`
-	Action      string   `json:"action"`
-	Scope       string   `json:"scope"`
-	URLs        []string `json:"urls,omitempty"`
-	Prefixes    []string `json:"prefixes,omitempty"`
-	CachePath   string   `json:"cache_path,omitempty"`
+	OperationID  string   `json:"operation_id"`
+	Action       string   `json:"action"`
+	Scope        string   `json:"scope"`
+	URLs         []string `json:"urls,omitempty"`
+	Prefixes     []string `json:"prefixes,omitempty"`
+	CachePath    string   `json:"cache_path,omitempty"`
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
 }
 
 type NodeAccessLog struct {

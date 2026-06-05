@@ -21,6 +21,7 @@ func setWebRouter(router *gin.Engine, buildFS embed.FS, indexPage []byte) {
 
 	router.Use(middleware.GlobalWebRateLimit())
 	router.Use(normalizeStaticExportDataNavigation())
+	router.Use(middleware.WebSecurityHeaders())
 	router.Use(middleware.Cache())
 	router.Use(static.Serve("/", embedfs.EmbedFolder(buildFS, "web/build")))
 	router.NoRoute(func(c *gin.Context) {

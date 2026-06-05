@@ -67,7 +67,7 @@ Default URL:
 http://localhost:3000
 ```
 
-Default account: `root` / `123456`.
+On an empty database, the first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first Server startup log when that variable is not set.
 
 ## Run the Frontend Dev Server
 
@@ -116,6 +116,13 @@ Server:
 ```bash
 cd dushengcdn_server
 GOCACHE=/tmp/dushengcdn-go-cache go test ./...
+```
+
+The commercial quota Postgres row-lock integration test is skipped by default. To verify real PostgreSQL concurrency semantics, provide a dedicated test database DSN:
+
+```bash
+cd dushengcdn_server
+POSTGRES_TEST_DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn_test?sslmode=disable' go test ./service -run TestPostgresCommercialLicenseQuotaSerializesConcurrentNodeCreates -count=1
 ```
 
 Agent:

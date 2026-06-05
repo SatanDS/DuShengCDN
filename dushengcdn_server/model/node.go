@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 type Node struct {
 	ID                        uint      `json:"id" gorm:"primaryKey"`
@@ -67,7 +71,14 @@ func GetNodeByAgentToken(token string) (*Node, error) {
 }
 
 func (node *Node) Insert() error {
-	return DB.Create(node).Error
+	return node.InsertWithDB(DB)
+}
+
+func (node *Node) InsertWithDB(db *gorm.DB) error {
+	if db == nil {
+		db = DB
+	}
+	return db.Create(node).Error
 }
 
 func (node *Node) Update() error {

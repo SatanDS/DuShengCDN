@@ -66,6 +66,68 @@ func TestConfigureSessionStoreSetsCommercialCookieFlags(t *testing.T) {
 	}
 }
 
+func TestConfigureTrustedProxiesDisablesForwardedClientIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTrustedProxies := common.TrustedProxies
+	common.TrustedProxies = ""
+	t.Cleanup(func() {
+		common.TrustedProxies = oldTrustedProxies
+	})
+
+	router := gin.New()
+	configureTrustedProxies(router)
+	router.GET("/client-ip", func(c *gin.Context) {
+		c.String(http.StatusOK, c.ClientIP())
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/client-ip", nil)
+	req.RemoteAddr = "192.0.2.10:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Body.String() != "192.0.2.10" {
+		t.Fatalf("expected forwarded client IP header to be ignored, got %q", recorder.Body.String())
+	}
+}
+
+func TestConfigureTrustedProxiesAllowsConfiguredProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTrustedProxies := common.TrustedProxies
+	common.TrustedProxies = "192.0.2.10"
+	t.Cleanup(func() {
+		common.TrustedProxies = oldTrustedProxies
+	})
+
+	router := gin.New()
+	configureTrustedProxies(router)
+	router.GET("/client-ip", func(c *gin.Context) {
+		c.String(http.StatusOK, c.ClientIP())
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/client-ip", nil)
+	req.RemoteAddr = "192.0.2.10:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Body.String() != "198.51.100.99" {
+		t.Fatalf("expected trusted proxy header to be honored, got %q", recorder.Body.String())
+	}
+}
+
+func TestParseTrustedProxiesRejectsGlobalCIDRs(t *testing.T) {
+	for _, raw := range []string{
+		"0.0.0.0/0",
+		"::/0",
+		"127.0.0.1, 0.0.0.0/0",
+	} {
+		if _, err := parseTrustedProxies(raw); err == nil {
+			t.Fatalf("expected %q to be rejected", raw)
+		}
+	}
+}
+
 func TestValidateRuntimeSecurityConfigRejectsReleasePlaceholders(t *testing.T) {
 	oldSecret := common.SessionSecret
 	oldDSN := common.SQLDSN

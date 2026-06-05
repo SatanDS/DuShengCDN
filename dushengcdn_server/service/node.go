@@ -15,6 +15,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type NodeInput struct {
@@ -70,9 +72,6 @@ type AgentRegistrationResponse struct {
 }
 
 func CreateNode(input NodeInput) (*NodeView, error) {
-	if err := EnsureCommercialResourceAvailable("node"); err != nil {
-		return nil, err
-	}
 	normalized, err := normalizeNodeInputV2(input, true)
 	if normalized.Name == "" {
 		return nil, errors.New("节点名不能为空")
@@ -106,7 +105,9 @@ func CreateNode(input NodeInput) (*NodeView, error) {
 	if !node.GeoManualOverride {
 		applyGeoInfoFromIP(node, node.IP)
 	}
-	if err := node.Insert(); err != nil {
+	if err := withCommercialResourceCreation("node", func(tx *gorm.DB) error {
+		return node.InsertWithDB(tx)
+	}); err != nil {
 		if isUniqueConstraintError(err) {
 			return nil, errors.New("节点标识生成冲突，请重试")
 		}
@@ -711,9 +712,6 @@ func RegisterNodeWithAgentToken(node *model.Node, payload AgentNodePayload) (*Ag
 }
 
 func RegisterNodeWithDiscovery(payload AgentNodePayload) (*AgentRegistrationResponse, error) {
-	if err := EnsureCommercialResourceAvailable("node"); err != nil {
-		return nil, err
-	}
 	payload = normalizeAgentNodePayload(payload)
 	if err := validateAgentNodePayload(payload); err != nil {
 		return nil, err
@@ -736,7 +734,9 @@ func RegisterNodeWithDiscovery(payload AgentNodePayload) (*AgentRegistrationResp
 		AgentToken: agentToken,
 	}
 	applyNodeRuntime(node, payload, false)
-	if err = node.Insert(); err != nil {
+	if err = withCommercialResourceCreation("node", func(tx *gorm.DB) error {
+		return node.InsertWithDB(tx)
+	}); err != nil {
 		if isUniqueConstraintError(err) {
 			return nil, errors.New("节点标识生成冲突，请重试")
 		}

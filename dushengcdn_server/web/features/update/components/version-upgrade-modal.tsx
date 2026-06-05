@@ -1,7 +1,7 @@
 'use client';
 
 import {marked} from 'marked';
-import {useEffect, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 
 import {EmptyState} from '@/components/feedback/empty-state';
 import {ErrorState} from '@/components/feedback/error-state';
@@ -21,6 +21,7 @@ import {
     SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 import {formatDateTime, formatRelativeTime} from '@/lib/utils/date';
+import {sanitizeHtml} from '@/lib/utils/sanitize-html';
 
 interface VersionUpgradeModalProps {
     isOpen: boolean;
@@ -121,6 +122,13 @@ export function VersionUpgradeModal({
     const showConfirmManualUpgradeAction = canConfirmManualUpgrade;
     const upgradeLogs = release?.upgrade_logs ?? [];
     const automaticUpgradeEnabled = release?.automatic_upgrade_enabled ?? false;
+    const safeReleaseBodyHtml = useMemo(
+        () =>
+            sanitizeHtml(
+                marked.parse(release?.body || '暂无更新说明') as string,
+            ),
+        [release?.body],
+    );
 
     useEffect(() => {
         if (!isOpen) {
@@ -230,9 +238,7 @@ export function VersionUpgradeModal({
                             <div
                                 className="prose prose-sm max-w-none text-[var(--foreground-primary)] [&_a]:text-[var(--brand-primary)]"
                                 dangerouslySetInnerHTML={{
-                                    __html: marked.parse(
-                                        release.body || '暂无更新说明',
-                                    ) as string,
+                                    __html: safeReleaseBodyHtml,
                                 }}
                             />
                             <a

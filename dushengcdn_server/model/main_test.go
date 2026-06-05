@@ -1,6 +1,7 @@
 package model
 
 import (
+	"dushengcdn/common"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -1904,6 +1905,31 @@ func TestResetRootPasswordCreatesAndEnablesRoot(t *testing.T) {
 	}
 	if resetUser.Role != 100 || resetUser.Status != 1 {
 		t.Fatalf("expected reset root to be enabled root role, got role=%d status=%d", resetUser.Role, resetUser.Status)
+	}
+}
+
+func TestCreateRootAccountUsesConfiguredInitialPassword(t *testing.T) {
+	db := openTestSQLiteDB(t, "initial-root-password.db")
+	previousDB := DB
+	DB = db
+	previousInitialPassword := common.InitialRootPassword
+	common.InitialRootPassword = "configured-root-password"
+	t.Cleanup(func() {
+		DB = previousDB
+		common.InitialRootPassword = previousInitialPassword
+	})
+
+	if err := createRootAccountIfNeed(); err != nil {
+		t.Fatalf("create root account: %v", err)
+	}
+
+	user := &User{Username: "root", Password: "configured-root-password"}
+	if err := user.ValidateAndFill(); err != nil {
+		t.Fatalf("expected configured initial root password to validate: %v", err)
+	}
+	defaultPasswordUser := &User{Username: "root", Password: "123456"}
+	if err := defaultPasswordUser.ValidateAndFill(); err == nil {
+		t.Fatal("fixed default root password should not validate")
 	}
 }
 

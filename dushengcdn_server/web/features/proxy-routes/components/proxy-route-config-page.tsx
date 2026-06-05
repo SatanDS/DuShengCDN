@@ -11,6 +11,7 @@ import { z } from 'zod';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
+import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
@@ -1938,6 +1939,7 @@ export function CacheSection({
 } & ConfigSectionPresentationProps) {
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
+  const confirmDialog = useConfirmDialog();
   const optionsQuery = useQuery({
     queryKey: ['settings', 'options'],
     queryFn: getOptions,
@@ -2017,6 +2019,21 @@ export function CacheSection({
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
     },
   });
+
+  const handlePurgeCache = async () => {
+    const confirmed = await confirmDialog({
+      title: '清理全部缓存',
+      message: `确认清理站点“${route.site_name}”的全部缓存吗？该操作会下发到目标节点，短时间内可能增加回源压力。`,
+      confirmLabel: '清理缓存',
+      tone: 'danger',
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    purgeMutation.mutate();
+  };
 
   return (
     <ConfigSectionShell
@@ -2149,7 +2166,7 @@ export function CacheSection({
           <SecondaryButton
             type="button"
             disabled={purgeMutation.isPending}
-            onClick={() => purgeMutation.mutate()}
+            onClick={() => void handlePurgeCache()}
           >
             {purgeMutation.isPending ? '清理中...' : '清理全部缓存'}
           </SecondaryButton>

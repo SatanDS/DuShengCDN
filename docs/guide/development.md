@@ -68,7 +68,7 @@ go run .
 http://localhost:3000
 ```
 
-默认账号是 `root` / `123456`。
+首次空库启动会创建 `root` 用户。密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 首次启动日志中的一次性随机密码。
 
 ## 启动前端开发服务器
 
@@ -142,6 +142,13 @@ Server：
 ```bash
 cd dushengcdn_server
 GOCACHE=/tmp/dushengcdn-go-cache go test ./...
+```
+
+商业配额的 Postgres 行锁集成测试默认跳过；需要验证真实 PostgreSQL 并发语义时，提供独立测试库 DSN 后运行：
+
+```bash
+cd dushengcdn_server
+POSTGRES_TEST_DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn_test?sslmode=disable' go test ./service -run TestPostgresCommercialLicenseQuotaSerializesConcurrentNodeCreates -count=1
 ```
 
 DNS Worker 单包：

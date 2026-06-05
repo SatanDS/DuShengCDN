@@ -30,7 +30,7 @@ services:
     environment:
       POSTGRES_DB: dushengcdn
       POSTGRES_USER: dushengcdn
-      POSTGRES_PASSWORD: replace-with-strong-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -40,7 +40,7 @@ services:
       retries: 5
 
   dushengcdn:
-    image: ghcr.io/satands/dushengcdn:latest
+    image: ghcr.io/satands/dushengcdn:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION in .env}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -49,7 +49,7 @@ services:
       - "3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
-      DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
+      DSN: ${DSN:?set DSN in .env}
       GIN_MODE: release
       LOG_LEVEL: info
     volumes:
@@ -63,12 +63,18 @@ volumes:
 启动：
 
 ```bash
+cat > .env <<'EOF'
+DUSHENGCDN_VERSION=v1.0.0
+POSTGRES_PASSWORD=change-this-database-password
+SESSION_SECRET=replace-with-openssl-rand-hex-32
+DSN=postgres://dushengcdn:change-this-database-password@postgres:5432/dushengcdn?sslmode=disable
+EOF
 docker compose up -d
 docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-浏览器访问 `http://服务器IP:3000`。默认账号是 `root` / `123456`，首次登录后立即修改密码。
+浏览器访问 `http://服务器IP:3000`。首次登录用户名是 `root`，密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 首次空库启动日志中的一次性随机密码。首次登录后立即修改密码。
 
 ## 3. 初始化运维设置
 
@@ -101,11 +107,12 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 Docker Agent：
 
 ```bash
+DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
   -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
   -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
-  ghcr.io/satands/dushengcdn-agent:latest
+  ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
 确认节点上线：

@@ -9,14 +9,29 @@ on:
       name:
         description: 'Reason'
         required: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout 🛎️
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
       - name: Install and Build 🔧 # This example project is built using npm and outputs the result to the 'build' folder. Replace with the commands required to build your project, or remove this step entirely if your site is pre-built.
         env:
           CI: ""
@@ -26,9 +41,10 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - name: Deploy 🚀
-        uses: JamesIves/github-pages-deploy-action@v4
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          token: ${{ secrets.ACCESS_TOKEN }}
-          branch: gh-pages
-          folder: dushengcdn_server/web/build
+          path: dushengcdn_server/web/build
+      - name: Deploy 🚀
+        id: deployment
+        uses: actions/deploy-pages@v5

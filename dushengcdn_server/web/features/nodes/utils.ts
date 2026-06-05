@@ -167,6 +167,24 @@ export function getServerUrl(value: string) {
   return value.trim().replace(/\/+$/, '');
 }
 
+export type DeploymentProtocol = 'http' | 'https';
+
+export function getDeploymentProtocol(value: string): DeploymentProtocol {
+  return value.trim().toLowerCase().startsWith('http://') ? 'http' : 'https';
+}
+
+export function stripServerUrlProtocol(value: string) {
+  return getServerUrl(value).replace(/^https?:\/\//i, '');
+}
+
+export function buildDeploymentServerUrl(
+  protocol: DeploymentProtocol,
+  value: string,
+) {
+  const endpoint = stripServerUrlProtocol(value);
+  return endpoint ? `${protocol}://${endpoint}` : '';
+}
+
 const installerScriptUrl =
   'https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh';
 

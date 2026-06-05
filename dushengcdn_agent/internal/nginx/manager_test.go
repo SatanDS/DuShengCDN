@@ -301,6 +301,148 @@ func TestProxyCacheDirectoriesFromConfig(t *testing.T) {
 	}
 }
 
+func TestSafeCacheDirectoryRejectsBroadAndNonCachePaths(t *testing.T) {
+	tempDir := t.TempDir()
+	testCases := []string{
+		filepath.Join(tempDir, "home", "admin"),
+		filepath.Join(tempDir, "var", "lib", "app"),
+		filepath.Join(tempDir, "var", "cache", "nginx"),
+		filepath.Join(tempDir, "tmp", "data"),
+	}
+	for _, path := range testCases {
+		if _, err := safeCacheDirectory(path); err == nil {
+			t.Fatalf("expected cache path %q to be rejected", path)
+		}
+	}
+}
+
+func TestSafeCacheDirectoryAcceptsManagedCachePaths(t *testing.T) {
+	tempDir := t.TempDir()
+	testCases := []string{
+		filepath.Join(tempDir, "var", "cache", "openresty", "dushengcdn"),
+		filepath.Join(tempDir, "srv", "dushengcdn", "cache"),
+	}
+	for _, path := range testCases {
+		if _, err := safeCacheDirectory(path); err != nil {
+			t.Fatalf("expected cache path %q to be accepted: %v", path, err)
+		}
+	}
+}
+
+func TestSafeCacheDirectoryRejectsSymlinkToNonCachePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows symlink creation requires elevated privileges")
+	}
+	tempDir := t.TempDir()
+	targetDir := filepath.Join(tempDir, "var", "lib", "app")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll target failed: %v", err)
+	}
+	linkPath := filepath.Join(tempDir, "var", "cache", "openresty", "dushengcdn")
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll link parent failed: %v", err)
+	}
+	if err := os.Symlink(targetDir, linkPath); err != nil {
+		t.Fatalf("Symlink failed: %v", err)
+	}
+
+	if _, err := safeCacheDirectory(linkPath); err == nil {
+		t.Fatal("expected symlinked cache path to be rejected")
+	}
+}
+
+func TestSafeCacheDirectoryRejectsSymlinkParentToNonCachePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows symlink creation requires elevated privileges")
+	}
+	tempDir := t.TempDir()
+	targetDir := filepath.Join(tempDir, "var", "lib", "app")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll target failed: %v", err)
+	}
+	linkPath := filepath.Join(tempDir, "var", "cache", "openresty")
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll link parent failed: %v", err)
+	}
+	if err := os.Symlink(targetDir, linkPath); err != nil {
+		t.Fatalf("Symlink failed: %v", err)
+	}
+
+	cachePath := filepath.Join(linkPath, "dushengcdn")
+	if _, err := safeCacheDirectory(cachePath); err == nil {
+		t.Fatal("expected cache path with symlinked parent to be rejected")
+	}
+}
+
+func TestNormalizeWarmURLsRejectsUnsafeInputs(t *testing.T) {
+	urls := normalizeWarmURLs([]string{
+		" https://Example.COM/assets/app.js#frag ",
+		"https://user:pass@example.com/secret",
+		"http://example.com:8080/debug",
+		"ftp://example.com/file",
+		"not a url",
+		"https://example.com/assets/app.js",
+	}, []string{"example.com"})
+	expected := []string{
+		"https://example.com/assets/app.js",
+	}
+	if !reflect.DeepEqual(urls, expected) {
+		t.Fatalf("unexpected warm URLs: got %#v want %#v", urls, expected)
+	}
+}
+
+func TestNormalizeWarmURLsRequiresAllowedHosts(t *testing.T) {
+	urls := normalizeWarmURLs([]string{
+		"https://www.example.com/app.js",
+		"https://static.example.net/app.css",
+		"https://deep.static.example.net/app.css",
+		"https://evil.example.com/app.js",
+	}, []string{"www.example.com", "*.example.net"})
+	expected := []string{
+		"https://www.example.com/app.js",
+		"https://static.example.net/app.css",
+	}
+	if !reflect.DeepEqual(urls, expected) {
+		t.Fatalf("unexpected warm URLs: got %#v want %#v", urls, expected)
+	}
+	if urls := normalizeWarmURLs([]string{"https://www.example.com/app.js"}, nil); len(urls) != 0 {
+		t.Fatalf("expected empty allowed host list to reject warm URLs, got %#v", urls)
+	}
+}
+
+func TestIsSafeWarmIP(t *testing.T) {
+	testCases := []struct {
+		ip   string
+		want bool
+	}{
+		{ip: "93.184.216.34", want: true},
+		{ip: "2606:2800:220:1:248:1893:25c8:1946", want: true},
+		{ip: "127.0.0.1", want: false},
+		{ip: "10.0.0.1", want: false},
+		{ip: "172.16.0.1", want: false},
+		{ip: "192.168.0.1", want: false},
+		{ip: "169.254.169.254", want: false},
+		{ip: "::1", want: false},
+		{ip: "fd00::1", want: false},
+		{ip: "fe80::1", want: false},
+		{ip: "0.0.0.0", want: false},
+		{ip: "100.64.0.1", want: false},
+		{ip: "192.0.2.1", want: false},
+		{ip: "198.51.100.1", want: false},
+		{ip: "203.0.113.1", want: false},
+		{ip: "240.0.0.1", want: false},
+		{ip: "2001:db8::1", want: false},
+		{ip: "224.0.0.1", want: false},
+	}
+
+	for _, testCase := range testCases {
+		ip := net.ParseIP(testCase.ip)
+		if got := isSafeWarmIP(ip); got != testCase.want {
+			t.Fatalf("%s: got %v want %v", testCase.ip, got, testCase.want)
+		}
+	}
+}
+
 func TestParseNginxVersionIgnoresDockerEntrypointPaths(t *testing.T) {
 	output := strings.Join([]string{
 		"/docker-entrypoint.sh: /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh: info: can not modify /etc/nginx/conf.d/default.conf (read-only file system?)",

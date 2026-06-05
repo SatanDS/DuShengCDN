@@ -149,11 +149,25 @@ func (s *MaxMindGeoIPService) UpdateDatabase() error {
 		_ = os.Remove(tempPath)
 		return fmt.Errorf("failed to download MaxMind database: response exceeds %d bytes", maxGeoIPDatabaseDownloadBytes)
 	}
+	if err = validateMaxMindDatabaseFile(tempPath); err != nil {
+		return err
+	}
 	if err = os.Rename(tempPath, s.dbFilePath); err != nil {
 		return fmt.Errorf("failed to move MaxMind database file into place: %w", err)
 	}
 
 	return s.initialize()
+}
+
+func validateMaxMindDatabaseFile(path string) error {
+	reader, err := maxminddb.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to validate MaxMind database file: %w", err)
+	}
+	if err := reader.Close(); err != nil {
+		return fmt.Errorf("failed to close MaxMind database validation reader: %w", err)
+	}
+	return nil
 }
 
 func (s *MaxMindGeoIPService) Close() error {

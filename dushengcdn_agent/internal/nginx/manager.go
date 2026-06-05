@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -36,6 +37,25 @@ const ObservabilityListenPlaceholder = "__DUSHENGCDN_OBSERVABILITY_LISTEN__"
 const ObservabilityPortPlaceholder = "__DUSHENGCDN_OBSERVABILITY_PORT__"
 const ResolverDirectivePlaceholder = "__DUSHENGCDN_RESOLVER_DIRECTIVE__"
 const PowStaticDirPlaceholder = "__DUSHENGCDN_POW_STATIC_DIR__"
+
+const (
+	cachePurgeReadBatchSize = 256
+	maxWarmCacheRedirects   = 5
+)
+
+var blockedWarmIPPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:db8::/32"),
+}
 
 type Executor interface {
 	Test(ctx context.Context) error
@@ -405,33 +425,20 @@ func (m *Manager) PurgeCache(ctx context.Context, operation protocol.CacheOperat
 	if err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(cleanPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		target := filepath.Join(cleanPath, entry.Name())
-		if err := os.RemoveAll(target); err != nil {
-			return fmt.Errorf("remove cache entry %s: %w", target, err)
-		}
-	}
-	return nil
+	return removeCacheEntries(ctx, cleanPath)
 }
 
 func (m *Manager) WarmCache(ctx context.Context, operation protocol.CacheOperation) error {
-	urls := normalizeWarmURLs(operation.URLs)
+	allowedHosts := normalizeWarmAllowedHosts(operation.AllowedHosts)
+	if len(allowedHosts) == 0 {
+		return errors.New("cache warm requires allowed route hosts")
+	}
+	urls := normalizeWarmURLs(operation.URLs, allowedHosts)
 	if len(urls) == 0 {
 		return errors.New("cache warm requires at least one URL")
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newWarmCacheHTTPClient(allowedHosts)
+	defer client.CloseIdleConnections()
 	for _, targetURL := range urls {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 		if err != nil {
@@ -439,6 +446,9 @@ func (m *Manager) WarmCache(ctx context.Context, operation protocol.CacheOperati
 		}
 		resp, err := client.Do(req)
 		if err != nil {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
 			return fmt.Errorf("warm cache %s failed: %w", targetURL, err)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -450,12 +460,44 @@ func (m *Manager) WarmCache(ctx context.Context, operation protocol.CacheOperati
 	return nil
 }
 
+func removeCacheEntries(ctx context.Context, cleanPath string) error {
+	dir, err := os.Open(cleanPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer dir.Close()
+
+	for {
+		names, err := dir.Readdirnames(cachePurgeReadBatchSize)
+		for _, name := range names {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			target := filepath.Join(cleanPath, name)
+			if err := os.RemoveAll(target); err != nil {
+				return fmt.Errorf("remove cache entry %s: %w", target, err)
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
 func safeCacheDirectory(path string) (string, error) {
 	cleanPath := filepath.Clean(strings.TrimSpace(path))
 	if cleanPath == "" || cleanPath == "." {
 		return "", errors.New("cache path is unsafe")
 	}
-	if !filepath.IsAbs(cleanPath) {
+	if !isCacheAbsPath(cleanPath) {
 		return "", errors.New("cache path must be absolute")
 	}
 	volume := filepath.VolumeName(cleanPath)
@@ -463,7 +505,122 @@ func safeCacheDirectory(path string) (string, error) {
 	if cleanPath == root || cleanPath == volume || len(cleanPath) < len(root)+4 {
 		return "", errors.New("cache path is too broad")
 	}
+	components := cachePathComponents(cleanPath)
+	if len(components) < 3 {
+		return "", errors.New("cache path is too shallow")
+	}
+	if isProtectedCacheDirectory(components) {
+		return "", errors.New("cache path points to a protected directory")
+	}
+	if !looksLikeCDNCacheDirectory(components) {
+		return "", errors.New("cache path must clearly be a dushengcdn/openresty cache directory")
+	}
+	if resolvedPath, changed, err := resolveExistingCachePath(cleanPath); err == nil && changed {
+		if err := validateResolvedCachePath(resolvedPath); err != nil {
+			return "", err
+		}
+		return resolvedPath, nil
+	} else if err != nil {
+		return "", err
+	}
 	return cleanPath, nil
+}
+
+func isCacheAbsPath(path string) bool {
+	return filepath.IsAbs(path) || strings.HasPrefix(filepath.ToSlash(path), "/")
+}
+
+func cachePathComponents(path string) []string {
+	volume := filepath.VolumeName(path)
+	remainder := strings.TrimPrefix(path, volume)
+	parts := strings.FieldsFunc(strings.Trim(remainder, `/\`), func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		normalized := strings.ToLower(strings.TrimSpace(part))
+		if normalized != "" {
+			result = append(result, normalized)
+		}
+	}
+	return result
+}
+
+func isProtectedCacheDirectory(components []string) bool {
+	if len(components) == 0 {
+		return true
+	}
+	first := components[0]
+	if len(components) <= 2 {
+		switch first {
+		case "bin", "boot", "dev", "etc", "home", "lib", "lib64", "opt", "proc", "root", "run", "sbin", "sys", "tmp", "usr", "var", "windows":
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeCDNCacheDirectory(components []string) bool {
+	hasCache := false
+	hasDuShengCDN := false
+	hasRuntimeMarker := false
+	for _, component := range components {
+		compacted := strings.NewReplacer("-", "", "_", "", ".", "", " ", "").Replace(component)
+		if strings.Contains(compacted, "cache") {
+			hasCache = true
+		}
+		if strings.Contains(compacted, "dushengcdn") {
+			hasDuShengCDN = true
+		}
+		if strings.Contains(compacted, "openresty") || strings.Contains(compacted, "nginx") {
+			hasRuntimeMarker = true
+		}
+	}
+	return hasDuShengCDN && (hasCache || hasRuntimeMarker)
+}
+
+func resolveExistingCachePath(cleanPath string) (string, bool, error) {
+	resolvedPath, err := filepath.EvalSymlinks(cleanPath)
+	if err == nil {
+		resolvedPath = filepath.Clean(resolvedPath)
+		return resolvedPath, resolvedPath != cleanPath, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", false, fmt.Errorf("resolve cache path symlink: %w", err)
+	}
+	missingParts := make([]string, 0)
+	current := cleanPath
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false, nil
+		}
+		missingParts = append(missingParts, filepath.Base(current))
+		resolvedParent, parentErr := filepath.EvalSymlinks(parent)
+		if parentErr == nil {
+			resolved := filepath.Clean(resolvedParent)
+			for index := len(missingParts) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missingParts[index])
+			}
+			resolved = filepath.Clean(resolved)
+			return resolved, resolved != cleanPath, nil
+		}
+		if !os.IsNotExist(parentErr) {
+			return "", false, fmt.Errorf("resolve cache path parent symlink: %w", parentErr)
+		}
+		current = parent
+	}
+}
+
+func validateResolvedCachePath(resolvedPath string) error {
+	resolvedComponents := cachePathComponents(resolvedPath)
+	if !isCacheAbsPath(resolvedPath) ||
+		len(resolvedComponents) < 3 ||
+		isProtectedCacheDirectory(resolvedComponents) ||
+		!looksLikeCDNCacheDirectory(resolvedComponents) {
+		return errors.New("cache path symlink resolves outside a dushengcdn cache directory")
+	}
+	return nil
 }
 
 func ensureProxyCacheDirectories(mainConfig string) error {
@@ -504,7 +661,7 @@ func proxyCacheDirectoriesFromConfig(mainConfig string) []string {
 	return result
 }
 
-func normalizeWarmURLs(values []string) []string {
+func normalizeWarmURLs(values []string, allowedHosts []string) []string {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
@@ -516,9 +673,11 @@ func normalizeWarmURLs(values []string) []string {
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 			continue
 		}
-		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		if !isWarmURLAllowed(parsed, allowedHosts) {
 			continue
 		}
+		parsed.Fragment = ""
+		parsed.Host = strings.ToLower(parsed.Host)
 		normalized := parsed.String()
 		if _, ok := seen[normalized]; ok {
 			continue
@@ -527,6 +686,197 @@ func normalizeWarmURLs(values []string) []string {
 		result = append(result, normalized)
 	}
 	return result
+}
+
+func newWarmCacheHTTPClient(allowedHosts []string) *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			Proxy:                 nil,
+			DialContext:           safeWarmDialContext,
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+			IdleConnTimeout:       30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxWarmCacheRedirects {
+				return errors.New("warm cache redirect limit exceeded")
+			}
+			if req == nil || req.URL == nil || !isWarmURLAllowed(req.URL, allowedHosts) {
+				return errors.New("warm cache redirect target is unsafe")
+			}
+			if len(via) > 0 && !strings.EqualFold(warmURLHostname(req.URL), warmURLHostname(via[0].URL)) {
+				return errors.New("warm cache redirect changed host")
+			}
+			return nil
+		},
+	}
+}
+
+func isWarmURLAllowed(parsed *url.URL, allowedHosts []string) bool {
+	if parsed == nil {
+		return false
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false
+	}
+	if parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	host := warmURLHostname(parsed)
+	if host == "" || !warmHostAllowed(host, allowedHosts) {
+		return false
+	}
+	port := parsed.Port()
+	return port == "" ||
+		(parsed.Scheme == "http" && port == "80") ||
+		(parsed.Scheme == "https" && port == "443")
+}
+
+func normalizeWarmAllowedHosts(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		host := warmURLHostname(&url.URL{Host: strings.TrimSpace(value)})
+		if host == "" {
+			host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+		}
+		if host == "" || strings.ContainsAny(host, `/\:`) {
+			continue
+		}
+		if _, ok := seen[host]; ok {
+			continue
+		}
+		seen[host] = struct{}{}
+		result = append(result, host)
+	}
+	return result
+}
+
+func warmHostAllowed(host string, allowedHosts []string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "" {
+		return false
+	}
+	for _, allowedHost := range allowedHosts {
+		allowed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(allowedHost)), ".")
+		if allowed == "" {
+			continue
+		}
+		if allowed == host {
+			return true
+		}
+		if !strings.HasPrefix(allowed, "*.") {
+			continue
+		}
+		suffix := strings.TrimPrefix(allowed, "*.")
+		if suffix == "" || !strings.HasSuffix(host, "."+suffix) {
+			continue
+		}
+		prefix := strings.TrimSuffix(host, "."+suffix)
+		if prefix != "" && !strings.Contains(prefix, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func warmURLHostname(parsed *url.URL) string {
+	if parsed == nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), ".")
+}
+
+func safeWarmDialContext(ctx context.Context, network string, address string) (net.Conn, error) {
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+	default:
+		return nil, fmt.Errorf("warm cache network %q is not allowed", network)
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := resolveWarmHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("warm cache host %q resolved to no addresses", host)
+	}
+	for _, ip := range ips {
+		if !isSafeWarmIP(ip) {
+			return nil, fmt.Errorf("warm cache target %q resolved to blocked address %s", host, ip.String())
+		}
+	}
+
+	var lastErr error
+	var dialer net.Dialer
+	for _, ip := range ips {
+		if network == "tcp4" && ip.To4() == nil {
+			continue
+		}
+		if network == "tcp6" && ip.To4() != nil {
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("warm cache host %q has no address for network %s", host, network)
+}
+
+func resolveWarmHost(ctx context.Context, host string) ([]net.IP, error) {
+	host = strings.Trim(host, "[]")
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr.IP != nil {
+			ips = append(ips, addr.IP)
+		}
+	}
+	return ips, nil
+}
+
+func isSafeWarmIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	if !addr.IsValid() {
+		return false
+	}
+	if addr.IsLoopback() ||
+		addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() ||
+		addr.IsMulticast() ||
+		addr.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range blockedWarmIPPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) CurrentChecksum() (string, error) {

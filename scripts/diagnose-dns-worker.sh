@@ -9,6 +9,7 @@ ZONE=""
 DNS_PORT=""
 LOG_TAIL="120"
 SKIP_LOGS="false"
+RAW_LOGS="false"
 STATUS=0
 
 usage() {
@@ -27,6 +28,7 @@ Options:
   --dns-port PORT        DNS query/listener port override (default: parsed listen port or 53)
   --log-tail NUM         Number of journal lines to print (default: 120)
   --skip-logs            Do not print journal logs
+  --raw-logs             Print logs without redacting secrets
   -h, --help             Show this help message
 
 Behavior:
@@ -325,6 +327,18 @@ diagnose_logs() {
   fi
 }
 
+redact_logs() {
+  if [[ "$RAW_LOGS" == "true" ]]; then
+    cat
+    return
+  fi
+  sed -E \
+    -e 's#(postgres(ql)?://[^:/@[:space:]]+:)[^@[:space:]]+@#\1<redacted>@#Ig' \
+    -e 's#(\"[^\"]*(password|passwd|pwd|token|secret|authorization)[^\"]*\"[[:space:]]*:[[:space:]]*\")[^\"]+\"#\1<redacted>\"#Ig' \
+    -e 's#((password|passwd|pwd|token|secret|authorization|x-agent-token|x-dns-worker-token)[_[:alnum:] .:-]*[=:][[:space:]]*)[^,;[:space:]\"]+#\1<redacted>#Ig' \
+    -e 's#(Bearer[[:space:]]+)[A-Za-z0-9._~+/=-]+#\1<redacted>#Ig'
+}
+
 show_logs() {
   local logs
 
@@ -333,7 +347,7 @@ show_logs() {
   if command -v journalctl >/dev/null 2>&1; then
     logs="$(journalctl -u "$SERVICE_NAME" -n "$LOG_TAIL" --no-pager 2>&1 || true)"
     if [[ -n "$logs" ]]; then
-      printf '%s\n' "$logs"
+      printf '%s\n' "$logs" | redact_logs
       diagnose_logs "$logs"
     else
       warn "no journal logs found for ${SERVICE_NAME}."
@@ -376,6 +390,7 @@ while [[ $# -gt 0 ]]; do
     --dns-port) DNS_PORT="$2"; shift 2 ;;
     --log-tail) LOG_TAIL="$2"; shift 2 ;;
     --skip-logs) SKIP_LOGS="true"; shift ;;
+    --raw-logs) RAW_LOGS="true"; shift ;;
     -h|--help) usage ;;
     *) warn "unknown option: $1"; exit 2 ;;
   esac

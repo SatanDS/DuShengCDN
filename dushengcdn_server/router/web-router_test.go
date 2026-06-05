@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"dushengcdn/middleware"
@@ -91,6 +92,32 @@ func TestCacheHeadersKeepImmutableStaticAssets(t *testing.T) {
 
 	if got := recorder.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
 		t.Fatalf("unexpected cache-control for static asset: %q", got)
+	}
+}
+
+func TestWebSecurityHeadersApplyToExportedPages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(middleware.WebSecurityHeaders())
+	engine.GET("/website", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/website", nil)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+
+	if got := recorder.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("unexpected x-frame-options: %q", got)
+	}
+	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("unexpected x-content-type-options: %q", got)
+	}
+	if got := recorder.Header().Get("Referrer-Policy"); got != "strict-origin-when-cross-origin" {
+		t.Fatalf("unexpected referrer-policy: %q", got)
+	}
+	if got := recorder.Header().Get("Content-Security-Policy"); !strings.Contains(got, "frame-ancestors 'none'") {
+		t.Fatalf("expected csp to deny framing, got %q", got)
 	}
 }
 

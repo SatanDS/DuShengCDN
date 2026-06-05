@@ -90,13 +90,13 @@ export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disab
 
 ## 首次登录
 
-默认账号：
+首次登录：
 
 | 用户名 | 密码 |
 | --- | --- |
-| `root` | `123456` |
+| `root` | `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`，或 Server 首次空库启动日志中的一次性随机密码 |
 
-首次登录后请立即修改默认密码。
+首次登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码。如果忘记密码，可使用 `--reset-root-password` 离线重置。
 
 ## Swagger
 

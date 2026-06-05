@@ -124,7 +124,7 @@ docker compose logs --since "12h" postgres | grep -Ei "too many clients|ERROR|FA
 
 ## 默认账号或 root 无法登录
 
-默认账号是 `root` / `123456`。首次登录后如果已经修改密码，应使用修改后的密码。
+首次空库启动会创建 `root` 用户。密码优先使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 首次空库启动日志中的一次性随机密码。首次登录后如果已经修改密码，应使用修改后的密码。
 
 排查步骤：
 

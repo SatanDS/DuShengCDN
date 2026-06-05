@@ -1,7 +1,10 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -478,6 +481,128 @@ func TestNormalizeDNSAccountAuthorizationRejectsInvalidInput(t *testing.T) {
 				t.Fatal("expected invalid input to fail")
 			}
 		})
+	}
+}
+
+func TestCloudflareListDNSRecordsFetchesAllPages(t *testing.T) {
+	requestedPages := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zones/zone-a/dns_records" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("type") != "A" || r.URL.Query().Get("name") != "app.example.com" || r.URL.Query().Get("per_page") != "100" {
+			t.Fatalf("unexpected query %s", r.URL.RawQuery)
+		}
+		page := r.URL.Query().Get("page")
+		requestedPages = append(requestedPages, page)
+		w.Header().Set("Content-Type", "application/json")
+		switch page {
+		case "1":
+			_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"r1","type":"A","name":"app.example.com","content":"1.1.1.1"}],"result_info":{"page":1,"per_page":100,"total_pages":2,"count":1,"total_count":2}}`))
+		case "2":
+			_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"r2","type":"A","name":"app.example.com","content":"8.8.8.8"}],"result_info":{"page":2,"per_page":100,"total_pages":2,"count":1,"total_count":2}}`))
+		default:
+			t.Fatalf("unexpected page %q", page)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := &cloudflareClient{
+		apiToken:   "token",
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+	}
+	records, err := client.ListDNSRecords(context.Background(), "zone-a", "A", "App.Example.Com.")
+	if err != nil {
+		t.Fatalf("list dns records: %v", err)
+	}
+	if len(records) != 2 || records[0].ID != "r1" || records[1].ID != "r2" {
+		t.Fatalf("unexpected records: %#v", records)
+	}
+	if strings.Join(requestedPages, ",") != "1,2" {
+		t.Fatalf("expected pages 1,2, got %v", requestedPages)
+	}
+}
+
+func TestCloudflareListDNSRecordsRejectsTooManyPages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"result":[],"result_info":{"page":1,"per_page":100,"total_pages":101,"count":0,"total_count":10001}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := &cloudflareClient{
+		apiToken:   "token",
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+	}
+	_, err := client.ListDNSRecords(context.Background(), "zone-a", "A", "app.example.com")
+	if err == nil || !strings.Contains(err.Error(), "page limit") {
+		t.Fatalf("expected page limit error, got %v", err)
+	}
+}
+
+func TestNormalizeGSLBPolicyRejectsHTTPSourceProviderForAuthoritativeDNS(t *testing.T) {
+	_, err := normalizeGSLBPolicy(ProxyRouteGSLBPolicy{
+		SourceIP: ProxyRouteGSLBSourceIPProvider{
+			Provider: "http",
+			APIURL:   "https://geo.example.com/{ip}",
+		},
+	}, "default", 1, "healthy", 60)
+	if err == nil || !strings.Contains(err.Error(), "provider=http is not supported") {
+		t.Fatalf("expected unsupported http source provider error, got %v", err)
+	}
+}
+
+func TestNormalizeGSLBPolicyRejectsSourceProviderSecretsWithoutProvider(t *testing.T) {
+	_, err := normalizeGSLBPolicy(ProxyRouteGSLBPolicy{
+		SourceIP: ProxyRouteGSLBSourceIPProvider{
+			APIURL:   "https://geo.example.com/{ip}",
+			APIToken: "secret",
+		},
+	}, "default", 1, "healthy", 60)
+	if err == nil || !strings.Contains(err.Error(), "provider is required") {
+		t.Fatalf("expected source provider requirement error, got %v", err)
+	}
+
+	_, err = normalizeGSLBPolicy(ProxyRouteGSLBPolicy{
+		SourceIP: ProxyRouteGSLBSourceIPProvider{
+			Provider: "none",
+			APIURL:   "https://geo.example.com/{ip}",
+		},
+	}, "default", 1, "healthy", 60)
+	if err == nil || !strings.Contains(err.Error(), "provider=none cannot set api_url") {
+		t.Fatalf("expected source provider none secret error, got %v", err)
+	}
+}
+
+func TestDecodeStoredGSLBPolicyDowngradesHTTPSourceProvider(t *testing.T) {
+	policy, err := decodeStoredGSLBPolicy(`{
+		"mode":"cloudflare_dns",
+		"strategy":"healthy",
+		"target_count":1,
+		"ttl":60,
+		"source_ip":{"provider":"http","api_url":"https://geo.example.com/{ip}","api_token":"secret"},
+		"pools":[{"name":"default","weight":100,"enabled":true}]
+	}`)
+	if err != nil {
+		t.Fatalf("decode stored gslb policy: %v", err)
+	}
+	if policy.SourceIP.Provider != gslbSourceProviderNone || policy.SourceIP.APIURL != "" || policy.SourceIP.APIToken != "" {
+		t.Fatalf("expected stored http provider to downgrade to none, got %+v", policy.SourceIP)
+	}
+}
+
+func TestDecodeStoredGSLBPolicyClearsUnusedSourceProviderFields(t *testing.T) {
+	policy, err := decodeStoredGSLBPolicy(`{
+		"source_ip":{"provider":"none","api_url":"https://geo.example.com/{ip}","api_token":"secret"},
+		"pools":[{"name":"default","weight":100,"enabled":true}]
+	}`)
+	if err != nil {
+		t.Fatalf("decode stored gslb policy: %v", err)
+	}
+	if policy.SourceIP.Provider != gslbSourceProviderNone || policy.SourceIP.APIURL != "" || policy.SourceIP.APIToken != "" {
+		t.Fatalf("expected unused provider fields to be cleared, got %+v", policy.SourceIP)
 	}
 }
 

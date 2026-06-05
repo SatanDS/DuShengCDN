@@ -20,6 +20,7 @@
 | `GIN_MODE` | Gin mode | release unless `debug` |
 | `LOG_LEVEL` | Log level | `info` |
 | `SESSION_SECRET` | Session signing secret; release mode requires an explicit value with at least 32 characters | random on startup in debug mode |
+| `TRUSTED_PROXIES` | Reverse proxy IP/CIDR list trusted for `X-Forwarded-For` / `X-Real-IP`; separated by comma, semicolon, whitespace, or newline | empty |
 | `SQLITE_PATH` | SQLite database path | `dushengcdn.db` |
 | `DSN` | PostgreSQL DSN, preferred over SQLite | empty |
 | `SQL_DSN` | Legacy PostgreSQL DSN, lower priority than `DSN` | empty |
@@ -37,11 +38,15 @@
 
 When `DSN` and `SQL_DSN` both exist, `DSN` wins. PostgreSQL is preferred when configured. If PostgreSQL is empty and a local SQLite file exists, Server migrates SQLite data at startup.
 
+`TRUSTED_PROXIES` defaults to empty, so client-supplied proxy headers are ignored to prevent spoofed `X-Forwarded-For` rate-limit bypasses. Set it only to controlled reverse proxy egress IPs or private CIDR ranges; global ranges such as `0.0.0.0/0` and `::/0` are rejected.
+
 When `REDIS_CONN_STRING` is empty, Redis-backed helpers fall back to in-process behavior. Multi-instance and commercial deployments should configure Redis; set `REDIS_REQUIRED=true` when startup must fail instead of degrading.
 
 Commercial license tokens use the `dscdn_license_v1.<payload>.<signature>` format with Ed25519 signatures. For enforced private deployments, set `DUSHENGCDN_LICENSE_REQUIRED=true`, configure `DUSHENGCDN_LICENSE_PUBLIC_KEYS`, then install the license from **Settings -> Commercial License**.
 
 Server automatic upgrades are disabled by default. Production deployments should usually check the version in the console, upload a reviewed Server binary, and confirm the manual upgrade. If `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` is enabled, the Release must include both the matching Server binary and a same-name `.sha256` file, such as `dushengcdn-server-linux-amd64.sha256`; the downloaded binary is verified before it replaces the executable.
+
+Production Compose files require `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `DSN` to be set explicitly. The installer can generate them, but Compose templates no longer fall back to public placeholder database credentials.
 
 ### Commercial License Issuing Tool
 
@@ -138,7 +143,7 @@ The settings page maintains these hot-updatable options:
 
 OpenResty performance and cache options are also stored in the Option table, including `OpenRestyWorkerProcesses`, `OpenRestyWorkerConnections`, `OpenRestyProxyConnectTimeout`, `OpenRestyProxyReadTimeout`, `OpenRestyCacheEnabled`, `OpenRestyCachePath`, and `OpenRestyCacheMaxSize`.
 
-`AgentUpdateRepo` releases must publish a matching `.sha256` file for each Agent binary, such as `dushengcdn-agent-linux-amd64.sha256`. Agent self-update verifies the SHA-256 digest before replacing the executable.
+`AgentUpdateRepo` releases must publish a matching `.sha256` file for each Agent binary, such as `dushengcdn-agent-linux-amd64.sha256`. Agent self-update and the install script verify the SHA-256 digest before replacing or installing the executable.
 
 ## Agent Configuration
 

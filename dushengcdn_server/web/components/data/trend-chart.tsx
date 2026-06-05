@@ -1,8 +1,8 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useMemo } from 'react';
 import type { EChartsOption } from 'echarts';
-import ReactECharts from 'echarts-for-react';
 
 import { calculateNiceAxisMax, formatCompactNumber } from '@/lib/utils/metrics';
 
@@ -30,6 +30,10 @@ type TooltipParam = {
 };
 
 const defaultFormatter = (value: number) => formatCompactNumber(value);
+
+const ReactECharts = dynamic(() => import('echarts-for-react'), {
+  ssr: false,
+});
 
 export function TrendChart({
                              labels,

@@ -17,6 +17,7 @@ import (
 	"github.com/gin-contrib/sessions/redis"
 	"github.com/gin-gonic/gin"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -108,6 +109,7 @@ func main() {
 
 	// Initialize HTTP server
 	server := gin.Default()
+	configureTrustedProxies(server)
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.CORS())
 
@@ -183,6 +185,48 @@ func configureSessionStore(store sessions.Store) {
 		SameSite: http.SameSiteLaxMode,
 		Secure:   strings.HasPrefix(strings.ToLower(strings.TrimSpace(common.ServerAddress)), "https://"),
 	})
+}
+
+func configureTrustedProxies(server *gin.Engine) {
+	if server == nil {
+		return
+	}
+	trustedProxies, err := parseTrustedProxies(common.TrustedProxies)
+	if err != nil {
+		slog.Error("configure trusted proxies failed", "error", err)
+		os.Exit(1)
+	}
+	if err := server.SetTrustedProxies(trustedProxies); err != nil {
+		slog.Error("configure trusted proxies failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func parseTrustedProxies(raw string) ([]string, error) {
+	proxies := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	if len(proxies) == 0 {
+		return nil, nil
+	}
+	for _, proxy := range proxies {
+		if isGlobalTrustedProxy(proxy) {
+			return nil, fmt.Errorf("TRUSTED_PROXIES must not trust all client networks: %s", proxy)
+		}
+	}
+	return proxies, nil
+}
+
+func isGlobalTrustedProxy(proxy string) bool {
+	if !strings.Contains(proxy, "/") {
+		return false
+	}
+	_, ipNet, err := net.ParseCIDR(proxy)
+	if err != nil {
+		return false
+	}
+	ones, bits := ipNet.Mask.Size()
+	return ones == 0 && (bits == net.IPv4len*8 || bits == net.IPv6len*8)
 }
 
 func validateRuntimeSecurityConfig(ginMode string) error {

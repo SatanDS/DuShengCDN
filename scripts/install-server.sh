@@ -49,7 +49,7 @@ Options:
 
 Behavior:
   1. Creates dushengcdn_server/.env from .env.example when .env does not exist
-     and fills SESSION_SECRET plus first-install database secrets with generated values
+     and fills SESSION_SECRET, initial root password, plus first-install database secrets with generated values
   2. Starts or updates Server with Docker Compose and checks /api/status
   3. When DNS Worker is enabled, checks whether a local Worker is already deployed
   4. If no local Worker is found, detects public IP, creates a DNS Worker Token, and runs install-dns-worker.sh
@@ -160,7 +160,7 @@ existing_postgres_data_dir() {
 }
 
 initialize_env_file() {
-  local postgres_db postgres_user postgres_password session_secret dsn
+  local postgres_db postgres_user postgres_password session_secret initial_root_password dsn
 
   if [[ -f "$ENV_FILE" ]]; then
     return
@@ -176,19 +176,25 @@ initialize_env_file() {
   else
     warn "could not generate SESSION_SECRET; edit ${ENV_FILE} before production use."
   fi
+  initial_root_password="$(random_hex 16 || true)"
+  if [[ -n "$initial_root_password" ]]; then
+    write_env_key DUSHENGCDN_INITIAL_ROOT_PASSWORD "$initial_root_password"
+  else
+    warn "could not generate DUSHENGCDN_INITIAL_ROOT_PASSWORD; Server will print a generated one-time password on first empty-database startup."
+  fi
 
   if existing_postgres_data_dir; then
     warn "existing PostgreSQL data directory detected at ${SERVER_DIR}/postgres-data."
     warn "preserving POSTGRES_PASSWORD and DSN copied from .env.example to avoid breaking existing database authentication."
     warn "after the panel is healthy, rotate the PostgreSQL password deliberately if needed."
-    log "Generated SESSION_SECRET in ${ENV_FILE}; preserved existing PostgreSQL credentials."
+    log "Generated SESSION_SECRET and DUSHENGCDN_INITIAL_ROOT_PASSWORD in ${ENV_FILE}; preserved existing PostgreSQL credentials."
     return
   fi
 
   postgres_password="$(random_hex 18 || true)"
   if [[ -z "$postgres_password" ]]; then
     warn "could not generate POSTGRES_PASSWORD; edit ${ENV_FILE} before production use."
-    log "Generated SESSION_SECRET in ${ENV_FILE}."
+    log "Generated SESSION_SECRET and DUSHENGCDN_INITIAL_ROOT_PASSWORD in ${ENV_FILE}."
     return
   fi
 
@@ -197,7 +203,7 @@ initialize_env_file() {
   dsn="postgres://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}?sslmode=disable"
   write_env_key POSTGRES_PASSWORD "$postgres_password"
   write_env_key DSN "$dsn"
-  log "Generated POSTGRES_PASSWORD, SESSION_SECRET, and DSN in ${ENV_FILE}."
+  log "Generated POSTGRES_PASSWORD, SESSION_SECRET, DUSHENGCDN_INITIAL_ROOT_PASSWORD, and DSN in ${ENV_FILE}."
 }
 
 detect_public_ip() {
@@ -325,6 +331,19 @@ check_server_http_health() {
   warn "For source Compose deployments, the default host panel port is DUSHENGCDN_HTTP_PORT=3010 while the container listens on 3000."
   warn "If you use Nginx, Nginx Proxy Manager, Baota, or another reverse proxy, point its upstream to the host port in ${ENV_FILE}."
   die "server HTTP health check failed. Fix the issue above and rerun scripts/install-server.sh."
+}
+
+print_initial_login_hint() {
+  local password
+
+  password="$(env_value DUSHENGCDN_INITIAL_ROOT_PASSWORD "")"
+  if [[ -n "$password" ]]; then
+    log "Initial login username: root"
+    log "Initial root password from ${ENV_FILE}: ${password}"
+    warn "DUSHENGCDN_INITIAL_ROOT_PASSWORD is only used when the database has no users. Change the root password after first login and remove or rotate this value."
+  else
+    warn "No DUSHENGCDN_INITIAL_ROOT_PASSWORD is configured. For a brand-new empty database, read the one-time generated root password from Server logs or run --reset-root-password."
+  fi
 }
 
 dns_worker_already_installed() {
@@ -474,6 +493,7 @@ compose_run up -d --build
 compose_run ps
 ensure_server_running
 check_server_http_health
+print_initial_login_hint
 
 if [[ "$INSTALL_DNS_WORKER" != "true" ]]; then
   log "DNS Worker installation skipped."

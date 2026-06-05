@@ -111,7 +111,7 @@ NEXT_DEV_BACKEND_URL=http://127.0.0.1:3000 pnpm dev
 
 ## Default Account Cannot Sign In
 
-The default account is `root` / `123456`. If the password was changed after first login, use the updated password.
+On an empty database, the first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first Server startup log when that variable is not set. If the password was changed after first login, use the updated password.
 
 Steps:
 

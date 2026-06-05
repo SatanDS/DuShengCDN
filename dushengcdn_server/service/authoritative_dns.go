@@ -48,6 +48,8 @@ const (
 	defaultDNSWorkerProbeMaxAge      = 24 * time.Hour
 	defaultDNSWorkerNodeProbeMaxAge  = 5 * time.Minute
 	defaultDNSMaxRollupWindowMinutes = 1440
+	defaultDNSMaxHeartbeatRollups    = 5000
+	defaultDNSMaxRollupTargetSummary = 64
 )
 
 var dnsLookupNS = net.LookupNS
@@ -714,6 +716,9 @@ func CreateAuthoritativeDNSZone(input DNSZoneInput) (*DNSZoneView, error) {
 }
 
 func UpdateAuthoritativeDNSZone(id uint, input DNSZoneInput) (*DNSZoneView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
 	zone, err := model.GetDNSZoneByID(id)
 	if err != nil {
 		return nil, err
@@ -732,6 +737,9 @@ func UpdateAuthoritativeDNSZone(id uint, input DNSZoneInput) (*DNSZoneView, erro
 }
 
 func DeleteAuthoritativeDNSZone(id uint) error {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return err
+	}
 	zone, err := model.GetDNSZoneByID(id)
 	if err != nil {
 		return err
@@ -798,6 +806,9 @@ func CreateAuthoritativeDNSRecord(zoneID uint, input DNSRecordInput) (*DNSRecord
 }
 
 func UpdateAuthoritativeDNSRecord(id uint, input DNSRecordInput) (*DNSRecordView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
 	record, err := model.GetDNSRecordByID(id)
 	if err != nil {
 		return nil, err
@@ -825,6 +836,9 @@ func UpdateAuthoritativeDNSRecord(id uint, input DNSRecordInput) (*DNSRecordView
 }
 
 func DeleteAuthoritativeDNSRecord(id uint) error {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return err
+	}
 	record, err := model.GetDNSRecordByID(id)
 	if err != nil {
 		return err
@@ -1244,6 +1258,9 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 }
 
 func DeleteAuthoritativeDNSWorker(id uint) error {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return err
+	}
 	worker, err := model.GetDNSWorkerByID(id)
 	if err != nil {
 		return err
@@ -1299,6 +1316,9 @@ func AuthenticateDNSWorkerToken(token string) (*model.DNSWorker, error) {
 }
 
 func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatInput) (*DNSWorkerView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
 	if worker == nil {
 		return nil, errors.New("DNS worker is nil")
 	}
@@ -1312,13 +1332,15 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	worker.GeoIPEnabled = input.GeoIPEnabled
 	worker.GeoIPDatabasePath = truncateForDatabase(strings.TrimSpace(input.GeoIPDatabasePath), 512)
 	worker.GeoIPLastError = truncateForDatabase(strings.TrimSpace(input.GeoIPLastError), 16000)
-	if err := worker.Update(); err != nil {
-		return nil, err
-	}
-	if err := persistDNSWorkerSchedulingStates(input.SchedulingStates); err != nil {
-		return nil, err
-	}
-	if err := persistDNSQueryRollups(worker.WorkerID, input.Rollups); err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(worker).Error; err != nil {
+			return err
+		}
+		if err := persistDNSWorkerSchedulingStatesWithDB(tx, input.SchedulingStates); err != nil {
+			return err
+		}
+		return persistDNSQueryRollupsWithDB(tx, worker.WorkerID, input.Rollups)
+	}); err != nil {
 		return nil, err
 	}
 	return ptrDNSWorkerView(buildDNSWorkerView(worker, false)), nil
@@ -1329,6 +1351,9 @@ func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnap
 }
 
 func getAuthoritativeDNSSnapshotWithQueries(worker *model.DNSWorker, schedulingQueries gslbDNSSchedulingDataQueries) (*AuthoritativeDNSSnapshot, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
 	zones, err := snapshotDNSZones()
 	if err != nil {
 		return nil, err
@@ -3254,6 +3279,16 @@ func persistDNSWorkerProbeResult(worker *model.DNSWorker, view *DNSWorkerProbeVi
 }
 
 func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error {
+	return persistDNSQueryRollupsWithDB(model.DB, workerID, inputs)
+}
+
+func persistDNSQueryRollupsWithDB(db *gorm.DB, workerID string, inputs []DNSQueryRollupInput) error {
+	if db == nil {
+		db = model.DB
+	}
+	if len(inputs) > defaultDNSMaxHeartbeatRollups {
+		return fmt.Errorf("DNS Worker heartbeat rollups exceed limit %d", defaultDNSMaxHeartbeatRollups)
+	}
 	rollups := make([]*model.DNSQueryRollup, 0, len(inputs))
 	for _, input := range inputs {
 		if input.QueryCount <= 0 {
@@ -3288,10 +3323,17 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 	if len(rollups) == 0 {
 		return nil
 	}
-	return model.DB.CreateInBatches(rollups, 500).Error
+	return db.CreateInBatches(rollups, 500).Error
 }
 
 func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulingState) error {
+	return persistDNSWorkerSchedulingStatesWithDB(model.DB, inputs)
+}
+
+func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeDNSSnapshotSchedulingState) error {
+	if db == nil {
+		db = model.DB
+	}
 	if len(inputs) == 0 {
 		return nil
 	}
@@ -3311,7 +3353,7 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 		return nil
 	}
 	var routes []*model.ProxyRoute
-	if err := model.DB.
+	if err := db.
 		Select("id", "dns_record_type").
 		Where("id IN ? AND enabled = ? AND dns_provider_mode = ? AND dns_zone_id_ref IS NOT NULL", routeIDs, true, DNSProviderModeAuthoritative).
 		Find(&routes).Error; err != nil {
@@ -3369,7 +3411,7 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 	if len(updates) == 0 {
 		return nil
 	}
-	statesByKey, err := loadGSLBSchedulingStatesForUpdates(updates)
+	statesByKey, err := loadGSLBSchedulingStatesForUpdatesWithDB(db, updates)
 	if err != nil {
 		return err
 	}
@@ -3417,7 +3459,7 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 			UpdatedAt:       now,
 		})
 	}
-	return model.DB.Clauses(clause.OnConflict{
+	return db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "proxy_route_id"},
 			{Name: "dns_record_type"},
@@ -3448,6 +3490,13 @@ type dnsWorkerSchedulingStateUpdate struct {
 }
 
 func loadGSLBSchedulingStatesForUpdates(updates []dnsWorkerSchedulingStateUpdate) (map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState, error) {
+	return loadGSLBSchedulingStatesForUpdatesWithDB(model.DB, updates)
+}
+
+func loadGSLBSchedulingStatesForUpdatesWithDB(db *gorm.DB, updates []dnsWorkerSchedulingStateUpdate) (map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState, error) {
+	if db == nil {
+		db = model.DB
+	}
 	statesByKey := make(map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState, len(updates))
 	routeIDs := make([]uint, 0, len(updates))
 	recordTypes := make([]string, 0, len(updates))
@@ -3476,7 +3525,7 @@ func loadGSLBSchedulingStatesForUpdates(updates []dnsWorkerSchedulingStateUpdate
 		return statesByKey, nil
 	}
 	var states []*model.GSLBSchedulingState
-	if err := model.DB.
+	if err := db.
 		Where("proxy_route_id IN ? AND dns_record_type IN ? AND scope_key IN ?", routeIDs, recordTypes, scopeKeys).
 		Find(&states).Error; err != nil {
 		return nil, err
@@ -3608,13 +3657,34 @@ func normalizeDNSTargetSummary(values map[string]int64) map[string]int64 {
 	if len(values) == 0 {
 		return map[string]int64{}
 	}
-	result := make(map[string]int64, len(values))
+	type targetCount struct {
+		target string
+		count  int64
+	}
+	counts := make(map[string]int64, len(values))
 	for target, count := range values {
 		trimmed := strings.TrimSpace(target)
 		if trimmed == "" || count <= 0 {
 			continue
 		}
-		result[trimmed] += count
+		counts[trimmed] += count
+	}
+	items := make([]targetCount, 0, len(counts))
+	for target, count := range counts {
+		items = append(items, targetCount{target: target, count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count == items[j].count {
+			return items[i].target < items[j].target
+		}
+		return items[i].count > items[j].count
+	})
+	if len(items) > defaultDNSMaxRollupTargetSummary {
+		items = items[:defaultDNSMaxRollupTargetSummary]
+	}
+	result := make(map[string]int64, len(items))
+	for _, item := range items {
+		result[item.target] += item.count
 	}
 	return result
 }

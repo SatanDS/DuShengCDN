@@ -17,12 +17,12 @@ services:
       - ./dushengcdn_agent/data/:/data
 
     environment:
-      DUSHENGCDN_SERVER_URL: "http://host.docker.internal:3010"
-      DUSHENGCDN_AGENT_TOKEN: "replace-with-agent-token"
+      DUSHENGCDN_SERVER_URL: ${DUSHENGCDN_SERVER_URL:?set DUSHENGCDN_SERVER_URL in .env}
+      DUSHENGCDN_AGENT_TOKEN: ${DUSHENGCDN_AGENT_TOKEN:?set DUSHENGCDN_AGENT_TOKEN in .env}
       # Optional precise IP lookup API. Local GeoIP is used first; this API is queried only when local GeoIP has no country.
-      # DUSHENGCDN_GEOIP_LOOKUP_API_URL: "https://ipdb.example.com/lookup"
-      # DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN: "replace-with-api-token"
-      LOG_LEVEL: "debug"
+      DUSHENGCDN_GEOIP_LOOKUP_API_URL: ${DUSHENGCDN_GEOIP_LOOKUP_API_URL:-}
+      DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN: ${DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
 
     extra_hosts:
       - "host.docker.internal:host-gateway"

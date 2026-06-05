@@ -6,7 +6,9 @@ import (
 	"dushengcdn/model"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,12 +19,13 @@ type CacheOperationInput struct {
 }
 
 type AgentCacheOperation struct {
-	OperationID string   `json:"operation_id"`
-	Action      string   `json:"action"`
-	Scope       string   `json:"scope"`
-	URLs        []string `json:"urls,omitempty"`
-	Prefixes    []string `json:"prefixes,omitempty"`
-	CachePath   string   `json:"cache_path,omitempty"`
+	OperationID  string   `json:"operation_id"`
+	Action       string   `json:"action"`
+	Scope        string   `json:"scope"`
+	URLs         []string `json:"urls,omitempty"`
+	Prefixes     []string `json:"prefixes,omitempty"`
+	CachePath    string   `json:"cache_path,omitempty"`
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
 }
 
 type CacheOperationResult struct {
@@ -32,11 +35,9 @@ type CacheOperationResult struct {
 	FailedNodes []string `json:"failed_nodes"`
 }
 
+const maxCacheWarmURLs = 100
+
 func RequestProxyRouteCachePurge(routeID uint, input CacheOperationInput) (*CacheOperationResult, error) {
-	route, err := model.GetProxyRouteByID(routeID)
-	if err != nil {
-		return nil, err
-	}
 	scope := normalizeCacheOperationScope(input.Scope)
 	if scope != "all" {
 		return nil, errors.New("cache purge currently supports scope=all only")
@@ -44,6 +45,13 @@ func RequestProxyRouteCachePurge(routeID uint, input CacheOperationInput) (*Cach
 	cachePath := strings.TrimSpace(common.OpenRestyCachePath)
 	if cachePath == "" {
 		return nil, errors.New("OpenResty cache path is not configured")
+	}
+	if err := ValidateAgentCachePath(cachePath); err != nil {
+		return nil, err
+	}
+	route, err := model.GetProxyRouteByID(routeID)
+	if err != nil {
+		return nil, err
 	}
 	operation := &AgentCacheOperation{
 		OperationID: newCacheOperationID(),
@@ -54,20 +62,98 @@ func RequestProxyRouteCachePurge(routeID uint, input CacheOperationInput) (*Cach
 	return dispatchRouteCacheOperation(route, operation)
 }
 
+func ValidateAgentCachePath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" || cleanPath == "." {
+		return errors.New("OpenResty cache path is unsafe")
+	}
+	if !isAgentCacheAbsPath(cleanPath) {
+		return errors.New("OpenResty cache path must be absolute")
+	}
+	components := cachePathComponents(cleanPath)
+	if len(components) < 3 {
+		return errors.New("OpenResty cache path is too broad")
+	}
+	if isProtectedAgentCacheDirectory(components) {
+		return errors.New("OpenResty cache path points to a protected directory")
+	}
+	if !looksLikeAgentCacheDirectory(components) {
+		return fmt.Errorf("OpenResty cache path %q must clearly be a dushengcdn/openresty cache directory", path)
+	}
+	return nil
+}
+
+func isAgentCacheAbsPath(path string) bool {
+	return filepath.IsAbs(path) || strings.HasPrefix(filepath.ToSlash(path), "/")
+}
+
+func cachePathComponents(path string) []string {
+	volume := filepath.VolumeName(path)
+	remainder := strings.TrimPrefix(path, volume)
+	parts := strings.FieldsFunc(strings.Trim(remainder, `/\`), func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		normalized := strings.ToLower(strings.TrimSpace(part))
+		if normalized != "" {
+			result = append(result, normalized)
+		}
+	}
+	return result
+}
+
+func isProtectedAgentCacheDirectory(components []string) bool {
+	if len(components) == 0 {
+		return true
+	}
+	first := components[0]
+	if len(components) <= 2 {
+		switch first {
+		case "bin", "boot", "dev", "etc", "home", "lib", "lib64", "opt", "proc", "root", "run", "sbin", "sys", "tmp", "usr", "var", "windows":
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeAgentCacheDirectory(components []string) bool {
+	hasCache := false
+	hasDuShengCDN := false
+	hasRuntimeMarker := false
+	for _, component := range components {
+		compacted := strings.NewReplacer("-", "", "_", "", ".", "", " ", "").Replace(component)
+		if strings.Contains(compacted, "cache") {
+			hasCache = true
+		}
+		if strings.Contains(compacted, "dushengcdn") {
+			hasDuShengCDN = true
+		}
+		if strings.Contains(compacted, "openresty") || strings.Contains(compacted, "nginx") {
+			hasRuntimeMarker = true
+		}
+	}
+	return hasDuShengCDN && (hasCache || hasRuntimeMarker)
+}
+
 func RequestProxyRouteCacheWarm(routeID uint, input CacheOperationInput) (*CacheOperationResult, error) {
 	route, err := model.GetProxyRouteByID(routeID)
 	if err != nil {
 		return nil, err
 	}
-	urls := normalizeCacheWarmURLs(input.URLs)
-	if len(urls) == 0 {
-		return nil, errors.New("cache warm requires at least one http/https URL")
+	urls, err := normalizeCacheWarmURLsForRoute(route, input.URLs)
+	if err != nil {
+		return nil, err
 	}
 	operation := &AgentCacheOperation{
-		OperationID: newCacheOperationID(),
-		Action:      "warm",
-		Scope:       "url",
-		URLs:        urls,
+		OperationID:  newCacheOperationID(),
+		Action:       "warm",
+		Scope:        "url",
+		URLs:         urls,
+		AllowedHosts: allowedCacheWarmHosts(route),
 	}
 	return dispatchRouteCacheOperation(route, operation)
 }
@@ -112,7 +198,14 @@ func normalizeCacheOperationScope(raw string) string {
 	return scope
 }
 
-func normalizeCacheWarmURLs(values []string) []string {
+func normalizeCacheWarmURLsForRoute(route *model.ProxyRoute, values []string) ([]string, error) {
+	if route == nil {
+		return nil, errors.New("cache warm route is invalid")
+	}
+	allowedDomains, err := decodeStoredDomains(route.Domains, route.Domain)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
@@ -122,12 +215,96 @@ func normalizeCacheWarmURLs(values []string) []string {
 		}
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			continue
+			return nil, errors.New("cache warm URL format is invalid")
 		}
-		if parsed.Scheme != "http" && parsed.Scheme != "https" {
-			continue
+		if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.User != nil {
+			return nil, errors.New("cache warm URL must be http/https and must not contain user info")
 		}
+		if !cacheWarmPortAllowed(parsed) {
+			return nil, errors.New("cache warm URL must use the default http/https port")
+		}
+		host := normalizeCacheWarmHost(parsed.Hostname())
+		if host == "" {
+			return nil, errors.New("cache warm URL host is invalid")
+		}
+		if !cacheWarmHostAllowed(host, allowedDomains) {
+			return nil, fmt.Errorf("cache warm URL host %q is not part of the route domains", host)
+		}
+		parsed.Fragment = ""
+		parsed.Host = strings.ToLower(parsed.Host)
 		normalized := parsed.String()
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		if len(result) >= maxCacheWarmURLs {
+			return nil, fmt.Errorf("cache warm accepts at most %d URLs", maxCacheWarmURLs)
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	if len(result) == 0 {
+		return nil, errors.New("cache warm requires at least one http/https URL")
+	}
+	return result, nil
+}
+
+func normalizeCacheWarmHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+}
+
+func cacheWarmPortAllowed(parsed *url.URL) bool {
+	if parsed == nil {
+		return false
+	}
+	port := parsed.Port()
+	return port == "" ||
+		(parsed.Scheme == "http" && port == "80") ||
+		(parsed.Scheme == "https" && port == "443")
+}
+
+func cacheWarmHostAllowed(host string, routeDomains []string) bool {
+	host = normalizeCacheWarmHost(host)
+	if host == "" {
+		return false
+	}
+	for _, domain := range routeDomains {
+		normalized := normalizeCacheWarmHost(domain)
+		if normalized == "" {
+			continue
+		}
+		if normalized == host {
+			return true
+		}
+		if !strings.HasPrefix(normalized, "*.") {
+			continue
+		}
+		suffix := strings.TrimPrefix(normalized, "*.")
+		if suffix == "" || !strings.HasSuffix(host, "."+suffix) {
+			continue
+		}
+		prefix := strings.TrimSuffix(host, "."+suffix)
+		if prefix != "" && !strings.Contains(prefix, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func allowedCacheWarmHosts(route *model.ProxyRoute) []string {
+	if route == nil {
+		return nil
+	}
+	domains, err := decodeStoredDomains(route.Domains, route.Domain)
+	if err != nil {
+		return nil
+	}
+	result := make([]string, 0, len(domains))
+	seen := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		normalized := normalizeCacheWarmHost(domain)
+		if normalized == "" {
+			continue
+		}
 		if _, ok := seen[normalized]; ok {
 			continue
 		}

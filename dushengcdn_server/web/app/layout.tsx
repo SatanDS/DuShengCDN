@@ -3,6 +3,7 @@ import Script from 'next/script';
 import type { ReactNode } from 'react';
 
 import { AppProviders } from '@/components/providers/app-providers';
+import { contentSecurityPolicy } from '@/lib/security/csp';
 import { getThemeInitScript } from '@/lib/theme/theme';
 
 import './globals.css';
@@ -28,6 +29,10 @@ interface RootLayoutProps {
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="zh-CN" suppressHydrationWarning className="font-sans">
+      <head>
+        <meta httpEquiv="Content-Security-Policy" content={contentSecurityPolicy} />
+        <meta httpEquiv="Referrer-Policy" content="strict-origin-when-cross-origin" />
+      </head>
       <body>
         <Script id="theme-init" strategy="beforeInteractive">
           {getThemeInitScript()}

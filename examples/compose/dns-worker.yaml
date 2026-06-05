@@ -1,6 +1,6 @@
 services:
   dushengcdn-dns-worker:
-    image: ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:-latest}
+    image: ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION in .env}
     container_name: dushengcdn-dns-worker
     restart: unless-stopped
     ports:

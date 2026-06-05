@@ -49,7 +49,7 @@ services:
     environment:
       POSTGRES_DB: dushengcdn
       POSTGRES_USER: dushengcdn
-      POSTGRES_PASSWORD: replace-with-strong-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -59,7 +59,7 @@ services:
       retries: 5
 
   dushengcdn:
-    image: ghcr.io/satands/dushengcdn:latest
+    image: ghcr.io/satands/dushengcdn:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION in .env}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -68,7 +68,7 @@ services:
       - "3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
-      DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
+      DSN: ${DSN:?set DSN in .env}
       GIN_MODE: release
       LOG_LEVEL: info
 
@@ -79,10 +79,16 @@ volumes:
 启动服务：
 
 ```bash
+cat > .env <<'EOF'
+DUSHENGCDN_VERSION=v1.0.0
+POSTGRES_PASSWORD=change-this-database-password
+SESSION_SECRET=replace-with-openssl-rand-hex-32
+DSN=postgres://dushengcdn:change-this-database-password@postgres:5432/dushengcdn?sslmode=disable
+EOF
 docker compose up -d
 ```
 
-如果使用仓库源码部署，也可以在仓库根目录执行一体化脚本。它会在首次部署时自动生成 `.env` 里的数据库密码、`SESSION_SECRET` 和 `DSN`；升级旧源码部署且已有 `dushengcdn_server/postgres-data` 时，会保留旧默认数据库密码和 DSN，只生成 `SESSION_SECRET`，避免旧 PostgreSQL 数据目录认证失败。脚本会启动面板，确认 `dushengcdn` 容器保持运行，并访问 `SERVER_URL/api/status` 做 HTTP 健康检查；检查失败时会打印最近日志，并提示数据库认证、端口映射和反向代理上游端口等常见原因。源码 Compose 默认宿主机访问端口是 `.env` 里的 `DUSHENGCDN_HTTP_PORT=3010`，容器内仍监听 `3000`。脚本还会默认自动探测公网 IPv4、创建名为 `DNS服务响应端` 的 DNS Worker、安装同机 DNS Worker。脚本会先检查本机是否已经部署过 DNS Worker；检测到已有服务、systemd unit 文件、安装目录、环境文件、同名 Docker 容器、进程或 DuShengCDN 监听 `53` 端口时会跳过 Worker 自动安装。
+如果使用仓库源码部署，也可以在仓库根目录执行一体化脚本。它会在首次部署时自动生成 `.env` 里的数据库密码、`SESSION_SECRET`、`DUSHENGCDN_INITIAL_ROOT_PASSWORD` 和 `DSN`；升级旧源码部署且已有 `dushengcdn_server/postgres-data` 时，会保留旧默认数据库密码和 DSN，只生成运行密钥和初始 root 密码配置，避免旧 PostgreSQL 数据目录认证失败。脚本会启动面板，确认 `dushengcdn` 容器保持运行，并访问 `SERVER_URL/api/status` 做 HTTP 健康检查；检查失败时会打印最近日志，并提示数据库认证、端口映射和反向代理上游端口等常见原因。源码 Compose 默认宿主机访问端口是 `.env` 里的 `DUSHENGCDN_HTTP_PORT=3010`，容器内仍监听 `3000`。脚本还会默认自动探测公网 IPv4、创建名为 `DNS服务响应端` 的 DNS Worker、安装同机 DNS Worker。脚本会先检查本机是否已经部署过 DNS Worker；检测到已有服务、systemd unit 文件、安装目录、环境文件、同名 Docker 容器、进程或 DuShengCDN 监听 `53` 端口时会跳过 Worker 自动安装。
 
 ```bash
 cd /opt/dushengcdn
@@ -108,13 +114,13 @@ docker compose logs -f dushengcdn
 http://localhost:3000
 ```
 
-默认账号：
+首次登录：
 
 | 用户名 | 密码 |
 | --- | --- |
-| `root` | `123456` |
+| `root` | `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`，或 Server 首次空库启动日志中的一次性随机密码 |
 
-首次登录后请立即修改默认密码。
+首次登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码。
 
 ## 2. 准备 Agent Token
 
@@ -198,6 +204,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，保存本地快照缓存，并下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb` 供国家代码调度使用。也可以使用 Docker 方式：
 
 ```bash
+DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp \
   -v dushengcdn-dns-worker-data:/data \
@@ -205,7 +212,7 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
   -e DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \
   -e DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232 \
-  ghcr.io/satands/dushengcdn-dns-worker:latest
+  ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
 如果需要按国家代码匹配节点池，再额外挂载本地 Country MMDB：

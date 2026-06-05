@@ -20,6 +20,11 @@ func TestValidateOpenRestyOption(t *testing.T) {
 		{name: "proxy buffers invalid", key: "OpenRestyProxyBuffers", value: "16x16k", wantErr: true},
 		{name: "cache max size valid", key: "OpenRestyCacheMaxSize", value: "2g"},
 		{name: "cache max size invalid", key: "OpenRestyCacheMaxSize", value: "2gb", wantErr: true},
+		{name: "cache path valid", key: "OpenRestyCachePath", value: "/var/cache/openresty/dushengcdn"},
+		{name: "cache path relative invalid", key: "OpenRestyCachePath", value: "cache/openresty/dushengcdn", wantErr: true},
+		{name: "cache path protected invalid", key: "OpenRestyCachePath", value: "/home/admin", wantErr: true},
+		{name: "cache path non cache invalid", key: "OpenRestyCachePath", value: "/var/lib/app", wantErr: true},
+		{name: "cache path shared nginx invalid", key: "OpenRestyCachePath", value: "/var/cache/nginx", wantErr: true},
 		{name: "client max body size valid", key: "OpenRestyClientMaxBodySize", value: "64m"},
 		{name: "client max body size invalid", key: "OpenRestyClientMaxBodySize", value: "64mb", wantErr: true},
 		{name: "large client header buffers valid", key: "OpenRestyLargeClientHeaderBuffers", value: "4 16k"},
@@ -48,6 +53,12 @@ func TestValidateOpenRestyOption(t *testing.T) {
 }
 
 func TestValidateAgentOption(t *testing.T) {
+	if err := validateAgentOption("AgentUpdateRepo", "SatanDS/DuShengCDN"); err != nil {
+		t.Fatalf("expected AgentUpdateRepo to accept owner/repo: %v", err)
+	}
+	if err := validateAgentOption("AgentUpdateRepo", "https://github.com/SatanDS/DuShengCDN"); err == nil {
+		t.Fatal("expected AgentUpdateRepo to reject URL format")
+	}
 	if err := validateAgentOption("AgentWebsocketUpgradeEnabled", "true"); err != nil {
 		t.Fatalf("expected websocket upgrade option to accept true: %v", err)
 	}

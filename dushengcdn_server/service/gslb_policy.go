@@ -88,7 +88,10 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 		strings.TrimSpace(input.Mode) == "" &&
 		strings.TrimSpace(input.Strategy) == "" &&
 		input.TargetCount == 0 &&
-		input.TTL == 0 {
+		input.TTL == 0 &&
+		strings.TrimSpace(input.SourceIP.Provider) == "" &&
+		strings.TrimSpace(input.SourceIP.APIURL) == "" &&
+		strings.TrimSpace(input.SourceIP.APIToken) == "" {
 		return defaultPolicy, nil
 	}
 
@@ -112,16 +115,23 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 		policy.TTL = normalizeDNSTTL(input.TTL)
 	}
 
-	if strings.TrimSpace(input.SourceIP.Provider) != "" {
-		provider := strings.ToLower(strings.TrimSpace(input.SourceIP.Provider))
-		switch provider {
-		case gslbSourceProviderNone, gslbSourceProviderHTTP:
-			policy.SourceIP.Provider = provider
-		default:
-			return policy, errors.New("gslb_policy.source_ip.provider is not supported")
+	sourceProvider := strings.ToLower(strings.TrimSpace(input.SourceIP.Provider))
+	sourceAPIURL := strings.TrimSpace(input.SourceIP.APIURL)
+	sourceAPIToken := strings.TrimSpace(input.SourceIP.APIToken)
+	switch sourceProvider {
+	case "":
+		if sourceAPIURL != "" || sourceAPIToken != "" {
+			return policy, errors.New("gslb_policy.source_ip.provider is required when api_url or api_token is set")
 		}
-		policy.SourceIP.APIURL = strings.TrimSpace(input.SourceIP.APIURL)
-		policy.SourceIP.APIToken = strings.TrimSpace(input.SourceIP.APIToken)
+	case gslbSourceProviderNone:
+		if sourceAPIURL != "" || sourceAPIToken != "" {
+			return policy, errors.New("gslb_policy.source_ip.provider=none cannot set api_url or api_token")
+		}
+		policy.SourceIP.Provider = sourceProvider
+	case gslbSourceProviderHTTP:
+		return policy, errors.New("gslb_policy.source_ip.provider=http is not supported by authoritative DNS workers")
+	default:
+		return policy, errors.New("gslb_policy.source_ip.provider is not supported")
 	}
 
 	policy.LoadThresholds = normalizeGSLBLoadThresholds(input.LoadThresholds)
@@ -450,5 +460,16 @@ func decodeStoredGSLBPolicy(raw string) (ProxyRouteGSLBPolicy, error) {
 	if err := json.Unmarshal([]byte(text), &policy); err != nil {
 		return policy, errors.New("gslb_policy payload is invalid")
 	}
+	policy = downgradeUnsupportedStoredGSLBPolicy(policy)
 	return normalizeGSLBPolicy(policy, "default", policy.TargetCount, policy.Strategy, policy.TTL)
+}
+
+func downgradeUnsupportedStoredGSLBPolicy(policy ProxyRouteGSLBPolicy) ProxyRouteGSLBPolicy {
+	provider := strings.ToLower(strings.TrimSpace(policy.SourceIP.Provider))
+	if provider == "" || provider == gslbSourceProviderNone || provider == gslbSourceProviderHTTP {
+		policy.SourceIP = ProxyRouteGSLBSourceIPProvider{
+			Provider: gslbSourceProviderNone,
+		}
+	}
+	return policy
 }

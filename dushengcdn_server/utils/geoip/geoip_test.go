@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,5 +157,38 @@ func TestMaxMindUpdateDatabaseRejectsOversizedDownload(t *testing.T) {
 	err := service.UpdateDatabase()
 	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
 		t.Fatalf("expected oversized database error, got %v", err)
+	}
+}
+
+func TestMaxMindUpdateDatabaseRejectsInvalidDatabaseWithoutReplacingExisting(t *testing.T) {
+	originalURL := GeoIpUrl
+	originalClient := geoIPDownloadHTTPClient
+	t.Cleanup(func() {
+		GeoIpUrl = originalURL
+		geoIPDownloadHTTPClient = originalClient
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not a mmdb"))
+	}))
+	defer server.Close()
+	GeoIpUrl = server.URL
+
+	target := filepath.Join(t.TempDir(), "GeoLite2-Country.mmdb")
+	if err := os.WriteFile(target, []byte("existing database"), 0o644); err != nil {
+		t.Fatalf("write existing database: %v", err)
+	}
+
+	service := &MaxMindGeoIPService{dbFilePath: target}
+	err := service.UpdateDatabase()
+	if err == nil || !strings.Contains(err.Error(), "validate MaxMind database") {
+		t.Fatalf("expected invalid database validation error, got %v", err)
+	}
+	data, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read existing database: %v", readErr)
+	}
+	if string(data) != "existing database" {
+		t.Fatalf("expected existing database to remain unchanged, got %q", string(data))
 	}
 }

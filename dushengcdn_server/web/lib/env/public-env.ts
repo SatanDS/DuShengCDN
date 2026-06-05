@@ -12,15 +12,51 @@ const rawEnv = {
 
 const parsedEnv = publicEnvSchema.parse(rawEnv);
 
-function normalizeBaseUrl(value: string) {
-  if (value === '/') {
+export function normalizeApiBaseUrl(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return '/api';
+  }
+
+  if (trimmed === '/') {
     return '';
   }
 
-  return value.replace(/\/+$/, '');
+  if (trimmed.startsWith('/')) {
+    if (trimmed.startsWith('//') || trimmed.includes('\\')) {
+      throw new Error(
+        'NEXT_PUBLIC_API_BASE_URL must be a same-origin path or an http(s) URL.',
+      );
+    }
+    return trimmed.replace(/\/+$/, '');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(
+      'NEXT_PUBLIC_API_BASE_URL must be a same-origin path or an http(s) URL.',
+    );
+  }
+
+  if (
+    (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error(
+      'NEXT_PUBLIC_API_BASE_URL must be a same-origin path or an http(s) URL.',
+    );
+  }
+
+  return parsed.toString().replace(/\/+$/, '');
 }
 
 export const publicEnv = {
-  apiBaseUrl: normalizeBaseUrl(parsedEnv.NEXT_PUBLIC_API_BASE_URL),
+  apiBaseUrl: normalizeApiBaseUrl(parsedEnv.NEXT_PUBLIC_API_BASE_URL),
   appVersion: parsedEnv.NEXT_PUBLIC_APP_VERSION,
 };

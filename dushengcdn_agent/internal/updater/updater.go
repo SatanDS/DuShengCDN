@@ -2,13 +2,16 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,11 +23,20 @@ import (
 	"dushengcdn-agent/internal/config"
 )
 
-const maxChecksumAssetSize = 64 * 1024
+const (
+	maxChecksumAssetSize  = 64 * 1024
+	maxSignatureAssetSize = 8 * 1024
+)
 
 var maxAgentBinaryAssetSize int64 = 200 * 1024 * 1024
 
 var replaceAndRestartFunc = replaceAndRestart
+
+var allowedUpdateDownloadHosts = map[string]struct{}{
+	"github.com":                            {},
+	"objects.githubusercontent.com":         {},
+	"github-releases.githubusercontent.com": {},
+}
 
 type Service struct {
 	httpClient   *http.Client
@@ -76,15 +88,19 @@ func (s *Service) CheckAndUpdate(ctx context.Context, repo string, options agent
 	slog.Info("agent update available", "from", localVersion, "to", remoteVersion)
 	assetName := assetNameForGOOSGOARCH(runtime.GOOS, runtime.GOARCH)
 	checksumAssetName := assetName + ".sha256"
+	signatureAssetName := assetName + ".sig"
 
 	var downloadURL string
 	var checksumURL string
+	var signatureURL string
 	for _, asset := range release.Assets {
 		switch asset.Name {
 		case assetName:
 			downloadURL = asset.BrowserDownloadURL
 		case checksumAssetName:
 			checksumURL = asset.BrowserDownloadURL
+		case signatureAssetName:
+			signatureURL = asset.BrowserDownloadURL
 		}
 	}
 	if downloadURL == "" {
@@ -94,17 +110,36 @@ func (s *Service) CheckAndUpdate(ctx context.Context, repo string, options agent
 	if checksumURL == "" {
 		return fmt.Errorf("no matching checksum asset %q in release %s", checksumAssetName, release.TagName)
 	}
+	if signatureURL == "" {
+		return fmt.Errorf("no matching signature asset %q in release %s", signatureAssetName, release.TagName)
+	}
+	if err := validateUpdateDownloadURL(downloadURL); err != nil {
+		return fmt.Errorf("invalid update asset url: %w", err)
+	}
+	if err := validateUpdateDownloadURL(checksumURL); err != nil {
+		return fmt.Errorf("invalid update checksum url: %w", err)
+	}
+	if err := validateUpdateDownloadURL(signatureURL); err != nil {
+		return fmt.Errorf("invalid update signature url: %w", err)
+	}
 
 	expectedChecksum, err := s.downloadChecksum(ctx, checksumURL, assetName)
 	if err != nil {
 		return fmt.Errorf("download checksum: %w", err)
+	}
+	signature, err := s.downloadSignature(ctx, signatureURL)
+	if err != nil {
+		return fmt.Errorf("download signature: %w", err)
+	}
+	if err = verifyReleaseSignature(release.TagName, assetName, expectedChecksum, signature); err != nil {
+		return fmt.Errorf("verify release signature: %w", err)
 	}
 
 	execPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("get executable path: %w", err)
 	}
-	if err = s.downloadAndRestart(ctx, downloadURL, expectedChecksum, execPath); err != nil {
+	if err = s.downloadAndRestart(ctx, downloadURL, expectedChecksum, signature, release.TagName, assetName, execPath); err != nil {
 		return fmt.Errorf("download and restart: %w", err)
 	}
 	s.lastCheckKey = checkKey
@@ -123,6 +158,10 @@ func (s *Service) getRelease(ctx context.Context, repo string, options agent.Upd
 }
 
 func (s *Service) getLatestStableRelease(ctx context.Context, repo string) (*githubRelease, error) {
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return nil, err
+	}
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -147,6 +186,10 @@ func (s *Service) getLatestStableRelease(ctx context.Context, repo string) (*git
 }
 
 func (s *Service) getLatestPreviewRelease(ctx context.Context, repo string) (*githubRelease, error) {
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return nil, err
+	}
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=20", repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -179,7 +222,11 @@ func (s *Service) getLatestPreviewRelease(ctx context.Context, repo string) (*gi
 }
 
 func (s *Service) getReleaseByTag(ctx context.Context, repo string, tag string) (*githubRelease, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, strings.TrimSpace(tag))
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, url.PathEscape(strings.TrimSpace(tag)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -215,7 +262,7 @@ func (s *Service) downloadChecksum(ctx context.Context, url string, assetName st
 	if err != nil {
 		return "", err
 	}
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.doUpdateDownload(req)
 	if err != nil {
 		return "", err
 	}
@@ -223,6 +270,11 @@ func (s *Service) downloadChecksum(ctx context.Context, url string, assetName st
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("checksum download returned %s", resp.Status)
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		if err := validateUpdateDownloadURL(resp.Request.URL.String()); err != nil {
+			return "", fmt.Errorf("checksum download final url is unsafe: %w", err)
+		}
 	}
 
 	content, err := io.ReadAll(io.LimitReader(resp.Body, maxChecksumAssetSize+1))
@@ -237,6 +289,40 @@ func (s *Service) downloadChecksum(ctx context.Context, url string, assetName st
 		return "", err
 	}
 	return checksum, nil
+}
+
+func (s *Service) downloadSignature(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.doUpdateDownload(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("signature download returned %s", resp.Status)
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		if err := validateUpdateDownloadURL(resp.Request.URL.String()); err != nil {
+			return nil, fmt.Errorf("signature download final url is unsafe: %w", err)
+		}
+	}
+
+	content, err := io.ReadAll(io.LimitReader(resp.Body, maxSignatureAssetSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > maxSignatureAssetSize {
+		return nil, fmt.Errorf("signature asset exceeds %d bytes", maxSignatureAssetSize)
+	}
+	signature, err := parseReleaseSignature(string(content))
+	if err != nil {
+		return nil, err
+	}
+	return signature, nil
 }
 
 func parseSHA256Checksum(content string, assetName string) (string, error) {
@@ -284,6 +370,59 @@ func parseSHA256Line(line string, assetName string) (string, bool) {
 	return "", false
 }
 
+func parseReleaseSignature(content string) ([]byte, error) {
+	value := strings.TrimSpace(content)
+	if value == "" {
+		return nil, fmt.Errorf("signature asset is empty")
+	}
+	fields := strings.Fields(value)
+	if len(fields) > 0 {
+		value = fields[0]
+	}
+	signature, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		signature, err = base64.RawStdEncoding.DecodeString(value)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("signature asset is not valid base64")
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return nil, fmt.Errorf("signature length is invalid")
+	}
+	return signature, nil
+}
+
+func releaseSignaturePayload(tagName string, assetName string, checksum string) []byte {
+	return []byte(strings.Join([]string{
+		"dushengcdn-release-v1",
+		strings.TrimSpace(tagName),
+		strings.TrimSpace(assetName),
+		strings.ToLower(strings.TrimSpace(checksum)),
+		"",
+	}, "\n"))
+}
+
+func verifyReleaseSignature(tagName string, assetName string, checksum string, signature []byte) error {
+	publicKeyText := strings.TrimSpace(config.ReleaseSignaturePublicKey)
+	if publicKeyText == "" {
+		return fmt.Errorf("release signature public key is not configured")
+	}
+	publicKey, err := base64.StdEncoding.DecodeString(publicKeyText)
+	if err != nil {
+		publicKey, err = base64.RawStdEncoding.DecodeString(publicKeyText)
+	}
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("release signature public key is invalid")
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return fmt.Errorf("release signature is invalid")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(publicKey), releaseSignaturePayload(tagName, assetName, checksum), signature) {
+		return fmt.Errorf("release signature verification failed")
+	}
+	return nil
+}
+
 func isSHA256Hex(value string) bool {
 	value = strings.TrimSpace(value)
 	if len(value) != sha256.Size*2 {
@@ -293,7 +432,79 @@ func isSHA256Hex(value string) bool {
 	return err == nil
 }
 
-func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedChecksum string, targetPath string) error {
+func validateUpdateDownloadURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("download url format is invalid")
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("download url must use https")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("download url must not contain user info")
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return fmt.Errorf("download url must use the default https port")
+	}
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), ".")
+	if _, ok := allowedUpdateDownloadHosts[host]; !ok {
+		return fmt.Errorf("download host %q is not allowed", host)
+	}
+	return nil
+}
+
+func normalizeGitHubRepo(repo string) (string, error) {
+	repo = strings.TrimSpace(repo)
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("github repo must use owner/repo format")
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("github repo must use owner/repo format")
+		}
+		for _, r := range part {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+				continue
+			}
+			return "", fmt.Errorf("github repo contains invalid characters")
+		}
+	}
+	return repo, nil
+}
+
+func (s *Service) doUpdateDownload(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil {
+		return nil, fmt.Errorf("download request is invalid")
+	}
+	if err := validateUpdateDownloadURL(req.URL.String()); err != nil {
+		return nil, err
+	}
+	baseClient := s.httpClient
+	if baseClient == nil {
+		baseClient = http.DefaultClient
+	}
+	client := *baseClient
+	previousCheckRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req == nil || req.URL == nil {
+			return fmt.Errorf("download redirect request is invalid")
+		}
+		if err := validateUpdateDownloadURL(req.URL.String()); err != nil {
+			return err
+		}
+		if previousCheckRedirect != nil {
+			return previousCheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return client.Do(req)
+}
+
+func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedChecksum string, signature []byte, tagName string, assetName string, targetPath string) error {
 	expectedChecksum = strings.ToLower(strings.TrimSpace(expectedChecksum))
 	if !isSHA256Hex(expectedChecksum) {
 		return fmt.Errorf("invalid expected sha256 checksum")
@@ -306,7 +517,7 @@ func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedCh
 	if err != nil {
 		return err
 	}
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.doUpdateDownload(req)
 	if err != nil {
 		return err
 	}
@@ -314,6 +525,11 @@ func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedCh
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download returned %s", resp.Status)
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		if err := validateUpdateDownloadURL(resp.Request.URL.String()); err != nil {
+			return fmt.Errorf("download final url is unsafe: %w", err)
+		}
 	}
 	if resp.ContentLength > maxAgentBinaryAssetSize {
 		return fmt.Errorf("agent binary asset exceeds %d bytes", maxAgentBinaryAssetSize)
@@ -346,6 +562,10 @@ func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedCh
 	if actualChecksum != expectedChecksum {
 		os.Remove(tmpPath)
 		return fmt.Errorf("sha256 checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
+	}
+	if err = verifyReleaseSignature(tagName, assetName, actualChecksum, signature); err != nil {
+		os.Remove(tmpPath)
+		return err
 	}
 	if err = os.Chmod(tmpPath, 0o755); err != nil && runtime.GOOS != "windows" {
 		os.Remove(tmpPath)

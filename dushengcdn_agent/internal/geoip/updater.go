@@ -1,6 +1,7 @@
 package geoip
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,8 +15,10 @@ import (
 )
 
 const minDatabaseSize = 1024 * 1024
+const maxDatabaseMetadataSearchBytes = 128 * 1024
 
 var maxDatabaseSize int64 = 128 * 1024 * 1024
+var maxMindMetadataMarker = []byte{0xab, 0xcd, 0xef, 'M', 'a', 'x', 'M', 'i', 'n', 'd', '.', 'c', 'o', 'm'}
 
 type Updater struct {
 	URL      string
@@ -97,10 +100,44 @@ func (u *Updater) Download(ctx context.Context) error {
 	if written > maxDatabaseSize {
 		return fmt.Errorf("downloaded geoip database exceeds maximum size: %d bytes", written)
 	}
+	if err = validateMMDBFile(tmpPath); err != nil {
+		return err
+	}
 	if err = os.Rename(tmpPath, targetPath); err != nil {
 		return fmt.Errorf("activate geoip database: %w", err)
 	}
 	slog.Info("geoip country database updated", "path", targetPath, "bytes", written)
+	return nil
+}
+
+func validateMMDBFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open geoip database for validation: %w", err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat geoip database for validation: %w", err)
+	}
+	readSize := int64(maxDatabaseMetadataSearchBytes)
+	if info.Size() < readSize {
+		readSize = info.Size()
+	}
+	if readSize <= 0 {
+		return errors.New("downloaded geoip database is empty")
+	}
+	if _, err := file.Seek(-readSize, io.SeekEnd); err != nil {
+		return fmt.Errorf("seek geoip database metadata: %w", err)
+	}
+	tail, err := io.ReadAll(io.LimitReader(file, readSize))
+	if err != nil {
+		return fmt.Errorf("read geoip database metadata: %w", err)
+	}
+	if !bytes.Contains(tail, maxMindMetadataMarker) {
+		return errors.New("downloaded geoip database is not a MaxMind MMDB file")
+	}
 	return nil
 }
 

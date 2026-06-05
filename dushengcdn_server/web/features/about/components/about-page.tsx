@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { marked } from 'marked';
+import { useMemo } from 'react';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
@@ -12,6 +13,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { getPublicStatus } from '@/features/auth/api/public';
 import { getAboutContent } from '@/features/settings/api/settings';
 import { formatDateTime } from '@/lib/utils/date';
+import { sanitizeHtml } from '@/lib/utils/sanitize-html';
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
@@ -27,6 +29,11 @@ export function AboutPage() {
     queryKey: ['public-status'],
     queryFn: getPublicStatus,
   });
+  const aboutContent = aboutQuery.data?.trim() ?? '';
+  const safeAboutHtml = useMemo(
+    () => sanitizeHtml(marked.parse(aboutContent) as string),
+    [aboutContent],
+  );
 
   if (aboutQuery.isLoading || statusQuery.isLoading) {
     return <LoadingState />;
@@ -40,7 +47,6 @@ export function AboutPage() {
     return <ErrorState title='系统状态加载失败' description={getErrorMessage(statusQuery.error)} />;
   }
 
-  const aboutContent = aboutQuery.data?.trim() ?? '';
   const status = statusQuery.data;
 
   if (!status) {
@@ -83,7 +89,7 @@ export function AboutPage() {
         <AppCard title='项目介绍' description='以下内容由系统设置中的“关于内容”维护。'>
           <div
             className='prose prose-sm max-w-none text-[var(--foreground-primary)] [&_a]:text-[var(--brand-primary)]'
-            dangerouslySetInnerHTML={{ __html: marked.parse(aboutContent) as string }}
+            dangerouslySetInnerHTML={{ __html: safeAboutHtml }}
           />
         </AppCard>
       ) : (

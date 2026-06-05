@@ -11,6 +11,7 @@ SERVER_URL=""
 LOG_TAIL="120"
 CURL_TIMEOUT="5"
 SKIP_LOGS="false"
+RAW_LOGS="false"
 STATUS=0
 
 usage() {
@@ -28,6 +29,7 @@ Options:
   --log-tail NUM         Number of compose log lines to print per service (default: 120)
   --curl-timeout SEC     Curl timeout in seconds for health checks (default: 5)
   --skip-logs            Do not print compose logs
+  --raw-logs             Print logs without redacting secrets
   -h, --help             Show this help message
 
 Behavior:
@@ -216,6 +218,18 @@ collect_logs() {
   "${COMPOSE_CMD[@]}" logs --no-color --tail="$tail_lines" "$service" 2>&1
 }
 
+redact_logs() {
+  if [[ "$RAW_LOGS" == "true" ]]; then
+    cat
+    return
+  fi
+  sed -E \
+    -e 's#(postgres(ql)?://[^:/@[:space:]]+:)[^@[:space:]]+@#\1<redacted>@#Ig' \
+    -e 's#(\"[^\"]*(password|passwd|pwd|token|secret|authorization)[^\"]*\"[[:space:]]*:[[:space:]]*\")[^\"]+\"#\1<redacted>\"#Ig' \
+    -e 's#((password|passwd|pwd|token|secret|authorization|x-agent-token|x-dns-worker-token)[_[:alnum:] .:-]*[=:][[:space:]]*)[^,;[:space:]\"]+#\1<redacted>#Ig' \
+    -e 's#(Bearer[[:space:]]+)[A-Za-z0-9._~+/=-]+#\1<redacted>#Ig'
+}
+
 diagnose_server_logs() {
   local logs="$1"
 
@@ -241,7 +255,7 @@ show_logs() {
   log "Recent dushengcdn logs"
   logs="$(collect_logs dushengcdn "$LOG_TAIL" || true)"
   if [[ -n "$logs" ]]; then
-    printf '%s\n' "$logs"
+    printf '%s\n' "$logs" | redact_logs
     diagnose_server_logs "$logs"
   else
     warn "could not read dushengcdn logs."
@@ -249,7 +263,7 @@ show_logs() {
   echo
 
   log "Recent postgres logs"
-  if ! collect_logs postgres "$LOG_TAIL"; then
+  if ! collect_logs postgres "$LOG_TAIL" | redact_logs; then
     warn "could not read postgres logs; this is expected when PostgreSQL is external or service name differs."
   fi
   echo
@@ -281,6 +295,7 @@ while [[ $# -gt 0 ]]; do
     --log-tail) LOG_TAIL="$2"; shift 2 ;;
     --curl-timeout) CURL_TIMEOUT="$2"; shift 2 ;;
     --skip-logs) SKIP_LOGS="true"; shift ;;
+    --raw-logs) RAW_LOGS="true"; shift ;;
     -h|--help) usage ;;
     *) warn "unknown option: $1"; exit 2 ;;
   esac

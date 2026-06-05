@@ -146,11 +146,18 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           ASSET_NAME: ${{ matrix.asset_name }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_SIGNATURE_PUBLIC_KEY: ${{ secrets.DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY }}
+          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY }}
         run: |
           go mod download
+          if [[ -z "$RELEASE_SIGNATURE_PUBLIC_KEY" || -z "$RELEASE_SIGNING_PRIVATE_KEY" ]]; then
+            echo "release signing secrets are required" >&2
+            exit 1
+          fi
           mkdir -p ../dist
-          go build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION'" -o "../dist/$ASSET_NAME" .
+          go build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY'" -o "../dist/$ASSET_NAME" .
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
+          go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v7
@@ -159,6 +166,7 @@ jobs:
           path: |
             dist/${{ matrix.asset_name }}
             dist/${{ matrix.asset_name }}.sha256
+            dist/${{ matrix.asset_name }}.sig
           retention-days: 1
 
   build-agent-binaries:
@@ -202,11 +210,18 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           ASSET_NAME: ${{ matrix.asset_name }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_SIGNATURE_PUBLIC_KEY: ${{ secrets.DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY }}
+          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY }}
         run: |
           go mod download
+          if [[ -z "$RELEASE_SIGNATURE_PUBLIC_KEY" || -z "$RELEASE_SIGNING_PRIVATE_KEY" ]]; then
+            echo "release signing secrets are required" >&2
+            exit 1
+          fi
           mkdir -p ../dist
-          go build -trimpath -ldflags "-s -w -X 'dushengcdn-agent/internal/config.AgentVersion=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/agent
+          go build -trimpath -ldflags "-s -w -X 'dushengcdn-agent/internal/config.AgentVersion=$VERSION' -X 'dushengcdn-agent/internal/config.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY'" -o "../dist/$ASSET_NAME" ./cmd/agent
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
+          go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload Agent Artifact
         uses: actions/upload-artifact@v7
@@ -215,6 +230,7 @@ jobs:
           path: |
             dist/${{ matrix.asset_name }}
             dist/${{ matrix.asset_name }}.sha256
+            dist/${{ matrix.asset_name }}.sig
           retention-days: 1
 
   build-dns-worker-binaries:
@@ -261,11 +277,17 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           ASSET_NAME: ${{ matrix.asset_name }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY }}
         run: |
           go mod download
+          if [[ -z "$RELEASE_SIGNING_PRIVATE_KEY" ]]; then
+            echo "release signing private key is required" >&2
+            exit 1
+          fi
           mkdir -p ../dist
           go build -trimpath -ldflags "-s -w -X 'main.version=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/dns-worker
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
+          go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload DNS Worker Artifact
         uses: actions/upload-artifact@v7
@@ -274,6 +296,7 @@ jobs:
           path: |
             dist/${{ matrix.asset_name }}
             dist/${{ matrix.asset_name }}.sha256
+            dist/${{ matrix.asset_name }}.sig
           retention-days: 1
 
   release:

@@ -9,6 +9,7 @@ import (
 
 var StartTime = time.Now().Unix() // unit: second
 var Version = "dev"               // release builds inject the tag version via ldflags
+var ReleaseSignaturePublicKey = ""
 var SystemName = "DuShengCDN"
 var ServerAddress = "http://localhost:3000"
 var Footer = ""
@@ -17,6 +18,8 @@ var HomePageLink = ""
 // Any options with "Secret", "Token" in its key won't be return by GetOptions
 
 var SessionSecret = uuid.New().String()
+var InitialRootPassword = ""
+var TrustedProxies = ""
 var SQLitePath = "dushengcdn.db"
 var SQLDSN = ""
 var DatabaseMaxOpenConns = 30

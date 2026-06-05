@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"dushengcdn/common"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +33,11 @@ const (
 )
 
 var manualServerBinaryMaxBytes int64 = 200 * 1024 * 1024
+var allowedServerUpdateDownloadHosts = map[string]struct{}{
+	"github.com":                            {},
+	"objects.githubusercontent.com":         {},
+	"github-releases.githubusercontent.com": {},
+}
 
 type ReleaseChannel string
 
@@ -108,12 +116,14 @@ type githubAsset struct {
 }
 
 type preparedServerUpgrade struct {
-	release      *LatestServerRelease
-	downloadURL  string
-	checksumURL  string
-	assetName    string
-	checksumName string
-	execPath     string
+	release       *LatestServerRelease
+	downloadURL   string
+	checksumURL   string
+	signatureURL  string
+	assetName     string
+	checksumName  string
+	signatureName string
+	execPath      string
 }
 
 type UploadedServerBinary struct {
@@ -149,7 +159,7 @@ func GetLatestServerRelease(ctx context.Context, channel string) (*LatestServerR
 
 func ScheduleServerUpgrade(channel string) (*LatestServerRelease, error) {
 	if !common.ServerAutoUpgradeEnabled {
-		return nil, fmt.Errorf("服务端自动升级默认关闭；如需启用，请设置 DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true，并确认 Release 同时包含 Server 二进制和同名 .sha256 校验文件。也可以上传已审阅的 Server 二进制进行手动升级")
+		return nil, fmt.Errorf("服务端自动升级默认关闭；如需启用，请设置 DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true，并确认 Release 同时包含 Server 二进制、同名 .sha256 校验文件和 .sig 签名文件。也可以上传已审阅的 Server 二进制进行手动升级")
 	}
 	return scheduleServerUpgradeFromRelease(channel)
 }
@@ -333,7 +343,11 @@ func fetchLatestGitHubRelease(ctx context.Context, repo string, channel ReleaseC
 }
 
 func fetchLatestStableGitHubRelease(ctx context.Context, repo string) (*githubReleaseResponse, error) {
-	url := fmt.Sprintf(githubReleasesAPIBase+"/latest", strings.TrimSpace(repo))
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf(githubReleasesAPIBase+"/latest", repo)
 	req, err := newGitHubReleaseRequest(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("创建更新请求失败")
@@ -353,7 +367,11 @@ func fetchLatestStableGitHubRelease(ctx context.Context, repo string) (*githubRe
 }
 
 func fetchLatestPreviewGitHubRelease(ctx context.Context, repo string) (*githubReleaseResponse, error) {
-	url := fmt.Sprintf(githubReleasesAPIBase+"?per_page=20", strings.TrimSpace(repo))
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf(githubReleasesAPIBase+"?per_page=20", repo)
 	req, err := newGitHubReleaseRequest(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("创建更新请求失败")
@@ -388,7 +406,11 @@ func fetchGitHubReleaseByTag(ctx context.Context, repo string, tag string) (*git
 	if tag == "" {
 		return nil, fmt.Errorf("缺少发布版本号")
 	}
-	url := fmt.Sprintf(githubReleasesAPIBase+"/tags/%s", strings.TrimSpace(repo), tag)
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf(githubReleasesAPIBase+"/tags/%s", repo, url.PathEscape(tag))
 	req, err := newGitHubReleaseRequest(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("创建更新请求失败")
@@ -483,16 +505,20 @@ func prepareServerUpgrade(ctx context.Context, channel ReleaseChannel) (*prepare
 
 	assetName := serverAssetName(runtime.GOOS, runtime.GOARCH)
 	checksumAssetName := assetName + ".sha256"
+	signatureAssetName := assetName + ".sig"
 	recordServerUpgradeLog("info", fmt.Sprintf("Matching release asset: %s.", assetName))
 
 	var downloadURL string
 	var checksumURL string
+	var signatureURL string
 	for _, asset := range release.Assets {
 		switch asset.Name {
 		case assetName:
 			downloadURL = asset.BrowserDownloadURL
 		case checksumAssetName:
 			checksumURL = asset.BrowserDownloadURL
+		case signatureAssetName:
+			signatureURL = asset.BrowserDownloadURL
 		}
 	}
 	if downloadURL == "" {
@@ -500,6 +526,18 @@ func prepareServerUpgrade(ctx context.Context, channel ReleaseChannel) (*prepare
 	}
 	if checksumURL == "" {
 		return nil, fmt.Errorf("最新版本缺少当前平台的服务端校验文件: %s", checksumAssetName)
+	}
+	if signatureURL == "" {
+		return nil, fmt.Errorf("最新版本缺少当前平台的服务端签名文件: %s", signatureAssetName)
+	}
+	if err := validateServerUpdateDownloadURL(downloadURL); err != nil {
+		return nil, fmt.Errorf("服务端升级包下载地址不安全: %w", err)
+	}
+	if err := validateServerUpdateDownloadURL(checksumURL); err != nil {
+		return nil, fmt.Errorf("服务端升级包校验文件地址不安全: %w", err)
+	}
+	if err := validateServerUpdateDownloadURL(signatureURL); err != nil {
+		return nil, fmt.Errorf("服务端升级包签名文件地址不安全: %w", err)
 	}
 
 	execPath, err := os.Executable()
@@ -512,12 +550,14 @@ func prepareServerUpgrade(ctx context.Context, channel ReleaseChannel) (*prepare
 	recordServerUpgradeLog("info", "Verified current executable directory is writable.")
 
 	return &preparedServerUpgrade{
-		release:      view,
-		downloadURL:  downloadURL,
-		checksumURL:  checksumURL,
-		assetName:    assetName,
-		checksumName: checksumAssetName,
-		execPath:     execPath,
+		release:       view,
+		downloadURL:   downloadURL,
+		checksumURL:   checksumURL,
+		signatureURL:  signatureURL,
+		assetName:     assetName,
+		checksumName:  checksumAssetName,
+		signatureName: signatureAssetName,
+		execPath:      execPath,
 	}, nil
 }
 
@@ -538,6 +578,78 @@ func verifyExecutableDirectoryWritable(execPath string) error {
 	return nil
 }
 
+func validateServerUpdateDownloadURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New("download url format is invalid")
+	}
+	if parsed.Scheme != "https" {
+		return errors.New("download url must use https")
+	}
+	if parsed.User != nil {
+		return errors.New("download url must not contain user info")
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return errors.New("download url must use the default https port")
+	}
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), ".")
+	if _, ok := allowedServerUpdateDownloadHosts[host]; !ok {
+		return fmt.Errorf("download host %q is not allowed", host)
+	}
+	return nil
+}
+
+func normalizeGitHubRepo(repo string) (string, error) {
+	repo = strings.TrimSpace(repo)
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return "", errors.New("github repo must use owner/repo format")
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", errors.New("github repo must use owner/repo format")
+		}
+		for _, r := range part {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+				continue
+			}
+			return "", errors.New("github repo contains invalid characters")
+		}
+	}
+	return repo, nil
+}
+
+func doServerUpdateDownload(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil {
+		return nil, errors.New("download request is invalid")
+	}
+	if err := validateServerUpdateDownloadURL(req.URL.String()); err != nil {
+		return nil, err
+	}
+	baseClient := updateHTTPClient
+	if baseClient == nil {
+		baseClient = http.DefaultClient
+	}
+	client := *baseClient
+	previousCheckRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req == nil || req.URL == nil {
+			return errors.New("download redirect request is invalid")
+		}
+		if err := validateServerUpdateDownloadURL(req.URL.String()); err != nil {
+			return err
+		}
+		if previousCheckRedirect != nil {
+			return previousCheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return client.Do(req)
+}
+
 func executeServerUpgrade(task *preparedServerUpgrade) error {
 	recordServerUpgradeLog("info", fmt.Sprintf("Downloading automatic upgrade package for version: %s.", strings.TrimSpace(task.release.TagName)))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -548,6 +660,15 @@ func executeServerUpgrade(task *preparedServerUpgrade) error {
 		return fmt.Errorf("下载服务端升级包校验文件失败: %w", err)
 	}
 	recordServerUpgradeLog("info", fmt.Sprintf("Downloaded checksum asset: %s.", strings.TrimSpace(task.checksumName)))
+	signature, err := downloadServerSignature(ctx, task.signatureURL)
+	if err != nil {
+		return fmt.Errorf("下载服务端升级包签名文件失败: %w", err)
+	}
+	recordServerUpgradeLog("info", fmt.Sprintf("Downloaded signature asset: %s.", strings.TrimSpace(task.signatureName)))
+	if err = verifyServerReleaseSignature(task.release.TagName, task.assetName, expectedChecksum, signature); err != nil {
+		return fmt.Errorf("服务端升级包签名校验失败: %w", err)
+	}
+	recordServerUpgradeLog("info", "Release signature verified.")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, task.downloadURL, nil)
 	if err != nil {
@@ -556,7 +677,7 @@ func executeServerUpgrade(task *preparedServerUpgrade) error {
 	req.Header.Set("Accept", "application/octet-stream")
 	req.Header.Set("User-Agent", "DuShengCDN-Server")
 
-	resp, err := updateHTTPClient.Do(req)
+	resp, err := doServerUpdateDownload(req)
 	if err != nil {
 		return err
 	}
@@ -565,17 +686,33 @@ func executeServerUpgrade(task *preparedServerUpgrade) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载服务端升级包失败: %s", resp.Status)
 	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		if err := validateServerUpdateDownloadURL(resp.Request.URL.String()); err != nil {
+			return fmt.Errorf("服务端升级包最终下载地址不安全: %w", err)
+		}
+	}
 
-	recordServerUpgradeLog("info", "Download finished, validating binary version.")
-	candidate, err := persistDownloadedServerBinary(ctx, task.execPath, task.release.TagName, resp.Body)
+	recordServerUpgradeLog("info", "Download finished, validating checksum and signature.")
+	tempPath, err := persistUploadedServerBinary(filepath.Dir(task.execPath), task.assetName, resp.Body)
 	if err != nil {
 		return err
 	}
-	if err = verifyServerBinaryChecksum(candidate.TempPath, expectedChecksum); err != nil {
-		_ = os.Remove(candidate.TempPath)
+	if err = verifyServerBinaryChecksum(tempPath, expectedChecksum); err != nil {
+		_ = os.Remove(tempPath)
 		return err
 	}
 	recordServerUpgradeLog("info", "Binary checksum verified.")
+	if err = verifyServerReleaseSignature(task.release.TagName, task.assetName, expectedChecksum, signature); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+	recordServerUpgradeLog("info", "Binary signature verified.")
+	recordServerUpgradeLog("info", "Validating binary version.")
+	candidate, err := buildDownloadedServerBinaryCandidate(ctx, task.execPath, task.release.TagName, task.assetName, tempPath)
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
 	return executeServerBinaryCandidateUpgrade(candidate, "auto")
 }
 
@@ -590,13 +727,18 @@ func downloadServerChecksum(ctx context.Context, url string, assetName string) (
 	}
 	req.Header.Set("Accept", "text/plain")
 	req.Header.Set("User-Agent", "DuShengCDN-Server")
-	resp, err := updateHTTPClient.Do(req)
+	resp, err := doServerUpdateDownload(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("checksum download returned %s", resp.Status)
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		if err := validateServerUpdateDownloadURL(resp.Request.URL.String()); err != nil {
+			return "", fmt.Errorf("checksum download final url is unsafe: %w", err)
+		}
 	}
 	content, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
 	if err != nil {
@@ -606,6 +748,40 @@ func downloadServerChecksum(ctx context.Context, url string, assetName string) (
 		return "", errors.New("checksum asset exceeds 64 KB")
 	}
 	return parseServerChecksum(string(content), assetName)
+}
+
+func downloadServerSignature(ctx context.Context, url string) ([]byte, error) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return nil, errors.New("signature url is empty")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/plain")
+	req.Header.Set("User-Agent", "DuShengCDN-Server")
+	resp, err := doServerUpdateDownload(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("signature download returned %s", resp.Status)
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		if err := validateServerUpdateDownloadURL(resp.Request.URL.String()); err != nil {
+			return nil, fmt.Errorf("signature download final url is unsafe: %w", err)
+		}
+	}
+	content, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > 8*1024 {
+		return nil, errors.New("signature asset exceeds 8 KB")
+	}
+	return parseServerReleaseSignature(string(content))
 }
 
 func parseServerChecksum(content string, assetName string) (string, error) {
@@ -640,6 +816,59 @@ func parseServerChecksum(content string, assetName string) (string, error) {
 		return "", errors.New("checksum asset does not contain a valid sha256 digest")
 	}
 	return "", fmt.Errorf("checksum asset does not contain a sha256 digest for %q", assetName)
+}
+
+func parseServerReleaseSignature(content string) ([]byte, error) {
+	value := strings.TrimSpace(content)
+	if value == "" {
+		return nil, errors.New("signature asset is empty")
+	}
+	fields := strings.Fields(value)
+	if len(fields) > 0 {
+		value = fields[0]
+	}
+	signature, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		signature, err = base64.RawStdEncoding.DecodeString(value)
+	}
+	if err != nil {
+		return nil, errors.New("signature asset is not valid base64")
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return nil, errors.New("signature length is invalid")
+	}
+	return signature, nil
+}
+
+func serverReleaseSignaturePayload(tagName string, assetName string, checksum string) []byte {
+	return []byte(strings.Join([]string{
+		"dushengcdn-release-v1",
+		strings.TrimSpace(tagName),
+		strings.TrimSpace(assetName),
+		strings.ToLower(strings.TrimSpace(checksum)),
+		"",
+	}, "\n"))
+}
+
+func verifyServerReleaseSignature(tagName string, assetName string, checksum string, signature []byte) error {
+	publicKeyText := strings.TrimSpace(common.ReleaseSignaturePublicKey)
+	if publicKeyText == "" {
+		return errors.New("release signature public key is not configured")
+	}
+	publicKey, err := base64.StdEncoding.DecodeString(publicKeyText)
+	if err != nil {
+		publicKey, err = base64.RawStdEncoding.DecodeString(publicKeyText)
+	}
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return errors.New("release signature public key is invalid")
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return errors.New("release signature is invalid")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(publicKey), serverReleaseSignaturePayload(tagName, assetName, checksum), signature) {
+		return errors.New("release signature verification failed")
+	}
+	return nil
 }
 
 func verifyServerBinaryChecksum(path string, expectedChecksum string) error {
@@ -1023,22 +1252,27 @@ func persistDownloadedServerBinary(ctx context.Context, execPath string, release
 	if err != nil {
 		return nil, err
 	}
-
-	detectedVersion, err := detectUploadedServerBinaryVersion(ctx, tempPath)
+	candidate, err := buildDownloadedServerBinaryCandidate(ctx, execPath, releaseTag, fileName, tempPath)
 	if err != nil {
 		_ = os.Remove(tempPath)
+		return nil, err
+	}
+	return candidate, nil
+}
+
+func buildDownloadedServerBinaryCandidate(ctx context.Context, execPath string, releaseTag string, fileName string, tempPath string) (*manualServerBinaryCandidate, error) {
+	detectedVersion, err := detectUploadedServerBinaryVersion(ctx, tempPath)
+	if err != nil {
 		return nil, err
 	}
 	recordServerUpgradeLog("info", fmt.Sprintf("Detected downloaded binary version: %s.", strings.TrimSpace(detectedVersion)))
 
 	if normalizeVersion(detectedVersion) != normalizeVersion(releaseTag) {
-		_ = os.Remove(tempPath)
 		return nil, fmt.Errorf("下载包版本校验失败：release=%s，binary=%s", strings.TrimSpace(releaseTag), strings.TrimSpace(detectedVersion))
 	}
 
 	info := buildUploadedServerBinaryView(fileName, common.Version, detectedVersion, time.Now())
 	if !info.ReadyToUpgrade {
-		_ = os.Remove(tempPath)
 		return nil, errors.New(info.ComparisonMessage)
 	}
 

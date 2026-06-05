@@ -511,10 +511,13 @@ func setupTestDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "phase1.db")
 	common.SQLitePath = dbPath
 	common.AgentToken = "phase1-agent-token"
+	previousInitialRootPassword := common.InitialRootPassword
+	common.InitialRootPassword = "123456"
 	if err := model.InitDB(); err != nil {
 		t.Fatalf("failed to init db: %v", err)
 	}
 	t.Cleanup(func() {
+		common.InitialRootPassword = previousInitialRootPassword
 		if err := model.CloseDB(); err != nil {
 			t.Fatalf("failed to close db: %v", err)
 		}

@@ -436,11 +436,24 @@ describe('Proxy route website pages', () => {
   });
 
   it('renders selected feature section as an expandable configuration page', async () => {
+    const user = userEvent.setup();
     searchParamsMock = new URLSearchParams('section=cache');
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
+
+        if (url.includes('/proxy-routes/9/cache/purge')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                message: '',
+                data: {
+                  target_nodes: ['node-default'],
+                },
+              }),
+            ),
+          );
+        }
 
         if (url.includes('/proxy-routes/')) {
           return Promise.resolve(
@@ -473,8 +486,8 @@ describe('Proxy route website pages', () => {
         }
 
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-      }),
-    );
+      });
+    vi.stubGlobal('fetch', fetchMock);
 
     renderWithProviders(<ProxyRoutesPage />);
 
@@ -484,9 +497,23 @@ describe('Proxy route website pages', () => {
     expect(screen.getByText('缓存规则')).toBeInTheDocument();
     expect(screen.getByLabelText('缓存规则 1')).toHaveValue('/assets');
     expect(screen.getByLabelText('缓存规则 2')).toHaveValue('/static');
+    await user.click(screen.getByRole('button', { name: '清理全部缓存' }));
+    expect(screen.getByRole('dialog', { name: '清理全部缓存' })).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: '清理全部缓存' }),
-    ).toBeInTheDocument();
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes('/proxy-routes/9/cache/purge'),
+      ),
+    ).toBe(false);
+
+    await user.click(screen.getByRole('button', { name: '清理缓存' }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some((call) =>
+          String(call[0]).includes('/proxy-routes/9/cache/purge'),
+        ),
+      ).toBe(true);
+    });
     expect(screen.getByRole('link', { name: '配置缓存策略' })).toHaveAttribute(
       'href',
       '/proxy-route/detail?id=9&section=cache',

@@ -3,8 +3,11 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"dushengcdn/common"
+	"encoding/base64"
 	"encoding/hex"
 	"io"
 	"net/http"
@@ -14,6 +17,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+)
+
+const (
+	testServerReleaseTag = "v0.5.0"
+	testServerAssetName  = "dushengcdn-server-linux-amd64"
+	testServerBinaryURL  = "https://github.com/SatanDS/DuShengCDN/releases/download/v0.5.0/server"
+	testServerSHAURL     = "https://github.com/SatanDS/DuShengCDN/releases/download/v0.5.0/server.sha256"
+	testServerSigURL     = "https://github.com/SatanDS/DuShengCDN/releases/download/v0.5.0/server.sig"
 )
 
 func resetServerUpgradeTestState(t *testing.T) {
@@ -33,6 +44,26 @@ func fakeServerBinaryFixture(version string) (string, []byte) {
 		return "dushengcdn-server-test.cmd", []byte("@echo off\r\necho " + version + "\r\n")
 	}
 	return "dushengcdn-server-test.sh", []byte("#!/bin/sh\necho " + version + "\n")
+}
+
+func withServerReleaseSigningKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate test signing key: %v", err)
+	}
+	originalPublicKey := common.ReleaseSignaturePublicKey
+	common.ReleaseSignaturePublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	t.Cleanup(func() {
+		common.ReleaseSignaturePublicKey = originalPublicKey
+	})
+	return privateKey
+}
+
+func signServerReleaseForTest(t *testing.T, privateKey ed25519.PrivateKey, tagName string, assetName string, checksum string) string {
+	t.Helper()
+	signature := ed25519.Sign(privateKey, serverReleaseSignaturePayload(tagName, assetName, checksum))
+	return base64.StdEncoding.EncodeToString(signature)
 }
 
 func TestIsVersionNewer(t *testing.T) {
@@ -435,6 +466,95 @@ func TestScheduleServerUpgradeUsesDownloadedBinaryValidation(t *testing.T) {
 	}
 }
 
+func TestValidateServerUpdateDownloadURL(t *testing.T) {
+	validURLs := []string{
+		"https://github.com/SatanDS/DuShengCDN/releases/download/v0.5.0/dushengcdn-server-linux-amd64",
+		"https://objects.githubusercontent.com/github-production-release-asset/file",
+		"https://github-releases.githubusercontent.com/asset",
+	}
+	for _, value := range validURLs {
+		if err := validateServerUpdateDownloadURL(value); err != nil {
+			t.Fatalf("expected URL %q to be accepted: %v", value, err)
+		}
+	}
+
+	invalidURLs := []string{
+		"http://github.com/SatanDS/DuShengCDN/releases/download/v0.5.0/server",
+		"https://github.com:444/SatanDS/DuShengCDN/releases/download/v0.5.0/server",
+		"https://user:pass@github.com/SatanDS/DuShengCDN/releases/download/v0.5.0/server",
+		"https://example.test/server",
+		"https://127.0.0.1/server",
+		"not a url",
+	}
+	for _, value := range invalidURLs {
+		if err := validateServerUpdateDownloadURL(value); err == nil {
+			t.Fatalf("expected URL %q to be rejected", value)
+		}
+	}
+}
+
+func TestNormalizeGitHubRepo(t *testing.T) {
+	if got, err := normalizeGitHubRepo(" SatanDS/DuShengCDN "); err != nil || got != "SatanDS/DuShengCDN" {
+		t.Fatalf("unexpected normalized repo: got %q err %v", got, err)
+	}
+	for _, value := range []string{
+		"https://github.com/SatanDS/DuShengCDN",
+		"SatanDS/DuShengCDN/releases",
+		"SatanDS/../DuShengCDN",
+		"SatanDS/DuShengCDN?x=1",
+		"SatanDS/",
+	} {
+		if _, err := normalizeGitHubRepo(value); err == nil {
+			t.Fatalf("expected repo %q to be rejected", value)
+		}
+	}
+}
+
+func TestDownloadServerChecksumRejectsUnsafeFinalURL(t *testing.T) {
+	originalClient := UpdateHTTPClientForTest()
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			finalReq := req.Clone(req.Context())
+			finalReq.URL.Scheme = "https"
+			finalReq.URL.Host = "example.test"
+			finalReq.URL.Path = "/server.sha256"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Request:    finalReq,
+				Body:       io.NopCloser(strings.NewReader(strings.Repeat("a", sha256.Size*2))),
+			}, nil
+		}),
+	})
+	t.Cleanup(func() {
+		SetUpdateHTTPClientForTest(originalClient)
+	})
+
+	_, err := downloadServerChecksum(context.Background(), "https://github.com/SatanDS/DuShengCDN/releases/download/v0.5.0/server.sha256", "server")
+	if err == nil || !strings.Contains(err.Error(), "final url is unsafe") {
+		t.Fatalf("expected unsafe final URL error, got %v", err)
+	}
+}
+
+func TestDownloadServerChecksumRejectsUnsafeInitialURL(t *testing.T) {
+	originalClient := UpdateHTTPClientForTest()
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatal("download request should not be sent for unsafe initial URL")
+			return nil, nil
+		}),
+	})
+	t.Cleanup(func() {
+		SetUpdateHTTPClientForTest(originalClient)
+	})
+
+	_, err := downloadServerChecksum(context.Background(), "https://example.test/server.sha256", "server")
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected unsafe initial URL error, got %v", err)
+	}
+}
+
 func TestParseServerChecksum(t *testing.T) {
 	checksum := strings.Repeat("a", sha256.Size*2)
 	testCases := []struct {
@@ -481,18 +601,26 @@ func TestExecuteServerUpgradeRejectsChecksumMismatch(t *testing.T) {
 		resetServerUpgradeTestState(t)
 	})
 
-	_, content := fakeServerBinaryFixture("v0.5.0")
+	_, content := fakeServerBinaryFixture(testServerReleaseTag)
+	signature := base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
 	SetUpdateHTTPClientForTest(&http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.URL.String() {
-			case "https://example.test/server.sha256":
+			case testServerSHAURL:
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Status:     "200 OK",
-					Body:       io.NopCloser(strings.NewReader(strings.Repeat("0", sha256.Size*2) + "  dushengcdn-server-linux-amd64\n")),
+					Body:       io.NopCloser(strings.NewReader(strings.Repeat("0", sha256.Size*2) + "  " + testServerAssetName + "\n")),
 					Header:     make(http.Header),
 				}, nil
-			case "https://example.test/server":
+			case testServerSigURL:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader(signature)),
+					Header:     make(http.Header),
+				}, nil
+			case testServerBinaryURL:
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Status:     "200 OK",
@@ -508,13 +636,15 @@ func TestExecuteServerUpgradeRejectsChecksumMismatch(t *testing.T) {
 
 	err := executeServerUpgrade(&preparedServerUpgrade{
 		release: &LatestServerRelease{
-			TagName: "v0.5.0",
+			TagName: testServerReleaseTag,
 		},
-		downloadURL:  "https://example.test/server",
-		checksumURL:  "https://example.test/server.sha256",
-		assetName:    "dushengcdn-server-linux-amd64",
-		checksumName: "dushengcdn-server-linux-amd64.sha256",
-		execPath:     os.Args[0],
+		downloadURL:   testServerBinaryURL,
+		checksumURL:   testServerSHAURL,
+		signatureURL:  testServerSigURL,
+		assetName:     testServerAssetName,
+		checksumName:  testServerAssetName + ".sha256",
+		signatureName: testServerAssetName + ".sig",
+		execPath:      os.Args[0],
 	})
 	if err == nil || !strings.Contains(err.Error(), "SHA256") {
 		t.Fatalf("expected checksum mismatch error, got %v", err)
@@ -544,20 +674,29 @@ func TestExecuteServerUpgradeVerifiesChecksumBeforeReplace(t *testing.T) {
 		resetServerUpgradeTestState(t)
 	})
 
-	_, content := fakeServerBinaryFixture("v0.5.0")
+	_, content := fakeServerBinaryFixture(testServerReleaseTag)
 	sum := sha256.Sum256(content)
 	checksum := hex.EncodeToString(sum[:])
+	privateKey := withServerReleaseSigningKey(t)
+	signature := signServerReleaseForTest(t, privateKey, testServerReleaseTag, testServerAssetName, checksum)
 	SetUpdateHTTPClientForTest(&http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.URL.String() {
-			case "https://example.test/server.sha256":
+			case testServerSHAURL:
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Status:     "200 OK",
-					Body:       io.NopCloser(strings.NewReader(checksum + "  dushengcdn-server-linux-amd64\n")),
+					Body:       io.NopCloser(strings.NewReader(checksum + "  " + testServerAssetName + "\n")),
 					Header:     make(http.Header),
 				}, nil
-			case "https://example.test/server":
+			case testServerSigURL:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader(signature)),
+					Header:     make(http.Header),
+				}, nil
+			case testServerBinaryURL:
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Status:     "200 OK",
@@ -573,17 +712,95 @@ func TestExecuteServerUpgradeVerifiesChecksumBeforeReplace(t *testing.T) {
 
 	if err := executeServerUpgrade(&preparedServerUpgrade{
 		release: &LatestServerRelease{
-			TagName: "v0.5.0",
+			TagName: testServerReleaseTag,
 		},
-		downloadURL:  "https://example.test/server",
-		checksumURL:  "https://example.test/server.sha256",
-		assetName:    "dushengcdn-server-linux-amd64",
-		checksumName: "dushengcdn-server-linux-amd64.sha256",
-		execPath:     os.Args[0],
+		downloadURL:   testServerBinaryURL,
+		checksumURL:   testServerSHAURL,
+		signatureURL:  testServerSigURL,
+		assetName:     testServerAssetName,
+		checksumName:  testServerAssetName + ".sha256",
+		signatureName: testServerAssetName + ".sig",
+		execPath:      os.Args[0],
 	}); err != nil {
 		t.Fatalf("expected upgrade to pass checksum verification: %v", err)
 	}
 	if !executed {
 		t.Fatal("expected upgrade executor to run after checksum verification")
+	}
+}
+
+func TestExecuteServerUpgradeRejectsInvalidSignature(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test binary fixtures require unix execution semantics")
+	}
+	originalVersion := common.Version
+	originalClient := UpdateHTTPClientForTest()
+	originalExecutor := ServerBinaryUpgradeExecutorForTest()
+	common.Version = "v0.4.0"
+	executed := false
+	SetServerBinaryUpgradeExecutorForTest(func(execPath string, tempPath string) error {
+		executed = true
+		return nil
+	})
+	t.Cleanup(func() {
+		common.Version = originalVersion
+		SetUpdateHTTPClientForTest(originalClient)
+		SetServerBinaryUpgradeExecutorForTest(originalExecutor)
+		resetServerUpgradeTestState(t)
+	})
+
+	_, content := fakeServerBinaryFixture(testServerReleaseTag)
+	sum := sha256.Sum256(content)
+	checksum := hex.EncodeToString(sum[:])
+	privateKey := withServerReleaseSigningKey(t)
+	signature := signServerReleaseForTest(t, privateKey, "v0.4.9", testServerAssetName, checksum)
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case testServerSHAURL:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader(checksum + "  " + testServerAssetName + "\n")),
+					Header:     make(http.Header),
+				}, nil
+			case testServerSigURL:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader(signature)),
+					Header:     make(http.Header),
+				}, nil
+			case testServerBinaryURL:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(bytes.NewReader(content)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected request url: %s", req.URL.String())
+				return nil, nil
+			}
+		}),
+	})
+
+	err := executeServerUpgrade(&preparedServerUpgrade{
+		release: &LatestServerRelease{
+			TagName: testServerReleaseTag,
+		},
+		downloadURL:   testServerBinaryURL,
+		checksumURL:   testServerSHAURL,
+		signatureURL:  testServerSigURL,
+		assetName:     testServerAssetName,
+		checksumName:  testServerAssetName + ".sha256",
+		signatureName: testServerAssetName + ".sig",
+		execPath:      os.Args[0],
+	})
+	if err == nil || !strings.Contains(err.Error(), "signature verification failed") {
+		t.Fatalf("expected signature verification error, got %v", err)
+	}
+	if executed {
+		t.Fatal("upgrade executor must not run when signature verification fails")
 	}
 }

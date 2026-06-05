@@ -1,8 +1,8 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useMemo } from 'react';
 import type { EChartsOption } from 'echarts';
-import ReactECharts from 'echarts-for-react';
 
 type RankChartItem = {
   label: string;
@@ -17,6 +17,10 @@ type RankChartProps = {
 };
 
 const defaultFormatter = (value: number) => value.toLocaleString('zh-CN');
+
+const ReactECharts = dynamic(() => import('echarts-for-react'), {
+  ssr: false,
+});
 
 function getChartValue(params: unknown) {
   if (typeof params !== 'object' || params === null || !('value' in params)) {

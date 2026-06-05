@@ -50,6 +50,12 @@ func init() {
 	if os.Getenv("SESSION_SECRET") != "" {
 		SessionSecret = os.Getenv("SESSION_SECRET")
 	}
+	if os.Getenv("DUSHENGCDN_INITIAL_ROOT_PASSWORD") != "" {
+		InitialRootPassword = os.Getenv("DUSHENGCDN_INITIAL_ROOT_PASSWORD")
+	}
+	if os.Getenv("TRUSTED_PROXIES") != "" {
+		TrustedProxies = os.Getenv("TRUSTED_PROXIES")
+	}
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")
 	}

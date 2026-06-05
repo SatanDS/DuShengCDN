@@ -9,10 +9,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"dushengcdn/common"
 	"dushengcdn/model"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -36,6 +40,7 @@ const (
 )
 
 var commercialLicenseNow = time.Now
+var commercialLicenseResourceMu sync.Mutex
 
 type CommercialLicenseInstallInput struct {
 	Token string `json:"token"`
@@ -89,12 +94,18 @@ type parsedCommercialLicense struct {
 	signatureVerified bool
 }
 
+type commercialLicenseGateState struct {
+	Status   string
+	Required bool
+	Features []string
+}
+
 func GetCommercialLicenseStatus() (*CommercialLicenseView, error) {
-	license, err := model.GetCommercialLicense()
+	license, err := getCommercialLicenseWithDB(model.DB)
 	if err != nil {
 		return nil, err
 	}
-	return buildCommercialLicenseView(license)
+	return buildCommercialLicenseViewWithDB(model.DB, license)
 }
 
 func InstallCommercialLicense(input CommercialLicenseInstallInput) (*CommercialLicenseView, error) {
@@ -121,11 +132,19 @@ func ClearCommercialLicense() (*CommercialLicenseView, error) {
 	if err := model.DeleteCommercialLicense(); err != nil {
 		return nil, err
 	}
-	return buildCommercialLicenseView(nil)
+	return buildCommercialLicenseViewWithDB(model.DB, nil)
 }
 
 func EnsureCommercialResourceAvailable(resource string) error {
-	view, err := GetCommercialLicenseStatus()
+	return ensureCommercialResourceAvailableWithDB(model.DB, resource)
+}
+
+func ensureCommercialResourceAvailableWithDB(db *gorm.DB, resource string) error {
+	license, err := getCommercialLicenseWithDB(db)
+	if err != nil {
+		return err
+	}
+	view, err := buildCommercialLicenseViewWithDB(db, license)
 	if err != nil {
 		return err
 	}
@@ -151,6 +170,23 @@ func EnsureCommercialResourceAvailable(resource string) error {
 	return commercialLicenseStatusOperationError(view.Status)
 }
 
+func withCommercialResourceCreation(resource string, create func(*gorm.DB) error) error {
+	if create == nil {
+		return errors.New("commercial resource creation callback is nil")
+	}
+	commercialLicenseResourceMu.Lock()
+	defer commercialLicenseResourceMu.Unlock()
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockCommercialLicenseForQuota(tx); err != nil {
+			return err
+		}
+		if err := ensureCommercialResourceAvailableWithDB(tx, resource); err != nil {
+			return err
+		}
+		return create(tx)
+	})
+}
+
 func EnsureCommercialFeatureEnabled(feature string) error {
 	return ensureCommercialFeaturesEnabled(feature)
 }
@@ -160,25 +196,78 @@ func ensureCommercialFeaturesEnabled(features ...string) error {
 	if len(normalized) == 0 {
 		return nil
 	}
-	view, err := GetCommercialLicenseStatus()
+	state, err := getCommercialLicenseGateState()
 	if err != nil {
 		return err
 	}
-	if view == nil {
+	if state == nil {
 		return nil
 	}
-	if view.Status == CommercialLicenseStatusCommunity && !view.Required {
+	if state.Status == CommercialLicenseStatusCommunity && !state.Required {
 		return nil
 	}
-	if view.Status != CommercialLicenseStatusValid && view.Status != CommercialLicenseStatusExpiring {
-		return commercialLicenseStatusOperationError(view.Status)
+	if state.Status != CommercialLicenseStatusValid && state.Status != CommercialLicenseStatusExpiring {
+		return commercialLicenseStatusOperationError(state.Status)
 	}
 	for _, feature := range normalized {
-		if !commercialLicenseFeaturesContain(view.Features, feature) {
+		if !commercialLicenseFeaturesContain(state.Features, feature) {
 			return fmt.Errorf("当前授权未包含 %s 能力", commercialLicenseFeatureLabel(feature))
 		}
 	}
 	return nil
+}
+
+func getCommercialLicenseGateState() (*commercialLicenseGateState, error) {
+	license, err := getCommercialLicenseWithDB(model.DB)
+	if err != nil {
+		return nil, err
+	}
+	state := &commercialLicenseGateState{
+		Status:   CommercialLicenseStatusCommunity,
+		Required: common.CommercialLicenseRequired,
+	}
+	if license == nil {
+		if state.Required {
+			state.Status = CommercialLicenseStatusMissing
+		}
+		return state, nil
+	}
+	parsed, err := parseCommercialLicenseToken(license.Token, commercialLicenseNow())
+	if err != nil {
+		state.Status = CommercialLicenseStatusInvalid
+		state.Features = decodeCommercialLicenseFeatures(license.FeaturesJSON)
+		return state, nil
+	}
+	state.Status = parsed.status
+	state.Features = normalizeCommercialLicenseFeatures(parsed.payload.Features)
+	return state, nil
+}
+
+func lockCommercialLicenseForQuota(tx *gorm.DB) error {
+	if model.DatabaseDialectorName(tx) != "postgres" {
+		return nil
+	}
+	var license model.CommercialLicense
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", 1).First(&license).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	return err
+}
+
+func getCommercialLicenseWithDB(db *gorm.DB) (*model.CommercialLicense, error) {
+	if db == nil {
+		db = model.DB
+	}
+	license := &model.CommercialLicense{}
+	err := db.Where("id = ?", 1).First(license).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return license, nil
 }
 
 func commercialLicenseStatusOperationError(status string) error {
@@ -229,7 +318,11 @@ func commercialLicenseModelFromParsed(token string, parsed *parsedCommercialLice
 }
 
 func buildCommercialLicenseView(license *model.CommercialLicense) (*CommercialLicenseView, error) {
-	nodeCount, siteCount, err := commercialLicenseUsageCounts()
+	return buildCommercialLicenseViewWithDB(model.DB, license)
+}
+
+func buildCommercialLicenseViewWithDB(db *gorm.DB, license *model.CommercialLicense) (*CommercialLicenseView, error) {
+	nodeCount, siteCount, err := commercialLicenseUsageCountsWithDB(db)
 	if err != nil {
 		return nil, err
 	}
@@ -540,12 +633,19 @@ func commercialLicenseAllowUnsigned() bool {
 }
 
 func commercialLicenseUsageCounts() (int64, int64, error) {
+	return commercialLicenseUsageCountsWithDB(model.DB)
+}
+
+func commercialLicenseUsageCountsWithDB(db *gorm.DB) (int64, int64, error) {
+	if db == nil {
+		db = model.DB
+	}
 	var nodeCount int64
-	if err := model.DB.Model(&model.Node{}).Count(&nodeCount).Error; err != nil {
+	if err := db.Model(&model.Node{}).Count(&nodeCount).Error; err != nil {
 		return 0, 0, err
 	}
 	var siteCount int64
-	if err := model.DB.Model(&model.ProxyRoute{}).Count(&siteCount).Error; err != nil {
+	if err := db.Model(&model.ProxyRoute{}).Count(&siteCount).Error; err != nil {
 		return 0, 0, err
 	}
 	return nodeCount, siteCount, nil

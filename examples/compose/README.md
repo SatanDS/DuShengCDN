@@ -25,6 +25,7 @@ docker compose --env-file .env -f server.production.yaml up -d
 docker compose --env-file .env -f server.production.yaml ps
 ```
 
+启动前必须在 `.env` 中替换 `DUSHENGCDN_VERSION`、`POSTGRES_PASSWORD`、`SESSION_SECRET` 和 `DSN`；生产 Compose 不会再用公开占位密码或浮动 `latest` 兜底。
 生产环境建议保留默认 `DUSHENGCDN_HTTP_BIND=127.0.0.1`，再用 Nginx、OpenResty、宝塔或其它反向代理提供 HTTPS。
 Server 自动升级默认关闭；需要一键自动升级时，在 `.env` 设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，并确认 Release 已发布对应 Server 二进制和同名 `.sha256` 校验文件。生产环境更推荐上传已审阅的 Server 二进制手动确认升级。
 
@@ -62,6 +63,8 @@ vi .env
 docker compose --env-file .env -f agent.yaml up -d
 ```
 
+启动前把 `.env` 中的 `DUSHENGCDN_VERSION` 改成要部署的 Release 版本，并替换节点 Token。
+
 ## DNS Worker
 
 ```bash
@@ -70,5 +73,7 @@ curl -fsSLo .env https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/examp
 vi .env
 docker compose --env-file .env -f dns-worker.yaml up -d
 ```
+
+启动前把 `.env` 中的 `DUSHENGCDN_VERSION` 改成要部署的 Release 版本，并替换 DNS Worker Token。
 
 DNS Worker 需要公网 UDP/TCP `53` 可达。生产环境至少部署两个 Worker，并在注册商配置多个 NS。

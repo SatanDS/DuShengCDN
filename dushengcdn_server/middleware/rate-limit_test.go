@@ -67,6 +67,40 @@ func TestRateLimiterRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+func TestRateLimiterIgnoresSpoofedForwardedForWhenProxyHeadersDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	inMemoryRateLimiter = inMemoryRateLimiterZeroValue()
+	t.Cleanup(func() {
+		inMemoryRateLimiter = inMemoryRateLimiterZeroValue()
+	})
+
+	handler := rateLimitFactory(1, 60, "test")
+	router := gin.New()
+	router.ForwardedByClientIP = false
+	router.GET("/limited", handler, func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	first := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/limited", nil)
+	req.RemoteAddr = "192.0.2.10:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.1")
+	router.ServeHTTP(first, req)
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("expected first request to pass, got %d", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/limited", nil)
+	req.RemoteAddr = "192.0.2.10:12346"
+	req.Header.Set("X-Forwarded-For", "198.51.100.2")
+	router.ServeHTTP(second, req)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected spoofed forwarded-for to share remote address quota, got %d", second.Code)
+	}
+}
+
 func inMemoryRateLimiterZeroValue() ratelimit.InMemoryRateLimiter {
 	return ratelimit.InMemoryRateLimiter{}
 }

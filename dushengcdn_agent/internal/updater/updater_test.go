@@ -2,9 +2,12 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"dushengcdn-agent/internal/agent"
 	"dushengcdn-agent/internal/config"
+	"encoding/base64"
 	"encoding/hex"
 	"io"
 	"net/http"
@@ -19,6 +22,25 @@ type roundTripFunc func(req *http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func withAgentReleaseSigningKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate test signing key: %v", err)
+	}
+	originalPublicKey := config.ReleaseSignaturePublicKey
+	config.ReleaseSignaturePublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	t.Cleanup(func() {
+		config.ReleaseSignaturePublicKey = originalPublicKey
+	})
+	return privateKey
+}
+
+func signAgentReleaseForTest(t *testing.T, privateKey ed25519.PrivateKey, tagName string, assetName string, checksum string) []byte {
+	t.Helper()
+	return ed25519.Sign(privateKey, releaseSignaturePayload(tagName, assetName, checksum))
 }
 
 func TestGetLatestPreviewRelease(t *testing.T) {
@@ -108,6 +130,129 @@ func TestCheckAndUpdateRequiresChecksumAsset(t *testing.T) {
 	}
 }
 
+func TestCheckAndUpdateRequiresSignatureAsset(t *testing.T) {
+	originalVersion := config.AgentVersion
+	config.AgentVersion = "v1.0.0"
+	t.Cleanup(func() {
+		config.AgentVersion = originalVersion
+	})
+
+	assetName := assetNameForGOOSGOARCH(runtime.GOOS, runtime.GOARCH)
+	service := &Service{
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.String() != "https://api.github.com/repos/SatanDS/DuShengCDN/releases/latest" {
+					t.Fatalf("unexpected request url: %s", req.URL.String())
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`{
+						"tag_name":"v1.0.1",
+						"assets":[
+							{"name":"` + assetName + `","browser_download_url":"https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.1/` + assetName + `"},
+							{"name":"` + assetName + `.sha256","browser_download_url":"https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.1/` + assetName + `.sha256"}
+						]
+					}`)),
+				}, nil
+			}),
+		},
+	}
+
+	err := service.CheckAndUpdate(context.Background(), "SatanDS/DuShengCDN", agent.UpdateOptions{})
+	if err == nil || !strings.Contains(err.Error(), "no matching signature asset") {
+		t.Fatalf("expected missing signature asset error, got %v", err)
+	}
+}
+
+func TestValidateUpdateDownloadURL(t *testing.T) {
+	validURLs := []string{
+		"https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/dushengcdn-agent-linux-amd64",
+		"https://objects.githubusercontent.com/github-production-release-asset/file",
+		"https://github-releases.githubusercontent.com/asset",
+	}
+	for _, value := range validURLs {
+		if err := validateUpdateDownloadURL(value); err != nil {
+			t.Fatalf("expected URL %q to be accepted: %v", value, err)
+		}
+	}
+
+	invalidURLs := []string{
+		"http://github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/agent",
+		"https://github.com:444/SatanDS/DuShengCDN/releases/download/v1.0.0/agent",
+		"https://user:pass@github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/agent",
+		"https://example.test/agent",
+		"https://127.0.0.1/agent",
+		"not a url",
+	}
+	for _, value := range invalidURLs {
+		if err := validateUpdateDownloadURL(value); err == nil {
+			t.Fatalf("expected URL %q to be rejected", value)
+		}
+	}
+}
+
+func TestNormalizeGitHubRepo(t *testing.T) {
+	if got, err := normalizeGitHubRepo(" SatanDS/DuShengCDN "); err != nil || got != "SatanDS/DuShengCDN" {
+		t.Fatalf("unexpected normalized repo: got %q err %v", got, err)
+	}
+	for _, value := range []string{
+		"https://github.com/SatanDS/DuShengCDN",
+		"SatanDS/DuShengCDN/releases",
+		"SatanDS/../DuShengCDN",
+		"SatanDS/DuShengCDN?x=1",
+		"SatanDS/",
+	} {
+		if _, err := normalizeGitHubRepo(value); err == nil {
+			t.Fatalf("expected repo %q to be rejected", value)
+		}
+	}
+}
+
+func TestDownloadChecksumRejectsUnsafeFinalURL(t *testing.T) {
+	service := &Service{
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				finalReq := req.Clone(req.Context())
+				finalReq.URL.Scheme = "https"
+				finalReq.URL.Host = "example.test"
+				finalReq.URL.Path = "/agent.sha256"
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Request:    finalReq,
+					Body:       io.NopCloser(strings.NewReader(strings.Repeat("a", sha256.Size*2))),
+				}, nil
+			}),
+		},
+	}
+
+	_, err := service.downloadChecksum(context.Background(), "https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/agent.sha256", "agent")
+	if err == nil || !strings.Contains(err.Error(), "final url is unsafe") {
+		t.Fatalf("expected unsafe final URL error, got %v", err)
+	}
+}
+
+func TestDownloadAndRestartRejectsUnsafeInitialURL(t *testing.T) {
+	targetPath := filepath.Join(t.TempDir(), "dushengcdn-agent")
+	if err := os.WriteFile(targetPath, []byte("old-agent-binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	service := &Service{
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				t.Fatal("download request should not be sent for unsafe initial URL")
+				return nil, nil
+			}),
+		},
+	}
+
+	err := service.downloadAndRestart(context.Background(), "https://example.test/agent", strings.Repeat("0", sha256.Size*2), nil, "v1.0.0", "agent", targetPath)
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected unsafe initial URL error, got %v", err)
+	}
+}
+
 func TestParseSHA256Checksum(t *testing.T) {
 	checksum := strings.Repeat("a", sha256.Size*2)
 	testCases := []struct {
@@ -139,6 +284,9 @@ func TestDownloadAndRestartVerifiesChecksum(t *testing.T) {
 	payload := []byte("new-agent-binary")
 	sum := sha256.Sum256(payload)
 	expectedChecksum := hex.EncodeToString(sum[:])
+	assetName := "dushengcdn-agent-linux-amd64"
+	privateKey := withAgentReleaseSigningKey(t)
+	signature := signAgentReleaseForTest(t, privateKey, "v1.0.0", assetName, expectedChecksum)
 	targetPath := filepath.Join(t.TempDir(), "dushengcdn-agent")
 	if err := os.WriteFile(targetPath, []byte("old-agent-binary"), 0o755); err != nil {
 		t.Fatalf("write target: %v", err)
@@ -168,7 +316,7 @@ func TestDownloadAndRestartVerifiesChecksum(t *testing.T) {
 		},
 	}
 
-	if err := service.downloadAndRestart(context.Background(), "https://example.test/agent", expectedChecksum, targetPath); err != nil {
+	if err := service.downloadAndRestart(context.Background(), "https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/agent", expectedChecksum, signature, "v1.0.0", assetName, targetPath); err != nil {
 		t.Fatalf("expected verified download to succeed: %v", err)
 	}
 	if replacedTarget != targetPath {
@@ -209,9 +357,51 @@ func TestDownloadAndRestartRejectsChecksumMismatch(t *testing.T) {
 		},
 	}
 
-	err := service.downloadAndRestart(context.Background(), "https://example.test/agent", strings.Repeat("0", sha256.Size*2), targetPath)
+	err := service.downloadAndRestart(context.Background(), "https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/agent", strings.Repeat("0", sha256.Size*2), nil, "v1.0.0", "agent", targetPath)
 	if err == nil || !strings.Contains(err.Error(), "sha256 checksum mismatch") {
 		t.Fatalf("expected checksum mismatch error, got %v", err)
+	}
+	if _, err = os.Stat(targetPath + ".update"); !os.IsNotExist(err) {
+		t.Fatalf("expected temp update file to be removed, stat err=%v", err)
+	}
+}
+
+func TestDownloadAndRestartRejectsInvalidSignature(t *testing.T) {
+	payload := []byte("new-agent-binary")
+	sum := sha256.Sum256(payload)
+	expectedChecksum := hex.EncodeToString(sum[:])
+	assetName := "dushengcdn-agent-linux-amd64"
+	privateKey := withAgentReleaseSigningKey(t)
+	signature := signAgentReleaseForTest(t, privateKey, "v0.9.0", assetName, expectedChecksum)
+	targetPath := filepath.Join(t.TempDir(), "dushengcdn-agent")
+	if err := os.WriteFile(targetPath, []byte("old-agent-binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	originalReplace := replaceAndRestartFunc
+	replaceAndRestartFunc = func(execPath string, tmpPath string) error {
+		t.Fatal("replace should not run when signature verification fails")
+		return nil
+	}
+	t.Cleanup(func() {
+		replaceAndRestartFunc = originalReplace
+	})
+
+	service := &Service{
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+				}, nil
+			}),
+		},
+	}
+
+	err := service.downloadAndRestart(context.Background(), "https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/agent", expectedChecksum, signature, "v1.0.0", assetName, targetPath)
+	if err == nil || !strings.Contains(err.Error(), "signature verification failed") {
+		t.Fatalf("expected signature verification error, got %v", err)
 	}
 	if _, err = os.Stat(targetPath + ".update"); !os.IsNotExist(err) {
 		t.Fatalf("expected temp update file to be removed, stat err=%v", err)
@@ -247,7 +437,7 @@ func TestDownloadAndRestartRejectsOversizedContentLength(t *testing.T) {
 		},
 	}
 
-	err := service.downloadAndRestart(context.Background(), "https://example.test/agent", strings.Repeat("0", sha256.Size*2), targetPath)
+	err := service.downloadAndRestart(context.Background(), "https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/agent", strings.Repeat("0", sha256.Size*2), nil, "v1.0.0", "agent", targetPath)
 	if err == nil || !strings.Contains(err.Error(), "agent binary asset exceeds") {
 		t.Fatalf("expected oversized asset error, got %v", err)
 	}
@@ -276,7 +466,7 @@ func TestDownloadAndRestartRejectsOversizedStream(t *testing.T) {
 		},
 	}
 
-	err := service.downloadAndRestart(context.Background(), "https://example.test/agent", strings.Repeat("0", sha256.Size*2), targetPath)
+	err := service.downloadAndRestart(context.Background(), "https://github.com/SatanDS/DuShengCDN/releases/download/v1.0.0/agent", strings.Repeat("0", sha256.Size*2), nil, "v1.0.0", "agent", targetPath)
 	if err == nil || !strings.Contains(err.Error(), "agent binary asset exceeds") {
 		t.Fatalf("expected oversized asset error, got %v", err)
 	}

@@ -98,7 +98,7 @@ services:
     environment:
       POSTGRES_DB: dushengcdn
       POSTGRES_USER: dushengcdn
-      POSTGRES_PASSWORD: replace-with-strong-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -108,7 +108,7 @@ services:
       retries: 5
 
   dushengcdn:
-    image: ghcr.io/satands/dushengcdn:latest
+    image: ghcr.io/satands/dushengcdn:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION in .env}
     container_name: dushengcdn
     restart: unless-stopped
     depends_on:
@@ -118,7 +118,7 @@ services:
       - "3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
-      DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
+      DSN: ${DSN:?set DSN in .env}
       GIN_MODE: release
       LOG_LEVEL: info
       # Optional: recommended for commercial or multi-instance deployments.
@@ -138,12 +138,18 @@ volumes:
 Start:
 
 ```bash
+cat > .env <<'EOF'
+DUSHENGCDN_VERSION=v1.0.0
+POSTGRES_PASSWORD=change-this-database-password
+SESSION_SECRET=replace-with-openssl-rand-hex-32
+DSN=postgres://dushengcdn:change-this-database-password@postgres:5432/dushengcdn?sslmode=disable
+EOF
 docker compose up -d
 docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-Open `http://localhost:3000`. The default account is `root` / `123456`; change it immediately.
+Open `http://localhost:3000`. The first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first empty-database Server log when that variable is not set. Change the root password immediately after login.
 
 Commercial or multi-instance deployments should also provide a Redis service and set `REDIS_CONN_STRING`. If Redis must not silently degrade to in-process helpers, set `REDIS_REQUIRED=true`. To enforce private commercial licensing, set `DUSHENGCDN_LICENSE_REQUIRED=true` and `DUSHENGCDN_LICENSE_PUBLIC_KEYS`, then install the `dscdn_license_v1...` token from **Settings -> Commercial License**.
 
@@ -327,6 +333,8 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --listen 203.0.113.10:53
 ```
 
+The Agent and DNS Worker install scripts prefer GitHub Release binaries and require a matching same-name `.sha256` asset. If a matching binary exists but the checksum asset is missing or invalid, the script stops; only when no matching binary asset exists does it fall back to a source build.
+
 After installation, run a read-only diagnosis on the Worker host:
 
 ```bash
@@ -348,12 +356,13 @@ It checks Server Compose, `/api/status`, DNS Worker systemd state, install files
 Docker example:
 
 ```bash
+DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp \
   -v dushengcdn-dns-worker-data:/data \
   -e DUSHENGCDN_DNS_WORKER_SERVER_URL=https://cdn.example.com \
   -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
-  ghcr.io/satands/dushengcdn-dns-worker:latest
+  ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
 For country-code GSLB pools, mount a local MaxMind Country MMDB and set `DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH`. Source CIDR and global scheduling continue to work without GeoIP.
@@ -420,7 +429,7 @@ For source Compose builds, `DUSHENGCDN_VERSION` is passed into the Dockerfile an
 Agent:
 
 * Agents follow stable releases by default.
-* The install script can be rerun to reinstall or upgrade. When no matching Release asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
+* The install script can be rerun to reinstall or upgrade. Matching Release binaries must include same-name `.sha256` assets; when no matching binary asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
 * For Docker Compose Agent deployments, rebuild with `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f docker-compose.agent.yaml up -d --build`.
 * Preview upgrades require manual action.
 

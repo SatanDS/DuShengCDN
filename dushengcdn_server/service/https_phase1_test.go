@@ -9,15 +9,35 @@ import (
 	"dushengcdn/model"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"gorm.io/gorm"
 )
+
+var serviceTestDBTemplate struct {
+	once sync.Once
+	path string
+	err  error
+}
+
+func TestMain(m *testing.M) {
+	templateDir, err := os.MkdirTemp("", "dushengcdn-service-testdb-*")
+	if err != nil {
+		panic(err)
+	}
+	serviceTestDBTemplate.path = filepath.Join(templateDir, "template.db")
+	code := m.Run()
+	_ = os.RemoveAll(templateDir)
+	os.Exit(code)
+}
 
 func TestCreateTLSCertificateAndRenderHTTPSConfig(t *testing.T) {
 	setupServiceTestDB(t)
@@ -1728,7 +1748,15 @@ func TestOpenRestyProxyRequestBufferingDefaultsToOff(t *testing.T) {
 func setupServiceTestDB(t *testing.T) {
 	t.Helper()
 	nodeAgentTokenCache.reset()
+	previousSQLitePath := common.SQLitePath
+	previousSQLDSN := common.SQLDSN
+	previousInitialRootPassword := common.InitialRootPassword
+	common.SQLDSN = ""
 	common.SQLitePath = filepath.Join(t.TempDir(), "service.db")
+	common.InitialRootPassword = "123456"
+	if err := copyServiceTestDBTemplate(common.SQLitePath); err != nil {
+		t.Fatalf("failed to copy test db template: %v", err)
+	}
 	if err := model.InitDB(); err != nil {
 		t.Fatalf("failed to init db: %v", err)
 	}
@@ -1737,7 +1765,51 @@ func setupServiceTestDB(t *testing.T) {
 		if err := model.CloseDB(); err != nil {
 			t.Fatalf("failed to close db: %v", err)
 		}
+		common.SQLitePath = previousSQLitePath
+		common.SQLDSN = previousSQLDSN
+		common.InitialRootPassword = previousInitialRootPassword
 	})
+}
+
+func copyServiceTestDBTemplate(destination string) error {
+	serviceTestDBTemplate.once.Do(func() {
+		serviceTestDBTemplate.err = createServiceTestDBTemplate(serviceTestDBTemplate.path)
+	})
+	if serviceTestDBTemplate.err != nil {
+		return serviceTestDBTemplate.err
+	}
+	source, err := os.Open(serviceTestDBTemplate.path)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	target, err := os.Create(destination)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(target, source); err != nil {
+		_ = target.Close()
+		return err
+	}
+	return target.Close()
+}
+
+func createServiceTestDBTemplate(path string) error {
+	previousSQLitePath := common.SQLitePath
+	previousSQLDSN := common.SQLDSN
+	previousInitialRootPassword := common.InitialRootPassword
+	common.SQLDSN = ""
+	common.SQLitePath = path
+	common.InitialRootPassword = "123456"
+	defer func() {
+		common.SQLitePath = previousSQLitePath
+		common.SQLDSN = previousSQLDSN
+		common.InitialRootPassword = previousInitialRootPassword
+	}()
+	if err := model.InitDB(); err != nil {
+		return err
+	}
+	return model.CloseDB()
 }
 
 func generateCertificatePair(t *testing.T, dnsNames []string) (string, string) {

@@ -63,6 +63,7 @@ import {
 import { ApiError } from '@/lib/api/client';
 import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime } from '@/lib/utils/date';
+import { normalizeTrustedExternalUrl } from '@/lib/utils/redirect';
 
 const settingsQueryKey = ['settings', 'options'] as const;
 const authSourcesQueryKey = ['settings', 'auth-sources'] as const;
@@ -254,6 +255,24 @@ function normalizeServerUrl(value: string) {
   return value.trim().replace(/\/+$/, '');
 }
 
+type DeploymentProtocol = 'http' | 'https';
+
+function getDeploymentProtocol(value: string): DeploymentProtocol {
+  return value.trim().toLowerCase().startsWith('http://') ? 'http' : 'https';
+}
+
+function stripServerUrlProtocol(value: string) {
+  return normalizeServerUrl(value).replace(/^https?:\/\//i, '');
+}
+
+function buildDeploymentServerUrl(
+  protocol: DeploymentProtocol,
+  value: string,
+) {
+  const endpoint = stripServerUrlProtocol(value);
+  return endpoint ? `${protocol}://${endpoint}` : '';
+}
+
 function getBrowserOrigin() {
   if (typeof window === 'undefined') {
     return '';
@@ -334,6 +353,8 @@ export function SettingsPage() {
   const [operationFields, setOperationFields] = useState(
     defaultOperationFields,
   );
+  const [deploymentProtocol, setDeploymentProtocol] =
+    useState<DeploymentProtocol>('https');
   const [otherFields, setOtherFields] = useState(defaultOtherFields);
   const [databaseFields, setDatabaseFields] = useState(defaultDatabaseFields);
   const [accessToken, setAccessToken] = useState('');
@@ -454,8 +475,13 @@ export function SettingsPage() {
     }));
     setOperationFields((previous) => ({
       ...previous,
-      ServerAddress: resolvedServerAddress || previous.ServerAddress,
+      ServerAddress: resolvedServerAddress
+        ? stripServerUrlProtocol(resolvedServerAddress)
+        : previous.ServerAddress,
     }));
+    if (resolvedServerAddress) {
+      setDeploymentProtocol(getDeploymentProtocol(resolvedServerAddress));
+    }
   }, [publicStatusQuery.data]);
 
   useEffect(() => {
@@ -496,7 +522,9 @@ export function SettingsPage() {
       TurnstileSecretKey: '',
     });
 
+    setDeploymentProtocol(getDeploymentProtocol(resolvedServerAddress));
     setOperationFields({
+      ServerAddress: stripServerUrlProtocol(resolvedServerAddress),
       AgentHeartbeatInterval: optionMap.AgentHeartbeatInterval ?? '10000',
       AgentWebsocketUpgradeEnabled: toBoolean(
         optionMap.AgentWebsocketUpgradeEnabled,
@@ -571,7 +599,6 @@ export function SettingsPage() {
       DownloadRateLimitDuration: optionMap.DownloadRateLimitDuration ?? '60',
       CriticalRateLimitNum: optionMap.CriticalRateLimitNum ?? '100',
       CriticalRateLimitDuration: optionMap.CriticalRateLimitDuration ?? '1200',
-      ServerAddress: resolvedServerAddress,
     });
 
     setOtherFields({
@@ -661,9 +688,13 @@ export function SettingsPage() {
   });
 
   const discoveryToken = bootstrapQuery.data?.discovery_token ?? '';
+  const deploymentServerUrl = buildDeploymentServerUrl(
+    deploymentProtocol,
+    operationFields.ServerAddress,
+  );
   const discoveryCommand =
-    isRoot && operationFields.ServerAddress && discoveryToken
-      ? buildDiscoveryCommand(operationFields.ServerAddress, discoveryToken)
+    isRoot && deploymentServerUrl && discoveryToken
+      ? buildDiscoveryCommand(deploymentServerUrl, discoveryToken)
       : '';
 
   const tabs = useMemo(
@@ -818,7 +849,7 @@ export function SettingsPage() {
       `auth-source-bind-${sourceName}`,
       async () => {
         const result = await getOAuthAuthorizeUrl(sourceName);
-        window.location.href = result.authorize_url;
+        window.location.href = normalizeTrustedExternalUrl(result.authorize_url);
       },
       '发起第三方账号绑定',
     );
@@ -1696,17 +1727,42 @@ export function SettingsPage() {
                 <div className="space-y-4">
                   <ResourceField
                     label="面板访问地址"
-                    hint="默认使用当前面板地址，可按需改为外部访问地址。"
+                    hint="默认使用当前面板地址，可按需选择 HTTP 或 HTTPS 并改为外部访问地址。"
+                    container="div"
                   >
-                    <ResourceInput
-                      value={operationFields.ServerAddress}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          ServerAddress: event.target.value,
-                        }))
-                      }
-                    />
+                    <div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)]">
+                      <div className="inline-flex rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1">
+                        {(['https', 'http'] as const).map((protocol) => (
+                          <button
+                            key={protocol}
+                            type="button"
+                            aria-pressed={deploymentProtocol === protocol}
+                            onClick={() => setDeploymentProtocol(protocol)}
+                            className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                              deploymentProtocol === protocol
+                                ? 'bg-[var(--brand-primary)] text-[var(--foreground-inverse)]'
+                                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground-primary)]'
+                            }`}
+                          >
+                            {protocol.toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
+                      <ResourceInput
+                        value={operationFields.ServerAddress}
+                        placeholder="cdn.example.com:3000"
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setDeploymentProtocol(
+                            getDeploymentProtocol(nextValue),
+                          );
+                          setOperationFields((previous) => ({
+                            ...previous,
+                            ServerAddress: stripServerUrlProtocol(nextValue),
+                          }));
+                        }}
+                      />
+                    </div>
                   </ResourceField>
                   <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                     <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">

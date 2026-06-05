@@ -57,6 +57,7 @@ go run . --port 3000 --log-dir ./logs
 | `GIN_MODE` | Gin 运行模式 | 非 `debug` 时按 release |
 | `LOG_LEVEL` | 日志等级 | `info` |
 | `SESSION_SECRET` | Session 签名密钥；release 模式必须显式配置且不少于 32 字符 | debug 模式启动时随机生成 |
+| `TRUSTED_PROXIES` | 允许 Gin 信任 `X-Forwarded-For` / `X-Real-IP` 的反向代理 IP 或 CIDR 列表，多个值可用逗号、分号、空格或换行分隔 | 空 |
 | `SQLITE_PATH` | SQLite 数据库文件路径 | `dushengcdn.db` |
 | `DSN` | PostgreSQL DSN，设置后优先于 SQLite | 空 |
 | `SQL_DSN` | 兼容旧命名的 PostgreSQL DSN，优先级低于 `DSN` | 空 |
@@ -79,13 +80,14 @@ go run . --port 3000 --log-dir ./logs
 * `DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS` 和 `DATABASE_CONN_MAX_LIFETIME_SECONDS` 用于限制 Server 侧连接池。生产环境遇到 PostgreSQL `too many clients already` 时，优先检查是否有异常 SQL 或日志写入错误持续重试，再按数据库容量调整这些值。
 * 当目标 PostgreSQL 数据库为空且本地 `SQLITE_PATH` 文件存在时，Server 启动阶段会自动迁移 SQLite 数据，并在日志中输出按表迁移进度。
 * `SESSION_SECRET` 生产环境必须显式配置。
+* `TRUSTED_PROXIES` 默认留空，Server 不信任任何客户端传入的代理头，避免伪造 `X-Forwarded-For` 绕过限流；只有在 Server 位于受控反向代理之后时才填写代理出口 IP 或内网 CIDR，`0.0.0.0/0`、`::/0` 这类全网段会被拒绝。
 * `REDIS_CONN_STRING` 未配置时，相关能力回退为进程内实现；多副本或商用部署建议配置 Redis，以获得跨实例一致的限流和运行时辅助状态。
 * `REDIS_REQUIRED=true` 适合不能接受 Redis 降级启动的生产环境；开启后 Redis 未配置或连接失败会阻止 Server 启动。
 * `AGENT_TOKEN` 仅用于升级兼容旧版 Agent。新部署应使用 Discovery Token 首次注册，或使用节点详情里的专属 `agent_token`；旧全局 Token 请求必须携带已存在的 `node_id`，且不能覆盖已经切换为专属 Token 的节点。
 * 商业授权令牌格式为 `dscdn_license_v1.<payload>.<signature>`，签名算法为 Ed25519；生产强制授权时应同时配置 `DUSHENGCDN_LICENSE_REQUIRED=true` 和 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，再到管理端「设置 -> 商业授权」安装许可证。
 * `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` 只适合开发、演示或签发链路联调；生产环境应保持关闭并使用签名授权。
 * Server 自动升级默认关闭；生产环境推荐在管理端检查版本后上传已审阅的 Server 二进制手动升级。开启 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` 时，Release 必须包含当前平台 Server 二进制和同名 `.sha256` 校验文件，例如 `dushengcdn-server-linux-amd64.sha256`，下载后必须通过 SHA-256 校验才会替换可执行文件。
-* 源码 Compose 部署 Server 时，推荐复制 `dushengcdn_server/.env.example` 为 `.env` 后再修改端口、密码和 DSN，避免直接修改仓库模板导致后续 `git pull` 冲突。
+* 源码 Compose 部署 Server 时，推荐复制 `dushengcdn_server/.env.example` 为 `.env` 后再修改端口、密码和 DSN；生产 Compose 会强制要求 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和 `DSN`，避免使用公开占位密码启动。
 
 ### 商业授权签发工具
 

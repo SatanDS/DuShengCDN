@@ -3,16 +3,24 @@ package dnsworker
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
+const (
+	DefaultRollupMaxBuckets       = 4096
+	DefaultRollupMaxTargetSummary = 64
+	rollupOverflowQName           = "_overflow"
+)
+
 type RollupAggregator struct {
-	mu      sync.Mutex
-	window  time.Duration
-	buckets map[rollupKey]*rollupBucket
+	mu         sync.Mutex
+	window     time.Duration
+	maxBuckets int
+	buckets    map[rollupKey]*rollupBucket
 }
 
 type rollupKey struct {
@@ -37,8 +45,9 @@ func NewRollupAggregator(window time.Duration) *RollupAggregator {
 		window = time.Minute
 	}
 	return &RollupAggregator{
-		window:  window,
-		buckets: map[rollupKey]*rollupBucket{},
+		window:     window,
+		maxBuckets: DefaultRollupMaxBuckets,
+		buckets:    map[rollupKey]*rollupBucket{},
 	}
 }
 
@@ -62,6 +71,10 @@ func (a *RollupAggregator) Record(zoneID uint, routeID uint, sourceScope string,
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	bucket := a.buckets[key]
+	if bucket == nil && a.maxBuckets > 0 && len(a.buckets) >= a.maxBuckets {
+		key = overflowRollupKey(key)
+		bucket = a.buckets[key]
+	}
 	if bucket == nil {
 		bucket = &rollupBucket{targets: map[string]int64{}}
 		a.buckets[key] = bucket
@@ -80,6 +93,9 @@ func (a *RollupAggregator) Record(zoneID uint, routeID uint, sourceScope string,
 		if target == "" {
 			continue
 		}
+		if _, ok := bucket.targets[target]; !ok && len(bucket.targets) >= DefaultRollupMaxTargetSummary {
+			continue
+		}
 		bucket.targets[target]++
 	}
 }
@@ -95,10 +111,7 @@ func (a *RollupAggregator) Drain() []QueryRollupPayload {
 		if bucket == nil || bucket.count <= 0 {
 			continue
 		}
-		targets := make(map[string]int64, len(bucket.targets))
-		for target, count := range bucket.targets {
-			targets[target] = count
-		}
+		targets := topRollupTargets(bucket.targets, DefaultRollupMaxTargetSummary)
 		payloads = append(payloads, QueryRollupPayload{
 			WindowStart:     key.WindowStart,
 			WindowMinutes:   int(a.window / time.Minute),
@@ -144,6 +157,10 @@ func (a *RollupAggregator) Restore(payloads []QueryRollupPayload) {
 			key.QType = "A"
 		}
 		bucket := a.buckets[key]
+		if bucket == nil && a.maxBuckets > 0 && len(a.buckets) >= a.maxBuckets {
+			key = overflowRollupKey(key)
+			bucket = a.buckets[key]
+		}
 		if bucket == nil {
 			bucket = &rollupBucket{targets: map[string]int64{}}
 			a.buckets[key] = bucket
@@ -156,12 +173,58 @@ func (a *RollupAggregator) Restore(payloads []QueryRollupPayload) {
 			bucket.maxDurationMs = payload.MaxDurationMs
 		}
 		for target, count := range payload.TargetSummary {
-			if strings.TrimSpace(target) == "" || count <= 0 {
+			target = strings.TrimSpace(target)
+			if target == "" || count <= 0 {
+				continue
+			}
+			if _, ok := bucket.targets[target]; !ok && len(bucket.targets) >= DefaultRollupMaxTargetSummary {
 				continue
 			}
 			bucket.targets[target] += count
 		}
 	}
+}
+
+func overflowRollupKey(key rollupKey) rollupKey {
+	return rollupKey{
+		WindowStart: key.WindowStart,
+		SourceScope: "global",
+		QName:       rollupOverflowQName,
+		QType:       "ANY",
+		RCode:       key.RCode,
+	}
+}
+
+func topRollupTargets(values map[string]int64, limit int) map[string]int64 {
+	if len(values) == 0 {
+		return map[string]int64{}
+	}
+	type targetCount struct {
+		target string
+		count  int64
+	}
+	items := make([]targetCount, 0, len(values))
+	for target, count := range values {
+		target = strings.TrimSpace(target)
+		if target == "" || count <= 0 {
+			continue
+		}
+		items = append(items, targetCount{target: target, count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count == items[j].count {
+			return items[i].target < items[j].target
+		}
+		return items[i].count > items[j].count
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	result := make(map[string]int64, len(items))
+	for _, item := range items {
+		result[item.target] += item.count
+	}
+	return result
 }
 
 func normalizeSourceScope(raw string) string {

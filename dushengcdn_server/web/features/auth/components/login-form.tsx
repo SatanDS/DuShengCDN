@@ -24,6 +24,10 @@ import {
   SecondaryButton,
 } from '@/features/auth/components/auth-form-primitives';
 import { PublicAuthGuard } from '@/features/auth/components/public-auth-guard';
+import {
+  normalizeInternalRedirect,
+  normalizeTrustedExternalUrl,
+} from '@/lib/utils/redirect';
 
 const TEXT = {
   usernameRequired: '\u8bf7\u8f93\u5165\u7528\u6237\u540d',
@@ -52,7 +56,7 @@ export function LoginForm() {
   const searchParams = useSearchParams();
   const { setUser } = useAuth();
   const [errorMessage, setErrorMessage] = useState('');
-  const redirect = searchParams?.get('redirect') || '/';
+  const redirect = normalizeInternalRedirect(searchParams?.get('redirect'));
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -81,7 +85,13 @@ export function LoginForm() {
   const oauthMutation = useMutation({
     mutationFn: getOAuthAuthorizeUrl,
     onSuccess: (result) => {
-      window.location.href = result.authorize_url;
+      try {
+        window.location.href = normalizeTrustedExternalUrl(result.authorize_url);
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : TEXT.oauthUnavailable,
+        );
+      }
     },
     onError: (error: Error) => {
       setErrorMessage(error.message || TEXT.oauthUnavailable);
@@ -91,7 +101,13 @@ export function LoginForm() {
   const legacyGitHubMutation = useMutation({
     mutationFn: getLegacyGitHubAuthorizeUrl,
     onSuccess: (result) => {
-      window.location.href = result.authorize_url;
+      try {
+        window.location.href = normalizeTrustedExternalUrl(result.authorize_url);
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : TEXT.oauthUnavailable,
+        );
+      }
     },
     onError: (error: Error) => {
       setErrorMessage(error.message || TEXT.oauthUnavailable);

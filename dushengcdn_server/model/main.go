@@ -3,6 +3,7 @@ package model
 import (
 	"dushengcdn/common"
 	"dushengcdn/utils/security"
+	"errors"
 	"fmt"
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -82,20 +84,40 @@ func buildDBModels() ([]dbModel, error) {
 func createRootAccountIfNeed() error {
 	var user User
 	//if user.Status != common.UserStatusEnabled {
-	if err := DB.First(&user).Error; err != nil {
-		slog.Info("no user exists, create a root user", "username", "root")
-		hashedPassword, err := security.Password2Hash("123456")
-		if err != nil {
-			return err
-		}
-		rootUser := User{
-			Username:    "root",
-			Password:    hashedPassword,
-			Role:        common.RoleRootUser,
-			Status:      common.UserStatusEnabled,
-			DisplayName: "Root User",
-		}
-		DB.Create(&rootUser)
+	err := DB.First(&user).Error
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	password := strings.TrimSpace(common.InitialRootPassword)
+	generated := false
+	if password == "" {
+		password = security.GenerateRandomString(24)
+		generated = true
+	}
+	if password == "" {
+		return fmt.Errorf("generate initial root password failed")
+	}
+	hashedPassword, err := security.Password2Hash(password)
+	if err != nil {
+		return err
+	}
+	rootUser := User{
+		Username:    "root",
+		Password:    hashedPassword,
+		Role:        common.RoleRootUser,
+		Status:      common.UserStatusEnabled,
+		DisplayName: "Root User",
+	}
+	if err := DB.Create(&rootUser).Error; err != nil {
+		return err
+	}
+	if generated {
+		slog.Warn("no user exists; created root user with a generated one-time password", "username", "root", "initial_password", password, "reset_hint", "run with --reset-root-password if this password was not captured")
+	} else {
+		slog.Warn("no user exists; created root user with DUSHENGCDN_INITIAL_ROOT_PASSWORD", "username", "root", "reset_hint", "remove or rotate this bootstrap password after first login")
 	}
 	return nil
 }

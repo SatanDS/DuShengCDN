@@ -108,6 +108,9 @@ func Load(path string) (*Config, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	if err == nil {
+		_ = tightenConfigFilePermissions(path)
+	}
 	file := &configFile{}
 	if err == nil {
 		if err = json.Unmarshal(data, file); err != nil {
@@ -446,7 +449,23 @@ func (cfg *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfg.configPath, data, 0o644)
+	if err := os.WriteFile(cfg.configPath, data, 0o600); err != nil {
+		return err
+	}
+	return tightenConfigFilePermissions(cfg.configPath)
+}
+
+func tightenConfigFilePermissions(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if os.PathSeparator == '\\' {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func detectHostname() string {

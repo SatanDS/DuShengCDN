@@ -668,33 +668,13 @@ install_openresty_with_apt() {
   rm -f "$key_tmp"
 
   local source_line
-  local used_trusted_openresty_source="false"
   source_line="deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/openresty.gpg] ${repo_base} ${codename} ${component}"
   echo "$source_line" | run_as_root tee /etc/apt/sources.list.d/openresty.list >/dev/null
   if ! run_as_root apt-get update; then
-    if [[ "$distro" == "debian" && "$detected_codename" != "$codename" ]]; then
-      log "OpenResty apt signature was rejected by the current Debian policy; retrying with a temporary trusted HTTPS source for OpenResty only."
-      source_line="deb [arch=$(dpkg --print-architecture) trusted=yes] ${repo_base} ${codename} ${component}"
-      echo "$source_line" | run_as_root tee /etc/apt/sources.list.d/openresty.list >/dev/null
-      used_trusted_openresty_source="true"
-      run_as_root apt-get -o Acquire::AllowInsecureRepositories=true update
-    else
-      die "apt update failed after enabling the OpenResty repository."
-    fi
+    die "apt update failed after enabling the signed OpenResty repository. Refusing unauthenticated packages; install OpenResty manually or pass --openresty-path."
   fi
   if ! with_service_autostart_disabled run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y openresty; then
-    if [[ "$used_trusted_openresty_source" == "true" ]]; then
-      log "Retrying OpenResty install with --allow-unauthenticated because Debian rejected the repository signature policy."
-      if ! with_service_autostart_disabled run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated openresty; then
-        die "OpenResty package installation failed."
-      fi
-    else
-      die "OpenResty package installation failed."
-    fi
-  fi
-  if [[ "$used_trusted_openresty_source" == "true" ]]; then
-    log "Removing temporary trusted OpenResty apt source."
-    run_as_root rm -f /etc/apt/sources.list.d/openresty.list
+    die "OpenResty package installation failed."
   fi
   disable_default_openresty_service
 }
@@ -849,6 +829,17 @@ ensure_openresty() {
   fi
 }
 
+sha256_file() {
+  local file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
 resolve_release_binary() {
   local release_info
 
@@ -858,10 +849,14 @@ resolve_release_binary() {
     return 1
   fi
 
-  DOWNLOAD_URL="$(echo "$release_info" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET_NAME}\"" | grep -o 'https://[^"]*' || true)"
+  DOWNLOAD_URL="$(echo "$release_info" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET_NAME}\"" | grep -o 'https://[^"]*' | grep -v '\.sha256$' | head -n 1 || true)"
+  SHA256_URL="$(echo "$release_info" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET_NAME}\.sha256\"" | grep -o 'https://[^"]*' | head -n 1 || true)"
   if [[ -z "$DOWNLOAD_URL" ]]; then
     log "No matching asset '${ASSET_NAME}' found in latest release. Falling back to source build."
     return 1
+  fi
+  if [[ -z "$SHA256_URL" ]]; then
+    die "matching checksum asset '${ASSET_NAME}.sha256' was not found in latest release; refusing to install an unverified Agent binary."
   fi
 
   TAG="$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"')"
@@ -869,9 +864,30 @@ resolve_release_binary() {
 }
 
 download_release_binary() {
+  local actual expected sha_file
+
   log "Latest release: ${TAG}"
   log "Downloading ${ASSET_NAME}..."
   curl -fsSL -o "$TMP_BINARY" "$DOWNLOAD_URL"
+
+  sha_file="$(mktemp "/tmp/dushengcdn-agent.sha256.XXXXXX")"
+  if ! curl -fsSL -o "$sha_file" "$SHA256_URL"; then
+    rm -f "$sha_file"
+    die "failed to download Agent checksum asset."
+  fi
+  expected="$(awk '{print $1}' "$sha_file")"
+  rm -f "$sha_file"
+  if [[ ! "$expected" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+    die "Agent checksum asset is invalid."
+  fi
+  if ! actual="$(sha256_file "$TMP_BINARY")"; then
+    die "sha256 tool was not found, cannot verify downloaded Agent asset."
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    die "downloaded Agent checksum mismatch."
+  fi
+  log "Release asset checksum verified."
+
   chmod +x "$TMP_BINARY"
 }
 
@@ -961,6 +977,7 @@ cleanup() {
 trap cleanup EXIT
 
 DOWNLOAD_URL=""
+SHA256_URL=""
 TAG=""
 if resolve_release_binary; then
   download_release_binary

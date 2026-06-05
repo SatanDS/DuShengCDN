@@ -521,6 +521,9 @@ resolve_release_binary() {
     log "No matching asset '${ASSET_NAME}' found in latest release. Falling back to source build."
     return 1
   fi
+  if [[ -z "$SHA256_URL" ]]; then
+    die "matching checksum asset '${ASSET_NAME}.sha256' was not found in latest release; refusing to install an unverified DNS Worker binary."
+  fi
 
   TAG="$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"')"
   return 0
@@ -533,19 +536,23 @@ download_release_binary() {
   log "Downloading ${ASSET_NAME}..."
   curl -fsSL -o "$TMP_BINARY" "$DOWNLOAD_URL"
 
-  if [[ -n "$SHA256_URL" ]]; then
-    sha_file="$(mktemp "/tmp/dushengcdn-dns-worker.sha256.XXXXXX")"
-    curl -fsSL -o "$sha_file" "$SHA256_URL"
-    expected="$(awk '{print $1}' "$sha_file")"
+  sha_file="$(mktemp "/tmp/dushengcdn-dns-worker.sha256.XXXXXX")"
+  if ! curl -fsSL -o "$sha_file" "$SHA256_URL"; then
     rm -f "$sha_file"
-    if ! actual="$(sha256_file "$TMP_BINARY")"; then
-      die "sha256 tool was not found, cannot verify downloaded DNS Worker asset."
-    fi
-    if [[ "$actual" != "$expected" ]]; then
-      die "downloaded DNS Worker checksum mismatch."
-    fi
-    log "Release asset checksum verified."
+    die "failed to download DNS Worker checksum asset."
   fi
+  expected="$(awk '{print $1}' "$sha_file")"
+  rm -f "$sha_file"
+  if [[ ! "$expected" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+    die "DNS Worker checksum asset is invalid."
+  fi
+  if ! actual="$(sha256_file "$TMP_BINARY")"; then
+    die "sha256 tool was not found, cannot verify downloaded DNS Worker asset."
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    die "downloaded DNS Worker checksum mismatch."
+  fi
+  log "Release asset checksum verified."
 
   chmod +x "$TMP_BINARY"
 }

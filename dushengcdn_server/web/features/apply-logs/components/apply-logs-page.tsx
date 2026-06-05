@@ -83,6 +83,7 @@ export function ApplyLogsPage() {
   const [isCleanupModalOpen, setCleanupModalOpen] = useState(false);
   const [cleanupMode, setCleanupMode] = useState<'all' | 'custom'>('custom');
   const [customRetentionDays, setCustomRetentionDays] = useState('30');
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const { setFeedback } = useToastFeedback<FeedbackState>();
 
   const logsQuery = useQuery({
@@ -100,6 +101,7 @@ export function ApplyLogsPage() {
     mutationFn: (payload: ApplyLogCleanupPayload) => cleanupApplyLogs(payload),
     onSuccess: async (result) => {
       setCleanupModalOpen(false);
+      setConfirmDeleteAll(false);
       setPageNo(1);
       setFeedback({
         tone: 'success',
@@ -154,6 +156,30 @@ export function ApplyLogsPage() {
   };
 
   const handleCleanupConfirm = () => {
+    if (cleanupMode === 'all' && !confirmDeleteAll) {
+      setFeedback({
+        tone: 'danger',
+        message: '请先勾选确认删除全部应用日志。',
+      });
+      return;
+    }
+
+    if (cleanupMode === 'custom') {
+      const retentionDays = Number.parseInt(customRetentionDays, 10);
+      if (
+        !/^\d+$/.test(customRetentionDays.trim()) ||
+        !Number.isInteger(retentionDays) ||
+        retentionDays < 1 ||
+        retentionDays > 3650
+      ) {
+        setFeedback({
+          tone: 'danger',
+          message: '请输入 1 到 3650 之间的应用日志保留天数。',
+        });
+        return;
+      }
+    }
+
     const payload: ApplyLogCleanupPayload =
       cleanupMode === 'all'
         ? { delete_all: true }
@@ -177,6 +203,7 @@ export function ApplyLogsPage() {
               type="button"
               onClick={() => {
                 setFeedback(null);
+                setConfirmDeleteAll(false);
                 setCleanupModalOpen(true);
               }}
             >
@@ -435,7 +462,10 @@ export function ApplyLogsPage() {
             </button>
             <button
               type="button"
-              onClick={() => setCleanupMode('custom')}
+              onClick={() => {
+                setCleanupMode('custom');
+                setConfirmDeleteAll(false);
+              }}
               className={`rounded-2xl border px-4 py-3 text-sm transition ${
                 cleanupMode === 'custom'
                   ? 'border-[var(--brand-primary)] bg-[var(--accent-soft)] text-[var(--foreground-primary)]'
@@ -457,7 +487,17 @@ export function ApplyLogsPage() {
                 placeholder="输入保留天数"
               />
             </ResourceField>
-          ) : null}
+          ) : (
+            <label className="flex items-start gap-3 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-4 py-3 text-sm leading-6 text-[var(--status-danger-foreground)]">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={confirmDeleteAll}
+                onChange={(event) => setConfirmDeleteAll(event.target.checked)}
+              />
+              <span>我确认删除全部应用日志，且了解删除后无法从管理端恢复。</span>
+            </label>
+          )}
 
           {cleanupMutation.isError ? (
             <ErrorState

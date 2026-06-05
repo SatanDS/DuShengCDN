@@ -46,16 +46,17 @@ The script prefers GitHub Release binaries. If no matching asset exists, it buil
 
 Without `openresty_path`, Agent runs `openresty` by default.
 
-Agent self-update requires the GitHub Release to include both the target binary and a matching `.sha256` file. The downloaded binary is verified before it replaces the local executable.
+Agent self-update and the install script require the GitHub Release to include both the target binary and a matching `.sha256` file. The downloaded binary is verified before it replaces or installs the local executable.
 
 ## Docker
 
 ```bash
+DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
   -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
   -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
-  ghcr.io/satands/dushengcdn-agent:latest
+  ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
 ## Run from Source

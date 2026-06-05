@@ -115,11 +115,12 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 Docker 部署时直接运行内置 OpenResty 的 Agent 镜像：
 
 ```bash
+DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
   -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
   -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
-  ghcr.io/satands/dushengcdn-agent:latest
+  ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
 ## 启动与验证

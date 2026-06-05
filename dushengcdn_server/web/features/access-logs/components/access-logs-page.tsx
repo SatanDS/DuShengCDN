@@ -458,6 +458,19 @@ export function AccessLogsPage() {
       cleanupDays === 'custom'
         ? Number.parseInt(customCleanupDays, 10)
         : Number.parseInt(cleanupDays, 10);
+
+    if (
+      !Number.isInteger(retentionDays) ||
+      retentionDays < 1 ||
+      retentionDays > 90
+    ) {
+      showToast({
+        tone: 'danger',
+        message: '请输入 1 到 90 之间的日志保留天数。',
+      });
+      return;
+    }
+
     cleanupMutation.mutate({ retention_days: retentionDays });
   };
 

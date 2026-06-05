@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,6 +29,7 @@ const (
 	DDOSProtectionProviderCustom     = "custom"
 	defaultCloudflareHTTPTimeout     = 15 * time.Second
 	defaultCloudflareSyncUserAgent   = "DuShengCDN/CloudflareDNS"
+	defaultCloudflareDNSListMaxPages = 100
 )
 
 type CloudflareCredentials struct {
@@ -345,14 +347,32 @@ func (client *cloudflareClient) ListDNSRecords(ctx context.Context, zoneID strin
 	if strings.TrimSpace(name) != "" {
 		query.Set("name", strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), "."))
 	}
-	var response cloudflareAPIListResponse[CloudflareDNSRecord]
-	if err := client.do(ctx, http.MethodGet, "/zones/"+url.PathEscape(zoneID)+"/dns_records", query, nil, &response); err != nil {
-		return nil, err
+	result := make([]CloudflareDNSRecord, 0)
+	for page := 1; ; page++ {
+		if page > defaultCloudflareDNSListMaxPages {
+			return nil, fmt.Errorf("Cloudflare DNS records exceed supported page limit %d", defaultCloudflareDNSListMaxPages)
+		}
+		query.Set("page", strconv.Itoa(page))
+		var response cloudflareAPIListResponse[CloudflareDNSRecord]
+		if err := client.do(ctx, http.MethodGet, "/zones/"+url.PathEscape(zoneID)+"/dns_records", query, nil, &response); err != nil {
+			return nil, err
+		}
+		if !response.Success {
+			return nil, errors.New(cloudflareErrorMessage(response.Errors))
+		}
+		result = append(result, response.Result...)
+		totalPages := response.ResultInfo.TotalPages
+		if totalPages > defaultCloudflareDNSListMaxPages {
+			return nil, fmt.Errorf("Cloudflare DNS records exceed supported page limit %d", defaultCloudflareDNSListMaxPages)
+		}
+		if totalPages <= 0 {
+			break
+		}
+		if page >= totalPages {
+			break
+		}
 	}
-	if !response.Success {
-		return nil, errors.New(cloudflareErrorMessage(response.Errors))
-	}
-	return response.Result, nil
+	return result, nil
 }
 
 func (client *cloudflareClient) UpsertDNSRecord(ctx context.Context, input CloudflareDNSUpsertInput) (*CloudflareDNSRecord, error) {

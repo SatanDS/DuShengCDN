@@ -60,13 +60,17 @@ import {
   buildNodeDockerInstallCommand,
   getApplyLabel,
   getApplyVariant,
+  buildDeploymentServerUrl,
+  getDeploymentProtocol,
   getNodeStatusLabel,
   getNodeStatusVariant,
   getOpenrestyStatusLabel,
   getOpenrestyStatusVariant,
   getServerUrl,
+  stripServerUrlProtocol,
   getUpdateMode,
   isMeaningfulTime,
+  type DeploymentProtocol,
 } from '@/features/nodes/utils';
 
 const nodesQueryKey = ['nodes'];
@@ -263,6 +267,8 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const [agentUpdateFeedback, setAgentUpdateFeedback] =
     useState<FeedbackState | null>(null);
   const [serverUrl, setServerUrl] = useState('');
+  const [deploymentProtocol, setDeploymentProtocol] =
+    useState<DeploymentProtocol>('https');
   const [isServerUrlOverridden, setIsServerUrlOverridden] = useState(false);
   const [healthEventFilter, setHealthEventFilter] =
     useState<HealthEventFilter>('all');
@@ -333,11 +339,13 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     const optionMap = optionsToMap(optionsQuery.data);
     const configuredServerUrl = getServerUrl(optionMap.ServerAddress ?? '');
     if (configuredServerUrl) {
-      setServerUrl(configuredServerUrl);
+      setDeploymentProtocol(getDeploymentProtocol(configuredServerUrl));
+      setServerUrl(stripServerUrlProtocol(configuredServerUrl));
       return;
     }
     if (typeof window !== 'undefined') {
-      setServerUrl(window.location.origin);
+      setDeploymentProtocol(getDeploymentProtocol(window.location.origin));
+      setServerUrl(stripServerUrlProtocol(window.location.origin));
     }
   }, [isServerUrlOverridden, optionsQuery.data]);
 
@@ -587,7 +595,10 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     );
   }
 
-  const normalizedServerUrl = getServerUrl(serverUrl);
+  const normalizedServerUrl = buildDeploymentServerUrl(
+    deploymentProtocol,
+    serverUrl,
+  );
   const nodeInstallCommand =
     normalizedServerUrl && node.agent_token
       ? buildNodeInstallCommand(normalizedServerUrl, node.agent_token)
@@ -1679,15 +1690,43 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
                   <ResourceField
                     label="面板访问地址"
-                    hint="默认跟随系统设置里的面板访问地址；临时修改这里只影响下方复制命令。"
+                    hint="默认跟随系统设置里的面板访问地址；协议和地址只影响下方复制命令。"
+                    container="div"
                   >
-                    <ResourceInput
-                      value={serverUrl}
-                      onChange={(event) => {
-                        setIsServerUrlOverridden(true);
-                        setServerUrl(event.target.value);
-                      }}
-                    />
+                    <div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)]">
+                      <div className="inline-flex rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1">
+                        {(['https', 'http'] as const).map((protocol) => (
+                          <button
+                            key={protocol}
+                            type="button"
+                            aria-pressed={deploymentProtocol === protocol}
+                            onClick={() => {
+                              setIsServerUrlOverridden(true);
+                              setDeploymentProtocol(protocol);
+                            }}
+                            className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                              deploymentProtocol === protocol
+                                ? 'bg-[var(--brand-primary)] text-[var(--foreground-inverse)]'
+                                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground-primary)]'
+                            }`}
+                          >
+                            {protocol.toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
+                      <ResourceInput
+                        value={serverUrl}
+                        placeholder="cdn.example.com:3000"
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setIsServerUrlOverridden(true);
+                          setDeploymentProtocol(
+                            getDeploymentProtocol(nextValue),
+                          );
+                          setServerUrl(stripServerUrlProtocol(nextValue));
+                        }}
+                      />
+                    </div>
                   </ResourceField>
 
                   {nodeInstallCommand ? (

@@ -1,6 +1,7 @@
 package dnsworker
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -48,4 +49,44 @@ func findRollupPayload(t *testing.T, payloads []QueryRollupPayload, sourceScope 
 	}
 	t.Fatalf("missing source scope %s in %+v", sourceScope, payloads)
 	return QueryRollupPayload{}
+}
+
+func TestRollupAggregatorCollapsesExcessBuckets(t *testing.T) {
+	aggregator := NewRollupAggregator(time.Minute)
+
+	for index := 0; index < DefaultRollupMaxBuckets+250; index++ {
+		aggregator.Record(1, 2, "country:HK", fmt.Sprintf("q-%d.example.com", index), "A", "NOERROR", []string{"8.8.8.8"}, time.Millisecond)
+	}
+
+	payloads := aggregator.Drain()
+	if len(payloads) > DefaultRollupMaxBuckets+1 {
+		t.Fatalf("expected bucket cap plus overflow, got %d payloads", len(payloads))
+	}
+	var overflow QueryRollupPayload
+	for _, payload := range payloads {
+		if payload.QName == rollupOverflowQName {
+			overflow = payload
+			break
+		}
+	}
+	if overflow.QueryCount != 250 || overflow.QType != "ANY" || overflow.SourceScope != "global" {
+		t.Fatalf("expected excess queries to collapse into overflow bucket, got %+v", overflow)
+	}
+}
+
+func TestRollupAggregatorLimitsTargetSummary(t *testing.T) {
+	aggregator := NewRollupAggregator(time.Minute)
+	targets := make([]string, 0, DefaultRollupMaxTargetSummary+25)
+	for index := 0; index < DefaultRollupMaxTargetSummary+25; index++ {
+		targets = append(targets, fmt.Sprintf("192.0.2.%d", index))
+	}
+
+	aggregator.Record(1, 2, "global", "www.example.com", "A", "NOERROR", targets, time.Millisecond)
+	payloads := aggregator.Drain()
+	if len(payloads) != 1 {
+		t.Fatalf("expected one payload, got %+v", payloads)
+	}
+	if len(payloads[0].TargetSummary) != DefaultRollupMaxTargetSummary {
+		t.Fatalf("expected target summary cap %d, got %d", DefaultRollupMaxTargetSummary, len(payloads[0].TargetSummary))
+	}
 }
