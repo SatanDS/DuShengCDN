@@ -74,6 +74,8 @@ go run . --port 3000 --log-dir ./logs
 | `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY` | 开发者授权面板使用的 Ed25519 签发私钥，支持 base64url、标准 base64 或 hex；只应配置在签发端 | 空 |
 | `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE` | 开发者授权面板读取签发私钥的文件路径；与 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY` 二选一 | 空 |
 | `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED` | 是否允许管理端从 GitHub Release 自动下载并替换 Server 二进制 | `false` |
+| `DUSHENGCDN_SERVER_UPDATE_REPO` | 顶栏“版本”检查使用的 GitHub Release 仓库，格式 `owner/repo`；私库商业版建议指向只放二进制的发布仓库 | `SatanDS/DuShengCDN-releases` |
+| `DUSHENGCDN_GITHUB_RELEASE_TOKEN` | 访问私有 Release 的 GitHub 只读 token；只应授予二进制发布仓库权限，不要授予源码私库权限 | 空 |
 
 说明：
 
@@ -89,7 +91,8 @@ go run . --port 3000 --log-dir ./logs
 * 商业授权令牌格式为 `dscdn_license_v1.<payload>.<signature>`，签名算法为 Ed25519；生产强制授权时应同时配置 `DUSHENGCDN_LICENSE_REQUIRED=true` 和 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，再到管理端「设置 -> 商业授权」安装许可证。
 * `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` 只适合开发、演示或签发链路联调；生产环境应保持关闭并使用签名授权。
 * 开发者签发面板需要额外配置 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY` 或 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE`。该私钥只用于生成许可证，不应配置在客户生产部署中；客户部署只需要 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`。
-* Server 自动升级默认关闭；生产环境推荐在管理端检查版本后上传已审阅的 Server 二进制手动升级。开启 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` 时，Release 必须包含当前平台 Server 二进制和同名 `.sha256` 校验文件，例如 `dushengcdn-server-linux-amd64.sha256`，下载后必须通过 SHA-256 校验才会替换可执行文件。
+* Server 自动升级默认关闭；生产环境推荐在管理端检查版本后上传已审阅的 Server 二进制手动升级。开启 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` 时，Release 必须包含当前平台 Server 二进制、同名 `.sha256` 校验文件和 `.sig` 签名文件，例如 `dushengcdn-server-linux-amd64.sha256`，下载后必须通过 SHA-256 与签名校验才会替换可执行文件。
+* 商业-only 部署不要把源码仓库读权限交给客户，也不要把 GitHub token 下发到 Agent。推荐源码仓库保持私有，另建只放 Release 资产的二进制仓库，例如 `SatanDS/DuShengCDN-releases`，让 `DUSHENGCDN_SERVER_UPDATE_REPO` 和 `AgentUpdateRepo` 指向它。该二进制仓库可以公开下载但不含源码，运行权限由商业授权令牌控制；如一定要私有下载，Server 顶栏检查可配置仅能读取二进制仓库的 `DUSHENGCDN_GITHUB_RELEASE_TOKEN`，Agent 自更新则应关闭或后续改为 Server 代理/短期签名 URL，不应直接给 Agent GitHub token。
 * 源码 Compose 部署 Server 时，推荐复制 `dushengcdn_server/.env.example` 为 `.env` 后再修改端口、密码和 DSN；生产 Compose 会强制要求 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和 `DSN`，避免使用公开占位密码启动。
 
 ### 商业授权签发工具
@@ -137,7 +140,7 @@ DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE=/run/secrets/dushengcdn-license-priva
 | `AgentWebsocketUpgradeEnabled` | 是否允许 Agent 在 HTTP 心跳成功后升级为 WebSocket | `true` |
 | `AgentDiscoveryToken` | Agent 首次自动注册使用的 Discovery Token；节点注册后会返回专属 `agent_token`，后续应优先使用节点专属 Token | 首次读取时自动生成 |
 | `NodeOfflineThreshold` | 节点离线阈值（毫秒） | `120000` |
-| `AgentUpdateRepo` | Agent 自更新仓库 | `SatanDS/DuShengCDN` |
+| `AgentUpdateRepo` | Agent 自更新仓库；私库商业版建议指向只放二进制的发布仓库 | `SatanDS/DuShengCDN-releases` |
 | `GeoIPProvider` | 节点/IP 归属解析方式 | `ipinfo` |
 | `DatabaseAutoCleanupEnabled` | 是否启用每日自动清理观测数据 | `false` |
 | `DatabaseAutoCleanupRetentionDays` | 自动清理保留天数，至少 1 天 | `30` |

@@ -95,7 +95,7 @@ describe('DashboardTopbar', () => {
           );
         }
 
-        if (url.includes('/update/latest-release')) {
+        if (url.includes('/update/latest-release?channel=stable')) {
           return Promise.resolve(
             Response.json({
               success: true,
@@ -110,6 +110,30 @@ describe('DashboardTopbar', () => {
                 current_version: '1.2.3',
                 has_update: false,
                 upgrade_supported: true,
+                in_progress: false,
+                upgrade_status: 'idle',
+                upgrade_logs: [],
+              },
+            }),
+          );
+        }
+
+        if (url.includes('/update/latest-release?channel=preview')) {
+          return Promise.resolve(
+            Response.json({
+              success: true,
+              message: '',
+              data: {
+                tag_name: '1.2.4-private.1-gabcdef0',
+                body: '',
+                html_url: '',
+                published_at: '2026-05-31T00:00:00Z',
+                channel: 'preview',
+                prerelease: true,
+                current_version: '1.2.3',
+                has_update: true,
+                upgrade_supported: true,
+                automatic_upgrade_enabled: false,
                 in_progress: false,
                 upgrade_status: 'idle',
                 upgrade_logs: [],

@@ -76,13 +76,13 @@ export function DashboardTopbar() {
   const previewReleaseQuery = useQuery({
     queryKey: ['update', 'latest-release', 'preview'],
     queryFn: () => getLatestRelease('preview'),
-    enabled: false,
+    enabled: isRoot,
     refetchInterval: (query) => {
       const release = query.state.data;
       if (isVersionModalOpen && release?.in_progress) {
         return upgradeStatusPollInterval;
       }
-      return false;
+      return 60 * 60 * 1000;
     },
   });
 
@@ -239,13 +239,17 @@ export function DashboardTopbar() {
   };
 
   const handleOpenVersionModal = () => {
-    setSelectedReleaseChannel('stable');
+    const defaultChannel: ReleaseChannel = previewReleaseQuery.data?.has_update
+      ? 'preview'
+      : 'stable';
+    setSelectedReleaseChannel(defaultChannel);
     setVersionFeedback(null);
     setManualUpgradeStatus(null);
     setManualUpgradeError(null);
     setIsVersionModalOpen(true);
     if (isRoot) {
       void stableReleaseQuery.refetch();
+      void previewReleaseQuery.refetch();
     }
   };
 
@@ -307,7 +311,11 @@ export function DashboardTopbar() {
     selectedReleaseChannel === 'preview'
       ? previewReleaseQuery.isError
       : stableReleaseQuery.isError;
-  const hasUpdate = Boolean(isRoot && stableReleaseQuery.data?.has_update);
+  const hasStableUpdate = Boolean(isRoot && stableReleaseQuery.data?.has_update);
+  const hasPreviewUpdate = Boolean(
+    isRoot && previewReleaseQuery.data?.has_update,
+  );
+  const hasUpdate = hasStableUpdate || hasPreviewUpdate;
   const currentVersion = publicStatusQuery.data?.version || 'unknown';
   const displayedVersion =
     currentVersion === 'unknown'
@@ -316,6 +324,11 @@ export function DashboardTopbar() {
   const versionLabel = hasUpdate
     ? `版本 ${displayedVersion} · 有更新`
     : `版本 ${displayedVersion}`;
+  const versionTitle = hasPreviewUpdate
+    ? '发现预览更新，点击检查版本'
+    : hasStableUpdate
+      ? '发现正式更新，点击检查版本'
+      : '点击检查版本更新';
   const versionButtonClassName = hasUpdate
     ? 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning-foreground)]'
     : 'border-[var(--border-default)]';
@@ -355,8 +368,10 @@ export function DashboardTopbar() {
             <button
               type="button"
               onClick={handleOpenVersionModal}
+              title={versionTitle}
+              aria-label={versionTitle}
               className={[
-                'inline-flex rounded-full border px-3 py-1.5 transition',
+                'inline-flex rounded-full border px-3 py-1.5 transition hover:bg-[var(--control-background-hover)]',
                 versionButtonClassName,
               ].join(' ')}
             >

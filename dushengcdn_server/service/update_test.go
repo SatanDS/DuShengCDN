@@ -153,11 +153,29 @@ func TestBuildLatestServerReleaseViewDevBuild(t *testing.T) {
 		TagName: "v0.5.0",
 	}, ReleaseChannelStable)
 
-	if view.HasUpdate {
-		t.Fatal("expected dev build not to report update availability")
+	if !view.HasUpdate {
+		t.Fatal("expected dev build to report available release package")
 	}
 	if view.UpgradeSupported {
 		t.Fatal("expected dev build not to support self-upgrade")
+	}
+}
+
+func TestBuildLatestServerReleaseViewPreviewSameVersion(t *testing.T) {
+	originalVersion := common.Version
+	common.Version = "v1.9.5-private.123-gabcdef0"
+	t.Cleanup(func() {
+		common.Version = originalVersion
+		resetServerUpgradeTestState(t)
+	})
+
+	view := buildLatestServerReleaseView(&githubReleaseResponse{
+		TagName:    "v1.9.5-private.123-gabcdef0",
+		Prerelease: true,
+	}, ReleaseChannelPreview)
+
+	if view.HasUpdate {
+		t.Fatal("expected preview release matching current version not to report update")
 	}
 }
 
@@ -507,6 +525,54 @@ func TestNormalizeGitHubRepo(t *testing.T) {
 		if _, err := normalizeGitHubRepo(value); err == nil {
 			t.Fatalf("expected repo %q to be rejected", value)
 		}
+	}
+}
+
+func TestReleaseAssetDownloadURLUsesAPIURLForPrivateRepo(t *testing.T) {
+	originalToken := common.GitHubReleaseToken
+	common.GitHubReleaseToken = "github_pat_test"
+	t.Cleanup(func() {
+		common.GitHubReleaseToken = originalToken
+	})
+
+	asset := githubAsset{
+		URL:                "https://api.github.com/repos/SatanDS/DuShengCDN-releases/releases/assets/123",
+		BrowserDownloadURL: "https://github.com/SatanDS/DuShengCDN-releases/releases/download/v0.5.0/server",
+	}
+	if got := releaseAssetDownloadURL(asset); got != asset.URL {
+		t.Fatalf("expected asset API URL, got %s", got)
+	}
+
+	common.GitHubReleaseToken = ""
+	if got := releaseAssetDownloadURL(asset); got != asset.BrowserDownloadURL {
+		t.Fatalf("expected browser download URL without token, got %s", got)
+	}
+}
+
+func TestServerUpdateDownloadRequestAuthScope(t *testing.T) {
+	originalToken := common.GitHubReleaseToken
+	common.GitHubReleaseToken = "github_pat_test"
+	t.Cleanup(func() {
+		common.GitHubReleaseToken = originalToken
+	})
+
+	apiReq, err := newServerUpdateDownloadRequest(context.Background(), "https://api.github.com/repos/SatanDS/DuShengCDN-releases/releases/assets/123", "text/plain")
+	if err != nil {
+		t.Fatalf("build api request: %v", err)
+	}
+	if apiReq.Header.Get("Authorization") != "Bearer github_pat_test" {
+		t.Fatalf("expected GitHub API request to carry auth header")
+	}
+	if apiReq.Header.Get("Accept") != "application/octet-stream" {
+		t.Fatalf("expected GitHub API asset request to use octet-stream accept, got %s", apiReq.Header.Get("Accept"))
+	}
+
+	objectReq, err := newServerUpdateDownloadRequest(context.Background(), "https://objects.githubusercontent.com/github-production-release-asset/file", "application/octet-stream")
+	if err != nil {
+		t.Fatalf("build object request: %v", err)
+	}
+	if objectReq.Header.Get("Authorization") != "" {
+		t.Fatalf("object storage request must not carry auth header")
 	}
 }
 

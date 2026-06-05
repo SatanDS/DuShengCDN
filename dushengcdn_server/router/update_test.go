@@ -32,6 +32,10 @@ func TestLatestReleaseProxy(t *testing.T) {
 	setupTestDB(t)
 
 	originalClient := service.UpdateHTTPClientForTest()
+	originalServerUpdateRepo := common.ServerUpdateRepo
+	originalGitHubReleaseToken := common.GitHubReleaseToken
+	common.ServerUpdateRepo = "SatanDS/DuShengCDN"
+	common.GitHubReleaseToken = ""
 	service.SetUpdateHTTPClientForTest(&http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			if req.URL.String() != "https://api.github.com/repos/SatanDS/DuShengCDN/releases/latest" {
@@ -57,6 +61,8 @@ func TestLatestReleaseProxy(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		service.SetUpdateHTTPClientForTest(originalClient)
+		common.ServerUpdateRepo = originalServerUpdateRepo
+		common.GitHubReleaseToken = originalGitHubReleaseToken
 	})
 
 	engine := gin.New()
@@ -108,6 +114,62 @@ func TestLatestReleaseProxy(t *testing.T) {
 	}
 	if data["current_version"] != common.Version {
 		t.Fatalf("unexpected current_version: %#v", data["current_version"])
+	}
+}
+
+func TestLatestReleaseProxyUsesPrivateRepoToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+
+	originalClient := service.UpdateHTTPClientForTest()
+	originalServerUpdateRepo := common.ServerUpdateRepo
+	originalGitHubReleaseToken := common.GitHubReleaseToken
+	common.ServerUpdateRepo = "SatanDS/DuShengCDN-releases"
+	common.GitHubReleaseToken = "github_pat_test"
+	service.SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() != "https://api.github.com/repos/SatanDS/DuShengCDN-releases/releases/latest" {
+				t.Fatalf("unexpected request url: %s", req.URL.String())
+			}
+			if req.Header.Get("Authorization") != "Bearer github_pat_test" {
+				t.Fatalf("unexpected authorization header: %s", req.Header.Get("Authorization"))
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{
+					"tag_name":"v1.2.4",
+					"body":"release notes",
+					"html_url":"https://github.com/SatanDS/DuShengCDN-releases/releases/tag/v1.2.4",
+					"published_at":"2026-03-11T00:00:00Z"
+				}`)),
+			}, nil
+		}),
+	})
+	t.Cleanup(func() {
+		service.SetUpdateHTTPClientForTest(originalClient)
+		common.ServerUpdateRepo = originalServerUpdateRepo
+		common.GitHubReleaseToken = originalGitHubReleaseToken
+	})
+
+	engine, cookies := loginRootAndBuildEngine(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/update/latest-release", nil)
+	for _, cookieValue := range cookies {
+		req.AddCookie(cookieValue)
+	}
+
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: %d", recorder.Code)
+	}
+
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected success response, got message: %s", resp.Message)
 	}
 }
 

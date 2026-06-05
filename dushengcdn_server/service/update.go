@@ -26,7 +26,6 @@ import (
 )
 
 const (
-	serverReleaseRepo            = "SatanDS/DuShengCDN"
 	githubReleasesAPIBase        = "https://api.github.com/repos/%s/releases"
 	manualServerBinaryTTL        = 15 * time.Minute
 	uploadedBinaryVersionTimeout = 10 * time.Second
@@ -34,6 +33,7 @@ const (
 
 var manualServerBinaryMaxBytes int64 = 200 * 1024 * 1024
 var allowedServerUpdateDownloadHosts = map[string]struct{}{
+	"api.github.com":                        {},
 	"github.com":                            {},
 	"objects.githubusercontent.com":         {},
 	"github-releases.githubusercontent.com": {},
@@ -111,6 +111,7 @@ type githubReleaseResponse struct {
 }
 
 type githubAsset struct {
+	URL                string `json:"url"`
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
@@ -330,7 +331,7 @@ func ConfirmManualServerUpgrade(uploadToken string) (*UploadedServerBinary, erro
 }
 
 func fetchLatestRelease(ctx context.Context, channel ReleaseChannel) (*githubReleaseResponse, error) {
-	return fetchLatestGitHubRelease(ctx, serverReleaseRepo, channel)
+	return fetchLatestGitHubRelease(ctx, common.ServerUpdateRepo, channel)
 }
 
 func fetchLatestGitHubRelease(ctx context.Context, repo string, channel ReleaseChannel) (*githubReleaseResponse, error) {
@@ -438,6 +439,7 @@ func newGitHubReleaseRequest(ctx context.Context, url string) (*http.Request, er
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	applyGitHubReleaseAuth(req)
 	req.Header.Set("User-Agent", "DuShengCDN-Server")
 	return req, nil
 }
@@ -455,14 +457,13 @@ func buildLatestServerReleaseView(release *githubReleaseResponse, channel Releas
 	isDevBuild := currentVersion == "" || strings.EqualFold(currentVersion, "dev")
 	platformUpgradeSupported := !isDevBuild && runtime.GOOS != "windows"
 	hasUpdate := false
-	if release != nil && !isDevBuild {
-		if channel == ReleaseChannelPreview {
-			// Preview releases use a "major.minor.patch-git-<commit>" scheme that cannot
-			// be meaningfully compared against the running stable version, so we skip the
-			// version check and always allow upgrading when the user explicitly selects
-			// the preview channel.
-			hasUpdate = true
-		} else {
+	if release != nil {
+		switch {
+		case isDevBuild:
+			hasUpdate = parseVersionInfo(release.TagName).Valid
+		case channel == ReleaseChannelPreview:
+			hasUpdate = normalizeVersion(currentVersion) != normalizeVersion(release.TagName)
+		default:
 			hasUpdate = isVersionNewer(currentVersion, release.TagName)
 		}
 	}
@@ -514,11 +515,11 @@ func prepareServerUpgrade(ctx context.Context, channel ReleaseChannel) (*prepare
 	for _, asset := range release.Assets {
 		switch asset.Name {
 		case assetName:
-			downloadURL = asset.BrowserDownloadURL
+			downloadURL = releaseAssetDownloadURL(asset)
 		case checksumAssetName:
-			checksumURL = asset.BrowserDownloadURL
+			checksumURL = releaseAssetDownloadURL(asset)
 		case signatureAssetName:
-			signatureURL = asset.BrowserDownloadURL
+			signatureURL = releaseAssetDownloadURL(asset)
 		}
 	}
 	if downloadURL == "" {
@@ -599,6 +600,56 @@ func validateServerUpdateDownloadURL(raw string) error {
 	return nil
 }
 
+func releaseAssetDownloadURL(asset githubAsset) string {
+	if strings.TrimSpace(common.GitHubReleaseToken) != "" {
+		if url := strings.TrimSpace(asset.URL); url != "" {
+			return url
+		}
+	}
+	return strings.TrimSpace(asset.BrowserDownloadURL)
+}
+
+func newServerUpdateDownloadRequest(ctx context.Context, rawURL string, accept string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", strings.TrimSpace(accept))
+	if isGitHubAPIHost(req.URL) {
+		req.Header.Set("Accept", "application/octet-stream")
+	}
+	applyGitHubReleaseAuth(req)
+	req.Header.Set("User-Agent", "DuShengCDN-Server")
+	return req, nil
+}
+
+func applyGitHubReleaseAuth(req *http.Request) {
+	if req == nil || req.URL == nil {
+		return
+	}
+	token := strings.TrimSpace(common.GitHubReleaseToken)
+	if token == "" {
+		return
+	}
+	host := normalizedURLHostname(req.URL)
+	if host != "api.github.com" && host != "github.com" {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+}
+
+func isGitHubAPIHost(parsed *url.URL) bool {
+	return normalizedURLHostname(parsed) == "api.github.com"
+}
+
+func normalizedURLHostname(parsed *url.URL) string {
+	if parsed == nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), ".")
+}
+
 func normalizeGitHubRepo(repo string) (string, error) {
 	repo = strings.TrimSpace(repo)
 	parts := strings.Split(repo, "/")
@@ -639,6 +690,9 @@ func doServerUpdateDownload(req *http.Request) (*http.Response, error) {
 		if err := validateServerUpdateDownloadURL(req.URL.String()); err != nil {
 			return err
 		}
+		req.Header.Del("Authorization")
+		req.Header.Del("X-GitHub-Api-Version")
+		applyGitHubReleaseAuth(req)
 		if previousCheckRedirect != nil {
 			return previousCheckRedirect(req, via)
 		}
@@ -670,12 +724,10 @@ func executeServerUpgrade(task *preparedServerUpgrade) error {
 	}
 	recordServerUpgradeLog("info", "Release signature verified.")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, task.downloadURL, nil)
+	req, err := newServerUpdateDownloadRequest(ctx, task.downloadURL, "application/octet-stream")
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Accept", "application/octet-stream")
-	req.Header.Set("User-Agent", "DuShengCDN-Server")
 
 	resp, err := doServerUpdateDownload(req)
 	if err != nil {
@@ -721,12 +773,10 @@ func downloadServerChecksum(ctx context.Context, url string, assetName string) (
 	if url == "" {
 		return "", errors.New("checksum url is empty")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := newServerUpdateDownloadRequest(ctx, url, "text/plain")
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Accept", "text/plain")
-	req.Header.Set("User-Agent", "DuShengCDN-Server")
 	resp, err := doServerUpdateDownload(req)
 	if err != nil {
 		return "", err
@@ -755,12 +805,10 @@ func downloadServerSignature(ctx context.Context, url string) ([]byte, error) {
 	if url == "" {
 		return nil, errors.New("signature url is empty")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := newServerUpdateDownloadRequest(ctx, url, "text/plain")
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "text/plain")
-	req.Header.Set("User-Agent", "DuShengCDN-Server")
 	resp, err := doServerUpdateDownload(req)
 	if err != nil {
 		return nil, err

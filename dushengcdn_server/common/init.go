@@ -101,6 +101,14 @@ func init() {
 	if os.Getenv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED") != "" {
 		ServerAutoUpgradeEnabled = readBoolEnv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED")
 	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_SERVER_UPDATE_REPO")) != "" {
+		ServerUpdateRepo = strings.TrimSpace(os.Getenv("DUSHENGCDN_SERVER_UPDATE_REPO"))
+	}
+	if os.Getenv("DUSHENGCDN_GITHUB_RELEASE_TOKEN") != "" {
+		GitHubReleaseToken = os.Getenv("DUSHENGCDN_GITHUB_RELEASE_TOKEN")
+	} else if os.Getenv("GITHUB_TOKEN") != "" {
+		GitHubReleaseToken = os.Getenv("GITHUB_TOKEN")
+	}
 	SetLogLevel(os.Getenv("LOG_LEVEL"))
 	if *LogDir != "" {
 		var err error

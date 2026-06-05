@@ -2,6 +2,7 @@ name: Cleanup prerelease tags
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  DUSHENGCDN_RELEASE_REPOSITORY: SatanDS/DuShengCDN-releases
 
 on:
   workflow_dispatch:
@@ -18,54 +19,33 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Resolve version metadata
-        id: version
-        run: |
-          SHOULD_RUN=true
-          VERSION="all-prerelease-tags"
-
-          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [[ "$VERSION" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
-            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Delete prerelease releases and tags
-        if: steps.version.outputs.should_run == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
           CONFIRM: ${{ github.event.inputs.confirm }}
+          RELEASE_REPO: ${{ env.DUSHENGCDN_RELEASE_REPOSITORY }}
         run: |
           if [[ "$CONFIRM" != "cleanup-prerelease-tags" ]]; then
             echo "confirm input must be exactly cleanup-prerelease-tags" >&2
             exit 1
           fi
 
-          mapfile -t TAGS < <(git tag --list 'v*' | sort -V)
+          mapfile -t TAGS < <(
+            gh release list --repo "$RELEASE_REPO" --limit 200 --json tagName,isPrerelease \
+              --jq '.[] | select(.isPrerelease == true) | .tagName' | sort -V
+          )
           DELETED=0
 
           for TAG in "${TAGS[@]}"; do
-            if [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
-              echo "Keep formal release tag: $TAG"
-              continue
-            fi
-
-            if gh release view "$TAG" >/dev/null 2>&1; then
+            if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
               echo "Delete prerelease release: $TAG"
-              gh release delete "$TAG" --yes
+              gh release delete "$TAG" --repo "$RELEASE_REPO" --yes
             else
               echo "No GitHub Release found for $TAG"
             fi
 
             echo "Delete prerelease tag: $TAG"
-            git push origin --delete "refs/tags/$TAG"
+            gh api -X DELETE "repos/$RELEASE_REPO/git/refs/tags/$TAG" >/dev/null || true
             DELETED=$((DELETED + 1))
           done
 
