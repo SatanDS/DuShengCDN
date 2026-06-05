@@ -113,6 +113,26 @@ func buildTrafficDistributions(
 	}
 }
 
+func buildDashboardTrafficDistributions(
+	statusRows []*model.NodeAccessLogDistributionRow,
+	domainRows []*model.NodeAccessLogDistributionRow,
+	accessLogRegions []*model.NodeAccessLogRegionCount,
+	limit int,
+) TrafficDistributions {
+	sourceCountries := make(distributionAccumulator, len(accessLogRegions))
+	for _, item := range accessLogRegions {
+		if item == nil || strings.TrimSpace(item.Region) == "" || item.Count <= 0 {
+			continue
+		}
+		sourceCountries[item.Region] = item.Count
+	}
+	return TrafficDistributions{
+		StatusCodes:     distributionRowsToItems(statusRows),
+		TopDomains:      distributionRowsToItems(domainRows),
+		SourceCountries: toDistributionItems(sourceCountries, limit),
+	}
+}
+
 func buildObservabilityHealthSummary(snapshot *model.NodeMetricSnapshot, report *model.NodeRequestReport, events []*model.NodeHealthEvent) ObservabilityHealthSummary {
 	summary := ObservabilityHealthSummary{}
 	for _, event := range events {

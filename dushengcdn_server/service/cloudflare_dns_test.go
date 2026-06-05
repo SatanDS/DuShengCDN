@@ -3,11 +3,14 @@ package service
 import (
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"dushengcdn/common"
 	"dushengcdn/model"
+
+	"gorm.io/gorm"
 )
 
 func TestNormalizeProxyRouteDNSSettingsRequiresCloudflareAccount(t *testing.T) {
@@ -196,6 +199,104 @@ func TestEffectiveCloudflareProxiedForDDOSProviders(t *testing.T) {
 
 	if !effectiveCloudflareProxied(route, false) {
 		t.Fatal("expected normal sync to keep configured Cloudflare proxy state")
+	}
+}
+
+func TestProxyRouteDNSSyncContextBatchesDNSAccounts(t *testing.T) {
+	setupServiceTestDB(t)
+
+	account := &model.DnsAccount{
+		Name:          "cf",
+		Type:          "cloudflare",
+		Authorization: `{"api_token":"token"}`,
+	}
+	if err := account.Insert(); err != nil {
+		t.Fatalf("insert dns account: %v", err)
+	}
+	routes := []*model.ProxyRoute{
+		{
+			DNSAutoSync:     true,
+			DNSProviderMode: DNSProviderModeCloudflare,
+			DNSAccountID:    &account.ID,
+		},
+		{
+			DNSAutoSync:     true,
+			DNSProviderMode: DNSProviderModeCloudflare,
+			DNSAccountID:    &account.ID,
+		},
+		{
+			DNSAutoSync:            true,
+			DNSProviderMode:        DNSProviderModeCloudflare,
+			DNSAccountID:           &account.ID,
+			DDOSProtectionMode:     DDOSProtectionModeAuto,
+			DDOSProtectionProvider: DDOSProtectionProviderCloudflare,
+			DDOSProtectionTarget:   "999999",
+		},
+	}
+
+	const callbackName = "dushengcdn:test_dns_account_query_counter"
+	var accountQueries int64
+	queryCallback := model.DB.Callback().Query()
+	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		if db.Statement.Table == "dns_accounts" ||
+			(db.Statement.Schema != nil && db.Statement.Schema.Table == "dns_accounts") ||
+			strings.Contains(db.Statement.SQL.String(), "dns_accounts") {
+			atomic.AddInt64(&accountQueries, 1)
+		}
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queryCallback.Remove(callbackName)
+	})
+
+	context, err := newProxyRouteDNSSyncContext(routes)
+	if err != nil {
+		t.Fatalf("newProxyRouteDNSSyncContext failed: %v", err)
+	}
+	if got := atomic.LoadInt64(&accountQueries); got != 1 {
+		t.Fatalf("expected one batched DNS account query, got %d", got)
+	}
+	resolved, err := proxyRouteDNSAccountForSyncWithContext(routes[0], false, context)
+	if err != nil {
+		t.Fatalf("resolve route account from context failed: %v", err)
+	}
+	if resolved.ID != account.ID {
+		t.Fatalf("expected account %d, got %d", account.ID, resolved.ID)
+	}
+	if _, err := proxyRouteDNSAccountForSyncWithContext(routes[2], true, context); err == nil {
+		t.Fatal("expected missing DDoS override account to fail from context")
+	}
+	if got := atomic.LoadInt64(&accountQueries); got != 1 {
+		t.Fatalf("expected context lookups to avoid extra DNS account queries, got %d", got)
+	}
+}
+
+func TestProxyRouteDNSSyncContextCachesDDoSProtectionSummary(t *testing.T) {
+	previous := getRequestReportTrafficSummaryForDNSProtection
+	var calls int64
+	getRequestReportTrafficSummaryForDNSProtection = func(since time.Time, until time.Time) (*model.NodeRequestReportTrafficSummary, error) {
+		atomic.AddInt64(&calls, 1)
+		return &model.NodeRequestReportTrafficSummary{RequestCount: 120, ErrorCount: 1}, nil
+	}
+	t.Cleanup(func() {
+		getRequestReportTrafficSummaryForDNSProtection = previous
+	})
+	setCloudflareDDoSThresholdsForTest(t, "100", "50")
+
+	context := &proxyRouteDNSSyncContext{}
+	route := &model.ProxyRoute{DDOSProtectionMode: DDOSProtectionModeAuto}
+	if !routeDDOSProtectionActiveWithContext(route, context) {
+		t.Fatal("expected first DDoS protection decision to be active")
+	}
+	if !routeDDOSProtectionActiveWithContext(route, context) {
+		t.Fatal("expected cached DDoS protection decision to remain active")
+	}
+	if got := atomic.LoadInt64(&calls); got != 1 {
+		t.Fatalf("expected one traffic summary load, got %d", got)
 	}
 }
 

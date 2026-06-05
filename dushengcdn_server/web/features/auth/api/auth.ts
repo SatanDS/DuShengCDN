@@ -57,8 +57,13 @@ export function resetPassword(payload: PasswordResetRequestPayload) {
   });
 }
 
-export function exchangeGitHubCode(code: string) {
-  return apiRequest<AuthUser>(`/oauth/github?code=${encodeURIComponent(code)}`);
+export function getLegacyGitHubAuthorizeUrl() {
+  return apiRequest<OAuthAuthorizeResult>('/oauth/github/authorize');
+}
+
+export function exchangeGitHubCode(code: string, state: string) {
+  const searchParams = new URLSearchParams({ code, state });
+  return apiRequest<AuthUser>(`/oauth/github?${searchParams.toString()}`);
 }
 
 export interface OAuthAuthorizeResult {

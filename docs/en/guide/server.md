@@ -38,7 +38,7 @@ pnpm test
 
 ```bash
 cd dushengcdn_server
-export SESSION_SECRET='replace-with-a-long-random-string'
+export SESSION_SECRET="$(openssl rand -hex 32)"
 export SQLITE_PATH='./dushengcdn.db'
 export LOG_LEVEL='info'
 go run .
@@ -54,7 +54,7 @@ http://localhost:3000
 
 ```bash
 cd dushengcdn_server
-export SESSION_SECRET='replace-with-a-long-random-string'
+export SESSION_SECRET="$(openssl rand -hex 32)"
 export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
 export LOG_LEVEL='info'
 go run .

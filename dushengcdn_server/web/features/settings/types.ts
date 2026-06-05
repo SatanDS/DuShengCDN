@@ -76,6 +76,42 @@ export interface DatabaseCleanupResult {
   cutoff?: string;
 }
 
+export type CommercialLicenseStatus =
+  | 'community'
+  | 'missing'
+  | 'valid'
+  | 'expiring'
+  | 'expired'
+  | 'invalid';
+
+export interface CommercialLicenseStatusPayload {
+  status: CommercialLicenseStatus;
+  status_label: string;
+  licensed: boolean;
+  required: boolean;
+  license_id: string;
+  customer_id: string;
+  customer_name: string;
+  plan: string;
+  plan_label: string;
+  fingerprint: string;
+  features: string[];
+  max_nodes: number;
+  max_sites: number;
+  current_nodes: number;
+  current_sites: number;
+  node_limit_exceeded: boolean;
+  site_limit_exceeded: boolean;
+  can_create_nodes: boolean;
+  can_create_sites: boolean;
+  issued_at?: string | null;
+  expires_at?: string | null;
+  days_until_expiry?: number | null;
+  last_validated_at?: string | null;
+  last_validation_error: string;
+  signature_verified: boolean;
+}
+
 export interface UpdateSelfPayload {
   username: string;
   display_name: string;

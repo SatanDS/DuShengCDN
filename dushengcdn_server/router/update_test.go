@@ -208,6 +208,52 @@ func TestManualUploadRoute(t *testing.T) {
 	}
 }
 
+func TestManualUploadRouteRejectsOversizedBody(t *testing.T) {
+	originalLimit := service.ManualServerBinaryMaxBytesForTest()
+	service.SetManualServerBinaryMaxBytesForTest(8)
+	t.Cleanup(func() {
+		service.SetManualServerBinaryMaxBytesForTest(originalLimit)
+	})
+
+	engine, cookies := loginRootAndBuildEngine(t)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("binary", "dushengcdn-server-test")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	if _, err = part.Write([]byte("0123456789")); err != nil {
+		t.Fatalf("failed to write upload content: %v", err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatalf("failed to close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/update/manual-upload", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	for _, cookieValue := range cookies {
+		req.AddCookie(cookieValue)
+	}
+
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: %d", recorder.Code)
+	}
+
+	var resp apiResponse
+	if err = json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("expected oversized upload to fail")
+	}
+	if !strings.Contains(resp.Message, "超过大小限制") {
+		t.Fatalf("unexpected error message: %s", resp.Message)
+	}
+}
+
 func TestManualUpgradeConfirmRoute(t *testing.T) {
 	originalVersion := common.Version
 	originalExecutor := service.ServerBinaryUpgradeExecutorForTest()

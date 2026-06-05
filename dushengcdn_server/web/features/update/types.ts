@@ -16,6 +16,7 @@ export interface LatestReleaseInfo {
   current_version: string;
   has_update: boolean;
   upgrade_supported: boolean;
+  automatic_upgrade_enabled: boolean;
   in_progress: boolean;
   upgrade_status: 'idle' | 'running' | 'succeeded' | 'failed' | string;
   upgrade_logs: UpgradeLogItem[];

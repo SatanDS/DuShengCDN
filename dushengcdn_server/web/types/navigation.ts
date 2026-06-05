@@ -1,5 +1,6 @@
 export type NavigationIconKey =
   | 'home'
+  | 'traffic'
   | 'node'
   | 'website'
   | 'origin'
@@ -10,6 +11,7 @@ export type NavigationIconKey =
   | 'release'
   | 'log'
   | 'performance'
+  | 'shield'
   | 'user'
   | 'setting';
 
@@ -17,5 +19,6 @@ export interface NavigationItem {
   href: string;
   label: string;
   icon: NavigationIconKey;
+  minRole?: number;
   children?: NavigationItem[];
 }

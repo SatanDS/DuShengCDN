@@ -3,7 +3,11 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"dushengcdn/common"
+	"encoding/hex"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -62,9 +66,12 @@ func TestIsVersionNewer(t *testing.T) {
 
 func TestBuildLatestServerReleaseView(t *testing.T) {
 	originalVersion := common.Version
+	originalAutoUpgrade := common.ServerAutoUpgradeEnabled
 	common.Version = "v0.4.0"
+	common.ServerAutoUpgradeEnabled = true
 	t.Cleanup(func() {
 		common.Version = originalVersion
+		common.ServerAutoUpgradeEnabled = originalAutoUpgrade
 		serverUpgradeState.Lock()
 		serverUpgradeState.inProgress = false
 		serverUpgradeState.Unlock()
@@ -89,6 +96,9 @@ func TestBuildLatestServerReleaseView(t *testing.T) {
 	}
 	if !view.InProgress {
 		t.Fatal("expected in_progress to reflect upgrade state")
+	}
+	if !view.AutomaticUpgradeEnabled {
+		t.Fatal("expected automatic upgrade flag to be exposed")
 	}
 	if view.TagName != "v0.5.0" {
 		t.Fatalf("unexpected tag name: %s", view.TagName)
@@ -253,6 +263,85 @@ func TestUploadManualServerBinaryRejectsSameVersion(t *testing.T) {
 	}
 }
 
+func TestUploadManualServerBinaryRejectsOversizedUpload(t *testing.T) {
+	originalVersion := common.Version
+	originalLimit := ManualServerBinaryMaxBytesForTest()
+	common.Version = "v0.4.0"
+	SetManualServerBinaryMaxBytesForTest(8)
+	t.Cleanup(func() {
+		common.Version = originalVersion
+		SetManualServerBinaryMaxBytesForTest(originalLimit)
+		resetServerUpgradeTestState(t)
+	})
+
+	_, err := UploadManualServerBinary(context.Background(), "dushengcdn-server-test", bytes.NewReader([]byte("0123456789")))
+	if err == nil {
+		t.Fatal("expected oversized upload to fail")
+	}
+	if !strings.Contains(err.Error(), "超过大小限制") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConfirmManualServerUpgradeRejectsExpiredCandidate(t *testing.T) {
+	originalVersion := common.Version
+	common.Version = "v0.4.0"
+	t.Cleanup(func() {
+		common.Version = originalVersion
+		resetServerUpgradeTestState(t)
+	})
+
+	fileName, content := fakeServerBinaryFixture("v0.5.0")
+	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("expected upload to succeed: %v", err)
+	}
+
+	manualServerBinaryState.Lock()
+	if manualServerBinaryState.candidate == nil {
+		manualServerBinaryState.Unlock()
+		t.Fatal("expected pending candidate")
+	}
+	tempPath := manualServerBinaryState.candidate.TempPath
+	manualServerBinaryState.candidate.UploadedAt = time.Now().Add(-manualServerBinaryTTL - time.Second)
+	manualServerBinaryState.Unlock()
+
+	if _, err = ConfirmManualServerUpgrade(info.UploadToken); err == nil {
+		t.Fatal("expected expired candidate confirmation to fail")
+	}
+	if !strings.Contains(err.Error(), "已过期") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(tempPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected expired temp file to be removed, got %v", statErr)
+	}
+}
+
+func TestDetectUploadedServerBinaryVersionHonorsContextTimeout(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "slow-version")
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		if err := os.WriteFile(path, []byte("@echo off\r\nping -n 3 127.0.0.1 >NUL\r\necho v9.9.9\r\n"), 0o755); err != nil {
+			t.Fatalf("failed to write slow script: %v", err)
+		}
+	} else {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 2\necho v9.9.9\n"), 0o755); err != nil {
+			t.Fatalf("failed to write slow script: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := detectUploadedServerBinaryVersion(ctx, path)
+	if err == nil {
+		t.Fatal("expected version detection to time out")
+	}
+	if !strings.Contains(err.Error(), "超时") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestConfirmManualServerUpgrade(t *testing.T) {
 	originalVersion := common.Version
 	originalExecutor := ServerBinaryUpgradeExecutorForTest()
@@ -331,11 +420,170 @@ func TestBuildLatestServerReleaseViewIncludesUpgradeLogs(t *testing.T) {
 }
 
 func TestScheduleServerUpgradeUsesDownloadedBinaryValidation(t *testing.T) {
+	originalAutoUpgrade := common.ServerAutoUpgradeEnabled
+	common.ServerAutoUpgradeEnabled = false
+	t.Cleanup(func() {
+		common.ServerAutoUpgradeEnabled = originalAutoUpgrade
+	})
+
 	_, err := ScheduleServerUpgrade("stable")
 	if err == nil {
 		t.Fatal("expected automatic release upgrade to be disabled")
 	}
-	if !strings.Contains(err.Error(), "disabled") {
+	if !strings.Contains(err.Error(), "自动升级默认关闭") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseServerChecksum(t *testing.T) {
+	checksum := strings.Repeat("a", sha256.Size*2)
+	testCases := []struct {
+		name    string
+		content string
+		asset   string
+		want    string
+	}{
+		{name: "single digest", content: checksum + "\n", asset: "dushengcdn-server-linux-amd64", want: checksum},
+		{name: "sha256sum format", content: checksum + "  dushengcdn-server-linux-amd64\n", asset: "dushengcdn-server-linux-amd64", want: checksum},
+		{name: "bsd format", content: "SHA256(dushengcdn-server-linux-amd64)= " + checksum + "\n", asset: "dushengcdn-server-linux-amd64", want: checksum},
+		{name: "select matching asset", content: strings.Repeat("b", sha256.Size*2) + "  other\n" + checksum + "  dushengcdn-server-linux-amd64\n", asset: "dushengcdn-server-linux-amd64", want: checksum},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := parseServerChecksum(testCase.content, testCase.asset)
+			if err != nil {
+				t.Fatalf("parse checksum: %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("unexpected checksum: got %s want %s", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestExecuteServerUpgradeRejectsChecksumMismatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test binary fixtures require unix execution semantics")
+	}
+	originalVersion := common.Version
+	originalClient := UpdateHTTPClientForTest()
+	originalExecutor := ServerBinaryUpgradeExecutorForTest()
+	common.Version = "v0.4.0"
+	executed := false
+	SetServerBinaryUpgradeExecutorForTest(func(execPath string, tempPath string) error {
+		executed = true
+		return nil
+	})
+	t.Cleanup(func() {
+		common.Version = originalVersion
+		SetUpdateHTTPClientForTest(originalClient)
+		SetServerBinaryUpgradeExecutorForTest(originalExecutor)
+		resetServerUpgradeTestState(t)
+	})
+
+	_, content := fakeServerBinaryFixture("v0.5.0")
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case "https://example.test/server.sha256":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader(strings.Repeat("0", sha256.Size*2) + "  dushengcdn-server-linux-amd64\n")),
+					Header:     make(http.Header),
+				}, nil
+			case "https://example.test/server":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(bytes.NewReader(content)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected request url: %s", req.URL.String())
+				return nil, nil
+			}
+		}),
+	})
+
+	err := executeServerUpgrade(&preparedServerUpgrade{
+		release: &LatestServerRelease{
+			TagName: "v0.5.0",
+		},
+		downloadURL:  "https://example.test/server",
+		checksumURL:  "https://example.test/server.sha256",
+		assetName:    "dushengcdn-server-linux-amd64",
+		checksumName: "dushengcdn-server-linux-amd64.sha256",
+		execPath:     os.Args[0],
+	})
+	if err == nil || !strings.Contains(err.Error(), "SHA256") {
+		t.Fatalf("expected checksum mismatch error, got %v", err)
+	}
+	if executed {
+		t.Fatal("upgrade executor must not run when checksum mismatches")
+	}
+}
+
+func TestExecuteServerUpgradeVerifiesChecksumBeforeReplace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test binary fixtures require unix execution semantics")
+	}
+	originalVersion := common.Version
+	originalClient := UpdateHTTPClientForTest()
+	originalExecutor := ServerBinaryUpgradeExecutorForTest()
+	common.Version = "v0.4.0"
+	executed := false
+	SetServerBinaryUpgradeExecutorForTest(func(execPath string, tempPath string) error {
+		executed = true
+		return nil
+	})
+	t.Cleanup(func() {
+		common.Version = originalVersion
+		SetUpdateHTTPClientForTest(originalClient)
+		SetServerBinaryUpgradeExecutorForTest(originalExecutor)
+		resetServerUpgradeTestState(t)
+	})
+
+	_, content := fakeServerBinaryFixture("v0.5.0")
+	sum := sha256.Sum256(content)
+	checksum := hex.EncodeToString(sum[:])
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case "https://example.test/server.sha256":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader(checksum + "  dushengcdn-server-linux-amd64\n")),
+					Header:     make(http.Header),
+				}, nil
+			case "https://example.test/server":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(bytes.NewReader(content)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected request url: %s", req.URL.String())
+				return nil, nil
+			}
+		}),
+	})
+
+	if err := executeServerUpgrade(&preparedServerUpgrade{
+		release: &LatestServerRelease{
+			TagName: "v0.5.0",
+		},
+		downloadURL:  "https://example.test/server",
+		checksumURL:  "https://example.test/server.sha256",
+		assetName:    "dushengcdn-server-linux-amd64",
+		checksumName: "dushengcdn-server-linux-amd64.sha256",
+		execPath:     os.Args[0],
+	}); err != nil {
+		t.Fatalf("expected upgrade to pass checksum verification: %v", err)
+	}
+	if !executed {
+		t.Fatal("expected upgrade executor to run after checksum verification")
 	}
 }

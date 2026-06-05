@@ -27,6 +27,7 @@ SNAPSHOT_MAX_AGE="5m"
 QUERY_RATE_LIMIT="200"
 UDP_RESPONSE_SIZE="1232"
 LOG_LEVEL_VALUE="info"
+DUSHENGCDN_BUILD_GO_DIR="${DUSHENGCDN_BUILD_GO_DIR:-/opt/dushengcdn-build/go}"
 
 usage() {
   cat <<EOF
@@ -243,8 +244,37 @@ validate_install_dir() {
   esac
 
   case "$INSTALL_DIR" in
+    *"/../"*|*/..|*"/./"*|*/.)
+      die "refusing to use non-normalized install directory: ${INSTALL_DIR}"
+      ;;
+  esac
+
+  case "$INSTALL_DIR" in
     /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/Applications)
       die "refusing to use unsafe install directory: ${INSTALL_DIR}"
+      ;;
+  esac
+}
+
+validate_build_go_dir() {
+  while [[ "$DUSHENGCDN_BUILD_GO_DIR" != "/" && "$DUSHENGCDN_BUILD_GO_DIR" == */ ]]; do
+    DUSHENGCDN_BUILD_GO_DIR="${DUSHENGCDN_BUILD_GO_DIR%/}"
+  done
+
+  case "$DUSHENGCDN_BUILD_GO_DIR" in
+    /*) ;;
+    *) die "DUSHENGCDN_BUILD_GO_DIR must be an absolute path." ;;
+  esac
+
+  case "$DUSHENGCDN_BUILD_GO_DIR" in
+    *"/../"*|*/..|*"/./"*|*/.)
+      die "refusing to use non-normalized Go build directory: ${DUSHENGCDN_BUILD_GO_DIR}"
+      ;;
+  esac
+
+  case "$DUSHENGCDN_BUILD_GO_DIR" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/Applications|/usr/local|/usr/local/go)
+      die "refusing to use unsafe Go build directory: ${DUSHENGCDN_BUILD_GO_DIR}"
       ;;
   esac
 }
@@ -322,8 +352,7 @@ install_go_linux() {
       rm -f "$archive"
       log "Downloading Go from ${url} (attempt ${attempt}/3)..."
       if curl --fail --location --show-error --silent --connect-timeout 20 --retry 2 --retry-delay 2 --retry-max-time 300 -o "$archive" "$url" && tar -tzf "$archive" >/dev/null 2>&1; then
-        run_as_root rm -rf /usr/local/go
-        run_as_root tar -C /usr/local -xzf "$archive"
+        install_go_archive "$archive"
         rm -f "$archive"
         return
       fi
@@ -335,7 +364,23 @@ install_go_linux() {
   die "failed to download Go ${go_version}. Install Go manually, set DUSHENGCDN_GO_DOWNLOAD_URL, or publish release assets."
 }
 
+install_go_archive() {
+  local archive="$1"
+  local parent
+  parent="$(dirname "$DUSHENGCDN_BUILD_GO_DIR")"
+  run_as_root mkdir -p "$parent"
+  run_as_root rm -rf -- "${DUSHENGCDN_BUILD_GO_DIR}.tmp"
+  run_as_root mkdir -p "${DUSHENGCDN_BUILD_GO_DIR}.tmp"
+  run_as_root tar -C "${DUSHENGCDN_BUILD_GO_DIR}.tmp" --strip-components=1 -xzf "$archive"
+  run_as_root rm -rf -- "$DUSHENGCDN_BUILD_GO_DIR"
+  run_as_root mv "${DUSHENGCDN_BUILD_GO_DIR}.tmp" "$DUSHENGCDN_BUILD_GO_DIR"
+}
+
 use_local_go_if_available() {
+  if [[ -x "${DUSHENGCDN_BUILD_GO_DIR}/bin/go" ]]; then
+    export PATH="${DUSHENGCDN_BUILD_GO_DIR}/bin:${PATH}"
+    return
+  fi
   if [[ -x /usr/local/go/bin/go ]]; then
     export PATH="/usr/local/go/bin:${PATH}"
   fi
@@ -516,7 +561,7 @@ build_binary_from_source() {
   git init "$source_dir" >/dev/null 2>&1
   git -C "$source_dir" remote add origin "https://github.com/${REPO}.git"
   git -C "$source_dir" fetch --depth 1 origin "$SOURCE_REF" >/dev/null 2>&1 || {
-    rm -rf "$source_dir"
+    rm -rf -- "$source_dir"
     die "failed to fetch ${REPO}@${SOURCE_REF}. Publish release assets or pass --source-ref with a valid branch, tag, or commit."
   }
   git -C "$source_dir" checkout --detach FETCH_HEAD >/dev/null 2>&1
@@ -529,7 +574,7 @@ build_binary_from_source() {
     CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${source_version}" -o "$TMP_BINARY" ./cmd/dns-worker
   )
 
-  rm -rf "$source_dir"
+  rm -rf -- "$source_dir"
   chmod +x "$TMP_BINARY"
 }
 
@@ -552,6 +597,7 @@ if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
 fi
 
 validate_install_dir
+validate_build_go_dir
 if [[ -z "$SNAPSHOT_PATH" ]]; then
   SNAPSHOT_PATH="${INSTALL_DIR}/data/dns-worker-snapshot.json"
 fi

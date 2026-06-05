@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
@@ -22,14 +23,17 @@ import {
 import { getPublicStatus } from '@/features/auth/api/public';
 import {
   bindEmail,
+  clearCommercialLicense,
   cleanupDatabaseObservability,
   deleteExternalAccountBinding,
   generateAccessToken,
   getAuthSources,
   getBootstrapToken,
+  getCommercialLicenseStatus,
   getExternalAccountBindings,
   getOptions,
   getSettingsProfile,
+  installCommercialLicense,
   lookupGeoIP,
   rotateBootstrapToken,
   updateOptions,
@@ -38,6 +42,7 @@ import {
 import { AuthSourceModal } from '@/features/settings/components/auth-source-modal';
 import type {
   BootstrapTokenPayload,
+  CommercialLicenseStatusPayload,
   DatabaseCleanupResult,
   DatabaseCleanupTarget,
   GeoIPLookupResult,
@@ -65,6 +70,7 @@ const externalAccountBindingsQueryKey = [
   'settings',
   'external-accounts',
 ] as const;
+const commercialLicenseQueryKey = ['settings', 'commercial-license'] as const;
 const installerScriptUrl =
   'https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh';
 
@@ -166,7 +172,47 @@ type CleanupModalState = {
   label: string;
 };
 
-type SettingsTab = 'personal' | 'operation' | 'database' | 'system' | 'other';
+type SettingsTab =
+  | 'personal'
+  | 'operation'
+  | 'license'
+  | 'database'
+  | 'system'
+  | 'other';
+
+const systemSettingsTabs = new Set<SettingsTab>([
+  'operation',
+  'license',
+  'database',
+  'system',
+  'other',
+]);
+
+function isSettingsTab(value: string | null): value is SettingsTab {
+  return (
+    value === 'personal' ||
+    value === 'operation' ||
+    value === 'license' ||
+    value === 'database' ||
+    value === 'system' ||
+    value === 'other'
+  );
+}
+
+function normalizeSettingsTab(
+  value: string | null,
+  isRoot: boolean,
+): SettingsTab {
+  if (!isSettingsTab(value)) {
+    return 'personal';
+  }
+
+  if (!isRoot && systemSettingsTabs.has(value)) {
+    return 'personal';
+  }
+
+  return value;
+}
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
@@ -246,6 +292,25 @@ function formatSecondsLabel(value: string) {
   return `${seconds} 秒`;
 }
 
+function formatLicenseLimit(current: number, max: number) {
+  return max > 0 ? `${current} / ${max}` : `${current} / 不限`;
+}
+
+function getLicenseBadgeVariant(
+  status: CommercialLicenseStatusPayload['status'],
+) {
+  switch (status) {
+    case 'valid':
+      return 'success';
+    case 'expiring':
+      return 'warning';
+    case 'community':
+      return 'info';
+    default:
+      return 'danger';
+  }
+}
+
 function buildDiscoveryCommand(serverUrl: string, discoveryToken: string) {
   return [
     `curl -fsSL ${installerScriptUrl} | bash -s -- \\`,
@@ -255,6 +320,9 @@ function buildDiscoveryCommand(serverUrl: string, discoveryToken: string) {
 }
 
 export function SettingsPage() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { refreshUser, user } = useAuth();
   const { showToast, dismissToast } = useToast();
@@ -277,10 +345,29 @@ export function SettingsPage() {
   const [cleanupModalState, setCleanupModalState] =
     useState<CleanupModalState | null>(null);
   const [cleanupRetentionDays, setCleanupRetentionDays] = useState('');
+  const [commercialLicenseToken, setCommercialLicenseToken] = useState('');
 
   const isRoot = (user?.role ?? 0) >= 100;
 
   const setFeedback = showToast;
+
+  useEffect(() => {
+    setActiveTab(normalizeSettingsTab(searchParams.get('tab'), isRoot));
+  }, [isRoot, searchParams]);
+
+  const handleTabChange = (tab: SettingsTab) => {
+    setActiveTab(tab);
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (tab === 'personal') {
+      nextParams.delete('tab');
+    } else {
+      nextParams.set('tab', tab);
+    }
+
+    const nextSearch = nextParams.toString();
+    router.replace(`${pathname ?? '/setting'}${nextSearch ? `?${nextSearch}` : ''}`);
+  };
 
   const handleCopy = async (value: string, message: string) => {
     try {
@@ -321,6 +408,12 @@ export function SettingsPage() {
   const bootstrapQuery = useQuery({
     queryKey: ['settings', 'bootstrap-token'],
     queryFn: getBootstrapToken,
+    enabled: isRoot,
+  });
+
+  const commercialLicenseQuery = useQuery({
+    queryKey: commercialLicenseQueryKey,
+    queryFn: getCommercialLicenseStatus,
     enabled: isRoot,
   });
 
@@ -588,6 +681,11 @@ export function SettingsPage() {
               description: '节点程序参数、接入令牌与部署命令。',
             },
             {
+              key: 'license' as const,
+              label: '商业授权',
+              description: '查看授权状态、有效期和资源额度。',
+            },
+            {
               key: 'system' as const,
               label: '系统设置',
               description: '登录注册、SMTP、认证源、限流与风控开关。',
@@ -761,6 +859,52 @@ export function SettingsPage() {
         await saveOptionEntries([[key, String(nextValue)]], '系统开关已更新。');
       },
       '更新系统开关',
+    );
+  };
+
+  const handleInstallCommercialLicense = () => {
+    const token = commercialLicenseToken.trim();
+    if (!token) {
+      setFeedback({ tone: 'danger', message: '请输入许可证内容。' });
+      return;
+    }
+
+    void runBusyAction(
+      'commercial-license-install',
+      async () => {
+        await installCommercialLicense(token);
+        setCommercialLicenseToken('');
+        await queryClient.invalidateQueries({
+          queryKey: commercialLicenseQueryKey,
+        });
+        setFeedback({ tone: 'success', message: '商业授权已安装。' });
+      },
+      '安装商业授权',
+    );
+  };
+
+  const handleClearCommercialLicense = async () => {
+    const confirmed = await confirmDialog({
+      title: '清除商业授权',
+      message:
+        '清除后，如果服务端启用了必须授权策略，将无法继续创建节点或站点。',
+      confirmLabel: '清除授权',
+      tone: 'danger',
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    void runBusyAction(
+      'commercial-license-clear',
+      async () => {
+        await clearCommercialLicense();
+        await queryClient.invalidateQueries({
+          queryKey: commercialLicenseQueryKey,
+        });
+        setFeedback({ tone: 'success', message: '商业授权已清除。' });
+      },
+      '清除商业授权',
     );
   };
 
@@ -1791,6 +1935,204 @@ export function SettingsPage() {
       );
     }
 
+    if (activeTab === 'license') {
+      if (commercialLicenseQuery.isLoading) {
+        return <LoadingState />;
+      }
+
+      if (commercialLicenseQuery.isError) {
+        return (
+          <ErrorState
+            title="商业授权加载失败"
+            description={getErrorMessage(commercialLicenseQuery.error)}
+          />
+        );
+      }
+
+      const license = commercialLicenseQuery.data;
+      if (!license) {
+        return (
+          <EmptyState
+            title="商业授权状态不可用"
+            description="服务端未返回授权状态。"
+          />
+        );
+      }
+
+      return (
+        <div className="grid gap-6 xl:grid-cols-[1fr_1fr] xl:items-start">
+          <AppCard
+            title="授权状态"
+            description="服务端会根据授权有效期和资源额度控制节点、站点创建。"
+            action={
+              license.fingerprint ? (
+                <DangerButton
+                  type="button"
+                  onClick={() => void handleClearCommercialLicense()}
+                  disabled={busyKey === 'commercial-license-clear'}
+                >
+                  {busyKey === 'commercial-license-clear'
+                    ? '清除中...'
+                    : '清除授权'}
+                </DangerButton>
+              ) : null
+            }
+          >
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-center gap-3">
+                <StatusBadge
+                  label={license.status_label}
+                  variant={getLicenseBadgeVariant(license.status)}
+                />
+                <StatusBadge
+                  label={license.required ? '强制授权' : '兼容社区模式'}
+                  variant={license.required ? 'warning' : 'info'}
+                />
+                {license.signature_verified ? (
+                  <StatusBadge label="签名已验证" variant="success" />
+                ) : null}
+              </div>
+
+              {license.last_validation_error ? (
+                <InlineMessage
+                  tone="danger"
+                  message={license.last_validation_error}
+                />
+              ) : null}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                    授权版本
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
+                    {license.plan_label}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                    授权指纹
+                  </p>
+                  <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
+                    {license.fingerprint || '未安装'}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                    授权客户
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
+                    {license.customer_name || license.customer_id || '未授权'}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                    到期时间
+                  </p>
+                  <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                    {license.expires_at
+                      ? formatDateTime(new Date(license.expires_at))
+                      : '长期有效'}
+                  </p>
+                  {license.days_until_expiry !== null &&
+                  license.days_until_expiry !== undefined ? (
+                    <p className="mt-1 text-xs text-[var(--foreground-secondary)]">
+                      剩余 {license.days_until_expiry} 天
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                    节点额度
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-[var(--foreground-primary)]">
+                    {formatLicenseLimit(
+                      license.current_nodes,
+                      license.max_nodes,
+                    )}
+                  </p>
+                  {license.node_limit_exceeded ? (
+                    <p className="mt-1 text-xs text-[var(--status-danger-foreground)]">
+                      当前节点数已超过授权额度
+                    </p>
+                  ) : null}
+                </div>
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                    站点额度
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-[var(--foreground-primary)]">
+                    {formatLicenseLimit(
+                      license.current_sites,
+                      license.max_sites,
+                    )}
+                  </p>
+                  {license.site_limit_exceeded ? (
+                    <p className="mt-1 text-xs text-[var(--status-danger-foreground)]">
+                      当前站点数已超过授权额度
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              {license.features.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {license.features.map((feature) => (
+                    <StatusBadge key={feature} label={feature} variant="info" />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </AppCard>
+
+          <AppCard
+            title="安装授权"
+            description="许可证支持离线签名校验，安装后会立即刷新资源额度。"
+            action={
+              <PrimaryButton
+                type="button"
+                onClick={handleInstallCommercialLicense}
+                disabled={busyKey === 'commercial-license-install'}
+              >
+                {busyKey === 'commercial-license-install'
+                  ? '安装中...'
+                  : '安装授权'}
+              </PrimaryButton>
+            }
+          >
+            <div className="space-y-5">
+              <ResourceField
+                label="许可证内容"
+                hint="粘贴 dscdn_license_v1 开头的授权令牌。"
+              >
+                <ResourceTextarea
+                  value={commercialLicenseToken}
+                  onChange={(event) =>
+                    setCommercialLicenseToken(event.target.value)
+                  }
+                  placeholder="dscdn_license_v1..."
+                  className="min-h-52 font-mono"
+                />
+              </ResourceField>
+              {license.last_validated_at ? (
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                    最近校验
+                  </p>
+                  <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                    {formatDateTime(new Date(license.last_validated_at))}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </AppCard>
+        </div>
+      );
+    }
+
     if (activeTab === 'system') {
       return (
         <div className="space-y-6">
@@ -2388,7 +2730,7 @@ export function SettingsPage() {
           <button
             key={tab.key}
             type="button"
-            onClick={() => setActiveTab(tab.key)}
+            onClick={() => handleTabChange(tab.key)}
             className={[
               'rounded-2xl border px-4 py-3 text-left transition',
               activeTab === tab.key

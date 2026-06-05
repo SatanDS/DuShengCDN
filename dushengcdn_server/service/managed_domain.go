@@ -146,23 +146,56 @@ func MatchManagedDomainCertificate(rawDomain string) (*ManagedDomainMatchResult,
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]ManagedDomainMatchCandidate, 0)
+	type matchedManagedDomain struct {
+		domain    *model.ManagedDomain
+		matchType string
+	}
+	matches := make([]matchedManagedDomain, 0)
+	certIDs := make([]uint, 0)
+	seenCertIDs := map[uint]struct{}{}
 	for _, item := range managedDomains {
-		if item.CertID == nil || *item.CertID == 0 {
+		if item == nil || item.CertID == nil || *item.CertID == 0 {
 			continue
 		}
 		matchType := detectManagedDomainMatchType(item.Domain, domain)
 		if matchType == "" {
 			continue
 		}
-		certificate, err := model.GetTLSCertificateByID(*item.CertID)
-		if err != nil {
+		matches = append(matches, matchedManagedDomain{
+			domain:    item,
+			matchType: matchType,
+		})
+		if _, ok := seenCertIDs[*item.CertID]; ok {
+			continue
+		}
+		seenCertIDs[*item.CertID] = struct{}{}
+		certIDs = append(certIDs, *item.CertID)
+	}
+	certificates, err := model.ListTLSCertificatesByIDs(certIDs)
+	if err != nil {
+		return nil, err
+	}
+	certificatesByID := make(map[uint]*model.TLSCertificate, len(certificates))
+	for _, certificate := range certificates {
+		if certificate == nil {
+			continue
+		}
+		certificatesByID[certificate.ID] = certificate
+	}
+	candidates := make([]ManagedDomainMatchCandidate, 0)
+	for _, match := range matches {
+		item := match.domain
+		if item.CertID == nil || *item.CertID == 0 {
+			continue
+		}
+		certificate := certificatesByID[*item.CertID]
+		if certificate == nil {
 			return nil, fmt.Errorf("托管域名 %s 关联证书不存在", item.Domain)
 		}
 		candidates = append(candidates, ManagedDomainMatchCandidate{
 			ManagedDomainID: item.ID,
 			Domain:          item.Domain,
-			MatchType:       matchType,
+			MatchType:       match.matchType,
 			CertificateID:   certificate.ID,
 			CertificateName: certificate.Name,
 		})

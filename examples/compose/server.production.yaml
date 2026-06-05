@@ -23,7 +23,7 @@ services:
     ports:
       - "${DUSHENGCDN_HTTP_BIND:-127.0.0.1}:${DUSHENGCDN_HTTP_PORT:-3010}:3000"
     environment:
-      SESSION_SECRET: ${SESSION_SECRET:-replace-with-random-string}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       SQLITE_PATH: ${SQLITE_PATH:-/data/dushengcdn.db}
       DSN: ${DSN:-postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable}
       DATABASE_MAX_OPEN_CONNS: ${DATABASE_MAX_OPEN_CONNS:-30}
@@ -33,6 +33,11 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       AGENT_TOKEN: ${AGENT_TOKEN:-}
       REDIS_CONN_STRING: ${REDIS_CONN_STRING:-}
+      REDIS_REQUIRED: ${REDIS_REQUIRED:-false}
+      DUSHENGCDN_LICENSE_REQUIRED: ${DUSHENGCDN_LICENSE_REQUIRED:-false}
+      DUSHENGCDN_LICENSE_PUBLIC_KEYS: ${DUSHENGCDN_LICENSE_PUBLIC_KEYS:-}
+      DUSHENGCDN_LICENSE_ALLOW_UNSIGNED: ${DUSHENGCDN_LICENSE_ALLOW_UNSIGNED:-false}
+      DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED: ${DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED:-false}
     volumes:
       - dushengcdn-data:/data
 

@@ -20,7 +20,7 @@ const (
 
 var verificationMutex sync.Mutex
 var verificationMap map[string]verificationValue
-var verificationMapMaxSize = 10
+var verificationMapMaxSize = 10000
 var VerificationValidMinutes = 10
 
 func GenerateVerificationCode(length int) string {
@@ -35,12 +35,15 @@ func GenerateVerificationCode(length int) string {
 func RegisterVerificationCodeWithKey(key string, code string, purpose string) {
 	verificationMutex.Lock()
 	defer verificationMutex.Unlock()
-	verificationMap[purpose+key] = verificationValue{
-		code: code,
-		time: time.Now(),
+	now := time.Now()
+	verificationKey := purpose + key
+	removeExpiredPairsBefore(now)
+	if _, exists := verificationMap[verificationKey]; !exists && verificationMapMaxSize > 0 && len(verificationMap) >= verificationMapMaxSize {
+		removeOldestPairs(len(verificationMap) - verificationMapMaxSize + 1)
 	}
-	if len(verificationMap) > verificationMapMaxSize {
-		removeExpiredPairs()
+	verificationMap[verificationKey] = verificationValue{
+		code: code,
+		time: now,
 	}
 }
 
@@ -50,6 +53,9 @@ func VerifyCodeWithKey(key string, code string, purpose string) bool {
 	value, okay := verificationMap[purpose+key]
 	now := time.Now()
 	if !okay || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 {
+		if okay {
+			delete(verificationMap, purpose+key)
+		}
 		return false
 	}
 	return code == value.code
@@ -63,11 +69,38 @@ func DeleteKey(key string, purpose string) {
 
 // no lock inside, so the caller must lock the verificationMap before calling!
 func removeExpiredPairs() {
-	now := time.Now()
-	for key := range verificationMap {
-		if int(now.Sub(verificationMap[key].time).Seconds()) >= VerificationValidMinutes*60 {
+	removeExpiredPairsBefore(time.Now())
+}
+
+// no lock inside, so the caller must lock the verificationMap before calling!
+func removeExpiredPairsBefore(now time.Time) {
+	expiration := time.Duration(VerificationValidMinutes) * time.Minute
+	if expiration <= 0 {
+		verificationMap = make(map[string]verificationValue)
+		return
+	}
+	for key, value := range verificationMap {
+		if now.Sub(value.time) >= expiration {
 			delete(verificationMap, key)
 		}
+	}
+}
+
+// no lock inside, so the caller must lock the verificationMap before calling!
+func removeOldestPairs(count int) {
+	for i := 0; i < count; i++ {
+		oldestKey := ""
+		var oldestTime time.Time
+		for key, value := range verificationMap {
+			if oldestKey == "" || value.time.Before(oldestTime) {
+				oldestKey = key
+				oldestTime = value.time
+			}
+		}
+		if oldestKey == "" {
+			return
+		}
+		delete(verificationMap, oldestKey)
 	}
 }
 

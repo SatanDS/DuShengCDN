@@ -218,6 +218,95 @@ func TestDownloadAndRestartRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestDownloadAndRestartRejectsOversizedContentLength(t *testing.T) {
+	restoreMaxAgentBinaryAssetSize(t, 8)
+	targetPath := filepath.Join(t.TempDir(), "dushengcdn-agent")
+	if err := os.WriteFile(targetPath, []byte("old-agent-binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	originalReplace := replaceAndRestartFunc
+	replaceAndRestartFunc = func(execPath string, tmpPath string) error {
+		t.Fatal("replace should not run on oversized download")
+		return nil
+	}
+	t.Cleanup(func() {
+		replaceAndRestartFunc = originalReplace
+	})
+
+	service := &Service{
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode:    http.StatusOK,
+					Header:        make(http.Header),
+					ContentLength: 9,
+					Body:          io.NopCloser(strings.NewReader("")),
+				}, nil
+			}),
+		},
+	}
+
+	err := service.downloadAndRestart(context.Background(), "https://example.test/agent", strings.Repeat("0", sha256.Size*2), targetPath)
+	if err == nil || !strings.Contains(err.Error(), "agent binary asset exceeds") {
+		t.Fatalf("expected oversized asset error, got %v", err)
+	}
+	if _, err = os.Stat(targetPath + ".update"); !os.IsNotExist(err) {
+		t.Fatalf("expected no temp update file, stat err=%v", err)
+	}
+}
+
+func TestDownloadAndRestartRejectsOversizedStream(t *testing.T) {
+	restoreMaxAgentBinaryAssetSize(t, 8)
+	targetPath := filepath.Join(t.TempDir(), "dushengcdn-agent")
+	if err := os.WriteFile(targetPath, []byte("old-agent-binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	service := &Service{
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode:    http.StatusOK,
+					Header:        make(http.Header),
+					ContentLength: -1,
+					Body:          io.NopCloser(strings.NewReader("123456789")),
+				}, nil
+			}),
+		},
+	}
+
+	err := service.downloadAndRestart(context.Background(), "https://example.test/agent", strings.Repeat("0", sha256.Size*2), targetPath)
+	if err == nil || !strings.Contains(err.Error(), "agent binary asset exceeds") {
+		t.Fatalf("expected oversized asset error, got %v", err)
+	}
+	if _, err = os.Stat(targetPath + ".update"); !os.IsNotExist(err) {
+		t.Fatalf("expected temp update file to be removed, stat err=%v", err)
+	}
+}
+
+func TestSafeUpdateTargetPathRejectsInvalidTargets(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := safeUpdateTargetPath("relative-agent"); err == nil {
+		t.Fatal("expected relative path to be rejected")
+	}
+	if _, err := safeUpdateTargetPath(dir); err == nil {
+		t.Fatal("expected directory target to be rejected")
+	}
+	if _, err := safeUpdateTargetPath(filepath.Join(dir, "missing-agent")); err == nil {
+		t.Fatal("expected missing target to be rejected")
+	}
+}
+
+func restoreMaxAgentBinaryAssetSize(t *testing.T, size int64) {
+	t.Helper()
+	original := maxAgentBinaryAssetSize
+	maxAgentBinaryAssetSize = size
+	t.Cleanup(func() {
+		maxAgentBinaryAssetSize = original
+	})
+}
+
 func TestIsNewerSupportsPrerelease(t *testing.T) {
 	testCases := []struct {
 		name     string

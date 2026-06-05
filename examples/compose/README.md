@@ -26,6 +26,7 @@ docker compose --env-file .env -f server.production.yaml ps
 ```
 
 生产环境建议保留默认 `DUSHENGCDN_HTTP_BIND=127.0.0.1`，再用 Nginx、OpenResty、宝塔或其它反向代理提供 HTTPS。
+Server 自动升级默认关闭；需要一键自动升级时，在 `.env` 设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，并确认 Release 已发布对应 Server 二进制和同名 `.sha256` 校验文件。生产环境更推荐上传已审阅的 Server 二进制手动确认升级。
 
 ## Server 源码部署
 

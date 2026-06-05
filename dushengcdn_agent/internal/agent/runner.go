@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -428,9 +429,9 @@ func runSelfUninstall(cfg *config.Config) error {
 		slog.Warn("agent appears to run in a container; exiting process, remove the container from the Docker host if needed")
 		os.Exit(0)
 	}
-	installDir := detectInstallDir(cfg)
-	if installDir == "" || installDir == "/" || installDir == "." {
-		return errors.New("unsafe install directory, refusing to uninstall")
+	installDir, err := safeInstallDirForRemoval(detectInstallDir(cfg))
+	if err != nil {
+		return fmt.Errorf("unsafe install directory, refusing to uninstall: %w", err)
 	}
 	if runtime.GOOS == "linux" && commandExists("systemd-run") {
 		return startSystemdUninstall(installDir)
@@ -439,6 +440,10 @@ func runSelfUninstall(cfg *config.Config) error {
 }
 
 func startSystemdUninstall(installDir string) error {
+	safeInstallDir, err := safeInstallDirForRemoval(installDir)
+	if err != nil {
+		return err
+	}
 	script := strings.Join([]string{
 		"sleep 1",
 		"systemctl stop dushengcdn-agent || true",
@@ -446,7 +451,7 @@ func startSystemdUninstall(installDir string) error {
 		"rm -f /etc/systemd/system/dushengcdn-agent.service",
 		"systemctl daemon-reload || true",
 		"systemctl reset-failed dushengcdn-agent || true",
-		"rm -rf -- " + shellQuote(installDir),
+		"rm -rf -- " + shellQuote(safeInstallDir),
 	}, "; ")
 	return exec.Command(
 		"systemd-run",
@@ -475,14 +480,107 @@ func detectInstallDir(cfg *config.Config) string {
 }
 
 func removeInstallDirAndExit(installDir string) error {
-	if runtime.GOOS == "windows" {
-		return exec.Command("cmd", "/C", "ping", "127.0.0.1", "-n", "3", ">nul", "&", "rmdir", "/S", "/Q", installDir).Start()
+	safeInstallDir, err := safeInstallDirForRemoval(installDir)
+	if err != nil {
+		return err
 	}
-	if err := os.RemoveAll(installDir); err != nil {
+	if runtime.GOOS == "windows" {
+		return scheduleWindowsInstallDirRemoval(safeInstallDir)
+	}
+	if err := os.RemoveAll(safeInstallDir); err != nil {
 		return err
 	}
 	os.Exit(0)
 	return nil
+}
+
+func safeInstallDirForRemoval(path string) (string, error) {
+	candidate := strings.TrimSpace(path)
+	if candidate == "" {
+		return "", errors.New("install directory cannot be empty")
+	}
+	if strings.Contains(candidate, "\x00") || strings.ContainsAny(candidate, "\r\n") {
+		return "", errors.New("install directory contains invalid characters")
+	}
+
+	cleaned := filepath.Clean(candidate)
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("install directory %q must be absolute", path)
+	}
+	if pathComponentCount(cleaned) < 2 {
+		return "", fmt.Errorf("install directory %q is too shallow", path)
+	}
+	if isProtectedInstallDir(cleaned) {
+		return "", fmt.Errorf("install directory %q is a protected system path", path)
+	}
+	if !looksLikeDuShengCDNInstallDir(cleaned) {
+		return "", fmt.Errorf("install directory %q does not look like a DuShengCDN agent directory", path)
+	}
+	return cleaned, nil
+}
+
+func pathComponentCount(path string) int {
+	volume := filepath.VolumeName(path)
+	remainder := strings.TrimPrefix(path, volume)
+	remainder = strings.Trim(remainder, `/\`)
+	if remainder == "" {
+		return 0
+	}
+	return len(strings.FieldsFunc(remainder, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}))
+}
+
+func isProtectedInstallDir(path string) bool {
+	volume := filepath.VolumeName(path)
+	remainder := strings.TrimPrefix(path, volume)
+	components := strings.FieldsFunc(strings.Trim(remainder, `/\`), func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(components) == 0 {
+		return true
+	}
+	first := strings.ToLower(components[0])
+	if len(components) < 3 {
+		switch first {
+		case "bin", "boot", "dev", "etc", "home", "lib", "lib64", "proc", "root", "run", "sbin", "sys", "tmp", "usr", "var", "windows":
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeDuShengCDNInstallDir(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	base = strings.NewReplacer("-", "", "_", "", ".", "", " ", "").Replace(base)
+	return strings.Contains(base, "dushengcdn")
+}
+
+func scheduleWindowsInstallDirRemoval(installDir string) error {
+	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("dushengcdn-agent-uninstall-%d.cmd", os.Getpid()))
+	script := strings.Join([]string{
+		"@echo off",
+		"ping 127.0.0.1 -n 3 >nul",
+		"rmdir /S /Q " + quoteWindowsBatchArg(installDir),
+		`del /Q "%~f0" >nul 2>nul`,
+		"",
+	}, "\r\n")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		return err
+	}
+	cmd := exec.Command("cmd", "/C", "start", "", scriptPath)
+	if err := cmd.Start(); err != nil {
+		os.Remove(scriptPath)
+		return err
+	}
+	os.Exit(0)
+	return nil
+}
+
+func quoteWindowsBatchArg(value string) string {
+	value = strings.ReplaceAll(value, `%`, `%%`)
+	value = strings.ReplaceAll(value, `"`, `""`)
+	return `"` + value + `"`
 }
 
 func commandExists(name string) bool {

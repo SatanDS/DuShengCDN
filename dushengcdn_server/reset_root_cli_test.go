@@ -52,7 +52,7 @@ func runResetRootPasswordCLI(t *testing.T, dbPath string, password string) {
 	cmd.Dir = "."
 	cmd.Env = append(os.Environ(),
 		"SQLITE_PATH="+dbPath,
-		"SESSION_SECRET=test-session-secret",
+		"SESSION_SECRET=test-session-secret-1234567890abcdef",
 		"LOG_LEVEL=error",
 		"GIN_MODE=release",
 	)

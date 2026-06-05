@@ -8,12 +8,14 @@ import { GitHubOAuthCallback } from '@/features/auth/components/github-oauth-cal
 const replaceMock = vi.fn();
 const setUserMock = vi.fn();
 const exchangeGitHubCodeMock = vi.fn();
+let searchParams = new URLSearchParams('code=github-code-123&state=oauth-state-123&legacy=1');
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     replace: replaceMock,
   }),
-  useSearchParams: () => new URLSearchParams('code=github-code-123'),
+  useSearchParams: () => searchParams,
+  usePathname: () => '/oauth/github',
 }));
 
 vi.mock('@/components/providers/auth-provider', () => ({
@@ -23,7 +25,9 @@ vi.mock('@/components/providers/auth-provider', () => ({
 }));
 
 vi.mock('@/features/auth/api/auth', () => ({
-  exchangeGitHubCode: (code: string) => exchangeGitHubCodeMock(code),
+  exchangeGitHubCode: (code: string, state: string) =>
+    exchangeGitHubCodeMock(code, state),
+  exchangeOAuthCode: vi.fn(),
 }));
 
 function createQueryClient() {
@@ -54,6 +58,7 @@ describe('GitHubOAuthCallback', () => {
     replaceMock.mockReset();
     setUserMock.mockReset();
     exchangeGitHubCodeMock.mockReset();
+    searchParams = new URLSearchParams('code=github-code-123&state=oauth-state-123&legacy=1');
     exchangeGitHubCodeMock.mockResolvedValue({
       id: 1,
       username: 'github-user',
@@ -82,7 +87,17 @@ describe('GitHubOAuthCallback', () => {
     });
 
     expect(exchangeGitHubCodeMock).toHaveBeenCalledTimes(1);
-    expect(exchangeGitHubCodeMock).toHaveBeenCalledWith('github-code-123');
+    expect(exchangeGitHubCodeMock).toHaveBeenCalledWith('github-code-123', 'oauth-state-123');
     expect(setUserMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not exchange a legacy GitHub code without state', async () => {
+    searchParams = new URLSearchParams('code=github-code-123&legacy=1');
+
+    renderWithProviders(<GitHubOAuthCallback />);
+
+    await waitFor(() => {
+      expect(exchangeGitHubCodeMock).not.toHaveBeenCalled();
+    });
   });
 });

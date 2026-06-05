@@ -21,6 +21,7 @@ import (
 
 	"github.com/miekg/dns"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -396,6 +397,56 @@ type dnsWorkerHealthRollupRow struct {
 	MaxDurationMs   int64
 }
 
+type dnsObservabilitySummaryQueryData struct {
+	rcodeCounts         map[string]int64
+	qtypeCounts         map[string]int64
+	qnameCounts         map[string]int64
+	workerCounts        map[string]int64
+	sourceScopeCounts   map[string]int64
+	zoneCounts          map[uint]int64
+	routeCounts         map[uint]int64
+	targetCounts        map[string]int64
+	trendPoints         []DNSObservabilityTrendPointView
+	workerHealthRollups []dnsWorkerHealthRollupRow
+	lastRollupAt        *time.Time
+}
+
+type dnsObservabilitySummaryQueries struct {
+	queryStringCounts        func(DNSObservabilitySummaryInput, dnsObservabilityWindow, string, int) (map[string]int64, error)
+	queryUintCounts          func(DNSObservabilitySummaryInput, dnsObservabilityWindow, string, int, string) (map[uint]int64, error)
+	queryTopTargets          func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) (map[string]int64, error)
+	queryTrendPoints         func(DNSObservabilitySummaryInput, dnsObservabilityWindow) ([]DNSObservabilityTrendPointView, error)
+	queryWorkerHealthRollups func(DNSObservabilitySummaryInput, dnsObservabilityWindow) ([]dnsWorkerHealthRollupRow, error)
+	queryLastRollupAt        func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*time.Time, error)
+}
+
+type dnsObservabilitySummaryLabelData struct {
+	workerLabels map[string]string
+	zoneLabels   map[string]string
+	routeLabels  map[string]string
+}
+
+type dnsObservabilitySummaryLabelQueries struct {
+	dnsWorkerLabels func() (map[string]string, error)
+	dnsZoneLabels   func() (map[string]string, error)
+	dnsRouteLabels  func(map[uint]int64) (map[string]string, error)
+}
+
+var defaultDNSObservabilitySummaryQueries = dnsObservabilitySummaryQueries{
+	queryStringCounts:        queryDNSObservabilityStringCounts,
+	queryUintCounts:          queryDNSObservabilityUintCounts,
+	queryTopTargets:          queryDNSObservabilityTopTargets,
+	queryTrendPoints:         queryDNSObservabilityTrendPoints,
+	queryWorkerHealthRollups: queryDNSWorkerHealthRollups,
+	queryLastRollupAt:        queryDNSObservabilityLastRollupAt,
+}
+
+var defaultDNSObservabilitySummaryLabelQueries = dnsObservabilitySummaryLabelQueries{
+	dnsWorkerLabels: dnsWorkerLabels,
+	dnsZoneLabels:   dnsZoneLabels,
+	dnsRouteLabels:  dnsRouteLabels,
+}
+
 type DNSWorkerSnapshotConsistencyView struct {
 	Status                string                         `json:"status"`
 	CheckedAt             time.Time                      `json:"checked_at"`
@@ -600,15 +651,41 @@ func ListAuthoritativeDNSZones() ([]DNSZoneView, error) {
 	if err != nil {
 		return nil, err
 	}
+	recordCounts, err := dnsZoneRecordCountMap(zones)
+	if err != nil {
+		return nil, err
+	}
 	views := make([]DNSZoneView, 0, len(zones))
 	for _, zone := range zones {
-		view, err := buildDNSZoneView(zone, false)
+		var recordCount int64
+		if zone != nil {
+			recordCount = recordCounts[zone.ID]
+		}
+		view, err := buildDNSZoneViewWithRecordCount(zone, false, recordCount)
 		if err != nil {
 			return nil, err
 		}
 		views = append(views, *view)
 	}
 	return views, nil
+}
+
+func dnsZoneRecordCountMap(zones []*model.DNSZone) (map[uint]int64, error) {
+	zoneIDs := make([]uint, 0, len(zones))
+	for _, zone := range zones {
+		if zone != nil && zone.ID != 0 {
+			zoneIDs = append(zoneIDs, zone.ID)
+		}
+	}
+	rows, err := model.ListDNSRecordCountsByZoneIDs(zoneIDs)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[uint]int64, len(rows))
+	for _, row := range rows {
+		counts[row.ZoneID] = row.Count
+	}
+	return counts, nil
 }
 
 func GetAuthoritativeDNSZone(id uint) (*DNSZoneView, error) {
@@ -620,6 +697,9 @@ func GetAuthoritativeDNSZone(id uint) (*DNSZoneView, error) {
 }
 
 func CreateAuthoritativeDNSZone(input DNSZoneInput) (*DNSZoneView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
 	zone, err := buildDNSZone(nil, input)
 	if err != nil {
 		return nil, err
@@ -692,6 +772,9 @@ func ListAuthoritativeDNSRecords(zoneID uint) ([]DNSRecordView, error) {
 }
 
 func CreateAuthoritativeDNSRecord(zoneID uint, input DNSRecordInput) (*DNSRecordView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
 	if input.ZoneID == 0 {
 		input.ZoneID = zoneID
 	}
@@ -754,6 +837,10 @@ func DeleteAuthoritativeDNSRecord(id uint) error {
 }
 
 func ListAuthoritativeDNSMigrationCandidates() ([]AuthoritativeDNSMigrationCandidateView, error) {
+	return listAuthoritativeDNSMigrationCandidatesWithQueries(defaultGSLBDNSSchedulingDataQueries)
+}
+
+func listAuthoritativeDNSMigrationCandidatesWithQueries(schedulingQueries gslbDNSSchedulingDataQueries) ([]AuthoritativeDNSMigrationCandidateView, error) {
 	routes, err := model.ListProxyRoutes()
 	if err != nil {
 		return nil, err
@@ -766,6 +853,12 @@ func ListAuthoritativeDNSMigrationCandidates() ([]AuthoritativeDNSMigrationCandi
 	if err != nil {
 		return nil, err
 	}
+	schedulingOptions := authoritativeDNSSchedulingOptions()
+	schedulingData, err := loadGSLBDNSSchedulingDataWithQueries(true, schedulingQueries)
+	if err != nil {
+		return nil, err
+	}
+	schedulingOptions.Data = schedulingData
 	candidates := make([]AuthoritativeDNSMigrationCandidateView, 0, len(routes))
 	for _, route := range routes {
 		if route == nil || normalizeDNSProviderMode(route.DNSProviderMode) == DNSProviderModeAuthoritative {
@@ -774,7 +867,7 @@ func ListAuthoritativeDNSMigrationCandidates() ([]AuthoritativeDNSMigrationCandi
 		if !route.Enabled && !route.DNSAutoSync && !route.GSLBEnabled {
 			continue
 		}
-		candidate, err := buildAuthoritativeDNSMigrationCandidate(route, zones, workerStats)
+		candidate, err := buildAuthoritativeDNSMigrationCandidate(route, zones, workerStats, schedulingOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -944,54 +1037,15 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 		WindowStart: window.WindowStart,
 		WindowEnd:   window.WindowEnd,
 	}
-	rcodeCounts, err := queryDNSObservabilityStringCounts(input, window, "rcode", 0)
-	if err != nil {
-		return nil, err
-	}
-	qtypeCounts, err := queryDNSObservabilityStringCounts(input, window, "qtype", 0)
-	if err != nil {
-		return nil, err
-	}
-	qnameCounts, err := queryDNSObservabilityStringCounts(input, window, "qname", 8)
-	if err != nil {
-		return nil, err
-	}
-	workerCounts, err := queryDNSObservabilityStringCounts(input, window, "worker_id", 8)
-	if err != nil {
-		return nil, err
-	}
-	sourceScopeCounts, err := queryDNSObservabilityStringCounts(input, window, "source_scope", 8)
-	if err != nil {
-		return nil, err
-	}
-	zoneCounts, err := queryDNSObservabilityUintCounts(input, window, "zone_id", 0, "zone_id > 0")
-	if err != nil {
-		return nil, err
-	}
-	routeCounts, err := queryDNSObservabilityUintCounts(input, window, "proxy_route_id", 0, "proxy_route_id > 0")
-	if err != nil {
-		return nil, err
-	}
-	targetCounts, err := queryDNSObservabilityTopTargets(input, window, 8)
-	if err != nil {
-		return nil, err
-	}
-	trendPoints, err := queryDNSObservabilityTrendPoints(input, window)
-	if err != nil {
-		return nil, err
-	}
-	workerHealthRollups, err := queryDNSWorkerHealthRollups(input, window)
-	if err != nil {
-		return nil, err
-	}
-	lastRollupAt, err := queryDNSObservabilityLastRollupAt(input, window)
-	if err != nil {
-		return nil, err
-	}
-	summary.LastRollupAt = lastRollupAt
-	summary.TrendPoints = trendPoints
 
-	for rcode, count := range rcodeCounts {
+	data, err := loadDNSObservabilitySummaryQueryData(input, window, defaultDNSObservabilitySummaryQueries)
+	if err != nil {
+		return nil, err
+	}
+	summary.LastRollupAt = data.lastRollupAt
+	summary.TrendPoints = data.trendPoints
+
+	for rcode, count := range data.rcodeCounts {
 		summary.TotalQueries += count
 		switch normalizeDNSRCode(rcode) {
 		case "NOERROR":
@@ -1002,38 +1056,118 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 			summary.NegativeQueries += count
 		}
 	}
-	for _, count := range routeCounts {
+	for _, count := range data.routeCounts {
 		summary.DynamicQueries += count
 	}
 	if summary.TotalQueries > summary.DynamicQueries {
 		summary.StaticQueries = summary.TotalQueries - summary.DynamicQueries
 	}
 
-	workerLabels, err := dnsWorkerLabels()
-	if err != nil {
-		return nil, err
-	}
-	zoneLabels, err := dnsZoneLabels()
-	if err != nil {
-		return nil, err
-	}
-	routeLabels, err := dnsRouteLabels(routeCounts)
+	labels, err := loadDNSObservabilitySummaryLabelData(data.routeCounts, defaultDNSObservabilitySummaryLabelQueries)
 	if err != nil {
 		return nil, err
 	}
 
-	summary.RCodeBreakdown = buildDNSObservabilityCounters(rcodeCounts, nil, 10)
-	summary.QTypeBreakdown = buildDNSObservabilityCounters(qtypeCounts, nil, 10)
-	summary.TopQNames = buildDNSObservabilityCounters(qnameCounts, nil, 8)
-	summary.TopTargets = buildDNSObservabilityCounters(targetCounts, nil, 8)
-	summary.WorkerBreakdown = buildDNSObservabilityCounters(workerCounts, workerLabels, 8)
-	summary.ZoneBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(zoneCounts), zoneLabels, 8)
-	summary.RouteBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(routeCounts), routeLabels, 8)
-	summary.SourceScopeBreakdown = buildDNSObservabilityCounters(sourceScopeCounts, nil, 8)
+	summary.RCodeBreakdown = buildDNSObservabilityCounters(data.rcodeCounts, nil, 10)
+	summary.QTypeBreakdown = buildDNSObservabilityCounters(data.qtypeCounts, nil, 10)
+	summary.TopQNames = buildDNSObservabilityCounters(data.qnameCounts, nil, 8)
+	summary.TopTargets = buildDNSObservabilityCounters(data.targetCounts, nil, 8)
+	summary.WorkerBreakdown = buildDNSObservabilityCounters(data.workerCounts, labels.workerLabels, 8)
+	summary.ZoneBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(data.zoneCounts), labels.zoneLabels, 8)
+	summary.RouteBreakdown = buildDNSObservabilityCounters(uintCountsToStringCounts(data.routeCounts), labels.routeLabels, 8)
+	summary.SourceScopeBreakdown = buildDNSObservabilityCounters(data.sourceScopeCounts, nil, 8)
 	checkedAt := time.Now().UTC()
 	summary.SnapshotConsistency = buildDNSWorkerSnapshotConsistency(checkedAt)
-	summary.WorkerHealth = buildDNSWorkerHealthSummary(checkedAt, workerHealthRollups)
+	summary.WorkerHealth = buildDNSWorkerHealthSummary(checkedAt, data.workerHealthRollups)
 	return summary, nil
+}
+
+func loadDNSObservabilitySummaryQueryData(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, queries dnsObservabilitySummaryQueries) (*dnsObservabilitySummaryQueryData, error) {
+	data := &dnsObservabilitySummaryQueryData{}
+	if err := runConcurrentQueries(
+		func() error {
+			rows, err := queries.queryStringCounts(input, window, "rcode", 0)
+			data.rcodeCounts = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryStringCounts(input, window, "qtype", 0)
+			data.qtypeCounts = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryStringCounts(input, window, "qname", 8)
+			data.qnameCounts = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryStringCounts(input, window, "worker_id", 8)
+			data.workerCounts = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryStringCounts(input, window, "source_scope", 8)
+			data.sourceScopeCounts = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryUintCounts(input, window, "zone_id", 0, "zone_id > 0")
+			data.zoneCounts = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryUintCounts(input, window, "proxy_route_id", 0, "proxy_route_id > 0")
+			data.routeCounts = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryTopTargets(input, window, 8)
+			data.targetCounts = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryTrendPoints(input, window)
+			data.trendPoints = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.queryWorkerHealthRollups(input, window)
+			data.workerHealthRollups = rows
+			return err
+		},
+		func() error {
+			value, err := queries.queryLastRollupAt(input, window)
+			data.lastRollupAt = value
+			return err
+		},
+	); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func loadDNSObservabilitySummaryLabelData(routeCounts map[uint]int64, queries dnsObservabilitySummaryLabelQueries) (*dnsObservabilitySummaryLabelData, error) {
+	data := &dnsObservabilitySummaryLabelData{}
+	if err := runConcurrentQueries(
+		func() error {
+			labels, err := queries.dnsWorkerLabels()
+			data.workerLabels = labels
+			return err
+		},
+		func() error {
+			labels, err := queries.dnsZoneLabels()
+			data.zoneLabels = labels
+			return err
+		},
+		func() error {
+			labels, err := queries.dnsRouteLabels(routeCounts)
+			data.routeLabels = labels
+			return err
+		},
+	); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func CheckAuthoritativeDNSZoneDelegation(id uint) (*DNSZoneDelegationCheckView, error) {
@@ -1075,6 +1209,9 @@ func CheckAuthoritativeDNSZoneDelegation(id uint) (*DNSZoneDelegationCheckView, 
 }
 
 func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
 		return nil, errors.New("DNS worker name cannot be empty")
@@ -1188,18 +1325,25 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 }
 
 func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnapshot, error) {
+	return getAuthoritativeDNSSnapshotWithQueries(worker, defaultGSLBDNSSchedulingDataQueries)
+}
+
+func getAuthoritativeDNSSnapshotWithQueries(worker *model.DNSWorker, schedulingQueries gslbDNSSchedulingDataQueries) (*AuthoritativeDNSSnapshot, error) {
 	zones, err := snapshotDNSZones()
 	if err != nil {
 		return nil, err
 	}
-	routes, err := snapshotAuthoritativeRoutes()
+	schedulingOptions := authoritativeDNSSchedulingOptions()
+	schedulingData, err := loadGSLBDNSSchedulingDataWithQueries(true, schedulingQueries)
 	if err != nil {
 		return nil, err
 	}
-	nodes, err := snapshotNodes()
+	schedulingOptions.Data = schedulingData
+	routes, err := snapshotAuthoritativeRoutesWithOptions(schedulingOptions)
 	if err != nil {
 		return nil, err
 	}
+	nodes := snapshotNodesWithData(schedulingData)
 	schedulingStates, err := snapshotGSLBSchedulingStates(routes)
 	if err != nil {
 		return nil, err
@@ -1395,6 +1539,12 @@ type dnsGSLBSimulationDiagnostics struct {
 }
 
 func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBPolicy, source GSLBSourceContext, selectedTargets []string, requireHealthyDNSProbe bool) dnsGSLBSimulationDiagnostics {
+	return buildDNSGSLBSimulationDiagnosticsWithOptions(recordType, policy, source, selectedTargets, gslbDNSSchedulingOptions{
+		RequireHealthyDNSProbe: requireHealthyDNSProbe,
+	})
+}
+
+func buildDNSGSLBSimulationDiagnosticsWithOptions(recordType string, policy dnsworker.GSLBPolicy, source GSLBSourceContext, selectedTargets []string, options gslbDNSSchedulingOptions) dnsGSLBSimulationDiagnostics {
 	servicePolicy := convertWorkerGSLBPolicyToAuthoritative(policy)
 	servicePolicy, err := normalizeGSLBPolicy(servicePolicy, "default", servicePolicy.TargetCount, servicePolicy.Strategy, servicePolicy.TTL)
 	if err != nil {
@@ -1405,12 +1555,12 @@ func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBP
 		pools: buildDNSGSLBSimulationPoolViews(servicePolicy.Pools, matchedPools, source),
 		nodes: []DNSGSLBSimulationNodeView{},
 	}
-	nodes, err := model.ListNodes()
+	nodes, err := gslbDNSSchedulingNodes(options)
 	if err != nil {
 		return diagnostics
 	}
-	metrics := latestNodeMetricSnapshots()
-	nodeProbeStats := buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
+	metrics := gslbDNSSchedulingMetricsByNode(options)
+	nodeProbeStats := gslbDNSSchedulingProbeStatsByNode(options)
 	selectedSet := make(map[string]struct{}, len(selectedTargets))
 	for _, target := range selectedTargets {
 		selectedSet[strings.TrimSpace(target)] = struct{}{}
@@ -1419,7 +1569,7 @@ func buildDNSGSLBSimulationDiagnostics(recordType string, policy dnsworker.GSLBP
 		if node == nil {
 			continue
 		}
-		view := buildDNSGSLBSimulationNodeView(node, recordType, servicePolicy, matchedPools, metrics[node.NodeID], selectedSet, nodeProbeStats[node.NodeID], requireHealthyDNSProbe)
+		view := buildDNSGSLBSimulationNodeView(node, recordType, servicePolicy, matchedPools, metrics[node.NodeID], selectedSet, nodeProbeStats[node.NodeID], options.RequireHealthyDNSProbe)
 		diagnostics.nodes = append(diagnostics.nodes, view)
 	}
 	sort.SliceStable(diagnostics.nodes, func(i, j int) bool {
@@ -1846,16 +1996,24 @@ func validateAuthoritativeProxyRouteStaticRecordConflicts(zoneID uint, domains [
 		return errors.New("本地自建解析自动选 IP 只支持 A/AAAA")
 	}
 	normalizedDomains := make([]string, 0, len(domains))
+	wildcardSuffixes := make([]string, 0, len(domains))
 	for _, domain := range domains {
 		normalized := normalizeDNSRecordName(domain)
-		if normalized != "" {
-			normalizedDomains = append(normalizedDomains, normalized)
+		if normalized == "" {
+			continue
+		}
+		normalizedDomains = append(normalizedDomains, normalized)
+		if strings.HasPrefix(normalized, "*.") {
+			suffix := strings.TrimPrefix(normalized, "*.")
+			if suffix != "" {
+				wildcardSuffixes = append(wildcardSuffixes, suffix)
+			}
 		}
 	}
-	if len(normalizedDomains) == 0 {
+	if len(normalizedDomains) == 0 && len(wildcardSuffixes) == 0 {
 		return nil
 	}
-	records, err := model.ListDNSRecordsByZoneID(zoneID)
+	records, err := model.ListDNSRecordsByZoneIDNameCandidates(zoneID, normalizedDomains, wildcardSuffixes)
 	if err != nil {
 		return err
 	}
@@ -1958,7 +2116,7 @@ func authoritativeDNSMigrationWorkerStats() (authoritativeDNSMigrationWorkerStat
 	return stats, nil
 }
 
-func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*model.DNSZone, workerStats authoritativeDNSMigrationWorkerStatsView) (AuthoritativeDNSMigrationCandidateView, error) {
+func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*model.DNSZone, workerStats authoritativeDNSMigrationWorkerStatsView, schedulingOptions gslbDNSSchedulingOptions) (AuthoritativeDNSMigrationCandidateView, error) {
 	domains, err := decodeStoredDomains(route.Domains, route.Domain)
 	if err != nil {
 		return AuthoritativeDNSMigrationCandidateView{}, err
@@ -1999,7 +2157,7 @@ func buildAuthoritativeDNSMigrationCandidate(route *model.ProxyRoute, zones []*m
 	} else if err := validateAuthoritativeProxyRouteStaticRecordConflicts(zone.ID, domains, recordType, route.Enabled); err != nil {
 		candidate.Blockers = append(candidate.Blockers, err.Error())
 	}
-	targetPrecheck, targetErr := precheckAuthoritativeRouteDNSTargets(route, recordType)
+	targetPrecheck, targetErr := precheckAuthoritativeRouteDNSTargetsWithOptions(route, recordType, schedulingOptions)
 	if targetErr != nil {
 		candidate.Blockers = append(candidate.Blockers, targetErr.Error())
 	}
@@ -2061,6 +2219,10 @@ func bestAuthoritativeZoneForDomains(zones []*model.DNSZone, domains []string) *
 }
 
 func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType string) (authoritativeDNSTargetPrecheckView, error) {
+	return precheckAuthoritativeRouteDNSTargetsWithOptions(route, recordType, authoritativeDNSSchedulingOptions())
+}
+
+func precheckAuthoritativeRouteDNSTargetsWithOptions(route *model.ProxyRoute, recordType string, schedulingOptions gslbDNSSchedulingOptions) (authoritativeDNSTargetPrecheckView, error) {
 	view := authoritativeDNSTargetPrecheckView{
 		targetCount: 1,
 		recordType:  normalizeDNSRecordType(recordType),
@@ -2090,9 +2252,9 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 		view.targetCount = normalizeDNSTargetCount(policy.TargetCount)
 		view.strategy = normalizeDNSScheduleMode(policy.Strategy)
 	}
-	selection, err := selectProxyRouteDNSTargetsWithOptions(route, recordType, authoritativeDNSSchedulingOptions())
+	selection, err := selectProxyRouteDNSTargetsWithOptions(route, recordType, schedulingOptions)
 	if err != nil {
-		return view, formatAuthoritativeDNSTargetPrecheckError("当前节点池/GSLB", recordType, err, policy, GSLBSourceContext{}, authoritativeDNSSchedulingOptions(), true)
+		return view, formatAuthoritativeDNSTargetPrecheckError("当前节点池/GSLB", recordType, err, policy, GSLBSourceContext{}, schedulingOptions, true)
 	}
 	targets, err := normalizeDNSRecordContents(recordType, selection.Targets)
 	if err != nil {
@@ -2108,9 +2270,9 @@ func precheckAuthoritativeRouteDNSTargets(route *model.ProxyRoute, recordType st
 	if route.GSLBEnabled {
 		blockers := []string{}
 		for _, source := range authoritativeDNSTargetPrecheckSources(policy) {
-			selection, err := selectGSLBDNSTargetsWithOptions(route, recordType, source.source, authoritativeDNSSchedulingOptions())
+			selection, err := selectGSLBDNSTargetsWithOptions(route, recordType, source.source, schedulingOptions)
 			if err != nil {
-				blockers = append(blockers, formatAuthoritativeDNSTargetPrecheckError(source.label, recordType, err, policy, source.source, authoritativeDNSSchedulingOptions(), false).Error())
+				blockers = append(blockers, formatAuthoritativeDNSTargetPrecheckError(source.label, recordType, err, policy, source.source, schedulingOptions, false).Error())
 				continue
 			}
 			targets, err := normalizeDNSRecordContents(recordType, selection.Targets)
@@ -2145,7 +2307,7 @@ func formatAuthoritativeDNSTargetPrecheckError(label string, recordType string, 
 }
 
 func summarizeAuthoritativeDNSTargetPrecheckDiagnostics(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext, options gslbDNSSchedulingOptions) string {
-	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, convertAuthoritativeGSLBPolicyToWorker(policy), source, nil, options.RequireHealthyDNSProbe)
+	diagnostics := buildDNSGSLBSimulationDiagnosticsWithOptions(recordType, convertAuthoritativeGSLBPolicyToWorker(policy), source, nil, options)
 	matchedPoolLabels := []string{}
 	matchedPoolNames := []string{}
 	matchedPools := map[string]struct{}{}
@@ -2314,6 +2476,17 @@ func buildDNSZoneView(zone *model.DNSZone, includeRecords bool) (*DNSZoneView, e
 	if zone == nil {
 		return nil, errors.New("DNS zone is nil")
 	}
+	var recordCount int64
+	if err := model.DB.Model(&model.DNSRecord{}).Where("zone_id = ?", zone.ID).Count(&recordCount).Error; err != nil {
+		return nil, err
+	}
+	return buildDNSZoneViewWithRecordCount(zone, includeRecords, recordCount)
+}
+
+func buildDNSZoneViewWithRecordCount(zone *model.DNSZone, includeRecords bool, recordCount int64) (*DNSZoneView, error) {
+	if zone == nil {
+		return nil, errors.New("DNS zone is nil")
+	}
 	view := &DNSZoneView{
 		ID:          zone.ID,
 		Name:        zone.Name,
@@ -2323,11 +2496,9 @@ func buildDNSZoneView(zone *model.DNSZone, includeRecords bool) (*DNSZoneView, e
 		DefaultTTL:  normalizeDNSZoneTTL(zone.DefaultTTL),
 		Serial:      zone.Serial,
 		Enabled:     zone.Enabled,
+		RecordCount: recordCount,
 		CreatedAt:   zone.CreatedAt,
 		UpdatedAt:   zone.UpdatedAt,
-	}
-	if err := model.DB.Model(&model.DNSRecord{}).Where("zone_id = ?", zone.ID).Count(&view.RecordCount).Error; err != nil {
-		return nil, err
 	}
 	if includeRecords {
 		records, err := model.ListDNSRecordsByZoneID(zone.ID)
@@ -2554,16 +2725,46 @@ func evaluateDNSGSLBSchedulingStateStatus(view DNSGSLBSchedulingStateView) strin
 }
 
 func snapshotDNSZones() ([]AuthoritativeDNSSnapshotZone, error) {
+	return snapshotDNSZonesWithQueries(defaultAuthoritativeDNSSnapshotZoneQueries)
+}
+
+type authoritativeDNSSnapshotZoneQueries struct {
+	ListDNSRecordsByZoneIDs func([]uint) ([]*model.DNSRecord, error)
+}
+
+var defaultAuthoritativeDNSSnapshotZoneQueries = authoritativeDNSSnapshotZoneQueries{
+	ListDNSRecordsByZoneIDs: model.ListDNSRecordsByZoneIDs,
+}
+
+func snapshotDNSZonesWithQueries(queries authoritativeDNSSnapshotZoneQueries) ([]AuthoritativeDNSSnapshotZone, error) {
 	var zones []*model.DNSZone
 	if err := model.DB.Where("enabled = ?", true).Order("name asc").Find(&zones).Error; err != nil {
 		return nil, err
 	}
+	zoneIDs := make([]uint, 0, len(zones))
+	for _, zone := range zones {
+		if zone != nil && zone.ID != 0 {
+			zoneIDs = append(zoneIDs, zone.ID)
+		}
+	}
+	listRecordsByZoneIDs := queries.ListDNSRecordsByZoneIDs
+	if listRecordsByZoneIDs == nil {
+		listRecordsByZoneIDs = model.ListDNSRecordsByZoneIDs
+	}
+	records, err := listRecordsByZoneIDs(zoneIDs)
+	if err != nil {
+		return nil, err
+	}
+	recordsByZoneID := make(map[uint][]*model.DNSRecord, len(zones))
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		recordsByZoneID[record.ZoneID] = append(recordsByZoneID[record.ZoneID], record)
+	}
 	result := make([]AuthoritativeDNSSnapshotZone, 0, len(zones))
 	for _, zone := range zones {
-		records, err := model.ListDNSRecordsByZoneID(zone.ID)
-		if err != nil {
-			return nil, err
-		}
+		records := recordsByZoneID[zone.ID]
 		item := AuthoritativeDNSSnapshotZone{
 			ID:          zone.ID,
 			Name:        zone.Name,
@@ -2593,6 +2794,22 @@ func snapshotDNSZones() ([]AuthoritativeDNSSnapshotZone, error) {
 }
 
 func snapshotAuthoritativeRoutes() ([]AuthoritativeDNSSnapshotRoute, error) {
+	return snapshotAuthoritativeRoutesWithOptions(authoritativeDNSSchedulingOptions())
+}
+
+func snapshotAuthoritativeRoutesWithOptions(schedulingOptions gslbDNSSchedulingOptions) ([]AuthoritativeDNSSnapshotRoute, error) {
+	return snapshotAuthoritativeRoutesWithQueries(schedulingOptions, defaultAuthoritativeDNSSnapshotRouteQueries)
+}
+
+type authoritativeDNSSnapshotRouteQueries struct {
+	ListDNSZonesByIDs func([]uint) ([]*model.DNSZone, error)
+}
+
+var defaultAuthoritativeDNSSnapshotRouteQueries = authoritativeDNSSnapshotRouteQueries{
+	ListDNSZonesByIDs: model.ListDNSZonesByIDs,
+}
+
+func snapshotAuthoritativeRoutesWithQueries(schedulingOptions gslbDNSSchedulingOptions, queries authoritativeDNSSnapshotRouteQueries) ([]AuthoritativeDNSSnapshotRoute, error) {
 	var routes []*model.ProxyRoute
 	if err := model.DB.
 		Where("enabled = ? AND dns_provider_mode = ? AND dns_zone_id_ref IS NOT NULL", true, DNSProviderModeAuthoritative).
@@ -2600,13 +2817,41 @@ func snapshotAuthoritativeRoutes() ([]AuthoritativeDNSSnapshotRoute, error) {
 		Find(&routes).Error; err != nil {
 		return nil, err
 	}
+	zoneIDs := make([]uint, 0, len(routes))
+	seenZoneIDs := make(map[uint]struct{}, len(routes))
+	for _, route := range routes {
+		if route == nil || route.DNSZoneIDRef == nil || *route.DNSZoneIDRef == 0 {
+			continue
+		}
+		zoneID := *route.DNSZoneIDRef
+		if _, ok := seenZoneIDs[zoneID]; ok {
+			continue
+		}
+		seenZoneIDs[zoneID] = struct{}{}
+		zoneIDs = append(zoneIDs, zoneID)
+	}
+	listZonesByIDs := queries.ListDNSZonesByIDs
+	if listZonesByIDs == nil {
+		listZonesByIDs = model.ListDNSZonesByIDs
+	}
+	zones, err := listZonesByIDs(zoneIDs)
+	if err != nil {
+		return nil, err
+	}
+	zonesByID := make(map[uint]*model.DNSZone, len(zones))
+	for _, zone := range zones {
+		if zone == nil || zone.ID == 0 {
+			continue
+		}
+		zonesByID[zone.ID] = zone
+	}
 	result := make([]AuthoritativeDNSSnapshotRoute, 0, len(routes))
 	for _, route := range routes {
 		if route == nil || route.DNSZoneIDRef == nil || *route.DNSZoneIDRef == 0 {
 			continue
 		}
-		zone, err := model.GetDNSZoneByID(*route.DNSZoneIDRef)
-		if err != nil || zone == nil || !zone.Enabled {
+		zone := zonesByID[*route.DNSZoneIDRef]
+		if zone == nil || !zone.Enabled {
 			continue
 		}
 		domains, err := decodeStoredDomains(route.Domains, route.Domain)
@@ -2647,7 +2892,7 @@ func snapshotAuthoritativeRoutes() ([]AuthoritativeDNSSnapshotRoute, error) {
 			selectRouteCopy.NodePool = normalizeNodePoolName(route.DDOSProtectionTarget)
 			selectRoute = &selectRouteCopy
 		}
-		selection, selectErr := selectProxyRouteDNSTargetsWithOptions(selectRoute, recordType, authoritativeDNSSchedulingOptions())
+		selection, selectErr := selectProxyRouteDNSTargetsWithOptions(selectRoute, recordType, schedulingOptions)
 		if selectErr != nil {
 			item.TargetError = selectErr.Error()
 		} else {
@@ -2664,10 +2909,25 @@ func snapshotNodes() ([]AuthoritativeDNSSnapshotNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	metrics := latestNodeMetricSnapshots()
-	probeStatsByNode := map[string]*dnsWorkerNodeProbeStats{}
+	data := &gslbDNSSchedulingData{
+		Nodes:         nodes,
+		MetricsByNode: latestNodeMetricSnapshots(),
+	}
 	if common.GSLBProbeSchedulingEnabled {
-		probeStatsByNode = buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
+		data.ProbeStatsByNode = buildDNSWorkerNodeProbeStatsByNodeForNodes(time.Now().UTC(), nodes)
+	}
+	return snapshotNodesWithData(data), nil
+}
+
+func snapshotNodesWithData(data *gslbDNSSchedulingData) []AuthoritativeDNSSnapshotNode {
+	if data == nil {
+		data = &gslbDNSSchedulingData{}
+	}
+	nodes := data.Nodes
+	metrics := data.MetricsByNode
+	probeStatsByNode := map[string]*dnsWorkerNodeProbeStats{}
+	if data.ProbeStatsByNode != nil {
+		probeStatsByNode = data.ProbeStatsByNode
 	}
 	result := make([]AuthoritativeDNSSnapshotNode, 0, len(nodes))
 	for _, node := range nodes {
@@ -2709,7 +2969,7 @@ func snapshotNodes() ([]AuthoritativeDNSSnapshotNode, error) {
 		}
 		return result[i].NodeID < result[j].NodeID
 	})
-	return result, nil
+	return result
 }
 
 func snapshotGSLBSchedulingStates(routes []AuthoritativeDNSSnapshotRoute) ([]AuthoritativeDNSSnapshotSchedulingState, error) {
@@ -2994,6 +3254,7 @@ func persistDNSWorkerProbeResult(worker *model.DNSWorker, view *DNSWorkerProbeVi
 }
 
 func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error {
+	rollups := make([]*model.DNSQueryRollup, 0, len(inputs))
 	for _, input := range inputs {
 		if input.QueryCount <= 0 {
 			continue
@@ -3022,11 +3283,12 @@ func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error
 		if rollup.WindowStart.IsZero() {
 			rollup.WindowStart = time.Now().UTC().Truncate(time.Minute)
 		}
-		if err := rollup.Insert(); err != nil {
-			return err
-		}
+		rollups = append(rollups, rollup)
 	}
-	return nil
+	if len(rollups) == 0 {
+		return nil
+	}
+	return model.DB.CreateInBatches(rollups, 500).Error
 }
 
 func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulingState) error {
@@ -3050,6 +3312,7 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 	}
 	var routes []*model.ProxyRoute
 	if err := model.DB.
+		Select("id", "dns_record_type").
 		Where("id IN ? AND enabled = ? AND dns_provider_mode = ? AND dns_zone_id_ref IS NOT NULL", routeIDs, true, DNSProviderModeAuthoritative).
 		Find(&routes).Error; err != nil {
 		return err
@@ -3066,6 +3329,7 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 		routeRecordTypes[route.ID] = recordType
 	}
 	now := time.Now().UTC()
+	updates := make([]dnsWorkerSchedulingStateUpdate, 0, len(inputs))
 	for _, input := range inputs {
 		expectedType, ok := routeRecordTypes[input.RouteID]
 		if !ok {
@@ -3091,42 +3355,169 @@ func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulin
 		if lastChangedAt == nil || lastChangedAt.IsZero() {
 			lastChangedAt = &now
 		}
-		if err := upsertDNSWorkerSchedulingState(input.RouteID, recordType, scopeKey, selectedTargets, desiredTargets, *lastChangedAt, now); err != nil {
-			return err
-		}
+		updates = append(updates, dnsWorkerSchedulingStateUpdate{
+			key: dnsWorkerSchedulingStateKey{
+				routeID:    input.RouteID,
+				recordType: recordType,
+				scopeKey:   scopeKey,
+			},
+			selectedTargets: selectedTargets,
+			desiredTargets:  desiredTargets,
+			lastChangedAt:   *lastChangedAt,
+		})
 	}
-	return nil
-}
-
-func upsertDNSWorkerSchedulingState(routeID uint, recordType string, scopeKey string, selectedTargets []string, desiredTargets []string, lastChangedAt time.Time, evaluatedAt time.Time) error {
-	state := model.GSLBSchedulingState{}
-	err := model.DB.Where("proxy_route_id = ? AND dns_record_type = ? AND scope_key = ?", routeID, recordType, scopeKey).First(&state).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		state = model.GSLBSchedulingState{
-			ProxyRouteID:  routeID,
-			DNSRecordType: recordType,
-			ScopeKey:      scopeKey,
-			CreatedAt:     evaluatedAt,
-		}
-	} else if err != nil {
+	if len(updates) == 0 {
+		return nil
+	}
+	statesByKey, err := loadGSLBSchedulingStatesForUpdates(updates)
+	if err != nil {
 		return err
 	}
-	changedAt := lastChangedAt.UTC()
+	dirtyKeys := make([]dnsWorkerSchedulingStateKey, 0, len(updates))
+	seenDirtyKeys := make(map[dnsWorkerSchedulingStateKey]struct{}, len(updates))
+	for _, update := range updates {
+		state := statesByKey[update.key]
+		if state == nil {
+			state = &model.GSLBSchedulingState{
+				ProxyRouteID:  update.key.routeID,
+				DNSRecordType: update.key.recordType,
+				ScopeKey:      update.key.scopeKey,
+				CreatedAt:     now,
+			}
+			statesByKey[update.key] = state
+		}
+		if !applyDNSWorkerSchedulingStateUpdate(state, update, now) {
+			continue
+		}
+		if _, ok := seenDirtyKeys[update.key]; ok {
+			continue
+		}
+		seenDirtyKeys[update.key] = struct{}{}
+		dirtyKeys = append(dirtyKeys, update.key)
+	}
+	if len(dirtyKeys) == 0 {
+		return nil
+	}
+	rows := make([]*model.GSLBSchedulingState, 0, len(dirtyKeys))
+	for _, key := range dirtyKeys {
+		state := statesByKey[key]
+		if state == nil {
+			continue
+		}
+		rows = append(rows, &model.GSLBSchedulingState{
+			ProxyRouteID:    state.ProxyRouteID,
+			DNSRecordType:   state.DNSRecordType,
+			ScopeKey:        state.ScopeKey,
+			SelectedTargets: state.SelectedTargets,
+			DesiredTargets:  state.DesiredTargets,
+			LastReason:      state.LastReason,
+			LastChangedAt:   state.LastChangedAt,
+			LastEvaluatedAt: state.LastEvaluatedAt,
+			CreatedAt:       state.CreatedAt,
+			UpdatedAt:       now,
+		})
+	}
+	return model.DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "proxy_route_id"},
+			{Name: "dns_record_type"},
+			{Name: "scope_key"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"selected_targets",
+			"desired_targets",
+			"last_reason",
+			"last_changed_at",
+			"last_evaluated_at",
+			"updated_at",
+		}),
+	}).CreateInBatches(rows, 100).Error
+}
+
+type dnsWorkerSchedulingStateKey struct {
+	routeID    uint
+	recordType string
+	scopeKey   string
+}
+
+type dnsWorkerSchedulingStateUpdate struct {
+	key             dnsWorkerSchedulingStateKey
+	selectedTargets []string
+	desiredTargets  []string
+	lastChangedAt   time.Time
+}
+
+func loadGSLBSchedulingStatesForUpdates(updates []dnsWorkerSchedulingStateUpdate) (map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState, error) {
+	statesByKey := make(map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState, len(updates))
+	routeIDs := make([]uint, 0, len(updates))
+	recordTypes := make([]string, 0, len(updates))
+	scopeKeys := make([]string, 0, len(updates))
+	seenRouteIDs := make(map[uint]struct{}, len(updates))
+	seenRecordTypes := make(map[string]struct{}, len(updates))
+	seenScopeKeys := make(map[string]struct{}, len(updates))
+	updateKeys := make(map[dnsWorkerSchedulingStateKey]struct{}, len(updates))
+	for _, update := range updates {
+		key := update.key
+		updateKeys[key] = struct{}{}
+		if _, ok := seenRouteIDs[key.routeID]; !ok {
+			seenRouteIDs[key.routeID] = struct{}{}
+			routeIDs = append(routeIDs, key.routeID)
+		}
+		if _, ok := seenRecordTypes[key.recordType]; !ok {
+			seenRecordTypes[key.recordType] = struct{}{}
+			recordTypes = append(recordTypes, key.recordType)
+		}
+		if _, ok := seenScopeKeys[key.scopeKey]; !ok {
+			seenScopeKeys[key.scopeKey] = struct{}{}
+			scopeKeys = append(scopeKeys, key.scopeKey)
+		}
+	}
+	if len(routeIDs) == 0 || len(recordTypes) == 0 || len(scopeKeys) == 0 {
+		return statesByKey, nil
+	}
+	var states []*model.GSLBSchedulingState
+	if err := model.DB.
+		Where("proxy_route_id IN ? AND dns_record_type IN ? AND scope_key IN ?", routeIDs, recordTypes, scopeKeys).
+		Find(&states).Error; err != nil {
+		return nil, err
+	}
+	for _, state := range states {
+		if state == nil {
+			continue
+		}
+		key := dnsWorkerSchedulingStateKey{
+			routeID:    state.ProxyRouteID,
+			recordType: normalizeDNSRecordType(state.DNSRecordType),
+			scopeKey:   normalizeDNSSourceScope(state.ScopeKey),
+		}
+		if _, ok := updateKeys[key]; !ok {
+			continue
+		}
+		statesByKey[key] = state
+	}
+	return statesByKey, nil
+}
+
+func applyDNSWorkerSchedulingStateUpdate(state *model.GSLBSchedulingState, update dnsWorkerSchedulingStateUpdate, evaluatedAt time.Time) bool {
+	if state == nil {
+		return false
+	}
+	changedAt := update.lastChangedAt.UTC()
 	evaluated := evaluatedAt.UTC()
 	if state.LastChangedAt != nil {
 		existingChangedAt := state.LastChangedAt.UTC()
 		if !existingChangedAt.After(evaluated) && existingChangedAt.After(changedAt) {
-			return nil
+			return false
 		}
 	}
-	state.DNSRecordType = recordType
-	state.ScopeKey = scopeKey
-	state.SelectedTargets = encodeGSLBTargetList(selectedTargets)
-	state.DesiredTargets = encodeGSLBTargetList(desiredTargets)
+	state.DNSRecordType = update.key.recordType
+	state.ScopeKey = update.key.scopeKey
+	state.SelectedTargets = encodeGSLBTargetList(update.selectedTargets)
+	state.DesiredTargets = encodeGSLBTargetList(update.desiredTargets)
 	state.LastReason = "reported by DNS Worker heartbeat"
 	state.LastChangedAt = &changedAt
 	state.LastEvaluatedAt = &evaluated
-	return model.DB.Save(&state).Error
+	return true
 }
 
 func normalizeGSLBSchedulingStateChangedAt(changedAt *time.Time, now time.Time, fallbacks ...*time.Time) *time.Time {
@@ -3363,22 +3754,29 @@ func dnsZoneLabels() (map[string]string, error) {
 
 func dnsRouteLabels(counts map[uint]int64) (map[string]string, error) {
 	labels := make(map[string]string, len(counts))
+	routeIDs := make([]uint, 0, len(counts))
 	for routeID := range counts {
 		if routeID == 0 {
 			continue
 		}
-		route := &model.ProxyRoute{}
-		if err := model.DB.First(route, routeID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				continue
-			}
-			return nil, err
+		routeIDs = append(routeIDs, routeID)
+	}
+	sort.Slice(routeIDs, func(i, j int) bool {
+		return routeIDs[i] < routeIDs[j]
+	})
+	routes, err := model.ListProxyRoutesByIDs(routeIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, route := range routes {
+		if route == nil || route.ID == 0 {
+			continue
 		}
 		label := normalizeProxyRouteSiteNameInput(route, route.SiteName, route.Domain)
 		if label == "" {
-			label = fmt.Sprintf("Route %d", routeID)
+			label = fmt.Sprintf("Route %d", route.ID)
 		}
-		labels[fmt.Sprint(routeID)] = label
+		labels[fmt.Sprint(route.ID)] = label
 	}
 	return labels, nil
 }
@@ -4033,6 +4431,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 
 	statsByWorker := map[string]*dnsWorkerHealthStats{}
 	currentWorkerIDs := make(map[string]struct{}, len(workers))
+	workerIDs := make([]string, 0, len(workers))
 	for _, worker := range workers {
 		if worker == nil {
 			continue
@@ -4042,6 +4441,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			continue
 		}
 		currentWorkerIDs[workerID] = struct{}{}
+		workerIDs = append(workerIDs, workerID)
 	}
 	var totalQueries int64
 	var totalErrors int64
@@ -4083,7 +4483,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 		}
 	}
 
-	nodeProbeStatsByWorker := buildDNSWorkerNodeProbeStats(now)
+	nodeProbeStatsByWorker := buildDNSWorkerNodeProbeStatsForWorkerIDs(now, workerIDs)
 	view.TotalWorkerCount = len(workers)
 	view.MaxLatencyMs = maxDurationMs
 	view.AverageLatencyMs = averageMilliseconds(totalDurationMs, totalQueries)
@@ -4197,12 +4597,25 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 }
 
 func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeStats {
+	return buildDNSWorkerNodeProbeStatsForWorkerIDs(now, activeDNSWorkerIDs())
+}
+
+func buildDNSWorkerNodeProbeStatsForWorkerIDs(now time.Time, workerIDs []string) map[string]*dnsWorkerNodeProbeStats {
 	nodes, err := model.ListNodes()
 	if err != nil {
-		nodes = []*model.Node{}
+		return buildDNSWorkerNodeProbeStatsForNodesAndWorkers(now, nil, workerIDs)
 	}
+	return buildDNSWorkerNodeProbeStatsForNodesAndWorkers(now, nodes, workerIDs)
+}
+
+func buildDNSWorkerNodeProbeStatsForNodes(now time.Time, nodes []*model.Node) map[string]*dnsWorkerNodeProbeStats {
+	return buildDNSWorkerNodeProbeStatsForNodesAndWorkers(now, nodes, activeDNSWorkerIDs())
+}
+
+func buildDNSWorkerNodeProbeStatsForNodesAndWorkers(now time.Time, nodes []*model.Node, workerIDs []string) map[string]*dnsWorkerNodeProbeStats {
 	nodesByID := make(map[string]*model.Node, len(nodes))
 	targetNodes := make([]dnsWorkerProbeTargetNode, 0, len(nodes))
+	targetNodeIDs := make([]string, 0, len(nodes))
 	for _, node := range nodes {
 		if node == nil {
 			continue
@@ -4217,6 +4630,7 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 			PoolName: strings.TrimSpace(node.PoolName),
 			Status:   computeNodeStatus(node),
 		})
+		targetNodeIDs = append(targetNodeIDs, strings.TrimSpace(node.NodeID))
 	}
 	sort.SliceStable(targetNodes, func(i, j int) bool {
 		if targetNodes[i].PoolName != targetNodes[j].PoolName {
@@ -4229,7 +4643,7 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 	})
 
 	statsByWorker := make(map[string]*dnsWorkerNodeProbeStats)
-	for _, workerID := range expectedAgentDNSProbeWorkerIDs() {
+	for _, workerID := range workerIDs {
 		stats := &dnsWorkerNodeProbeStats{probes: []DNSWorkerNodeProbeView{}}
 		statsByWorker[workerID] = stats
 		for _, node := range targetNodes {
@@ -4248,7 +4662,7 @@ func buildDNSWorkerNodeProbeStats(now time.Time) map[string]*dnsWorkerNodeProbeS
 		}
 	}
 
-	probes, err := model.ListDNSWorkerNodeProbes()
+	probes, err := model.ListDNSWorkerNodeProbesByScope(workerIDs, targetNodeIDs)
 	if err != nil {
 		return statsByWorker
 	}
@@ -4421,6 +4835,30 @@ func expectedAgentDNSProbeWorkerIDs() []string {
 	return workerIDs
 }
 
+func activeDNSWorkerIDs() []string {
+	workers, err := model.ListDNSWorkers()
+	if err != nil {
+		return []string{}
+	}
+	workerIDs := make([]string, 0, len(workers))
+	seen := make(map[string]struct{}, len(workers))
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		workerID := strings.TrimSpace(worker.WorkerID)
+		if workerID == "" {
+			continue
+		}
+		if _, ok := seen[workerID]; ok {
+			continue
+		}
+		seen[workerID] = struct{}{}
+		workerIDs = append(workerIDs, workerID)
+	}
+	return workerIDs
+}
+
 func findDNSWorkerNodeProbeViewIndex(probes []DNSWorkerNodeProbeView, nodeID string) int {
 	nodeID = strings.TrimSpace(nodeID)
 	for index, probe := range probes {
@@ -4447,11 +4885,23 @@ func dnsWorkerProbeStatusSortRank(status string) int {
 }
 
 func buildDNSWorkerNodeProbeStatsByNode(now time.Time) map[string]*dnsWorkerNodeProbeStats {
-	probes, err := model.ListDNSWorkerNodeProbes()
+	nodes, err := model.ListNodes()
+	if err != nil {
+		return map[string]*dnsWorkerNodeProbeStats{}
+	}
+	return buildDNSWorkerNodeProbeStatsByNodeForNodes(now, nodes)
+}
+
+func buildDNSWorkerNodeProbeStatsByNodeForNodes(now time.Time, nodes []*model.Node) map[string]*dnsWorkerNodeProbeStats {
+	currentNodeIDs := currentSchedulableDNSProbeNodeIDsForNodes(nodes)
+	nodeIDs := make([]string, 0, len(currentNodeIDs))
+	for nodeID := range currentNodeIDs {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	probes, err := model.ListDNSWorkerNodeProbesByScope(activeDNSWorkerIDs(), nodeIDs)
 	if err != nil || len(probes) == 0 {
 		return map[string]*dnsWorkerNodeProbeStats{}
 	}
-	currentNodeIDs := currentSchedulableDNSProbeNodeIDs()
 	statsByNode := make(map[string]*dnsWorkerNodeProbeStats)
 	for _, probe := range probes {
 		if probe == nil {
@@ -4493,6 +4943,21 @@ func buildDNSWorkerNodeProbeStatsByNode(now time.Time) map[string]*dnsWorkerNode
 		}
 	}
 	return statsByNode
+}
+
+func currentSchedulableDNSProbeNodeIDsForNodes(nodes []*model.Node) map[string]struct{} {
+	result := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		if !shouldExpectAgentDNSProbeForNode(node) {
+			continue
+		}
+		nodeID := strings.TrimSpace(node.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		result[nodeID] = struct{}{}
+	}
+	return result
 }
 
 func normalizeDNSWorkerNodeProbeRTT(averageRTTMs float64, maxRTTMs int64) (float64, int64) {
@@ -4816,12 +5281,7 @@ func normalizeAuthoritativeRouteTTL(value int) int {
 }
 
 func authoritativeDNSDefaultTTL() int {
-	common.OptionMapRWMutex.RLock()
-	raw := ""
-	if common.OptionMap != nil {
-		raw = strings.TrimSpace(common.OptionMap["AuthoritativeDNSDefaultTTL"])
-	}
-	common.OptionMapRWMutex.RUnlock()
+	raw := strings.TrimSpace(common.GetOptionValue("AuthoritativeDNSDefaultTTL"))
 	if raw == "" {
 		return common.AuthoritativeDNSDefaultTTL
 	}
@@ -4836,12 +5296,7 @@ func authoritativeDNSDefaultTTL() int {
 }
 
 func authoritativeDNSSnapshotMaxAge() time.Duration {
-	common.OptionMapRWMutex.RLock()
-	raw := ""
-	if common.OptionMap != nil {
-		raw = strings.TrimSpace(common.OptionMap["AuthoritativeDNSSnapshotMaxAge"])
-	}
-	common.OptionMapRWMutex.RUnlock()
+	raw := strings.TrimSpace(common.GetOptionValue("AuthoritativeDNSSnapshotMaxAge"))
 	if raw == "" {
 		if common.AuthoritativeDNSSnapshotMaxAge > 0 {
 			return time.Duration(common.AuthoritativeDNSSnapshotMaxAge) * time.Second

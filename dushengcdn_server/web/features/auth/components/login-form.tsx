@@ -11,7 +11,11 @@ import { z } from 'zod';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { useAuth } from '@/components/providers/auth-provider';
 import { AppCard } from '@/components/ui/app-card';
-import { getOAuthAuthorizeUrl, login } from '@/features/auth/api/auth';
+import {
+  getLegacyGitHubAuthorizeUrl,
+  getOAuthAuthorizeUrl,
+  login,
+} from '@/features/auth/api/auth';
 import { getPublicStatus } from '@/features/auth/api/public';
 import {
   AuthButton,
@@ -84,6 +88,16 @@ export function LoginForm() {
     },
   });
 
+  const legacyGitHubMutation = useMutation({
+    mutationFn: getLegacyGitHubAuthorizeUrl,
+    onSuccess: (result) => {
+      window.location.href = result.authorize_url;
+    },
+    onError: (error: Error) => {
+      setErrorMessage(error.message || TEXT.oauthUnavailable);
+    },
+  });
+
   const handleSubmit = form.handleSubmit((values) => {
     setErrorMessage('');
     loginMutation.mutate(values);
@@ -93,6 +107,12 @@ export function LoginForm() {
     setErrorMessage('');
     oauthMutation.mutate(sourceName);
   };
+  const hasGitHubAuthSource = (statusQuery.data?.auth_sources ?? []).some(
+    (source) => source.type === 'github',
+  );
+  const showLegacyGitHubLogin =
+    Boolean(statusQuery.data?.github_oauth && statusQuery.data?.github_client_id) &&
+    !hasGitHubAuthSource;
 
   return (
     <PublicAuthGuard>
@@ -151,6 +171,21 @@ export function LoginForm() {
                   </SecondaryButton>
                 ))}
               </div>
+            </div>
+          ) : null}
+          {showLegacyGitHubLogin ? (
+            <div className="flex justify-center pt-1">
+              <SecondaryButton
+                type="button"
+                onClick={() => {
+                  setErrorMessage('');
+                  legacyGitHubMutation.mutate();
+                }}
+                className="min-w-36"
+                disabled={legacyGitHubMutation.isPending}
+              >
+                GitHub 登录
+              </SecondaryButton>
             </div>
           ) : null}
         </form>

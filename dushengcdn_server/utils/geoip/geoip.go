@@ -64,7 +64,10 @@ func newProviderCache(duration time.Duration) *providerCache {
 		BufferItems: 64,
 	})
 	if err != nil {
-		panic(err)
+		slog.Warn("GeoIP cache disabled", "error", err)
+		return &providerCache{
+			duration: duration,
+		}
 	}
 	return &providerCache{
 		items:    items,
@@ -73,6 +76,9 @@ func newProviderCache(duration time.Duration) *providerCache {
 }
 
 func (c *providerCache) Get(key string) (*GeoInfo, bool) {
+	if c == nil || c.items == nil {
+		return nil, false
+	}
 	entry, ok := c.items.Get(key)
 	if !ok {
 		return nil, false
@@ -85,6 +91,9 @@ func (c *providerCache) Get(key string) (*GeoInfo, bool) {
 }
 
 func (c *providerCache) Set(key string, info *GeoInfo) {
+	if c == nil || c.items == nil {
+		return
+	}
 	c.items.Set(key, cachedGeoInfo{
 		info:      info,
 		expiresAt: time.Now().Add(c.duration),
@@ -93,6 +102,9 @@ func (c *providerCache) Set(key string, info *GeoInfo) {
 }
 
 func (c *providerCache) Flush() {
+	if c == nil || c.items == nil {
+		return
+	}
 	c.items.Clear()
 }
 

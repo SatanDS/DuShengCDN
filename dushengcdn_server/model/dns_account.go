@@ -22,6 +22,14 @@ func GetDnsAccountByID(id uint) (*DnsAccount, error) {
 	return account, err
 }
 
+func ListDnsAccountsByIDs(ids []uint) (accounts []*DnsAccount, err error) {
+	if len(ids) == 0 {
+		return []*DnsAccount{}, nil
+	}
+	err = DB.Where("id IN ?", ids).Find(&accounts).Error
+	return accounts, err
+}
+
 func (account *DnsAccount) Insert() error {
 	return DB.Create(account).Error
 }

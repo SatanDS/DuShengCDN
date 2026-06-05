@@ -17,8 +17,10 @@ import (
 	"github.com/gin-contrib/sessions/redis"
 	"github.com/gin-gonic/gin"
 	"log/slog"
+	"net/http"
 	"os"
 	"strconv"
+	"strings"
 )
 
 //go:embed all:web/build
@@ -99,18 +101,51 @@ func main() {
 	job.InitCronJobs()
 	defer job.StopCronJobs()
 
+	if err := validateRuntimeSecurityConfig(gin.Mode()); err != nil {
+		slog.Error("runtime security validation failed", "error", err)
+		os.Exit(1)
+	}
+
 	// Initialize HTTP server
 	server := gin.Default()
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.CORS())
 
 	// Initialize session store
+	sessionStoreConfigured := false
 	if common.RedisEnabled {
-		opt := common.ParseRedisOption()
-		store, _ := redis.NewStore(opt.MinIdleConns, opt.Network, opt.Addr, opt.Password, []byte(common.SessionSecret))
-		server.Use(sessions.Sessions("session", store))
-	} else {
+		opt, err := common.ParseRedisOption()
+		if err != nil {
+			if common.RedisRequired {
+				slog.Error("parse redis session options failed", "error", err)
+				os.Exit(1)
+			}
+			common.DisableRedisClient()
+			slog.Warn("falling back to cookie session because redis session options failed", "error", err)
+		} else {
+			var store sessions.Store
+			if opt.DB > 0 {
+				store, err = redis.NewStoreWithDB(opt.MinIdleConns, opt.Network, opt.Addr, opt.Password, strconv.Itoa(opt.DB), []byte(common.SessionSecret))
+			} else {
+				store, err = redis.NewStore(opt.MinIdleConns, opt.Network, opt.Addr, opt.Password, []byte(common.SessionSecret))
+			}
+			if err != nil {
+				if common.RedisRequired {
+					slog.Error("initialize redis session store failed", "error", err)
+					os.Exit(1)
+				}
+				common.DisableRedisClient()
+				slog.Warn("falling back to cookie session because redis session store failed", "error", err)
+			} else {
+				configureSessionStore(store)
+				server.Use(sessions.Sessions("session", store))
+				sessionStoreConfigured = true
+			}
+		}
+	}
+	if !sessionStoreConfigured {
 		store := cookie.NewStore([]byte(common.SessionSecret))
+		configureSessionStore(store)
 		server.Use(sessions.Sessions("session", store))
 	}
 
@@ -136,4 +171,38 @@ func valueOrDefault(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func configureSessionStore(store sessions.Store) {
+	if store == nil {
+		return
+	}
+	store.Options(sessions.Options{
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   strings.HasPrefix(strings.ToLower(strings.TrimSpace(common.ServerAddress)), "https://"),
+	})
+}
+
+func validateRuntimeSecurityConfig(ginMode string) error {
+	if ginMode == gin.DebugMode {
+		return nil
+	}
+	if strings.TrimSpace(os.Getenv("SESSION_SECRET")) == "" {
+		return fmt.Errorf("SESSION_SECRET must be explicitly set in release mode")
+	}
+	secret := strings.TrimSpace(common.SessionSecret)
+	if len(secret) < 32 {
+		return fmt.Errorf("SESSION_SECRET must be at least 32 characters in release mode")
+	}
+	switch strings.ToLower(secret) {
+	case "replace-with-random-string",
+		"replace-with-a-long-random-string",
+		"dev-session-secret",
+		"test-session-secret":
+		return fmt.Errorf("SESSION_SECRET is a placeholder and must be replaced before production startup")
+	default:
+		return nil
+	}
 }

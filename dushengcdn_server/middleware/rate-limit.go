@@ -4,69 +4,115 @@ import (
 	"context"
 	"dushengcdn/common"
 	"dushengcdn/utils/ratelimit"
-	"github.com/gin-gonic/gin"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 )
 
-var timeFormat = "2006-01-02T15:04:05.000Z"
+const redisRateLimitTimeout = time.Second
 
 var inMemoryRateLimiter ratelimit.InMemoryRateLimiter
+var redisRateLimitSequence uint64
+var redisRateLimitInstanceID = uuid.NewString()
+
+var redisRateLimitScript = redis.NewScript(`
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local member = ARGV[4]
+local ttl = tonumber(ARGV[5])
+
+redis.call("ZREMRANGEBYSCORE", key, "-inf", now - window)
+local count = redis.call("ZCARD", key)
+if count >= limit then
+	redis.call("PEXPIRE", key, ttl)
+	return 0
+end
+
+redis.call("ZADD", key, now, member)
+redis.call("PEXPIRE", key, ttl)
+return 1
+`)
 
 func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark string) {
-	ctx := context.Background()
-	rdb := common.RDB
-	key := "rateLimit:" + mark + c.ClientIP()
-	listLength, err := rdb.LLen(ctx, key).Result()
-	if err != nil {
-		slog.Error("redis rate limiter llen failed", "error", err)
-		c.Status(http.StatusInternalServerError)
-		c.Abort()
+	if !validRateLimitConfig(c, maxRequestNum, duration) {
 		return
 	}
-	if listLength < int64(maxRequestNum) {
-		rdb.LPush(ctx, key, time.Now().Format(timeFormat))
-		rdb.Expire(ctx, key, common.RateLimitKeyExpirationDuration)
-	} else {
-		oldTimeStr, _ := rdb.LIndex(ctx, key, -1).Result()
-		oldTime, err := time.Parse(timeFormat, oldTimeStr)
-		if err != nil {
-			slog.Error("parse redis rate limiter old timestamp failed", "error", err)
-			c.Status(http.StatusInternalServerError)
-			c.Abort()
-			return
-		}
-		nowTimeStr := time.Now().Format(timeFormat)
-		nowTime, err := time.Parse(timeFormat, nowTimeStr)
-		if err != nil {
-			slog.Error("parse redis rate limiter current timestamp failed", "error", err)
-			c.Status(http.StatusInternalServerError)
-			c.Abort()
-			return
-		}
-		// time.Since will return negative number!
-		// See: https://stackoverflow.com/questions/50970900/why-is-time-since-returning-negative-durations-on-windows
-		if int64(nowTime.Sub(oldTime).Seconds()) < duration {
-			rdb.Expire(ctx, key, common.RateLimitKeyExpirationDuration)
-			c.Status(http.StatusTooManyRequests)
-			c.Abort()
-			return
-		} else {
-			rdb.LPush(ctx, key, time.Now().Format(timeFormat))
-			rdb.LTrim(ctx, key, 0, int64(maxRequestNum-1))
-			rdb.Expire(ctx, key, common.RateLimitKeyExpirationDuration)
-		}
+	rdb := common.RDB
+	if rdb == nil {
+		slog.Warn("redis rate limiter unavailable; falling back to memory limiter")
+		memoryRateLimiter(c, maxRequestNum, duration, mark)
+		return
+	}
+
+	key := "rateLimit:" + mark + c.ClientIP()
+	nowMillis := time.Now().UnixMilli()
+	windowMillis := duration * int64(time.Second/time.Millisecond)
+	ttlMillis := int64(common.RateLimitKeyExpirationDuration / time.Millisecond)
+	if ttlMillis < windowMillis {
+		ttlMillis = windowMillis
+	}
+	member := fmt.Sprintf("%d:%s:%d", nowMillis, redisRateLimitInstanceID, atomic.AddUint64(&redisRateLimitSequence, 1))
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), redisRateLimitTimeout)
+	defer cancel()
+
+	result, err := redisRateLimitScript.Run(
+		ctx,
+		rdb,
+		[]string{key},
+		nowMillis,
+		windowMillis,
+		maxRequestNum,
+		member,
+		ttlMillis,
+	).Result()
+	if err != nil {
+		slog.Warn("redis rate limiter script failed; falling back to memory limiter", "error", err)
+		memoryRateLimiter(c, maxRequestNum, duration, mark)
+		return
+	}
+	allowed, ok := result.(int64)
+	if !ok {
+		slog.Warn("redis rate limiter returned unexpected result; falling back to memory limiter", "result", result)
+		memoryRateLimiter(c, maxRequestNum, duration, mark)
+		return
+	}
+	if allowed != 1 {
+		c.Status(http.StatusTooManyRequests)
+		c.Abort()
+		return
 	}
 }
 
 func memoryRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark string) {
+	if !validRateLimitConfig(c, maxRequestNum, duration) {
+		return
+	}
+	inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
 	key := mark + c.ClientIP()
 	if !inMemoryRateLimiter.Request(key, maxRequestNum, duration) {
 		c.Status(http.StatusTooManyRequests)
 		c.Abort()
 		return
 	}
+}
+
+func validRateLimitConfig(c *gin.Context, maxRequestNum int, duration int64) bool {
+	if maxRequestNum > 0 && duration > 0 {
+		return true
+	}
+	slog.Error("invalid rate limiter config", "max_request_num", maxRequestNum, "duration", duration)
+	c.Status(http.StatusTooManyRequests)
+	c.Abort()
+	return false
 }
 
 func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gin.Context) {

@@ -134,7 +134,10 @@ func collectProfile(cfg *config.Config) *protocol.NodeSystemProfile {
 }
 
 func fingerprintProfile(profile *protocol.NodeSystemProfile) string {
-	raw, err := json.Marshal(profile)
+	stableProfile := *profile
+	stableProfile.ReportedAtUnix = 0
+	stableProfile.UptimeSeconds = 0
+	raw, err := json.Marshal(&stableProfile)
 	if err != nil {
 		return ""
 	}

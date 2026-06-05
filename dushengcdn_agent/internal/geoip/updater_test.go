@@ -53,3 +53,26 @@ func TestUpdaterRejectsTinyDatabase(t *testing.T) {
 		t.Fatalf("expected tiny database not to be activated, stat err = %v", err)
 	}
 }
+
+func TestUpdaterRejectsOversizedDatabase(t *testing.T) {
+	originalMax := maxDatabaseSize
+	maxDatabaseSize = minDatabaseSize + 8
+	t.Cleanup(func() {
+		maxDatabaseSize = originalMax
+	})
+
+	payload := make([]byte, int(maxDatabaseSize)+1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	target := filepath.Join(t.TempDir(), "GeoLite2-Country.mmdb")
+	updater := &Updater{URL: server.URL, Path: target}
+	if err := updater.Ensure(context.Background()); err == nil {
+		t.Fatal("expected oversized database download to fail")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected oversized database not to be activated, stat err = %v", err)
+	}
+}

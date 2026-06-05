@@ -120,11 +120,12 @@ func StreamServerUpgradeLogs(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/update/manual-upload [post]
 func UploadManualServerBinary(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, service.ManualServerBinaryMaxBytes())
 	fileHeader, err := c.FormFile("binary")
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "请先选择要上传的服务端二进制文件。",
+			"message": manualUploadFormErrorMessage(err),
 		})
 		return
 	}
@@ -160,6 +161,13 @@ func UploadManualServerBinary(c *gin.Context) {
 		"message": message,
 		"data":    info,
 	})
+}
+
+func manualUploadFormErrorMessage(err error) string {
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "request body too large") {
+		return "上传二进制超过大小限制。"
+	}
+	return "请先选择要上传的服务端二进制文件。"
 }
 
 // ConfirmManualServerUpgrade godoc

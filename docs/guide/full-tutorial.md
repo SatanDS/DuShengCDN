@@ -48,7 +48,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      SESSION_SECRET: replace-with-a-long-random-string
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
       GIN_MODE: release
       LOG_LEVEL: info

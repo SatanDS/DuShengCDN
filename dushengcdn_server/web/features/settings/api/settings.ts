@@ -4,6 +4,7 @@ import type {
   BootstrapTokenPayload,
   AuthSource,
   AuthSourcePayload,
+  CommercialLicenseStatusPayload,
   DatabaseCleanupPayload,
   DatabaseCleanupResult,
   ExternalAccountBinding,
@@ -43,6 +44,23 @@ export function cleanupDatabaseObservability(payload: DatabaseCleanupPayload) {
   return apiRequest<DatabaseCleanupResult>('/option/database/cleanup', {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+export function getCommercialLicenseStatus() {
+  return apiRequest<CommercialLicenseStatusPayload>('/license/status');
+}
+
+export function installCommercialLicense(token: string) {
+  return apiRequest<CommercialLicenseStatusPayload>('/license/install', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
+}
+
+export function clearCommercialLicense() {
+  return apiRequest<CommercialLicenseStatusPayload>('/license/clear', {
+    method: 'POST',
   });
 }
 

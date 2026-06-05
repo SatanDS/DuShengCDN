@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -189,15 +190,64 @@ type meteringOverviewDataSource struct {
 	nodes     []*model.Node
 }
 
+type meteringOverviewAggregatedDataSource struct {
+	now         time.Time
+	summary     *model.NodeAccessLogMeteringSummary
+	statusCodes []*model.NodeAccessLogDistributionRow
+	topURLs     []*model.NodeAccessLogDistributionRow
+	topIPs      []*model.NodeAccessLogDistributionRow
+	topRegions  []*model.NodeAccessLogDistributionRow
+	siteTraffic []*model.NodeAccessLogMeteringTrafficRow
+	nodeTraffic []*model.NodeAccessLogMeteringTrafficRow
+	cache       *model.NodeRequestReportCacheSummary
+	bandwidth   []*model.NodeMetricSnapshotCounterDeltaBucket
+	nodes       []*model.Node
+}
+
+func runConcurrentQueries(functions ...func() error) error {
+	var firstErr error
+	var errMu sync.Mutex
+	var wg sync.WaitGroup
+	for _, fn := range functions {
+		if fn == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(run func() error) {
+			defer wg.Done()
+			if err := run(); err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				errMu.Unlock()
+			}
+		}(fn)
+	}
+	wg.Wait()
+	return firstErr
+}
+
 func ListAccessLogs(input AccessLogQuery) (*AccessLogList, error) {
 	normalized := normalizeAccessLogQuery(input)
 	modelQuery := buildModelAccessLogQuery(normalized)
-	logs, err := model.ListNodeAccessLogs(modelQuery)
-	if err != nil {
-		return nil, err
-	}
-	totalRecords, totalIPs, err := model.CountNodeAccessLogs(modelQuery)
-	if err != nil {
+
+	var logs []*model.NodeAccessLog
+	var totalRecords int64
+	var totalIPs int64
+	if err := runConcurrentQueries(
+		func() error {
+			rows, err := model.ListNodeAccessLogs(modelQuery)
+			logs = rows
+			return err
+		},
+		func() error {
+			recordCount, ipCount, err := model.CountNodeAccessLogs(modelQuery)
+			totalRecords = recordCount
+			totalIPs = ipCount
+			return err
+		},
+	); err != nil {
 		return nil, err
 	}
 	nodeNames, err := listNodeNameMap(logs)
@@ -252,16 +302,29 @@ func ListFoldedAccessLogs(input AccessLogQuery) (*FoldedAccessLogList, error) {
 		SortOrder:   normalized.SortOrder,
 		FoldMinutes: foldMinutes,
 	}
-	items, err := model.ListNodeAccessLogBuckets(bucketQuery)
-	if err != nil {
-		return nil, err
-	}
-	totalBuckets, err := model.CountNodeAccessLogBuckets(bucketQuery)
-	if err != nil {
-		return nil, err
-	}
-	totalRecords, totalIPs, err := model.CountNodeAccessLogs(modelQuery)
-	if err != nil {
+
+	var items []*model.NodeAccessLogBucketRow
+	var totalBuckets int64
+	var totalRecords int64
+	var totalIPs int64
+	if err := runConcurrentQueries(
+		func() error {
+			rows, err := model.ListNodeAccessLogBuckets(bucketQuery)
+			items = rows
+			return err
+		},
+		func() error {
+			count, err := model.CountNodeAccessLogBuckets(bucketQuery)
+			totalBuckets = count
+			return err
+		},
+		func() error {
+			recordCount, ipCount, err := model.CountNodeAccessLogs(modelQuery)
+			totalRecords = recordCount
+			totalIPs = ipCount
+			return err
+		},
+	); err != nil {
 		return nil, err
 	}
 	views := make([]FoldedAccessLogView, 0, len(items))
@@ -305,12 +368,21 @@ func ListAccessLogIPSummaries(input AccessLogIPSummaryQuery) (*AccessLogIPSummar
 		SortBy:     normalized.SortBy,
 		SortOrder:  normalized.SortOrder,
 	}
-	items, err := model.ListNodeAccessLogIPSummaries(query, recentSince)
-	if err != nil {
-		return nil, err
-	}
-	totalIP, err := model.CountNodeAccessLogIPSummaries(query)
-	if err != nil {
+
+	var items []*model.NodeAccessLogIPSummaryRow
+	var totalIP int64
+	if err := runConcurrentQueries(
+		func() error {
+			rows, err := model.ListNodeAccessLogIPSummaries(query, recentSince)
+			items = rows
+			return err
+		},
+		func() error {
+			count, err := model.CountNodeAccessLogIPSummaries(query)
+			totalIP = count
+			return err
+		},
+	); err != nil {
 		return nil, err
 	}
 	views := make([]AccessLogIPSummaryView, 0, len(items))
@@ -381,34 +453,85 @@ func GetAccessLogIPTrend(input AccessLogIPTrendQuery) (*AccessLogIPTrendView, er
 func GetObservabilityMeteringOverview() (*ObservabilityMeteringOverview, error) {
 	now := time.Now().UTC()
 	since := now.Add(-24 * time.Hour)
+	const limit = 8
 
-	logs, err := model.ListNodeAccessLogs(model.NodeAccessLogQuery{
-		Since:     since,
-		SortBy:    "logged_at",
-		SortOrder: "desc",
-	})
-	if err != nil {
-		return nil, err
-	}
-	reports, err := model.ListRequestReportsSince(since)
-	if err != nil {
-		return nil, err
-	}
-	snapshots, err := model.ListMetricSnapshotsSince(since)
-	if err != nil {
-		return nil, err
-	}
-	nodes, err := model.ListNodes()
-	if err != nil {
+	var summary *model.NodeAccessLogMeteringSummary
+	var statusCodes []*model.NodeAccessLogDistributionRow
+	var topURLs []*model.NodeAccessLogDistributionRow
+	var topIPs []*model.NodeAccessLogDistributionRow
+	var topRegions []*model.NodeAccessLogDistributionRow
+	var siteTraffic []*model.NodeAccessLogMeteringTrafficRow
+	var nodeTraffic []*model.NodeAccessLogMeteringTrafficRow
+	var cacheSummary *model.NodeRequestReportCacheSummary
+	var bandwidthBuckets []*model.NodeMetricSnapshotCounterDeltaBucket
+	var nodes []*model.Node
+	if err := runConcurrentQueries(
+		func() error {
+			value, err := model.GetNodeAccessLogMeteringSummary(since)
+			summary = value
+			return err
+		},
+		func() error {
+			rows, err := model.ListNodeAccessLogStatusDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: limit})
+			statusCodes = rows
+			return err
+		},
+		func() error {
+			rows, err := model.ListNodeAccessLogURLDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: limit})
+			topURLs = rows
+			return err
+		},
+		func() error {
+			rows, err := model.ListNodeAccessLogIPDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: limit})
+			topIPs = rows
+			return err
+		},
+		func() error {
+			rows, err := model.ListNodeAccessLogRegionDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: limit})
+			topRegions = rows
+			return err
+		},
+		func() error {
+			rows, err := model.ListNodeAccessLogMeteringTrafficByHost(since, limit)
+			siteTraffic = rows
+			return err
+		},
+		func() error {
+			rows, err := model.ListNodeAccessLogMeteringTrafficByNode(since, limit)
+			nodeTraffic = rows
+			return err
+		},
+		func() error {
+			value, err := model.GetRequestReportCacheSummary(since, now)
+			cacheSummary = value
+			return err
+		},
+		func() error {
+			rows, err := model.ListMetricSnapshotCounterDeltaBuckets("", since, now, 60)
+			bandwidthBuckets = rows
+			return err
+		},
+		func() error {
+			rows, err := model.ListNodes()
+			nodes = rows
+			return err
+		},
+	); err != nil {
 		return nil, err
 	}
 
-	return buildObservabilityMeteringOverview(meteringOverviewDataSource{
-		now:       now,
-		logs:      logs,
-		reports:   reports,
-		snapshots: snapshots,
-		nodes:     nodes,
+	return buildAggregatedObservabilityMeteringOverview(meteringOverviewAggregatedDataSource{
+		now:         now,
+		summary:     summary,
+		statusCodes: statusCodes,
+		topURLs:     topURLs,
+		topIPs:      topIPs,
+		topRegions:  topRegions,
+		siteTraffic: siteTraffic,
+		nodeTraffic: nodeTraffic,
+		cache:       cacheSummary,
+		bandwidth:   bandwidthBuckets,
+		nodes:       nodes,
 	}), nil
 }
 
@@ -518,6 +641,92 @@ func buildObservabilityMeteringOverview(source meteringOverviewDataSource) *Obse
 	overview.TopIPs = toDistributionItems(topIPCounts, limit)
 	overview.TopRegions = toDistributionItems(topRegionCounts, limit)
 	return overview
+}
+
+func buildAggregatedObservabilityMeteringOverview(source meteringOverviewAggregatedDataSource) *ObservabilityMeteringOverview {
+	now := source.now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	since := now.Add(-24 * time.Hour)
+	const limit = 8
+
+	overview := &ObservabilityMeteringOverview{
+		GeneratedAt:     now,
+		WindowStartedAt: since,
+		WindowEndedAt:   now,
+		TotalNodes:      len(source.nodes),
+		StatusCodes:     distributionRowsToItems(source.statusCodes),
+		TopURLs:         distributionRowsToItems(source.topURLs),
+		TopIPs:          distributionRowsToItems(source.topIPs),
+		TopRegions:      distributionRowsToItems(source.topRegions),
+		SiteTraffic:     meteringTrafficRowsToItems(source.siteTraffic, nil),
+		NodeTraffic:     meteringTrafficRowsToItems(source.nodeTraffic, buildMeteringNodeNameMap(source.nodes)),
+		BandwidthTrend:  buildMeteringBandwidthTrendFromCounterBuckets(now, source.bandwidth),
+	}
+	if summary := source.summary; summary != nil {
+		overview.RequestCount = summary.RequestCount
+		overview.RequestBytes = summary.RequestBytes
+		overview.ResponseBytes = summary.ResponseBytes
+		overview.UpstreamBytes = summary.UpstreamBytes
+		overview.UpstreamBytesSupported = summary.UpstreamBytesHitCount > 0
+	}
+	if cache := source.cache; cache != nil {
+		overview.CacheHitCount = cache.CacheHitCount
+		overview.CacheMissCount = cache.CacheMissCount
+		overview.CacheBypassCount = cache.CacheBypassCount
+		overview.CacheExpiredCount = cache.CacheExpiredCount
+		overview.CacheStaleCount = cache.CacheStaleCount
+		overview.CacheClassifiedCount = cache.CacheClassifiedCount
+	}
+	if overview.CacheClassifiedCount > 0 {
+		overview.CacheHitRatePercent = float64(overview.CacheHitCount) / float64(overview.CacheClassifiedCount) * 100
+	}
+	overview.BandwidthP95Bps = calculateP95BandwidthBps(overview.BandwidthTrend)
+	for _, node := range source.nodes {
+		if node == nil {
+			continue
+		}
+		if meteringNodeOnline(node, now) {
+			overview.OnlineNodes++
+		}
+	}
+	if overview.TotalNodes > 0 {
+		overview.NodeAvailabilityPercent = float64(overview.OnlineNodes) / float64(overview.TotalNodes) * 100
+	}
+	return overview
+}
+
+func distributionRowsToItems(rows []*model.NodeAccessLogDistributionRow) []DistributionItem {
+	items := make([]DistributionItem, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || strings.TrimSpace(row.Key) == "" || row.Value <= 0 {
+			continue
+		}
+		items = append(items, DistributionItem{Key: row.Key, Value: row.Value})
+	}
+	return items
+}
+
+func meteringTrafficRowsToItems(rows []*model.NodeAccessLogMeteringTrafficRow, nodeNames map[string]string) []MeteringTrafficItem {
+	items := make([]MeteringTrafficItem, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || strings.TrimSpace(row.Key) == "" {
+			continue
+		}
+		key := strings.TrimSpace(row.Key)
+		if displayName := strings.TrimSpace(nodeNames[key]); displayName != "" {
+			key = displayName
+		}
+		items = append(items, MeteringTrafficItem{
+			Key:           key,
+			RequestCount:  row.RequestCount,
+			RequestBytes:  row.RequestBytes,
+			ResponseBytes: row.ResponseBytes,
+			UpstreamBytes: row.UpstreamBytes,
+		})
+	}
+	return items
 }
 
 func buildMeteringNodeNameMap(nodes []*model.Node) map[string]string {
@@ -718,6 +927,28 @@ func buildMeteringBandwidthTrend(now time.Time, snapshots []*model.NodeMetricSna
 			txDelta = 0
 		}
 		points[index].Bytes += rxDelta + txDelta
+	}
+	for index := range points {
+		points[index].Bps = float64(points[index].Bytes) / 3600
+	}
+	return points
+}
+
+func buildMeteringBandwidthTrendFromCounterBuckets(now time.Time, buckets []*model.NodeMetricSnapshotCounterDeltaBucket) []MeteringBandwidthPoint {
+	start := now.Truncate(time.Hour).Add(-(observabilityTrendBuckets - 1) * time.Hour)
+	points := make([]MeteringBandwidthPoint, observabilityTrendBuckets)
+	for index := range points {
+		points[index].BucketStartedAt = start.Add(time.Duration(index) * time.Hour)
+	}
+	for _, bucket := range buckets {
+		if bucket == nil {
+			continue
+		}
+		index, ok := trendBucketIndex(time.Unix(bucket.BucketEpoch, 0).UTC(), start)
+		if !ok {
+			continue
+		}
+		points[index].Bytes += bucket.OpenrestyRxBytes + bucket.OpenrestyTxBytes
 	}
 	for index := range points {
 		points[index].Bps = float64(points[index].Bytes) / 3600

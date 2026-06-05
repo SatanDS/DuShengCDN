@@ -6,7 +6,7 @@
 
 ## Server 升级
 
-Root 用户可以在管理端顶栏检查并升级 Server 正式版。也可以通过上传 Server 二进制的方式执行确认升级。
+Root 用户可以在管理端顶栏检查 Server 正式版。Server 自动升级默认关闭，生产环境推荐上传已审阅的 Server 二进制后确认升级；如需允许一键自动升级，设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，并确保 Release 包含当前平台 Server 二进制和同名 `.sha256` 校验文件。
 
 如需尝试 preview 版本，可手动检查对应发布。生产环境建议优先使用正式版。
 

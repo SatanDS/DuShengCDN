@@ -8,7 +8,7 @@ Start from source:
 
 ```bash
 cd dushengcdn_server
-export SESSION_SECRET='replace-with-random-string'
+export SESSION_SECRET="$(openssl rand -hex 32)"
 export SQLITE_PATH='./dushengcdn.db'
 export LOG_LEVEL='info'
 go run .

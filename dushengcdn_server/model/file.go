@@ -2,9 +2,11 @@ package model
 
 import (
 	"dushengcdn/common"
+	"errors"
 	"gorm.io/gorm"
 	"os"
-	"path"
+	"path/filepath"
+	"strings"
 )
 
 type File struct {
@@ -37,14 +39,43 @@ func (file *File) Insert() error {
 	return err
 }
 
-// Delete Make sure link is valid! Because we will use os.Remove to delete it!
 func (file *File) Delete() error {
-	var err error
-	err = DB.Delete(file).Error
-	err = os.Remove(path.Join(common.UploadPath, file.Link))
-	return err
+	filePath, err := safeUploadFilePath(file.Link)
+	if err != nil {
+		return err
+	}
+	if err = DB.Delete(file).Error; err != nil {
+		return err
+	}
+	if err = os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func UpdateDownloadCounter(link string) {
 	DB.Model(&File{}).Where("link = ?", link).UpdateColumn("download_counter", gorm.Expr("download_counter + 1"))
+}
+
+func safeUploadFilePath(link string) (string, error) {
+	link = strings.TrimSpace(link)
+	if link == "" || filepath.IsAbs(link) {
+		return "", errors.New("invalid upload file link")
+	}
+	cleanLink := filepath.Clean(link)
+	if cleanLink == "." || cleanLink == ".." || strings.HasPrefix(cleanLink, ".."+string(filepath.Separator)) {
+		return "", errors.New("invalid upload file link")
+	}
+	baseDir, err := filepath.Abs(common.UploadPath)
+	if err != nil {
+		return "", err
+	}
+	filePath, err := filepath.Abs(filepath.Join(baseDir, cleanLink))
+	if err != nil {
+		return "", err
+	}
+	if filePath != baseDir && !strings.HasPrefix(filePath, baseDir+string(filepath.Separator)) {
+		return "", errors.New("invalid upload file link")
+	}
+	return filePath, nil
 }

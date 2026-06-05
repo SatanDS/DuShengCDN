@@ -421,15 +421,8 @@ func ListApplyLogsPage(input ApplyLogListQuery) (*ApplyLogListResult, error) {
 	pageNo := normalizeApplyLogPageNo(input.PageNo)
 	pageSize := normalizeApplyLogPageSize(input.PageSize)
 	nodeID := strings.TrimSpace(input.NodeID)
-	rows, err := model.ListApplyLogs(model.ApplyLogQuery{
-		NodeID:   nodeID,
-		PageNo:   pageNo,
-		PageSize: pageSize,
-	})
-	if err != nil {
-		return nil, err
-	}
-	total, err := model.CountApplyLogs(nodeID)
+
+	rows, total, err := loadApplyLogPageData(nodeID, pageNo, pageSize, defaultApplyLogPageQueries)
 	if err != nil {
 		return nil, err
 	}
@@ -443,6 +436,40 @@ func ListApplyLogsPage(input ApplyLogListQuery) (*ApplyLogListResult, error) {
 		Total:     int(total),
 		TotalPage: totalPage,
 	}, nil
+}
+
+type applyLogPageQueries struct {
+	listApplyLogs  func(model.ApplyLogQuery) ([]*model.ApplyLog, error)
+	countApplyLogs func(string) (int64, error)
+}
+
+var defaultApplyLogPageQueries = applyLogPageQueries{
+	listApplyLogs:  model.ListApplyLogs,
+	countApplyLogs: model.CountApplyLogs,
+}
+
+func loadApplyLogPageData(nodeID string, pageNo int, pageSize int, queries applyLogPageQueries) ([]*model.ApplyLog, int64, error) {
+	var rows []*model.ApplyLog
+	var total int64
+	if err := runConcurrentQueries(
+		func() error {
+			value, err := queries.listApplyLogs(model.ApplyLogQuery{
+				NodeID:   nodeID,
+				PageNo:   pageNo,
+				PageSize: pageSize,
+			})
+			rows = value
+			return err
+		},
+		func() error {
+			value, err := queries.countApplyLogs(nodeID)
+			total = value
+			return err
+		},
+	); err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
 
 func CleanupApplyLogs(input ApplyLogCleanupInput) (*ApplyLogCleanupResult, error) {

@@ -26,6 +26,25 @@ var DatabaseConnMaxLifetime = 30 * time.Minute
 var OptionMap map[string]string
 var OptionMapRWMutex sync.RWMutex
 
+func GetOptionValue(key string) string {
+	OptionMapRWMutex.RLock()
+	defer OptionMapRWMutex.RUnlock()
+	if OptionMap == nil {
+		return ""
+	}
+	return OptionMap[key]
+}
+
+func OptionMapSnapshot() map[string]string {
+	OptionMapRWMutex.RLock()
+	defer OptionMapRWMutex.RUnlock()
+	snapshot := make(map[string]string, len(OptionMap))
+	for key, value := range OptionMap {
+		snapshot[key] = value
+	}
+	return snapshot
+}
+
 var ItemsPerPage = 10
 
 var PasswordLoginEnabled = true
@@ -53,6 +72,11 @@ var TurnstileSecretKey = ""
 var AgentToken = ""
 var AgentDiscoveryToken = ""
 var NodeOfflineThreshold = 2 * time.Minute
+var RedisRequired = false
+var CommercialLicenseRequired = false
+var CommercialLicensePublicKeys = ""
+var CommercialLicenseAllowUnsigned = false
+var ServerAutoUpgradeEnabled = false
 
 // V3 operational settings (hot-reloadable via Option table)
 var AgentHeartbeatInterval = 10000 // milliseconds

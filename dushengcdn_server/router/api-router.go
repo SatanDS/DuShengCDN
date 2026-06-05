@@ -17,6 +17,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/verification", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendEmailVerification)
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
 		apiRouter.POST("/user/reset", middleware.CriticalRateLimit(), controller.ResetPassword)
+		apiRouter.GET("/oauth/github/authorize", middleware.CriticalRateLimit(), controller.GitHubOAuthAuthorize)
 		apiRouter.GET("/oauth/github", middleware.CriticalRateLimit(), controller.GitHubOAuth)
 		apiRouter.GET("/oauth/wechat", middleware.CriticalRateLimit(), controller.WeChatAuth)
 		apiRouter.GET("/oauth/wechat/bind", middleware.CriticalRateLimit(), middleware.UserAuth(), controller.WeChatBind)
@@ -84,6 +85,13 @@ func SetApiRouter(router *gin.Engine) {
 			updateRoute.POST("/manual-upload", controller.UploadManualServerBinary)
 			updateRoute.POST("/manual-upgrade", controller.ConfirmManualServerUpgrade)
 			updateRoute.POST("/upgrade", controller.UpgradeServer)
+		}
+		licenseRoute := apiRouter.Group("/license")
+		licenseRoute.Use(middleware.RootAuth(), middleware.NoTokenAuth())
+		{
+			licenseRoute.GET("/status", controller.GetCommercialLicense)
+			licenseRoute.POST("/install", controller.InstallCommercialLicense)
+			licenseRoute.POST("/clear", controller.ClearCommercialLicense)
 		}
 		proxyRoute := apiRouter.Group("/proxy-routes")
 		proxyRoute.Use(middleware.AdminAuth())

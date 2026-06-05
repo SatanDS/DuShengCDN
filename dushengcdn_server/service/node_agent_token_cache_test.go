@@ -111,3 +111,67 @@ func TestAgentTokenAuthCacheRefreshesAfterMissingEntryExpires(t *testing.T) {
 		t.Fatalf("unexpected recovered node: %+v", node)
 	}
 }
+
+func TestAgentTokenAuthCacheFallsBackWhenCachesUnavailable(t *testing.T) {
+	baseTime := time.Date(2026, 3, 14, 17, 0, 0, 0, time.UTC)
+	loadCount := 0
+	cache := &agentTokenAuthCache{
+		now: func() time.Time {
+			return baseTime
+		},
+		loadNodeByToken: func(token string) (*model.Node, error) {
+			loadCount++
+			return &model.Node{
+				NodeID:     fmt.Sprintf("node-%d", loadCount),
+				Name:       "edge",
+				AgentToken: token,
+			}, nil
+		},
+	}
+
+	first, err := cache.authenticate("token-no-cache")
+	if err != nil {
+		t.Fatalf("expected first auth without cache to succeed: %v", err)
+	}
+	second, err := cache.authenticate("token-no-cache")
+	if err != nil {
+		t.Fatalf("expected second auth without cache to succeed: %v", err)
+	}
+	if loadCount != 2 {
+		t.Fatalf("expected direct loads while cache is unavailable, got %d", loadCount)
+	}
+	if first.NodeID == second.NodeID {
+		t.Fatalf("expected uncached auth to reload node, got unchanged node id %s", first.NodeID)
+	}
+
+	cache.storeNode("token-no-cache", first, baseTime.Add(agentTokenPositiveCacheTTL))
+	cache.storeMissing("token-no-cache", baseTime.Add(agentTokenNegativeCacheTTL))
+	cache.invalidate("token-no-cache")
+	cache.reset()
+}
+
+func TestAgentTokenAuthCacheDoesNotNegativeCacheWhenUnavailable(t *testing.T) {
+	baseTime := time.Date(2026, 3, 14, 17, 30, 0, 0, time.UTC)
+	loadCount := 0
+	cache := &agentTokenAuthCache{
+		now: func() time.Time {
+			return baseTime
+		},
+		loadNodeByToken: func(token string) (*model.Node, error) {
+			loadCount++
+			return nil, gorm.ErrRecordNotFound
+		},
+	}
+
+	_, err := cache.authenticate("missing-no-cache")
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected first missing auth without cache to miss: %v", err)
+	}
+	_, err = cache.authenticate("missing-no-cache")
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected second missing auth without cache to miss: %v", err)
+	}
+	if loadCount != 2 {
+		t.Fatalf("expected repeated direct missing lookups while cache is unavailable, got %d", loadCount)
+	}
+}

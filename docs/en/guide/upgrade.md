@@ -6,7 +6,7 @@ Before upgrading, it is recommended to confirm the current activated version, th
 
 ## Server Upgrade
 
-Root users can check and upgrade the Server stable version from the top bar of the management console. Upgrades can also be confirmed and executed by uploading the Server binary.
+Root users can check the Server stable version from the top bar of the management console. Server automatic upgrades are disabled by default; production deployments should usually upload a reviewed Server binary and confirm the manual upgrade. To allow one-click automatic upgrades, set `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` and ensure the Release includes the matching Server binary plus a same-name `.sha256` file.
 
 To try a preview version, you can manually check the corresponding release. It is recommended to prioritize the stable version in production environments.
 

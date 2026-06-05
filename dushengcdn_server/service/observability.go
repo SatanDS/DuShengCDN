@@ -283,13 +283,25 @@ func summarizeAgentDNSProbeResults(results []AgentDNSProbeResult) (bool, float64
 }
 
 func persistBufferedObservability(tx *gorm.DB, nodeID string, records []AgentBufferedObservabilityRecord, reportedAt time.Time) error {
+	snapshots := make([]*model.NodeMetricSnapshot, 0, len(records))
+	reports := make([]*model.NodeRequestReport, 0, len(records))
 	for _, record := range records {
-		if err := persistNodeMetricSnapshot(tx, nodeID, record.Snapshot, reportedAt); err != nil {
+		if snapshot := buildNodeMetricSnapshotRecord(nodeID, record.Snapshot, reportedAt); snapshot != nil {
+			snapshots = append(snapshots, snapshot)
+		}
+		report, err := buildNodeRequestReportRecord(nodeID, record.TrafficReport, reportedAt)
+		if err != nil {
 			return err
 		}
-		if err := persistNodeTrafficReport(tx, nodeID, record.TrafficReport, reportedAt); err != nil {
-			return err
+		if report != nil {
+			reports = append(reports, report)
 		}
+	}
+	if _, err := model.InsertNewNodeMetricSnapshots(tx, snapshots); err != nil {
+		return err
+	}
+	if _, err := model.InsertNewNodeRequestReports(tx, reports); err != nil {
+		return err
 	}
 	return nil
 }
@@ -341,6 +353,15 @@ func persistNodeSystemProfile(tx *gorm.DB, nodeID string, profile *AgentNodeSyst
 }
 
 func persistNodeMetricSnapshot(tx *gorm.DB, nodeID string, snapshot *AgentNodeMetricSnapshot, reportedAt time.Time) error {
+	record := buildNodeMetricSnapshotRecord(nodeID, snapshot, reportedAt)
+	if record == nil {
+		return nil
+	}
+	_, err := model.InsertNewNodeMetricSnapshots(tx, []*model.NodeMetricSnapshot{record})
+	return err
+}
+
+func buildNodeMetricSnapshotRecord(nodeID string, snapshot *AgentNodeMetricSnapshot, reportedAt time.Time) *model.NodeMetricSnapshot {
 	if snapshot == nil {
 		return nil
 	}
@@ -348,7 +369,7 @@ func persistNodeMetricSnapshot(tx *gorm.DB, nodeID string, snapshot *AgentNodeMe
 	if capturedAt.After(reportedAt.UTC()) {
 		capturedAt = reportedAt.UTC()
 	}
-	record := &model.NodeMetricSnapshot{
+	return &model.NodeMetricSnapshot{
 		NodeID:               nodeID,
 		CapturedAt:           capturedAt,
 		CPUUsagePercent:      snapshot.CPUUsagePercent,
@@ -364,24 +385,28 @@ func persistNodeMetricSnapshot(tx *gorm.DB, nodeID string, snapshot *AgentNodeMe
 		OpenrestyTxBytes:     snapshot.OpenrestyTxBytes,
 		OpenrestyConnections: snapshot.OpenrestyConnections,
 	}
-	exists, err := model.NodeMetricSnapshotExists(tx, nodeID, record.CapturedAt)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	return tx.Create(record).Error
 }
 
 func persistNodeTrafficReport(tx *gorm.DB, nodeID string, report *AgentNodeTrafficReport, reportedAt time.Time) error {
-	if report == nil {
+	record, err := buildNodeRequestReportRecord(nodeID, report, reportedAt)
+	if err != nil {
+		return err
+	}
+	if record == nil {
 		return nil
 	}
-	if report.WindowEndedAtUnix > 0 && report.WindowStartedAtUnix > report.WindowEndedAtUnix {
-		return errors.New("traffic report window_started_at_unix 不能大于 window_ended_at_unix")
+	_, err = model.InsertNewNodeRequestReports(tx, []*model.NodeRequestReport{record})
+	return err
+}
+
+func buildNodeRequestReportRecord(nodeID string, report *AgentNodeTrafficReport, reportedAt time.Time) (*model.NodeRequestReport, error) {
+	if report == nil {
+		return nil, nil
 	}
-	record := &model.NodeRequestReport{
+	if report.WindowEndedAtUnix > 0 && report.WindowStartedAtUnix > report.WindowEndedAtUnix {
+		return nil, errors.New("traffic report window_started_at_unix 不能大于 window_ended_at_unix")
+	}
+	return &model.NodeRequestReport{
 		NodeID:              nodeID,
 		WindowStartedAt:     timeFromUnix(report.WindowStartedAtUnix, reportedAt),
 		WindowEndedAt:       timeFromUnix(report.WindowEndedAtUnix, reportedAt),
@@ -398,15 +423,7 @@ func persistNodeTrafficReport(tx *gorm.DB, nodeID string, report *AgentNodeTraff
 		StatusCodesJSON:     marshalJSON(report.StatusCodes),
 		TopDomainsJSON:      marshalJSON(report.TopDomains),
 		SourceCountriesJSON: marshalJSON(report.SourceCountries),
-	}
-	exists, err := model.NodeRequestReportExists(tx, nodeID, record.WindowStartedAt, record.WindowEndedAt)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	return tx.Create(record).Error
+	}, nil
 }
 
 func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog, reportedAt time.Time) error {
@@ -420,6 +437,7 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 	if resolver != nil {
 		defer resolver.Close()
 	}
+	records := make([]*model.NodeAccessLog, 0, len(logs))
 	for _, item := range logs {
 		record := &model.NodeAccessLog{
 			NodeID:        nodeID,
@@ -441,16 +459,10 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 			record.Region = geoResult.region
 			record.Operator = truncateForDatabase(geoResult.operator, 255)
 		}
-		exists, err := model.NodeAccessLogExists(tx, record)
-		if err != nil {
-			return err
-		}
-		if exists {
-			continue
-		}
-		if err := tx.Create(record).Error; err != nil {
-			return err
-		}
+		records = append(records, record)
+	}
+	if _, err := model.InsertNewNodeAccessLogs(tx, records); err != nil {
+		return err
 	}
 	_, err = model.DeleteNodeAccessLogsByNodeBefore(tx, nodeID, reportedAt.Add(-nodeAccessLogRetentionWindow))
 	return err

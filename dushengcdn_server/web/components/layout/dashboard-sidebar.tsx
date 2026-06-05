@@ -5,9 +5,13 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 
+import { useAuth } from '@/components/providers/auth-provider';
 import { dashboardNavigation } from '@/lib/constants/navigation';
 import { cn } from '@/lib/utils/cn';
-import { isNavigationItemActive } from '@/lib/utils/navigation';
+import {
+  filterNavigationItemsByRole,
+  isNavigationItemActive,
+} from '@/lib/utils/navigation';
 import { useAppShellStore } from '@/store/app-shell';
 import type { NavigationIconKey, NavigationItem } from '@/types/navigation';
 
@@ -29,6 +33,16 @@ function SidebarIcon({ icon }: { icon: NavigationIconKey }) {
           <path d="M3 10.5 12 3l9 7.5" />
           <path d="M5.5 9.5V21h13V9.5" />
           <path d="M9.5 21v-6h5v6" />
+        </svg>
+      );
+    case 'traffic':
+      return (
+        <svg {...commonProps}>
+          <path d="M4 7h10" />
+          <path d="M4 12h16" />
+          <path d="M4 17h8" />
+          <path d="m16 5 4 2-4 2" />
+          <path d="m14 15 4 2-4 2" />
         </svg>
       );
     case 'node':
@@ -115,6 +129,13 @@ function SidebarIcon({ icon }: { icon: NavigationIconKey }) {
           <path d="m15.5 8 1.5 0 0 1.5" />
         </svg>
       );
+    case 'shield':
+      return (
+        <svg {...commonProps}>
+          <path d="M12 3.5 19 6v5.4c0 4.2-2.8 7.2-7 9.1-4.2-1.9-7-4.9-7-9.1V6l7-2.5Z" />
+          <path d="m9 12 2 2 4-5" />
+        </svg>
+      );
     case 'user':
       return (
         <svg {...commonProps}>
@@ -135,6 +156,7 @@ function SidebarIcon({ icon }: { icon: NavigationIconKey }) {
 function SidebarNavItem({
   item,
   currentPath,
+  navigationItems,
   isSidebarCollapsed,
   forceExpanded,
   onNavigate,
@@ -142,12 +164,13 @@ function SidebarNavItem({
 }: {
   item: NavigationItem;
   currentPath: string;
+  navigationItems: NavigationItem[];
   isSidebarCollapsed: boolean;
   forceExpanded?: boolean;
   onNavigate?: () => void;
   depth?: number;
 }) {
-  const active = isNavigationItemActive(currentPath, item);
+  const active = isNavigationItemActive(currentPath, item, navigationItems);
   const hasChildren = Boolean(item.children?.length);
   const showLabel = forceExpanded || !isSidebarCollapsed;
 
@@ -180,6 +203,7 @@ function SidebarNavItem({
               key={child.href}
               item={child}
               currentPath={currentPath}
+              navigationItems={navigationItems}
               isSidebarCollapsed={isSidebarCollapsed}
               forceExpanded={forceExpanded}
               onNavigate={onNavigate}
@@ -194,11 +218,13 @@ function SidebarNavItem({
 
 function SidebarContent({
   currentPath,
+  navigationItems,
   isSidebarCollapsed,
   forceExpanded = false,
   onNavigate,
 }: {
   currentPath: string;
+  navigationItems: NavigationItem[];
   isSidebarCollapsed: boolean;
   forceExpanded?: boolean;
   onNavigate?: () => void;
@@ -232,11 +258,12 @@ function SidebarContent({
 
       <nav className="flex-1 space-y-2">
         <div className="flex max-h-full min-h-0 flex-col gap-2 overflow-y-auto pr-1">
-          {dashboardNavigation.map((item) => (
+          {navigationItems.map((item) => (
             <SidebarNavItem
               key={item.href}
               item={item}
               currentPath={currentPath}
+              navigationItems={navigationItems}
               isSidebarCollapsed={isSidebarCollapsed}
               forceExpanded={forceExpanded}
               onNavigate={onNavigate}
@@ -262,6 +289,11 @@ export function DashboardSidebar() {
   const setMobileSidebarOpen = useAppShellStore(
     (state) => state.setMobileSidebarOpen,
   );
+  const { user } = useAuth();
+  const navigationItems = filterNavigationItemsByRole(
+    dashboardNavigation,
+    user?.role ?? 0,
+  );
 
   useEffect(() => {
     setMobileSidebarOpen(false);
@@ -286,6 +318,7 @@ export function DashboardSidebar() {
       >
         <SidebarContent
           currentPath={currentPath}
+          navigationItems={navigationItems}
           isSidebarCollapsed={false}
           forceExpanded
           onNavigate={() => setMobileSidebarOpen(false)}
@@ -300,6 +333,7 @@ export function DashboardSidebar() {
       >
         <SidebarContent
           currentPath={currentPath}
+          navigationItems={navigationItems}
           isSidebarCollapsed={isSidebarCollapsed}
         />
       </aside>

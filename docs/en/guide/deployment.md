@@ -2,7 +2,7 @@
 
 You will learn the recommended DuShengCDN deployment model, Server and Agent requirements, source startup workflow, integration steps, upgrade paths, and uninstall entry points.
 
-For production, use PostgreSQL for the Server database and set `SESSION_SECRET` explicitly. Agent controls OpenResty through the OpenResty binary; Docker deployments run the Agent image that already includes OpenResty.
+For production, use PostgreSQL for the Server database, set `SESSION_SECRET` explicitly, and add Redis for multi-instance or commercial deployments. Agent controls OpenResty through the OpenResty binary; Docker deployments run the Agent image that already includes OpenResty.
 
 ## Topology
 
@@ -32,6 +32,7 @@ Server:
 | Go | `1.25+`, source run only |
 | Node.js | `18+`, frontend source build only |
 | Database | Writable SQLite directory or reachable PostgreSQL instance |
+| Redis | Optional; recommended for multi-instance deployments and consistent production rate limiting |
 | Port | `3000` by default |
 
 Agent:
@@ -116,10 +117,16 @@ services:
     ports:
       - "3000:3000"
     environment:
-      SESSION_SECRET: replace-with-a-long-random-string
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
       GIN_MODE: release
       LOG_LEVEL: info
+      # Optional: recommended for commercial or multi-instance deployments.
+      # REDIS_CONN_STRING: redis://redis:6379/0
+      # REDIS_REQUIRED: "true"
+      # Optional: enforced private commercial licensing.
+      # DUSHENGCDN_LICENSE_REQUIRED: "true"
+      # DUSHENGCDN_LICENSE_PUBLIC_KEYS: base64url-or-hex-ed25519-public-key
     volumes:
       - dushengcdn-data:/data
 
@@ -138,6 +145,8 @@ docker compose logs -f dushengcdn
 
 Open `http://localhost:3000`. The default account is `root` / `123456`; change it immediately.
 
+Commercial or multi-instance deployments should also provide a Redis service and set `REDIS_CONN_STRING`. If Redis must not silently degrade to in-process helpers, set `REDIS_REQUIRED=true`. To enforce private commercial licensing, set `DUSHENGCDN_LICENSE_REQUIRED=true` and `DUSHENGCDN_LICENSE_PUBLIC_KEYS`, then install the `dscdn_license_v1...` token from **Settings -> Commercial License**.
+
 ## Run Server from Source
 
 Build the management UI first:
@@ -153,7 +162,7 @@ Then start Server:
 
 ```bash
 cd dushengcdn_server
-export SESSION_SECRET='replace-with-a-long-random-string'
+export SESSION_SECRET="$(openssl rand -hex 32)"
 export SQLITE_PATH='./dushengcdn.db'
 export LOG_LEVEL='info'
 # Optional: PostgreSQL takes precedence when set.
@@ -377,9 +386,9 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 
 Server:
 
-* Root users can check and upgrade stable Server releases from the top bar.
+* Root users can check stable Server releases from the top bar. Server automatic upgrades are disabled by default; production deployments should usually upload a reviewed Server binary and confirm the manual upgrade.
+* To allow one-click automatic upgrades, set `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` and ensure the Release includes the matching Server binary plus a same-name `.sha256` file.
 * Preview releases can be checked manually.
-* Binary upload upgrades are also supported.
 * For source or Compose deployments, back up local `docker-compose.yaml` settings or move them into an override before pulling new code.
 
 Source directory + Compose upgrade:

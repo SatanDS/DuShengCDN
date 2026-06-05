@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"dushengcdn/model"
 
 	"github.com/miekg/dns"
+	"gorm.io/gorm"
 )
 
 func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
@@ -180,6 +183,322 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	}
 	if reloadedWorker.LastSnapshotVersion != snapshot.SnapshotVersion || reloadedWorker.LastSnapshotAt == nil {
 		t.Fatalf("expected worker snapshot metadata to be updated, got %+v", reloadedWorker)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotReusesTargetSelectionNodeSnapshot(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = false
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:            "node-hk",
+		Name:              "hk",
+		IP:                "8.8.4.4",
+		PoolName:          "hk",
+		PublicIPs:         `["8.8.4.4"]`,
+		Weight:            100,
+		SchedulingEnabled: true,
+		AgentToken:        "token-hk",
+		AgentVersion:      "dev",
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		Status:            NodeStatusOnline,
+		LastSeenAt:        now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	for _, domain := range []string{"a.example.com", "b.example.com", "c.example.com"} {
+		route := &model.ProxyRoute{
+			SiteName:        "edge-" + strings.TrimSuffix(domain, ".example.com"),
+			Domain:          domain,
+			Domains:         mustJSON(t, []string{domain}),
+			OriginURL:       "https://origin.internal",
+			Upstreams:       `["https://origin.internal"]`,
+			NodePool:        "hk",
+			Enabled:         true,
+			DNSProviderMode: DNSProviderModeAuthoritative,
+			DNSZoneIDRef:    &zone.ID,
+			DNSRecordType:   "A",
+			DNSAutoTarget:   true,
+			DNSTargetCount:  1,
+			DNSScheduleMode: "weighted",
+			DNSTTL:          60,
+		}
+		if err := route.Insert(); err != nil {
+			t.Fatalf("insert route %s: %v", domain, err)
+		}
+	}
+
+	var listNodesCalls atomic.Int64
+	snapshot, err := getAuthoritativeDNSSnapshotWithQueries(nil, gslbDNSSchedulingDataQueries{
+		ListNodes: func() ([]*model.Node, error) {
+			listNodesCalls.Add(1)
+			return model.ListNodes()
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+	if len(snapshot.Routes) != 3 || len(snapshot.Nodes) != 1 {
+		t.Fatalf("unexpected snapshot size: routes=%+v nodes=%+v", snapshot.Routes, snapshot.Nodes)
+	}
+	for _, route := range snapshot.Routes {
+		if len(route.CurrentTargets) != 1 || route.CurrentTargets[0] != "8.8.4.4" || route.TargetError != "" {
+			t.Fatalf("expected route target from shared node snapshot, got %+v", route)
+		}
+	}
+	if got := int(listNodesCalls.Load()); got != 1 {
+		t.Fatalf("expected snapshot generation to load nodes once, got %d listNodes calls", got)
+	}
+}
+
+func TestSnapshotAuthoritativeRoutesBatchesZoneLoading(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	zoneA, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "a.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone zoneA: %v", err)
+	}
+	zoneB, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "b.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone zoneB: %v", err)
+	}
+	zoneC, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "c.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone zoneC: %v", err)
+	}
+	rawZoneC, err := model.GetDNSZoneByID(zoneC.ID)
+	if err != nil {
+		t.Fatalf("GetDNSZoneByID zoneC: %v", err)
+	}
+	rawZoneC.Enabled = false
+	if err := rawZoneC.Update(); err != nil {
+		t.Fatalf("disable zoneC: %v", err)
+	}
+
+	now := time.Now().UTC()
+	nodes := []*model.Node{
+		{NodeID: "node-hk", Name: "hk", IP: "8.8.4.4", PoolName: "hk", PublicIPs: `["8.8.4.4"]`, Weight: 100, SchedulingEnabled: true, AgentToken: "token-hk", AgentVersion: "dev", OpenrestyStatus: OpenrestyStatusHealthy, Status: NodeStatusOnline, LastSeenAt: now},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+	for _, fixture := range []struct {
+		domain string
+		zoneID uint
+	}{
+		{"www.a.example.com", zoneA.ID},
+		{"api.a.example.com", zoneA.ID},
+		{"www.b.example.com", zoneB.ID},
+		{"www.c.example.com", zoneC.ID},
+	} {
+		route := &model.ProxyRoute{
+			SiteName:        "edge-" + fixture.domain,
+			Domain:          fixture.domain,
+			Domains:         mustJSON(t, []string{fixture.domain}),
+			OriginURL:       "https://origin.internal",
+			Upstreams:       `["https://origin.internal"]`,
+			NodePool:        "hk",
+			Enabled:         true,
+			DNSProviderMode: DNSProviderModeAuthoritative,
+			DNSZoneIDRef:    &fixture.zoneID,
+			DNSRecordType:   "A",
+			DNSAutoTarget:   true,
+			DNSTargetCount:  1,
+			DNSScheduleMode: "weighted",
+			DNSTTL:          60,
+		}
+		if err := route.Insert(); err != nil {
+			t.Fatalf("insert route %s: %v", fixture.domain, err)
+		}
+	}
+
+	schedulingData, err := loadGSLBDNSSchedulingDataWithQueries(true, gslbDNSSchedulingDataQueries{
+		ListNodes: func() ([]*model.Node, error) {
+			return model.ListNodes()
+		},
+	})
+	if err != nil {
+		t.Fatalf("loadGSLBDNSSchedulingData: %v", err)
+	}
+	schedulingOptions := authoritativeDNSSchedulingOptions()
+	schedulingOptions.Data = schedulingData
+	var listZonesCalls atomic.Int64
+	routes, err := snapshotAuthoritativeRoutesWithQueries(schedulingOptions, authoritativeDNSSnapshotRouteQueries{
+		ListDNSZonesByIDs: func(zoneIDs []uint) ([]*model.DNSZone, error) {
+			listZonesCalls.Add(1)
+			if fmt.Sprint(zoneIDs) != fmt.Sprint([]uint{zoneA.ID, zoneB.ID, zoneC.ID}) {
+				t.Fatalf("unexpected batched route zone ids: %v", zoneIDs)
+			}
+			return model.ListDNSZonesByIDs(zoneIDs)
+		},
+	})
+	if err != nil {
+		t.Fatalf("snapshotAuthoritativeRoutes: %v", err)
+	}
+	if got := int(listZonesCalls.Load()); got != 1 {
+		t.Fatalf("expected snapshot routes to load zones once, got %d calls", got)
+	}
+	if len(routes) != 3 {
+		t.Fatalf("expected routes in enabled zones only, got %+v", routes)
+	}
+	for _, route := range routes {
+		if route.ZoneID == zoneC.ID || len(route.CurrentTargets) != 1 || route.CurrentTargets[0] != "8.8.4.4" {
+			t.Fatalf("unexpected snapshot route: %+v", route)
+		}
+	}
+}
+
+func TestListAuthoritativeDNSZonesIncludesRecordCounts(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zoneA, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "a.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone zoneA: %v", err)
+	}
+	zoneB, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "b.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone zoneB: %v", err)
+	}
+	emptyZone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "empty.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone emptyZone: %v", err)
+	}
+
+	for _, input := range []struct {
+		zoneID uint
+		record DNSRecordInput
+	}{
+		{zoneA.ID, DNSRecordInput{Name: "www", Type: "A", Value: "192.0.2.1"}},
+		{zoneA.ID, DNSRecordInput{Name: "api", Type: "A", Value: "192.0.2.2"}},
+		{zoneB.ID, DNSRecordInput{Name: "www", Type: "A", Value: "192.0.2.3"}},
+	} {
+		if _, err := CreateAuthoritativeDNSRecord(input.zoneID, input.record); err != nil {
+			t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+		}
+	}
+
+	zones, err := ListAuthoritativeDNSZones()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSZones: %v", err)
+	}
+	viewsByID := make(map[uint]DNSZoneView, len(zones))
+	for _, zone := range zones {
+		viewsByID[zone.ID] = zone
+		if len(zone.Records) != 0 {
+			t.Fatalf("expected list view to omit hydrated records, got %+v", zone)
+		}
+	}
+	if viewsByID[zoneA.ID].RecordCount != 2 {
+		t.Fatalf("expected zoneA record count 2, got %+v", viewsByID[zoneA.ID])
+	}
+	if viewsByID[zoneB.ID].RecordCount != 1 {
+		t.Fatalf("expected zoneB record count 1, got %+v", viewsByID[zoneB.ID])
+	}
+	if viewsByID[emptyZone.ID].RecordCount != 0 {
+		t.Fatalf("expected empty zone record count 0, got %+v", viewsByID[emptyZone.ID])
+	}
+
+	detail, err := GetAuthoritativeDNSZone(zoneA.ID)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSZone: %v", err)
+	}
+	if detail.RecordCount != 2 || len(detail.Records) != 2 {
+		t.Fatalf("expected detail view to include two records and count, got %+v", detail)
+	}
+}
+
+func TestSnapshotDNSZonesBatchesRecordLoading(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zoneA, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "a.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone zoneA: %v", err)
+	}
+	zoneB, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "b.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone zoneB: %v", err)
+	}
+	zoneC, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "c.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone zoneC: %v", err)
+	}
+	for _, input := range []struct {
+		zoneID uint
+		record DNSRecordInput
+	}{
+		{zoneA.ID, DNSRecordInput{Name: "www", Type: "A", Value: "192.0.2.1"}},
+		{zoneB.ID, DNSRecordInput{Name: "www", Type: "AAAA", Value: "2001:db8::1"}},
+		{zoneC.ID, DNSRecordInput{Name: "www", Type: "A", Value: "192.0.2.3"}},
+	} {
+		if _, err := CreateAuthoritativeDNSRecord(input.zoneID, input.record); err != nil {
+			t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+		}
+	}
+	disabledRecord, err := CreateAuthoritativeDNSRecord(zoneA.ID, DNSRecordInput{Name: "disabled", Type: "A", Value: "192.0.2.2"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord disabled: %v", err)
+	}
+	rawDisabledRecord, err := model.GetDNSRecordByID(disabledRecord.ID)
+	if err != nil {
+		t.Fatalf("GetDNSRecordByID disabled: %v", err)
+	}
+	rawDisabledRecord.Enabled = false
+	if err := rawDisabledRecord.Update(); err != nil {
+		t.Fatalf("disable dns record: %v", err)
+	}
+
+	var listRecordsCalls atomic.Int64
+	snapshotZones, err := snapshotDNSZonesWithQueries(authoritativeDNSSnapshotZoneQueries{
+		ListDNSRecordsByZoneIDs: func(zoneIDs []uint) ([]*model.DNSRecord, error) {
+			listRecordsCalls.Add(1)
+			if fmt.Sprint(zoneIDs) != fmt.Sprint([]uint{zoneA.ID, zoneB.ID, zoneC.ID}) {
+				t.Fatalf("unexpected batched zone ids: %v", zoneIDs)
+			}
+			return model.ListDNSRecordsByZoneIDs(zoneIDs)
+		},
+	})
+	if err != nil {
+		t.Fatalf("snapshotDNSZones: %v", err)
+	}
+	if got := int(listRecordsCalls.Load()); got != 1 {
+		t.Fatalf("expected snapshot zones to load records once, got %d calls", got)
+	}
+	if len(snapshotZones) != 3 {
+		t.Fatalf("expected three zones in snapshot, got %+v", snapshotZones)
+	}
+	recordsByZone := make(map[string][]AuthoritativeDNSSnapshotRecord, len(snapshotZones))
+	for _, zone := range snapshotZones {
+		recordsByZone[zone.Name] = zone.Records
+	}
+	if len(recordsByZone["a.example.com"]) != 1 || recordsByZone["a.example.com"][0].Name != "www.a.example.com" {
+		t.Fatalf("expected enabled records for zoneA only, got %+v", recordsByZone["a.example.com"])
+	}
+	if len(recordsByZone["b.example.com"]) != 1 || recordsByZone["b.example.com"][0].Type != "AAAA" {
+		t.Fatalf("expected zoneB AAAA record, got %+v", recordsByZone["b.example.com"])
+	}
+	if len(recordsByZone["c.example.com"]) != 1 || recordsByZone["c.example.com"][0].Name != "www.c.example.com" {
+		t.Fatalf("expected zoneC A record, got %+v", recordsByZone["c.example.com"])
 	}
 }
 
@@ -651,6 +970,11 @@ func TestCreateProxyRouteAuthoritativeRejectsStaticRecordConflict(t *testing.T) 
 	}
 	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.10"}); err != nil {
 		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+	}
+	for _, name := range []string{"api", "static", "img", "download"} {
+		if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: name, Type: "A", Value: "203.0.113.11"}); err != nil {
+			t.Fatalf("CreateAuthoritativeDNSRecord unrelated %s: %v", name, err)
+		}
 	}
 
 	_, err = CreateProxyRoute(ProxyRouteInput{
@@ -1526,6 +1850,85 @@ func TestListAuthoritativeDNSMigrationCandidatesReportsNoAvailableGSLBTargets(t 
 	}
 }
 
+func TestListAuthoritativeDNSMigrationCandidatesReusesTargetPrecheckNodeSnapshot(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	oldProbeScheduling := common.GSLBProbeSchedulingEnabled
+	common.NodeOfflineThreshold = time.Minute
+	common.GSLBProbeSchedulingEnabled = false
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+		common.GSLBProbeSchedulingEnabled = oldProbeScheduling
+	})
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:            "node-hk",
+		Name:              "hk",
+		IP:                "8.8.4.4",
+		PoolName:          "hk",
+		PublicIPs:         `["8.8.4.4"]`,
+		Weight:            100,
+		SchedulingEnabled: true,
+		AgentToken:        "token-hk",
+		AgentVersion:      "dev",
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		Status:            NodeStatusOnline,
+		LastSeenAt:        now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert hk node: %v", err)
+	}
+	for _, domain := range []string{"a.example.com", "b.example.com", "c.example.com"} {
+		route := &model.ProxyRoute{
+			SiteName:        "edge-" + strings.TrimSuffix(domain, ".example.com"),
+			Domain:          domain,
+			Domains:         mustJSON(t, []string{domain}),
+			OriginURL:       "https://origin.internal",
+			Upstreams:       `["https://origin.internal"]`,
+			NodePool:        "hk",
+			Enabled:         true,
+			DNSAutoSync:     true,
+			DNSProviderMode: DNSProviderModeCloudflare,
+			DNSRecordType:   "A",
+			DNSAutoTarget:   true,
+			DNSTargetCount:  1,
+			DNSScheduleMode: "weighted",
+			DNSTTL:          60,
+		}
+		if err := route.Insert(); err != nil {
+			t.Fatalf("insert route %s: %v", domain, err)
+		}
+	}
+	createReadyDNSWorker(t, now)
+
+	var listNodesCalls atomic.Int64
+	candidates, err := listAuthoritativeDNSMigrationCandidatesWithQueries(gslbDNSSchedulingDataQueries{
+		ListNodes: func() ([]*model.Node, error) {
+			listNodesCalls.Add(1)
+			return model.ListNodes()
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSMigrationCandidates: %v", err)
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("expected three migration candidates, got %+v", candidates)
+	}
+	for _, candidate := range candidates {
+		if !candidate.Ready || candidate.MatchingZoneID == nil || *candidate.MatchingZoneID != zone.ID {
+			t.Fatalf("expected ready candidate backed by shared node snapshot, got %+v", candidate)
+		}
+	}
+	if got := int(listNodesCalls.Load()); got != 1 {
+		t.Fatalf("expected migration candidates to load nodes once, got %d listNodes calls", got)
+	}
+}
+
 func TestListAuthoritativeDNSMigrationCandidatesRequiresFreshWorkerSnapshot(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -2309,6 +2712,82 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 }
 
+func TestPersistDNSQueryRollupsBatchesInserts(t *testing.T) {
+	setupServiceTestDB(t)
+
+	const callbackName = "dushengcdn:test_dns_query_rollup_create_counter"
+	var rollupCreates int64
+	createCallback := model.DB.Callback().Create()
+	if err := createCallback.After("gorm:create").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		if db.Statement.Table == "dns_query_rollups" ||
+			(db.Statement.Schema != nil && db.Statement.Schema.Table == "dns_query_rollups") ||
+			strings.Contains(db.Statement.SQL.String(), "dns_query_rollups") {
+			atomic.AddInt64(&rollupCreates, 1)
+		}
+	}); err != nil {
+		t.Fatalf("register create callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = createCallback.Remove(callbackName)
+	})
+
+	windowStart := time.Now().UTC().Add(-time.Minute).Truncate(time.Minute)
+	if err := persistDNSQueryRollups("ns1", []DNSQueryRollupInput{
+		{
+			WindowStart:   windowStart,
+			WindowMinutes: 5,
+			QName:         "www.example.com",
+			QType:         "A",
+			RCode:         "NOERROR",
+			QueryCount:    10,
+			TargetSummary: map[string]int64{
+				"8.8.8.8":   6,
+				" 8.8.8.8 ": 4,
+			},
+		},
+		{
+			WindowStart:   windowStart,
+			WindowMinutes: 5,
+			QName:         "api.example.com",
+			QType:         "AAAA",
+			RCode:         "NOERROR",
+			QueryCount:    7,
+			SourceScope:   "country:tw",
+		},
+		{
+			WindowStart:   windowStart,
+			WindowMinutes: 5,
+			QName:         "ignored.example.com",
+			QType:         "A",
+			RCode:         "NOERROR",
+			QueryCount:    0,
+		},
+	}); err != nil {
+		t.Fatalf("persistDNSQueryRollups: %v", err)
+	}
+
+	if got := atomic.LoadInt64(&rollupCreates); got != 1 {
+		t.Fatalf("expected one batched rollup insert, got %d", got)
+	}
+	var rollups []model.DNSQueryRollup
+	if err := model.DB.Order("q_name asc").Find(&rollups).Error; err != nil {
+		t.Fatalf("list rollups: %v", err)
+	}
+	if len(rollups) != 2 {
+		t.Fatalf("expected two persisted rollups, got %+v", rollups)
+	}
+	if rollups[0].QName != "api.example.com" || rollups[0].SourceScope != "country:TW" {
+		t.Fatalf("unexpected normalized scoped rollup: %+v", rollups[0])
+	}
+	targetSummary := decodeDNSTargetSummary(rollups[1].TargetSummary)
+	if rollups[1].QName != "www.example.com" || targetSummary["8.8.8.8"] != 10 {
+		t.Fatalf("unexpected aggregated target summary: raw=%s decoded=%+v", rollups[1].TargetSummary, targetSummary)
+	}
+}
+
 func TestDNSWorkerHeartbeatClampsFutureSnapshotTime(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -2568,6 +3047,177 @@ func TestDNSWorkerHeartbeatPersistsSchedulingStates(t *testing.T) {
 	}
 	if state.SelectedTargets != `["1.1.1.1"]` || state.LastChangedAt == nil || !state.LastChangedAt.After(clampedChangedAt) {
 		t.Fatalf("expected normal heartbeat to overwrite clamped future state, got %+v", state)
+	}
+}
+
+func TestPersistDNSWorkerSchedulingStatesBatchesExistingStateLookup(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		GSLBEnabled:     true,
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	existingChangedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	if err := model.DB.Create(&model.GSLBSchedulingState{
+		ProxyRouteID:    route.ID,
+		DNSRecordType:   "A",
+		ScopeKey:        "country:HK",
+		SelectedTargets: `["8.8.4.4"]`,
+		DesiredTargets:  `["8.8.4.4"]`,
+		LastReason:      "existing",
+		LastChangedAt:   &existingChangedAt,
+		LastEvaluatedAt: &existingChangedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert existing scheduling state: %v", err)
+	}
+
+	const callbackName = "dushengcdn:test_gslb_state_lookup_counter"
+	var stateQueries int64
+	queryCallback := model.DB.Callback().Query()
+	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		if db.Statement.Table == "gslb_scheduling_states" ||
+			(db.Statement.Schema != nil && db.Statement.Schema.Table == "gslb_scheduling_states") ||
+			strings.Contains(db.Statement.SQL.String(), "gslb_scheduling_states") {
+			atomic.AddInt64(&stateQueries, 1)
+		}
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queryCallback.Remove(callbackName)
+	})
+
+	olderChangedAt := existingChangedAt.Add(-time.Minute)
+	newerChangedAt := existingChangedAt.Add(time.Minute)
+	if err := persistDNSWorkerSchedulingStates([]AuthoritativeDNSSnapshotSchedulingState{
+		{
+			RouteID:         route.ID,
+			RecordType:      "A",
+			ScopeKey:        "country:hk",
+			SelectedTargets: []string{"9.9.9.9"},
+			DesiredTargets:  []string{"9.9.9.9"},
+			LastChangedAt:   &olderChangedAt,
+		},
+		{
+			RouteID:         route.ID,
+			RecordType:      "A",
+			ScopeKey:        "country:HK",
+			SelectedTargets: []string{"1.1.1.1"},
+			DesiredTargets:  []string{"1.1.1.1"},
+			LastChangedAt:   &newerChangedAt,
+		},
+		{
+			RouteID:         route.ID,
+			RecordType:      "A",
+			ScopeKey:        "country:TW",
+			SelectedTargets: []string{"2.2.2.2"},
+			DesiredTargets:  []string{"2.2.2.2"},
+			LastChangedAt:   &newerChangedAt,
+		},
+	}); err != nil {
+		t.Fatalf("persistDNSWorkerSchedulingStates: %v", err)
+	}
+
+	if got := atomic.LoadInt64(&stateQueries); got != 1 {
+		t.Fatalf("expected one batched scheduling state lookup, got %d", got)
+	}
+	var states []model.GSLBSchedulingState
+	if err := model.DB.Order("scope_key asc").Find(&states).Error; err != nil {
+		t.Fatalf("list scheduling states: %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("expected two scheduling states, got %+v", states)
+	}
+	if states[0].ScopeKey != "country:HK" || states[0].SelectedTargets != `["1.1.1.1"]` || states[0].LastChangedAt == nil || !states[0].LastChangedAt.Equal(newerChangedAt) {
+		t.Fatalf("expected newer duplicate input to win, got %+v", states[0])
+	}
+	if states[1].ScopeKey != "country:TW" || states[1].SelectedTargets != `["2.2.2.2"]` {
+		t.Fatalf("expected second scope to be inserted, got %+v", states[1])
+	}
+}
+
+func TestBuildDNSWorkerHealthSummaryReusesWorkerListForNodeProbeStats(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := model.DB.Model(&model.DNSWorker{}).
+		Where("id = ?", authenticated.ID).
+		Updates(map[string]any{
+			"status":       dnsWorkerStatusOnline,
+			"last_seen_at": now,
+		}).Error; err != nil {
+		t.Fatalf("mark worker online: %v", err)
+	}
+	if err := (&model.Node{
+		NodeID:            "node-probe",
+		Name:              "node-probe",
+		IP:                "8.8.8.8",
+		PoolName:          "default",
+		PublicIPs:         `["8.8.8.8"]`,
+		SchedulingEnabled: true,
+		AgentToken:        "token-probe",
+		AgentVersion:      "dev",
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		Status:            NodeStatusOnline,
+		LastSeenAt:        now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	const callbackName = "dushengcdn:test_dns_worker_health_query_counter"
+	var workerQueries int64
+	queryCallback := model.DB.Callback().Query()
+	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		if db.Statement.Table == "dns_workers" ||
+			(db.Statement.Schema != nil && db.Statement.Schema.Table == "dns_workers") ||
+			strings.Contains(db.Statement.SQL.String(), "dns_workers") {
+			atomic.AddInt64(&workerQueries, 1)
+		}
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queryCallback.Remove(callbackName)
+	})
+
+	view := buildDNSWorkerHealthSummary(now, nil)
+	if len(view.Workers) != 1 || view.Workers[0].WorkerID != authenticated.WorkerID {
+		t.Fatalf("unexpected worker health view: %+v", view)
+	}
+	if got := atomic.LoadInt64(&workerQueries); got != 1 {
+		t.Fatalf("expected worker health summary to query dns_workers once, got %d", got)
 	}
 }
 

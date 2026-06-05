@@ -96,6 +96,34 @@ func TestMatchManagedDomainCertificateSupportsWildcard(t *testing.T) {
 	}
 }
 
+func TestMatchManagedDomainCertificateReturnsMissingCertificateError(t *testing.T) {
+	setupServiceTestDB(t)
+
+	missingCertID := uint(999999)
+	if _, err := CreateManagedDomain(ManagedDomainInput{
+		Domain:  "missing.example.com",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("failed to create managed domain shell: %v", err)
+	}
+	domains, err := ListManagedDomains()
+	if err != nil {
+		t.Fatalf("ListManagedDomains failed: %v", err)
+	}
+	if len(domains) != 1 {
+		t.Fatalf("expected one managed domain, got %d", len(domains))
+	}
+	domains[0].CertID = &missingCertID
+	if err := domains[0].Update(); err != nil {
+		t.Fatalf("failed to assign missing cert id: %v", err)
+	}
+
+	_, err = MatchManagedDomainCertificate("missing.example.com")
+	if err == nil {
+		t.Fatal("expected missing certificate reference to fail")
+	}
+}
+
 func TestCreateManagedDomainRejectsInvalidWildcard(t *testing.T) {
 	setupServiceTestDB(t)
 

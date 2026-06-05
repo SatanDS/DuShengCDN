@@ -270,13 +270,7 @@ func validateOpenRestyOption(key string, value string) error {
 }
 
 func buildOptionValidationState(options []model.Option) map[string]string {
-	common.OptionMapRWMutex.RLock()
-	state := make(map[string]string, len(common.OptionMap)+len(options))
-	for key, value := range common.OptionMap {
-		state[key] = value
-	}
-	common.OptionMapRWMutex.RUnlock()
-
+	state := common.OptionMapSnapshot()
 	for _, option := range options {
 		state[option.Key] = option.Value
 	}
@@ -349,8 +343,7 @@ func updateOptions(options []model.Option) error {
 // @Router /api/option/ [get]
 func GetOptions(c *gin.Context) {
 	var options []*model.Option
-	common.OptionMapRWMutex.Lock()
-	for k, v := range common.OptionMap {
+	for k, v := range common.OptionMapSnapshot() {
 		if strings.Contains(k, "Token") || strings.Contains(k, "Secret") {
 			continue
 		}
@@ -359,7 +352,6 @@ func GetOptions(c *gin.Context) {
 			Value: utils.Interface2String(v),
 		})
 	}
-	common.OptionMapRWMutex.Unlock()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

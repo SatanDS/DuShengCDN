@@ -159,7 +159,7 @@ func UpdateTLSCertificate(id uint, input TLSCertificateInput) (*model.TLSCertifi
 }
 
 func DeleteTLSCertificate(id uint) error {
-	routes, err := model.ListProxyRoutes()
+	routes, err := model.ListProxyRouteCertificateReferenceFields()
 	if err != nil {
 		return err
 	}
@@ -204,8 +204,14 @@ func DeleteTLSCertificate(id uint) error {
 }
 
 func ApplyTLSCertificate(input TLSApplyInput) (*model.TLSCertificate, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureACMEAutomation); err != nil {
+		return nil, err
+	}
 	dnsProviderMode, dnsAccountID, dnsZoneIDRef, err := normalizeTLSCertificateDNSSettings(input)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureCommercialTLSDNSFeatureEnabled(dnsProviderMode); err != nil {
 		return nil, err
 	}
 
@@ -250,6 +256,9 @@ func ApplyTLSCertificate(input TLSApplyInput) (*model.TLSCertificate, error) {
 }
 
 func UpdateAcmeCertificate(id uint, input TLSApplyInput) (*model.TLSCertificate, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureACMEAutomation); err != nil {
+		return nil, err
+	}
 	cert, err := model.GetTLSCertificateByID(id)
 	if err != nil {
 		return nil, err
@@ -264,6 +273,9 @@ func UpdateAcmeCertificate(id uint, input TLSApplyInput) (*model.TLSCertificate,
 	}
 	dnsProviderMode, dnsAccountID, dnsZoneIDRef, err := normalizeTLSCertificateDNSSettings(input)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureCommercialTLSDNSFeatureEnabled(dnsProviderMode); err != nil {
 		return nil, err
 	}
 
@@ -298,6 +310,9 @@ func UpdateAcmeCertificate(id uint, input TLSApplyInput) (*model.TLSCertificate,
 }
 
 func ConvertTLSCertificateToAcme(id uint, input TLSApplyInput) (*model.TLSCertificate, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureACMEAutomation); err != nil {
+		return nil, err
+	}
 	cert, err := model.GetTLSCertificateByID(id)
 	if err != nil {
 		return nil, err
@@ -315,6 +330,9 @@ func ConvertTLSCertificateToAcme(id uint, input TLSApplyInput) (*model.TLSCertif
 	}
 	dnsProviderMode, dnsAccountID, dnsZoneIDRef, err := normalizeTLSCertificateDNSSettings(input)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureCommercialTLSDNSFeatureEnabled(dnsProviderMode); err != nil {
 		return nil, err
 	}
 
@@ -352,21 +370,29 @@ func ConvertTLSCertificateToAcme(id uint, input TLSApplyInput) (*model.TLSCertif
 			return
 		}
 		latest.Provider = "acme"
-		latest.ApplyStatus = "ready"
-		latest.ApplyMessage = ""
-		if err := latest.Update(); err != nil {
-			return
-		}
-		if err := SyncManagedDomainForCertificate(latest); err != nil {
-			latest.ApplyMessage = fmt.Sprintf("证书已签发，但同步域名资产失败：%v", err)
-			_ = latest.Update()
-		}
+		_ = markCertificateReadyAfterManagedDomainSync(latest)
 	}(cert)
 
 	return cert, nil
 }
 
+func markCertificateReadyAfterManagedDomainSync(cert *model.TLSCertificate) error {
+	if cert == nil {
+		return errors.New("certificate is nil")
+	}
+	applyMessage := ""
+	if err := SyncManagedDomainForCertificate(cert); err != nil {
+		applyMessage = fmt.Sprintf("证书已签发，但同步域名资产失败：%v", err)
+	}
+	cert.ApplyStatus = "ready"
+	cert.ApplyMessage = applyMessage
+	return cert.Update()
+}
+
 func RenewTLSCertificate(id uint) (*model.TLSCertificate, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureACMEAutomation); err != nil {
+		return nil, err
+	}
 	cert, err := model.GetTLSCertificateByID(id)
 	if err != nil {
 		return nil, err
@@ -384,6 +410,17 @@ func RenewTLSCertificate(id uint) (*model.TLSCertificate, error) {
 	cert.Update()
 
 	return cert, nil
+}
+
+func ensureCommercialTLSDNSFeatureEnabled(dnsProviderMode string) error {
+	switch normalizeTLSCertificateDNSProviderMode(dnsProviderMode) {
+	case DNSProviderModeAuthoritative:
+		return EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS)
+	case DNSProviderModeCloudflare:
+		return EnsureCommercialFeatureEnabled(CommercialFeatureCloudflareDNS)
+	default:
+		return nil
+	}
 }
 
 func normalizeTLSCertificateDNSProviderMode(raw string) string {

@@ -1,5 +1,5 @@
-import { TlsCertificatesPage } from '@/features/tls-certificates/components/tls-certificates-page';
+import { redirect } from 'next/navigation';
 
 export default function CertificateRoute() {
-  return <TlsCertificatesPage />;
+  redirect('/website/certificate');
 }

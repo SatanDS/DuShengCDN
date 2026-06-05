@@ -25,7 +25,7 @@ type DashboardSummary struct {
 }
 
 type DashboardTraffic struct {
-	RequestCount          int64   `json:"request_count"`
+	RequestCount         int64   `json:"request_count"`
 	UniqueVisitors       int64   `json:"unique_visitors"`
 	ErrorCount           int64   `json:"error_count"`
 	EstimatedQPS         float64 `json:"estimated_qps"`
@@ -74,51 +74,73 @@ type DashboardNodeHealth struct {
 	UniqueVisitorCount  int64    `json:"unique_visitor_count"`
 }
 
+type dashboardOverviewQueryData struct {
+	nodes               []*model.Node
+	latestSnapshotRows  []*model.NodeMetricSnapshot
+	latestTrafficRows   []*model.NodeRequestReport
+	trafficTrendBuckets []*model.NodeRequestReportTrendBucket
+	metricTrendBuckets  []*model.NodeMetricSnapshotTrendBucket
+	counterTrendBuckets []*model.NodeMetricSnapshotCounterDeltaBucket
+	accessLogStatus     []*model.NodeAccessLogDistributionRow
+	accessLogTopDomains []*model.NodeAccessLogDistributionRow
+	accessLogRegions    []*model.NodeAccessLogRegionCount
+	activeEvents        []*model.NodeHealthEvent
+}
+
+type dashboardOverviewQueries struct {
+	listNodes                        func() ([]*model.Node, error)
+	listLatestMetricSnapshotsByNode  func(time.Time, time.Time) ([]*model.NodeMetricSnapshot, error)
+	listLatestRequestReportsByNode   func(time.Time, time.Time) ([]*model.NodeRequestReport, error)
+	listRequestReportTrendBuckets    func(string, time.Time, time.Time, int) ([]*model.NodeRequestReportTrendBucket, error)
+	listMetricSnapshotTrendBuckets   func(string, time.Time, time.Time, int) ([]*model.NodeMetricSnapshotTrendBucket, error)
+	listMetricCounterDeltaBuckets    func(string, time.Time, time.Time, int) ([]*model.NodeMetricSnapshotCounterDeltaBucket, error)
+	listAccessLogStatusDistributions func(model.NodeAccessLogDistributionQuery) ([]*model.NodeAccessLogDistributionRow, error)
+	listAccessLogHostDistributions   func(model.NodeAccessLogDistributionQuery) ([]*model.NodeAccessLogDistributionRow, error)
+	listAccessLogRegionCounts        func(string, time.Time, int) ([]*model.NodeAccessLogRegionCount, error)
+	listActiveNodeHealthEvents       func() ([]*model.NodeHealthEvent, error)
+}
+
+var defaultDashboardOverviewQueries = dashboardOverviewQueries{
+	listNodes:                        model.ListNodes,
+	listLatestMetricSnapshotsByNode:  model.ListLatestMetricSnapshotsByNode,
+	listLatestRequestReportsByNode:   model.ListLatestRequestReportsByNode,
+	listRequestReportTrendBuckets:    model.ListRequestReportTrendBuckets,
+	listMetricSnapshotTrendBuckets:   model.ListMetricSnapshotTrendBuckets,
+	listMetricCounterDeltaBuckets:    model.ListMetricSnapshotCounterDeltaBuckets,
+	listAccessLogStatusDistributions: model.ListNodeAccessLogStatusDistributions,
+	listAccessLogHostDistributions:   model.ListNodeAccessLogHostDistributions,
+	listAccessLogRegionCounts:        model.ListNodeAccessLogRegionCounts,
+	listActiveNodeHealthEvents:       model.ListActiveNodeHealthEvents,
+}
+
 func GetDashboardOverview() (*DashboardOverviewView, error) {
 	now := time.Now()
 	since := now.Add(-24 * time.Hour)
 
-	nodes, err := model.ListNodes()
-	if err != nil {
-		return nil, err
-	}
-
-	snapshots, err := model.ListMetricSnapshotsSince(since)
-	if err != nil {
-		return nil, err
-	}
-	reports, err := model.ListRequestReportsSince(since)
-	if err != nil {
-		return nil, err
-	}
-	accessLogRegions, err := model.ListNodeAccessLogRegionCounts("", since, 8)
-	if err != nil {
-		return nil, err
-	}
-	activeEvents, err := model.ListActiveNodeHealthEvents()
+	data, err := loadDashboardOverviewQueryData(since, now, defaultDashboardOverviewQueries)
 	if err != nil {
 		return nil, err
 	}
 
 	view := &DashboardOverviewView{
 		GeneratedAt:   now,
-		Nodes:         make([]DashboardNodeHealth, 0, len(nodes)),
-		Distributions: buildTrafficDistributions(reports, accessLogRegions, 8),
+		Nodes:         make([]DashboardNodeHealth, 0, len(data.nodes)),
+		Distributions: buildDashboardTrafficDistributions(data.accessLogStatus, data.accessLogTopDomains, data.accessLogRegions, 8),
 		Trends: DashboardTrends{
-			Traffic24h:  buildTrafficTrendPoints(now, reports),
-			Capacity24h: buildCapacityTrendPoints(now, snapshots),
-			Network24h:  buildNetworkTrendPoints(now, snapshots),
-			DiskIO24h:   buildDiskIOTrendPoints(now, snapshots),
+			Traffic24h:  buildTrafficTrendPointsFromBuckets(now, data.trafficTrendBuckets),
+			Capacity24h: buildCapacityTrendPointsFromBuckets(now, data.metricTrendBuckets),
+			Network24h:  buildNetworkTrendPointsFromCounterBuckets(now, data.counterTrendBuckets),
+			DiskIO24h:   buildDiskIOTrendPointsFromCounterBuckets(now, data.counterTrendBuckets),
 		},
 	}
 
 	var cpuNodeCount int
 	var memoryNodeCount int
-	latestSnapshots := latestMetricSnapshotsByNode(snapshots)
-	latestTrafficReports := latestTrafficReportsByNode(reports)
-	activeEventsByNode := activeHealthEventsByNode(activeEvents)
+	latestSnapshots := latestMetricSnapshotsByNode(data.latestSnapshotRows)
+	latestTrafficReports := latestTrafficReportsByNode(data.latestTrafficRows)
+	activeEventsByNode := activeHealthEventsByNode(data.activeEvents)
 
-	for _, node := range nodes {
+	for _, node := range data.nodes {
 		computedStatus := computeNodeStatus(node)
 		switch computedStatus {
 		case NodeStatusOnline:
@@ -195,7 +217,7 @@ func GetDashboardOverview() (*DashboardOverviewView, error) {
 		view.Nodes = append(view.Nodes, nodeHealth)
 	}
 
-	view.Summary.TotalNodes = len(nodes)
+	view.Summary.TotalNodes = len(data.nodes)
 
 	if cpuNodeCount > 0 {
 		view.Capacity.AverageCPUUsagePercent /= float64(cpuNodeCount)
@@ -215,6 +237,65 @@ func GetDashboardOverview() (*DashboardOverviewView, error) {
 	})
 
 	return view, nil
+}
+
+func loadDashboardOverviewQueryData(since time.Time, now time.Time, queries dashboardOverviewQueries) (*dashboardOverviewQueryData, error) {
+	data := &dashboardOverviewQueryData{}
+	if err := runConcurrentQueries(
+		func() error {
+			rows, err := queries.listNodes()
+			data.nodes = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listLatestMetricSnapshotsByNode(since, now)
+			data.latestSnapshotRows = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listLatestRequestReportsByNode(since, now)
+			data.latestTrafficRows = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listRequestReportTrendBuckets("", since, now, 60)
+			data.trafficTrendBuckets = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listMetricSnapshotTrendBuckets("", since, now, 60)
+			data.metricTrendBuckets = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listMetricCounterDeltaBuckets("", since, now, 60)
+			data.counterTrendBuckets = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listAccessLogStatusDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: 8})
+			data.accessLogStatus = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listAccessLogHostDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: 8})
+			data.accessLogTopDomains = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listAccessLogRegionCounts("", since, 8)
+			data.accessLogRegions = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listActiveNodeHealthEvents()
+			data.activeEvents = rows
+			return err
+		},
+	); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func percentage(used int64, total int64) float64 {

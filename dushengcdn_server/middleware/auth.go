@@ -10,12 +10,32 @@ import (
 
 func authHelper(c *gin.Context, minRole int) {
 	session := sessions.Default(c)
-	username := session.Get("username")
-	role := session.Get("role")
-	id := session.Get("id")
-	status := session.Get("status")
+	var user *model.User
 	authByToken := false
-	if username == nil {
+
+	if session.Get("username") != nil {
+		id, ok := session.Get("id").(int)
+		if !ok || id <= 0 {
+			clearAuthSession(session)
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "登录状态已失效，请重新登录",
+			})
+			c.Abort()
+			return
+		}
+		currentUser := &model.User{Id: id}
+		if err := currentUser.FillUserById(); err != nil {
+			clearAuthSession(session)
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "登录状态已失效，请重新登录",
+			})
+			c.Abort()
+			return
+		}
+		user = currentUser
+	} else {
 		// Check token
 		token := c.Request.Header.Get("Authorization")
 		if token == "" {
@@ -26,14 +46,8 @@ func authHelper(c *gin.Context, minRole int) {
 			c.Abort()
 			return
 		}
-		user := model.ValidateUserToken(token)
-		if user != nil && user.Username != "" {
-			// Token is valid
-			username = user.Username
-			role = user.Role
-			id = user.Id
-			status = user.Status
-		} else {
+		user = model.ValidateUserToken(token)
+		if user == nil || user.Username == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无权进行此操作，token 无效",
@@ -43,7 +57,7 @@ func authHelper(c *gin.Context, minRole int) {
 		}
 		authByToken = true
 	}
-	if status.(int) == common.UserStatusDisabled {
+	if user.Status != common.UserStatusEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "用户已被封禁",
@@ -51,7 +65,7 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	if role.(int) < minRole {
+	if user.Role < minRole {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "无权进行此操作，权限不足",
@@ -59,11 +73,20 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	c.Set("username", username)
-	c.Set("role", role)
-	c.Set("id", id)
+	c.Set("username", user.Username)
+	c.Set("role", user.Role)
+	c.Set("status", user.Status)
+	c.Set("id", user.Id)
 	c.Set("authByToken", authByToken)
 	c.Next()
+}
+
+func clearAuthSession(session sessions.Session) {
+	session.Delete("id")
+	session.Delete("username")
+	session.Delete("role")
+	session.Delete("status")
+	_ = session.Save()
 }
 
 func UserAuth() func(c *gin.Context) {

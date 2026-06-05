@@ -34,6 +34,8 @@
 * 本地自建解析与实时多节点智能解析已落地控制面和 DNS 响应端（DNS Worker），包含托管域名、响应端接入令牌、心跳/聚合、只读调度快照、UDP/TCP 53 查询回答、逐查询选点、来源网段/国家代码匹配、稳定权重分流桶、按来源 IP 查询限速、UDP 响应大小保护、查询趋势、SERVFAIL/NXDOMAIN 观测、来源作用域分布、当前调度状态、响应端查询延迟/可用性看板、GeoIP 国家库加载状态、公网探测健康状态、快照一致性告警、委派检查、Glue 提示和 Cloudflare 到本地自建解析的迁移向导。
 * 网站缓存页支持向目标节点池下发全量缓存清理和首页预热。
 * 观测计量合并访问日志与计量统计，支持站点/节点流量、缓存命中率、回源流量、状态码分布、TOP URL/IP/地区、带宽 P95 和节点可用率。
+* 管理端新增商业授权入口，支持离线 Ed25519 签名许可证、节点/站点额度和高级能力开关，可用于私有商业版本交付。
+* Redis 可配置为生产强依赖，限流和运行时辅助状态在 Redis 不可用时可选择降级或直接阻止启动。
 * 代理服务回源失败保护增强，默认对常见 5xx/超时错误尝试切换下一源站。
 * Cloudflare API Token 校验兼容原始 Token、`Bearer ...` 和包含 `api_token` / `apiToken` / `token` 的 JSON。
 
@@ -85,10 +87,13 @@ services:
     ports:
       - "3000:3000"
     environment:
-      SESSION_SECRET: replace-with-random-string
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
       GIN_MODE: release
       LOG_LEVEL: info
+      # 可选：商用/多实例部署建议启用 Redis。
+      # REDIS_CONN_STRING: redis://redis:6379/0
+      # REDIS_REQUIRED: "true"
 
 volumes:
   postgres-data:
@@ -101,6 +106,22 @@ docker compose up -d
 访问地址：`http://localhost:3000`
 
 更多可复制的 Compose 模板放在 `examples/compose/`：包括 GHCR 镜像生产部署、源码构建部署、端口/数据目录 override、Agent 和 DNS Worker。生产部署推荐从这些模板复制到独立目录后改 `.env`，不要直接修改仓库内 Compose 文件。
+
+商用私有部署可在 `.env` 中设置 `DUSHENGCDN_LICENSE_REQUIRED=true` 与 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，再到管理端「设置 -> 商业授权」安装许可证；公钥支持 base64url、标准 base64 或 hex 编码的 Ed25519 公钥。源码仓库内置离线签发工具：
+
+```bash
+cd dushengcdn_server
+go run ./cmd/license keygen
+go run ./cmd/license sign \
+  -private-key "$DUSHENGCDN_LICENSE_PRIVATE_KEY" \
+  -license-id lic-2026-001 \
+  -customer-name "Example Ltd." \
+  -plan enterprise \
+  -features all \
+  -max-nodes 20 \
+  -max-sites 200 \
+  -expires-at 2027-12-31
+```
 
 源码 Compose 部署时，也可以在仓库根目录使用一体化脚本启动面板并默认安装同机 DNS Worker。脚本会在首次部署时自动生成 `.env` 里的数据库密码、`SESSION_SECRET` 和 `DSN`；如果升级旧源码部署且检测到已有 `dushengcdn_server/postgres-data`，会保留 `.env.example` 中的数据库密码和 DSN，避免旧 PostgreSQL 数据目录因密码不一致导致面板打不开。脚本会先检查本机是否已部署 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动安装，避免覆盖现有配置。
 
@@ -433,7 +454,7 @@ git fetch origin main
 git pull --ff-only origin main
 cd dushengcdn_server
 cp -n .env.example .env
-sed -i 's/replace-with-a-long-random-string/your-session-secret/' .env
+sed -i "s/^SESSION_SECRET=.*/SESSION_SECRET=$(openssl rand -hex 32)/" .env
 sed -i 's/replace-with-strong-password/your-postgres-password/g' .env
 DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
@@ -475,16 +496,16 @@ docker compose -f docker-compose.agent.yaml ps
 
 如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `3010:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token，迁移到 `dushengcdn_server/.env`；确认没有需要保留的源码修改后，再使用 `git fetch origin main && git reset --hard origin/main` 拉回新版。源码 Compose 构建时会通过 `DUSHENGCDN_VERSION` 把当前 Git 版本写入 Server 或 Agent；顶栏“版本”显示当前运行中的后端版本，节点列表显示 Agent 上报的版本。
 
-节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。DNS Worker 使用安装脚本部署时也可重复执行脚本升级，脚本会优先下载对应平台的 DNS Worker Release 资产并校验 `.sha256`。没有 Release 资产时，安装脚本会从源码构建并写入当前 Git 版本；源码构建会复用本机 Go，自动下载 Go 时会多源重试。
+Server 自动升级默认关闭，生产环境推荐在顶栏检查版本后上传已审阅的 Server 二进制确认升级；如需启用自动升级，设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，Release 必须同时包含当前平台 Server 二进制和同名 `.sha256` 校验文件。节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。DNS Worker 使用安装脚本部署时也可重复执行脚本升级，脚本会优先下载对应平台的 DNS Worker Release 资产并校验 `.sha256`。没有 Release 资产时，安装脚本会从源码构建并写入当前 Git 版本；源码构建会复用本机 Go，自动下载 Go 时会多源重试。
 
 ### 7. 发布 Release 与 latest
 
 仓库已提供 GitHub Actions 用于生成 GitHub Release 和 GHCR 镜像，方便后续直接部署：
 
-* 发布二进制：进入 GitHub 仓库 `Actions` -> `Release` -> `Run workflow`，填写版本号，例如 `v1.0.0` 或 `v1.0.0-beta`。工作流会构建 Server、Agent 多平台二进制并上传到 Release。
+* 发布二进制：进入 GitHub 仓库 `Actions` -> `Release` -> `Run workflow`，填写版本号，例如 `v1.0.0` 或 `v1.0.0-beta`。工作流会构建 Server、Agent、DNS Worker 多平台二进制，并为每个资产上传同名 `.sha256` 校验文件。
 * `v1.0.0` 这类纯数字版本会作为正式 Release；`v1.0.0-beta` 这类带后缀版本会作为 prerelease。GitHub 的 `releases/latest` 会指向最新正式 Release。
 * 发布 Docker 镜像：进入 `Actions` -> `Docker image builds` -> `Run workflow`，填写同一个版本号。工作流会推送 `ghcr.io/satands/dushengcdn:<version>`、`ghcr.io/satands/dushengcdn:latest`、`ghcr.io/satands/dushengcdn-agent:<version>`、`ghcr.io/satands/dushengcdn-agent:latest`、`ghcr.io/satands/dushengcdn-dns-worker:<version>` 和 `ghcr.io/satands/dushengcdn-dns-worker:latest`。
-* 安装脚本会优先读取 `https://github.com/SatanDS/DuShengCDN/releases/latest` 中的 Agent 或 DNS Worker 资产；没有匹配资产时才回退到源码构建。
+* Server 自动升级、Agent 自更新和 DNS Worker 安装脚本都会优先读取 `https://github.com/SatanDS/DuShengCDN/releases/latest` 中的对应资产；自动/脚本升级要求二进制通过同名 `.sha256` 校验，没有匹配资产时 Agent 或 DNS Worker 安装脚本才回退到源码构建。
 * GitHub Actions 已切换到支持 Node.js 24 的动作版本，并显式启用 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`，用于规避 Node.js 20 弃用警告。
 
 

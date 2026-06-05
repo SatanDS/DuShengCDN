@@ -15,6 +15,7 @@ import (
 
 const openRestyObservabilityPath = "/dushengcdn/observability"
 const openRestyStubStatusPath = "/dushengcdn/stub_status"
+const maxLocalOpenRestyResponseBytes int64 = 64 * 1024
 
 var stubStatusActivePattern = regexp.MustCompile(`Active connections:\s+(\d+)`)
 
@@ -82,7 +83,7 @@ func fetchLocalJSON(client *http.Client, url string, target any) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected local observability status: %s", resp.Status)
 	}
-	return json.NewDecoder(resp.Body).Decode(target)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxLocalOpenRestyResponseBytes+1)).Decode(target)
 }
 
 func fetchLocalText(client *http.Client, url string) (string, error) {
@@ -94,9 +95,12 @@ func fetchLocalText(client *http.Client, url string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("unexpected local stub status: %s", resp.Status)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxLocalOpenRestyResponseBytes+1))
 	if err != nil {
 		return "", err
+	}
+	if int64(len(data)) > maxLocalOpenRestyResponseBytes {
+		return "", fmt.Errorf("local stub status response exceeds %d bytes", maxLocalOpenRestyResponseBytes)
 	}
 	return string(data), nil
 }

@@ -2,10 +2,64 @@ package service
 
 import (
 	"dushengcdn/model"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestRunConcurrentQueriesRunsAllQueriesConcurrently(t *testing.T) {
+	const queryCount = 5
+	started := make(chan struct{}, queryCount)
+	release := make(chan struct{})
+	var calls atomic.Int32
+
+	functions := make([]func() error, 0, queryCount)
+	for range queryCount {
+		functions = append(functions, func() error {
+			calls.Add(1)
+			started <- struct{}{}
+			<-release
+			return nil
+		})
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runConcurrentQueries(functions...)
+	}()
+
+	for index := 0; index < queryCount; index++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			close(release)
+			t.Fatalf("expected all queries to start concurrently, got %d/%d", calls.Load(), queryCount)
+		}
+	}
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runConcurrentQueries returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for concurrent queries")
+	}
+}
+
+func TestRunConcurrentQueriesReturnsFirstError(t *testing.T) {
+	wantErr := errors.New("query failed")
+	err := runConcurrentQueries(
+		func() error { return nil },
+		func() error { return wantErr },
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected query error to be returned, got %v", err)
+	}
+}
 
 func TestListAccessLogsIncludesSummaryTotals(t *testing.T) {
 	setupServiceTestDB(t)
@@ -353,6 +407,166 @@ func TestBuildObservabilityMeteringOverviewAggregatesBillingSignals(t *testing.T
 	if view.BandwidthP95Bps <= 0 {
 		t.Fatalf("expected positive p95 bandwidth, got %f", view.BandwidthP95Bps)
 	}
+
+	aggregatedView := buildAggregatedObservabilityMeteringOverview(meteringOverviewAggregatedDataSource{
+		now: now,
+		nodes: []*model.Node{
+			{NodeID: "node-a", Name: "AKKO HK", Status: NodeStatusOnline, LastSeenAt: now},
+			{NodeID: "node-b", Name: "AKKO DE", Status: NodeStatusOffline, LastSeenAt: now.Add(-3 * time.Hour)},
+		},
+		summary: &model.NodeAccessLogMeteringSummary{
+			RequestCount:          3,
+			RequestBytes:          300,
+			ResponseBytes:         3500,
+			UpstreamBytes:         1200,
+			UpstreamBytesHitCount: 2,
+		},
+		statusCodes: []*model.NodeAccessLogDistributionRow{
+			{Key: "200", Value: 2},
+			{Key: "502", Value: 1},
+		},
+		topURLs: []*model.NodeAccessLogDistributionRow{
+			{Key: "app.example.com/index", Value: 1},
+		},
+		topIPs: []*model.NodeAccessLogDistributionRow{
+			{Key: "203.0.113.1", Value: 2},
+		},
+		topRegions: []*model.NodeAccessLogDistributionRow{
+			{Key: "China", Value: 2},
+		},
+		siteTraffic: []*model.NodeAccessLogMeteringTrafficRow{
+			{Key: "app.example.com", RequestCount: 2, RequestBytes: 300, ResponseBytes: 3000, UpstreamBytes: 1200},
+			{Key: "static.example.com", RequestCount: 1, ResponseBytes: 500},
+		},
+		nodeTraffic: []*model.NodeAccessLogMeteringTrafficRow{
+			{Key: "node-b", RequestCount: 1, RequestBytes: 200, ResponseBytes: 2000, UpstreamBytes: 900},
+			{Key: "node-a", RequestCount: 2, RequestBytes: 100, ResponseBytes: 1500, UpstreamBytes: 300},
+		},
+		cache: &model.NodeRequestReportCacheSummary{
+			CacheHitCount:        7,
+			CacheMissCount:       2,
+			CacheBypassCount:     1,
+			CacheClassifiedCount: 10,
+		},
+		bandwidth: []*model.NodeMetricSnapshotCounterDeltaBucket{
+			{
+				BucketEpoch:      now.Add(-1 * time.Hour).Truncate(time.Hour).Unix(),
+				OpenrestyRxBytes: 500,
+				OpenrestyTxBytes: 1200,
+			},
+			{
+				BucketEpoch:      now.Truncate(time.Hour).Unix(),
+				OpenrestyRxBytes: 700,
+				OpenrestyTxBytes: 2000,
+			},
+		},
+	})
+	if aggregatedView.RequestCount != view.RequestCount ||
+		aggregatedView.ResponseBytes != view.ResponseBytes ||
+		aggregatedView.UpstreamBytes != view.UpstreamBytes ||
+		aggregatedView.CacheHitRatePercent != view.CacheHitRatePercent ||
+		aggregatedView.NodeAvailabilityPercent != view.NodeAvailabilityPercent {
+		t.Fatalf("aggregated overview diverged: aggregated=%+v memory=%+v", aggregatedView, view)
+	}
+	if len(aggregatedView.SiteTraffic) == 0 || aggregatedView.SiteTraffic[0].Key != "app.example.com" || aggregatedView.SiteTraffic[0].ResponseBytes != 3000 {
+		t.Fatalf("unexpected aggregated site traffic: %+v", aggregatedView.SiteTraffic)
+	}
+	if len(aggregatedView.NodeTraffic) == 0 || aggregatedView.NodeTraffic[0].Key != "AKKO DE" {
+		t.Fatalf("expected aggregated node traffic to use node display names, got %+v", aggregatedView.NodeTraffic)
+	}
+}
+
+func TestGetObservabilityMeteringOverviewUsesAggregatedAccessLogs(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now().UTC().Truncate(time.Hour)
+	if err := model.DB.Create(&model.Node{
+		NodeID:     "node-metering-a",
+		Name:       "Metering A",
+		Status:     NodeStatusOnline,
+		LastSeenAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:        "node-metering-a",
+			LoggedAt:      now.Add(-10 * time.Minute),
+			RemoteAddr:    "203.0.113.80",
+			Region:        "HK",
+			Host:          "metering.example.com",
+			Path:          "/index",
+			StatusCode:    200,
+			RequestBytes:  100,
+			ResponseBytes: 1000,
+			UpstreamBytes: 200,
+		},
+		{
+			NodeID:        "node-metering-a",
+			LoggedAt:      now.Add(-5 * time.Minute),
+			RemoteAddr:    "203.0.113.81",
+			Region:        "HK",
+			Host:          "metering.example.com",
+			Path:          "/api",
+			StatusCode:    502,
+			RequestBytes:  200,
+			ResponseBytes: 2500,
+			UpstreamBytes: 700,
+		},
+	})
+	if err := model.DB.Create(&model.NodeRequestReport{
+		NodeID:              "node-metering-a",
+		WindowStartedAt:     now.Add(-time.Hour),
+		WindowEndedAt:       now,
+		CacheHitCount:       3,
+		CacheMissCount:      1,
+		StatusCodesJSON:     `{"200":1,"502":1}`,
+		TopDomainsJSON:      `{"metering.example.com":2}`,
+		SourceCountriesJSON: `{"HK":2}`,
+	}).Error; err != nil {
+		t.Fatalf("seed request report: %v", err)
+	}
+	for _, snapshot := range []*model.NodeMetricSnapshot{
+		{
+			NodeID:           "node-metering-a",
+			CapturedAt:       now.Add(-time.Hour),
+			OpenrestyRxBytes: 100,
+			OpenrestyTxBytes: 200,
+		},
+		{
+			NodeID:           "node-metering-a",
+			CapturedAt:       now,
+			OpenrestyRxBytes: 500,
+			OpenrestyTxBytes: 900,
+		},
+	} {
+		if err := snapshot.Insert(); err != nil {
+			t.Fatalf("seed metric snapshot: %v", err)
+		}
+	}
+
+	view, err := GetObservabilityMeteringOverview()
+	if err != nil {
+		t.Fatalf("GetObservabilityMeteringOverview failed: %v", err)
+	}
+	if view.RequestCount != 2 || view.ResponseBytes != 3500 || view.UpstreamBytes != 900 {
+		t.Fatalf("unexpected aggregated metering totals: %+v", view)
+	}
+	if len(view.SiteTraffic) == 0 || view.SiteTraffic[0].Key != "metering.example.com" || view.SiteTraffic[0].ResponseBytes != 3500 {
+		t.Fatalf("unexpected aggregated site traffic: %+v", view.SiteTraffic)
+	}
+	if len(view.NodeTraffic) == 0 || view.NodeTraffic[0].Key != "Metering A" {
+		t.Fatalf("unexpected aggregated node traffic: %+v", view.NodeTraffic)
+	}
+	if len(view.StatusCodes) == 0 || view.StatusCodes[0].Key == "" {
+		t.Fatalf("expected aggregated status codes, got %+v", view.StatusCodes)
+	}
+	if view.CacheHitRatePercent != 75 {
+		t.Fatalf("expected cache hit rate from request reports, got %f", view.CacheHitRatePercent)
+	}
+	if view.BandwidthP95Bps <= 0 {
+		t.Fatalf("expected aggregated bandwidth p95 from counter buckets, got %f", view.BandwidthP95Bps)
+	}
 }
 
 func TestPersistNodeAccessLogsTruncatesLongPath(t *testing.T) {
@@ -420,6 +634,33 @@ func TestPersistNodeAccessLogsStoresCacheStatus(t *testing.T) {
 	}
 	if len(view.Items) != 1 || view.Items[0].CacheStatus != "HIT" {
 		t.Fatalf("expected cache status in access log view, got %+v", view.Items)
+	}
+}
+
+func TestPersistNodeAccessLogsDeduplicatesBatch(t *testing.T) {
+	setupServiceTestDB(t)
+
+	reportedAt := time.Now().UTC()
+	log := AgentNodeAccessLog{
+		LoggedAtUnix: reportedAt.Unix(),
+		RemoteAddr:   "203.0.113.30",
+		Host:         "dedupe.example.com",
+		Path:         "/same",
+		StatusCode:   200,
+	}
+	if err := persistNodeAccessLogs(model.DB, "node-dedupe", []AgentNodeAccessLog{log, log}, reportedAt); err != nil {
+		t.Fatalf("persistNodeAccessLogs failed: %v", err)
+	}
+	if err := persistNodeAccessLogs(model.DB, "node-dedupe", []AgentNodeAccessLog{log}, reportedAt); err != nil {
+		t.Fatalf("persistNodeAccessLogs second call failed: %v", err)
+	}
+
+	totalRecords, totalIPs, err := model.CountNodeAccessLogs(model.NodeAccessLogQuery{NodeID: "node-dedupe"})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs failed: %v", err)
+	}
+	if totalRecords != 1 || totalIPs != 1 {
+		t.Fatalf("expected one deduped access log and IP, got records=%d ips=%d", totalRecords, totalIPs)
 	}
 }
 

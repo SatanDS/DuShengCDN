@@ -189,6 +189,12 @@ func GetProxyRoute(id uint) (*ProxyRouteView, error) {
 }
 
 func CreateProxyRoute(input ProxyRouteInput) (*ProxyRouteView, error) {
+	if err := EnsureCommercialResourceAvailable("site"); err != nil {
+		return nil, err
+	}
+	if err := ensureCommercialProxyRouteInputFeaturesEnabled(input); err != nil {
+		return nil, err
+	}
 	route, err := buildProxyRoute(nil, input)
 	if err != nil {
 		return nil, err
@@ -211,6 +217,9 @@ func CreateProxyRoute(input ProxyRouteInput) (*ProxyRouteView, error) {
 func UpdateProxyRoute(id uint, input ProxyRouteInput) (*ProxyRouteView, error) {
 	route, err := model.GetProxyRouteByID(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureCommercialProxyRouteInputFeaturesEnabled(input); err != nil {
 		return nil, err
 	}
 	route, err = buildProxyRoute(route, input)
@@ -343,7 +352,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		input.CertIDs = nil
 		input.DomainCertIDs = nil
 	}
-	domainCertIDs, certIDs, primaryCertID, err := normalizeProxyRouteDomainCertificateIDs(
+	domainCertIDs, certIDs, primaryCertID, coverageValidated, err := normalizeProxyRouteDomainCertificateIDs(
 		domains,
 		input.EnableHTTPS,
 		input.DomainCertIDs,
@@ -353,8 +362,10 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
-	if err := validateProxyRouteDomainCertificateCoverage(domains, domainCertIDs); err != nil {
-		return nil, err
+	if !coverageValidated {
+		if err := validateProxyRouteDomainCertificateCoverage(domains, domainCertIDs); err != nil {
+			return nil, err
+		}
 	}
 	certIDsJSON, err := json.Marshal(certIDs)
 	if err != nil {
@@ -513,7 +524,66 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.DDOSProtectionProvider = ddosProvider
 	route.DDOSProtectionTarget = ddosTarget
 	route.Remark = remark
+	if err := ensureCommercialProxyRouteFeaturesEnabled(route); err != nil {
+		return nil, err
+	}
 	return route, nil
+}
+
+func ensureCommercialProxyRouteInputFeaturesEnabled(input ProxyRouteInput) error {
+	features := make([]string, 0, 8)
+	dnsProviderMode := normalizeDNSProviderMode(input.DNSProviderMode)
+	if dnsProviderMode == DNSProviderModeAuthoritative {
+		features = append(features, CommercialFeatureAuthoritativeDNS)
+	}
+	if input.DNSAutoSync && dnsProviderMode == DNSProviderModeCloudflare {
+		features = append(features, CommercialFeatureCloudflareDNS)
+	}
+	if input.GSLBEnabled && (dnsProviderMode == DNSProviderModeAuthoritative || input.DNSAutoSync) {
+		features = append(features, CommercialFeatureGSLB)
+	}
+	if normalizeDDOSProtectionMode(input.DDOSProtectionMode) == DDOSProtectionModeAuto {
+		features = append(features, CommercialFeatureDDoSProtection)
+	}
+	if input.WAFEnabled {
+		features = append(features, CommercialFeatureWAF)
+	}
+	if input.CCEnabled || input.PoWEnabled {
+		features = append(features, CommercialFeatureCCProtection)
+	}
+	if input.RegionRestrictionEnabled {
+		features = append(features, CommercialFeatureGeoAccessControl)
+	}
+	return ensureCommercialFeaturesEnabled(features...)
+}
+
+func ensureCommercialProxyRouteFeaturesEnabled(route *model.ProxyRoute) error {
+	if route == nil {
+		return nil
+	}
+	features := make([]string, 0, 8)
+	if normalizeDNSProviderMode(route.DNSProviderMode) == DNSProviderModeAuthoritative {
+		features = append(features, CommercialFeatureAuthoritativeDNS)
+	}
+	if route.DNSAutoSync && normalizeDNSProviderMode(route.DNSProviderMode) == DNSProviderModeCloudflare {
+		features = append(features, CommercialFeatureCloudflareDNS)
+	}
+	if route.GSLBEnabled {
+		features = append(features, CommercialFeatureGSLB)
+	}
+	if normalizeDDOSProtectionMode(route.DDOSProtectionMode) == DDOSProtectionModeAuto {
+		features = append(features, CommercialFeatureDDoSProtection)
+	}
+	if route.WAFEnabled {
+		features = append(features, CommercialFeatureWAF)
+	}
+	if route.CCEnabled || route.PoWEnabled {
+		features = append(features, CommercialFeatureCCProtection)
+	}
+	if route.RegionRestrictionEnabled {
+		features = append(features, CommercialFeatureGeoAccessControl)
+	}
+	return ensureCommercialFeaturesEnabled(features...)
 }
 
 func shouldPrecheckAuthoritativeDNSRoute(
@@ -594,9 +664,13 @@ func buildAuthoritativeDNSPrecheckProxyRoute(
 }
 
 func buildProxyRouteViews(routes []*model.ProxyRoute) ([]*ProxyRouteView, error) {
+	context, err := newProxyRouteViewBuildContext(routes)
+	if err != nil {
+		return nil, err
+	}
 	views := make([]*ProxyRouteView, 0, len(routes))
 	for _, route := range routes {
-		view, err := buildProxyRouteView(route)
+		view, err := buildProxyRouteViewWithContext(route, context)
 		if err != nil {
 			return nil, err
 		}
@@ -606,6 +680,10 @@ func buildProxyRouteViews(routes []*model.ProxyRoute) ([]*ProxyRouteView, error)
 }
 
 func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
+	return buildProxyRouteViewWithContext(route, nil)
+}
+
+func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRouteViewBuildContext) (*ProxyRouteView, error) {
 	if route == nil {
 		return nil, errors.New("proxy route is nil")
 	}
@@ -649,7 +727,7 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 	if err != nil {
 		return nil, err
 	}
-	domainCertIDs, err := resolveProxyRouteDomainCertIDs(route, domains, certIDs)
+	domainCertIDs, err := resolveProxyRouteDomainCertIDsWithContext(route, domains, certIDs, context)
 	if err != nil {
 		return nil, err
 	}
@@ -726,6 +804,80 @@ func buildProxyRouteView(route *model.ProxyRoute) (*ProxyRouteView, error) {
 		CreatedAt:                  route.CreatedAt,
 		UpdatedAt:                  route.UpdatedAt,
 	}, nil
+}
+
+type proxyRouteTLSCertificateLoader interface {
+	loadTLSCertificates([]uint) ([]*model.TLSCertificate, error)
+}
+
+type proxyRouteViewBuildContext struct {
+	certificatesByID map[uint]*model.TLSCertificate
+}
+
+func newProxyRouteViewBuildContext(routes []*model.ProxyRoute) (*proxyRouteViewBuildContext, error) {
+	certIDs := make([]uint, 0)
+	seenCertIDs := make(map[uint]struct{})
+	for _, route := range routes {
+		if route == nil {
+			continue
+		}
+		domains, err := decodeStoredDomains(route.Domains, route.Domain)
+		if err != nil {
+			return nil, err
+		}
+		routeCertIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
+		if err != nil {
+			return nil, err
+		}
+		domainCertIDs, err := decodeStoredDomainCertIDs(route.DomainCertIDs, len(domains))
+		if err != nil {
+			return nil, err
+		}
+		if len(domainCertIDs) > 0 || len(routeCertIDs) == 0 {
+			continue
+		}
+		for _, certID := range routeCertIDs {
+			if certID == 0 {
+				continue
+			}
+			if _, ok := seenCertIDs[certID]; ok {
+				continue
+			}
+			seenCertIDs[certID] = struct{}{}
+			certIDs = append(certIDs, certID)
+		}
+	}
+
+	certificates, err := loadTLSCertificates(certIDs)
+	if err != nil {
+		return nil, err
+	}
+	certificatesByID := make(map[uint]*model.TLSCertificate, len(certificates))
+	for _, certificate := range certificates {
+		if certificate == nil {
+			continue
+		}
+		certificatesByID[certificate.ID] = certificate
+	}
+	return &proxyRouteViewBuildContext{certificatesByID: certificatesByID}, nil
+}
+
+func (context *proxyRouteViewBuildContext) loadTLSCertificates(certIDs []uint) ([]*model.TLSCertificate, error) {
+	if context == nil {
+		return loadTLSCertificates(certIDs)
+	}
+	certificates := make([]*model.TLSCertificate, 0, len(certIDs))
+	for _, certID := range certIDs {
+		if certID == 0 {
+			continue
+		}
+		certificate := context.certificatesByID[certID]
+		if certificate == nil {
+			return nil, gorm.ErrRecordNotFound
+		}
+		certificates = append(certificates, certificate)
+	}
+	return certificates, nil
 }
 
 func normalizeProxyRouteSiteNameInput(route *model.ProxyRoute, raw string, primaryDomain string) string {
@@ -830,7 +982,7 @@ func validateProxyRouteSiteName(siteName string) error {
 }
 
 func validateProxyRouteIdentityUniqueness(route *model.ProxyRoute, siteName string, domains []string) error {
-	routes, err := model.ListProxyRoutes()
+	routes, err := model.ListProxyRouteIdentityCandidates(siteName, domains)
 	if err != nil {
 		return err
 	}
@@ -1230,9 +1382,6 @@ func normalizeProxyRouteCertificateIDs(enableHTTPS bool, certID *uint, certIDs [
 		if _, ok := seen[item]; ok {
 			continue
 		}
-		if _, err := model.GetTLSCertificateByID(item); err != nil {
-			return nil, errors.New("selected certificate does not exist")
-		}
 		seen[item] = struct{}{}
 		normalized = append(normalized, item)
 	}
@@ -1248,14 +1397,14 @@ func normalizeProxyRouteDomainCertificateIDs(
 	rawDomainCertIDs []uint,
 	certID *uint,
 	certIDs []uint,
-) ([]uint, []uint, *uint, error) {
+) ([]uint, []uint, *uint, bool, error) {
 	if !enableHTTPS {
-		return []uint{}, []uint{}, nil, nil
+		return []uint{}, []uint{}, nil, true, nil
 	}
 
 	if len(rawDomainCertIDs) > 0 {
 		if len(rawDomainCertIDs) != len(domains) {
-			return nil, nil, nil, errors.New("domain_cert_ids must match domains length")
+			return nil, nil, nil, false, errors.New("domain_cert_ids must match domains length")
 		}
 
 		normalizedDomainCertIDs := make([]uint, len(rawDomainCertIDs))
@@ -1266,9 +1415,6 @@ func normalizeProxyRouteDomainCertificateIDs(
 			if item == 0 {
 				continue
 			}
-			if _, err := model.GetTLSCertificateByID(item); err != nil {
-				return nil, nil, nil, errors.New("selected certificate does not exist")
-			}
 			normalizedDomainCertIDs[index] = item
 			hasAssignedCertificate = true
 			if _, ok := seen[item]; ok {
@@ -1278,11 +1424,11 @@ func normalizeProxyRouteDomainCertificateIDs(
 			uniqueCertIDs = append(uniqueCertIDs, item)
 		}
 		if !hasAssignedCertificate {
-			return nil, nil, nil, errors.New("must select a certificate when HTTPS is enabled")
+			return nil, nil, nil, false, errors.New("must select a certificate when HTTPS is enabled")
 		}
 
 		primaryCertID := &uniqueCertIDs[0]
-		return normalizedDomainCertIDs, uniqueCertIDs, primaryCertID, nil
+		return normalizedDomainCertIDs, uniqueCertIDs, primaryCertID, false, nil
 	}
 
 	normalizedCertIDs, err := normalizeProxyRouteCertificateIDs(
@@ -1291,34 +1437,37 @@ func normalizeProxyRouteDomainCertificateIDs(
 		certIDs,
 	)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, false, err
 	}
 
 	switch {
 	case len(normalizedCertIDs) == 0:
-		return nil, nil, nil, errors.New("must select a certificate when HTTPS is enabled")
+		return nil, nil, nil, false, errors.New("must select a certificate when HTTPS is enabled")
 	case len(normalizedCertIDs) == 1:
 		domainCertIDs := make([]uint, len(domains))
 		for index := range domainCertIDs {
 			domainCertIDs[index] = normalizedCertIDs[0]
 		}
 		primaryCertID := &normalizedCertIDs[0]
-		return domainCertIDs, normalizedCertIDs, primaryCertID, nil
+		return domainCertIDs, normalizedCertIDs, primaryCertID, false, nil
 	case len(normalizedCertIDs) == len(domains):
 		domainCertIDs := make([]uint, len(normalizedCertIDs))
 		copy(domainCertIDs, normalizedCertIDs)
 		primaryCertID := &normalizedCertIDs[0]
-		return domainCertIDs, normalizedCertIDs, primaryCertID, nil
+		return domainCertIDs, normalizedCertIDs, primaryCertID, false, nil
 	default:
 		domainCertIDs, err := deriveDomainCertIDsFromCertificateSet(
 			domains,
 			normalizedCertIDs,
 		)
 		if err != nil {
-			return nil, nil, nil, err
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, nil, nil, false, errors.New("selected certificate does not exist")
+			}
+			return nil, nil, nil, false, err
 		}
 		primaryCertID := &normalizedCertIDs[0]
-		return domainCertIDs, normalizedCertIDs, primaryCertID, nil
+		return domainCertIDs, normalizedCertIDs, primaryCertID, true, nil
 	}
 }
 
@@ -1331,18 +1480,29 @@ func validateProxyRouteDomainCertificateCoverage(
 	}
 
 	domainsByCertID := make(map[uint][]string)
+	certIDs := make([]uint, 0, len(domainCertIDs))
+	seenCertIDs := make(map[uint]struct{}, len(domainCertIDs))
 	for index, certID := range domainCertIDs {
 		if certID == 0 {
 			continue
 		}
 		domainsByCertID[certID] = append(domainsByCertID[certID], domains[index])
+		if _, ok := seenCertIDs[certID]; ok {
+			continue
+		}
+		seenCertIDs[certID] = struct{}{}
+		certIDs = append(certIDs, certID)
 	}
 
-	for certID, assignedDomains := range domainsByCertID {
-		certificate, err := model.GetTLSCertificateByID(certID)
-		if err != nil {
-			return errors.New("selected certificate does not exist")
-		}
+	if len(certIDs) == 0 {
+		return nil
+	}
+	certificates, err := loadTLSCertificates(certIDs)
+	if err != nil {
+		return errors.New("selected certificate does not exist")
+	}
+	for _, certificate := range certificates {
+		assignedDomains := domainsByCertID[certificate.ID]
 		if err := validateCertificateCoverage(certificate, assignedDomains); err != nil {
 			return err
 		}
@@ -1354,7 +1514,15 @@ func deriveDomainCertIDsFromCertificateSet(
 	domains []string,
 	certIDs []uint,
 ) ([]uint, error) {
-	certificates, err := loadTLSCertificates(certIDs)
+	return deriveDomainCertIDsFromCertificateSetWithContext(domains, certIDs, nil)
+}
+
+func deriveDomainCertIDsFromCertificateSetWithContext(
+	domains []string,
+	certIDs []uint,
+	context proxyRouteTLSCertificateLoader,
+) ([]uint, error) {
+	certificates, err := loadTLSCertificatesWithContext(context, certIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1411,6 +1579,15 @@ func resolveProxyRouteDomainCertIDs(
 	domains []string,
 	certIDs []uint,
 ) ([]uint, error) {
+	return resolveProxyRouteDomainCertIDsWithContext(route, domains, certIDs, nil)
+}
+
+func resolveProxyRouteDomainCertIDsWithContext(
+	route *model.ProxyRoute,
+	domains []string,
+	certIDs []uint,
+	context proxyRouteTLSCertificateLoader,
+) ([]uint, error) {
 	domainCertIDs, err := decodeStoredDomainCertIDs(route.DomainCertIDs, len(domains))
 	if err != nil {
 		return nil, err
@@ -1418,7 +1595,17 @@ func resolveProxyRouteDomainCertIDs(
 	if len(domainCertIDs) > 0 || len(certIDs) == 0 {
 		return domainCertIDs, nil
 	}
-	return deriveDomainCertIDsFromCertificateSet(domains, certIDs)
+	return deriveDomainCertIDsFromCertificateSetWithContext(domains, certIDs, context)
+}
+
+func loadTLSCertificatesWithContext(
+	context proxyRouteTLSCertificateLoader,
+	certIDs []uint,
+) ([]*model.TLSCertificate, error) {
+	if context == nil {
+		return loadTLSCertificates(certIDs)
+	}
+	return context.loadTLSCertificates(certIDs)
 }
 
 func normalizeProxyRouteLimitRate(raw string) (string, error) {

@@ -110,3 +110,45 @@ func TestOAuthCallbackPathMatchesSourceNames(t *testing.T) {
 		}
 	}
 }
+
+func TestExportedOAuthCallbackPageKeepsLegacyGitHubPage(t *testing.T) {
+	cases := []struct {
+		name        string
+		requestPath string
+		legacy      string
+		expected    string
+	}{
+		{
+			name:        "legacy github",
+			requestPath: "oauth/github",
+			legacy:      "1",
+			expected:    "github",
+		},
+		{
+			name:        "auth source named github",
+			requestPath: "oauth/github",
+			legacy:      "",
+			expected:    "callback",
+		},
+		{
+			name:        "oidc source",
+			requestPath: "oauth/oidc-main",
+			legacy:      "",
+			expected:    "callback",
+		},
+		{
+			name:        "link page",
+			requestPath: "oauth/link",
+			legacy:      "",
+			expected:    "",
+		},
+	}
+
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			if got := exportedOAuthCallbackPage(item.requestPath, item.legacy); got != item.expected {
+				t.Fatalf("expected %q, got %q", item.expected, got)
+			}
+		})
+	}
+}

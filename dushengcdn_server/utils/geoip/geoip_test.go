@@ -2,7 +2,12 @@ package geoip
 
 import (
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 type fakeProvider struct {
@@ -56,6 +61,34 @@ func TestGetGeoInfoCachesByProviderAndIP(t *testing.T) {
 	}
 }
 
+func TestGetGeoInfoWorksWhenCacheUnavailable(t *testing.T) {
+	originalProvider := CurrentProvider
+	originalCache := geoCache
+	fake := &fakeProvider{}
+	CurrentProvider = fake
+	geoCache = &providerCache{duration: time.Hour}
+	defer func() {
+		CurrentProvider = originalProvider
+		geoCache = originalCache
+	}()
+
+	ip := net.ParseIP("8.8.4.4")
+	first, err := GetGeoInfo(ip)
+	if err != nil {
+		t.Fatalf("expected first lookup without cache to succeed, got %v", err)
+	}
+	second, err := GetGeoInfo(ip)
+	if err != nil {
+		t.Fatalf("expected second lookup without cache to succeed, got %v", err)
+	}
+	if first == nil || second == nil || first.ISOCode != "CN" || second.ISOCode != "CN" {
+		t.Fatalf("unexpected geo records: %#v %#v", first, second)
+	}
+	if fake.calls != 2 {
+		t.Fatalf("expected provider to be called for each uncached lookup, got %d", fake.calls)
+	}
+}
+
 func TestUnicodeEmoji(t *testing.T) {
 	emoji := GetRegionUnicodeEmoji("CN")
 	if emoji != "🇨🇳" {
@@ -95,5 +128,33 @@ func TestLookupGeoInfoWithProviderUsesTemporaryProvider(t *testing.T) {
 	}
 	if info == nil || info.ISOCode != "CN" || info.Name != "China" {
 		t.Fatalf("unexpected geo info: %#v", info)
+	}
+}
+
+func TestMaxMindUpdateDatabaseRejectsOversizedDownload(t *testing.T) {
+	originalURL := GeoIpUrl
+	originalMax := maxGeoIPDatabaseDownloadBytes
+	originalClient := geoIPDownloadHTTPClient
+	maxGeoIPDatabaseDownloadBytes = 8
+	t.Cleanup(func() {
+		GeoIpUrl = originalURL
+		maxGeoIPDatabaseDownloadBytes = originalMax
+		geoIPDownloadHTTPClient = originalClient
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") != "DuShengCDN-Server" {
+			t.Fatalf("unexpected user agent: %s", r.Header.Get("User-Agent"))
+		}
+		w.Header().Set("Content-Length", "9")
+		_, _ = w.Write([]byte("123456789"))
+	}))
+	defer server.Close()
+	GeoIpUrl = server.URL
+
+	service := &MaxMindGeoIPService{dbFilePath: filepath.Join(t.TempDir(), "GeoLite2-Country.mmdb")}
+	err := service.UpdateDatabase()
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("expected oversized database error, got %v", err)
 	}
 }

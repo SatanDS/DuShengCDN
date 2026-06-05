@@ -70,6 +70,29 @@ func buildTrafficTrendPoints(now time.Time, reports []*model.NodeRequestReport) 
 	return points
 }
 
+func buildTrafficTrendPointsFromBuckets(now time.Time, buckets []*model.NodeRequestReportTrendBucket) []TrafficTrendPoint {
+	start := trendWindowStart(now)
+	points := make([]TrafficTrendPoint, observabilityTrendBuckets)
+	for index := range points {
+		points[index].BucketStartedAt = start.Add(time.Duration(index) * time.Hour)
+	}
+
+	for _, bucket := range buckets {
+		if bucket == nil {
+			continue
+		}
+		index, ok := trendBucketIndex(time.Unix(bucket.BucketEpoch, 0).UTC(), start)
+		if !ok {
+			continue
+		}
+		points[index].RequestCount += bucket.RequestCount
+		points[index].ErrorCount += bucket.ErrorCount
+		points[index].UniqueVisitorCount += bucket.UniqueVisitorCount
+	}
+
+	return points
+}
+
 func buildCapacityTrendPoints(now time.Time, snapshots []*model.NodeMetricSnapshot) []CapacityTrendPoint {
 	start := trendWindowStart(now)
 	points := make([]CapacityTrendPoint, observabilityTrendBuckets)
@@ -110,6 +133,33 @@ func buildCapacityTrendPoints(now time.Time, snapshots []*model.NodeMetricSnapsh
 	return points
 }
 
+func buildCapacityTrendPointsFromBuckets(now time.Time, buckets []*model.NodeMetricSnapshotTrendBucket) []CapacityTrendPoint {
+	start := trendWindowStart(now)
+	points := make([]CapacityTrendPoint, observabilityTrendBuckets)
+	for index := range points {
+		points[index].BucketStartedAt = start.Add(time.Duration(index) * time.Hour)
+	}
+
+	for _, bucket := range buckets {
+		if bucket == nil {
+			continue
+		}
+		index, ok := trendBucketIndex(time.Unix(bucket.BucketEpoch, 0).UTC(), start)
+		if !ok {
+			continue
+		}
+		if bucket.CPUUsageCount > 0 {
+			points[index].AverageCPUUsagePercent = bucket.CPUUsageSum / float64(bucket.CPUUsageCount)
+		}
+		if bucket.MemoryUsageCount > 0 {
+			points[index].AverageMemoryUsagePercent = bucket.MemoryUsageSum / float64(bucket.MemoryUsageCount)
+		}
+		points[index].ReportedNodes = bucket.ReportedNodes
+	}
+
+	return points
+}
+
 func buildNetworkTrendPoints(now time.Time, snapshots []*model.NodeMetricSnapshot) []NetworkTrendPoint {
 	start := trendWindowStart(now)
 	points := make([]NetworkTrendPoint, observabilityTrendBuckets)
@@ -137,6 +187,29 @@ func buildNetworkTrendPoints(now time.Time, snapshots []*model.NodeMetricSnapsho
 		points[index].ReportedNodes = len(accumulators[index].nodes)
 	}
 
+	return points
+}
+
+func buildNetworkTrendPointsFromCounterBuckets(now time.Time, buckets []*model.NodeMetricSnapshotCounterDeltaBucket) []NetworkTrendPoint {
+	start := trendWindowStart(now)
+	points := make([]NetworkTrendPoint, observabilityTrendBuckets)
+	for index := range points {
+		points[index].BucketStartedAt = start.Add(time.Duration(index) * time.Hour)
+	}
+	for _, bucket := range buckets {
+		if bucket == nil {
+			continue
+		}
+		index, ok := trendBucketIndex(time.Unix(bucket.BucketEpoch, 0).UTC(), start)
+		if !ok {
+			continue
+		}
+		points[index].NetworkRxBytes += bucket.NetworkRxBytes
+		points[index].NetworkTxBytes += bucket.NetworkTxBytes
+		points[index].OpenrestyRxBytes += bucket.OpenrestyRxBytes
+		points[index].OpenrestyTxBytes += bucket.OpenrestyTxBytes
+		points[index].ReportedNodes = maxInt(points[index].ReportedNodes, bucket.ReportedNodeCount)
+	}
 	return points
 }
 
@@ -208,6 +281,27 @@ func buildDiskIOTrendPoints(now time.Time, snapshots []*model.NodeMetricSnapshot
 	return points
 }
 
+func buildDiskIOTrendPointsFromCounterBuckets(now time.Time, buckets []*model.NodeMetricSnapshotCounterDeltaBucket) []DiskIOTrendPoint {
+	start := trendWindowStart(now)
+	points := make([]DiskIOTrendPoint, observabilityTrendBuckets)
+	for index := range points {
+		points[index].BucketStartedAt = start.Add(time.Duration(index) * time.Hour)
+	}
+	for _, bucket := range buckets {
+		if bucket == nil {
+			continue
+		}
+		index, ok := trendBucketIndex(time.Unix(bucket.BucketEpoch, 0).UTC(), start)
+		if !ok {
+			continue
+		}
+		points[index].DiskReadBytes += bucket.DiskReadBytes
+		points[index].DiskWriteBytes += bucket.DiskWriteBytes
+		points[index].ReportedNodes = maxInt(points[index].ReportedNodes, bucket.ReportedNodeCount)
+	}
+	return points
+}
+
 func trendWindowStart(now time.Time) time.Time {
 	return now.Truncate(time.Hour).Add(-(observabilityTrendBuckets - 1) * time.Hour)
 }
@@ -222,4 +316,11 @@ func trendBucketIndex(timestamp time.Time, start time.Time) (int, bool) {
 		return 0, false
 	}
 	return index, true
+}
+
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }

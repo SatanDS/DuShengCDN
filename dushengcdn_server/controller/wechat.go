@@ -1,16 +1,22 @@
 package controller
 
 import (
+	"crypto/rand"
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"io"
 	"net/http"
-	"strconv"
+	"net/url"
+	"strings"
 	"time"
 )
+
+const wechatUsernameMaxAttempts = 20
 
 type wechatLoginResponse struct {
 	Success bool   `json:"success"`
@@ -22,7 +28,22 @@ func getWeChatIdByCode(code string) (string, error) {
 	if code == "" {
 		return "", errors.New("无效的参数")
 	}
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/wechat/user?code=%s", common.WeChatServerAddress, code), nil)
+	wechatServerAddress := strings.TrimSpace(common.WeChatServerAddress)
+	if wechatServerAddress == "" {
+		return "", errors.New("微信登录服务地址未配置")
+	}
+	endpoint, err := url.JoinPath(wechatServerAddress, "api", "wechat", "user")
+	if err != nil {
+		return "", err
+	}
+	requestURL, err := url.Parse(endpoint)
+	if err != nil {
+		return "", err
+	}
+	query := requestURL.Query()
+	query.Set("code", code)
+	requestURL.RawQuery = query.Encode()
+	req, err := http.NewRequest(http.MethodGet, requestURL.String(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -35,6 +56,10 @@ func getWeChatIdByCode(code string) (string, error) {
 		return "", err
 	}
 	defer httpResponse.Body.Close()
+	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(httpResponse.Body, 1024))
+		return "", fmt.Errorf("微信登录服务返回异常状态: %s %s", httpResponse.Status, strings.TrimSpace(string(raw)))
+	}
 	var res wechatLoginResponse
 	err = json.NewDecoder(httpResponse.Body).Decode(&res)
 	if err != nil {
@@ -47,6 +72,46 @@ func getWeChatIdByCode(code string) (string, error) {
 		return "", errors.New("验证码错误或已过期")
 	}
 	return res.Data, nil
+}
+
+func createWeChatUser(wechatId string) (*model.User, error) {
+	for attempt := 0; attempt < wechatUsernameMaxAttempts; attempt++ {
+		username, err := newWeChatUsername()
+		if err != nil {
+			return nil, err
+		}
+		user := &model.User{
+			Username:    username,
+			DisplayName: "WeChat User",
+			Role:        common.RoleCommonUser,
+			Status:      common.UserStatusEnabled,
+			WeChatId:    wechatId,
+		}
+		if err := user.Insert(); err != nil {
+			if isWeChatUniqueConstraintError(err) {
+				continue
+			}
+			return nil, err
+		}
+		return user, nil
+	}
+	return nil, errors.New("微信用户名生成冲突，请重试")
+}
+
+func newWeChatUsername() (string, error) {
+	buffer := make([]byte, 4)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return "wx_" + hex.EncodeToString(buffer), nil
+}
+
+func isWeChatUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique") || strings.Contains(message, "duplicate")
 }
 
 func WeChatAuth(c *gin.Context) {
@@ -80,18 +145,15 @@ func WeChatAuth(c *gin.Context) {
 		}
 	} else {
 		if common.RegisterEnabled {
-			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
-			user.DisplayName = "WeChat User"
-			user.Role = common.RoleCommonUser
-			user.Status = common.UserStatusEnabled
-
-			if err := user.Insert(); err != nil {
+			createdUser, err := createWeChatUser(wechatId)
+			if err != nil {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
 					"message": err.Error(),
 				})
 				return
 			}
+			user = *createdUser
 		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

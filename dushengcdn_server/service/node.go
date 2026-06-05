@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip"
@@ -69,6 +70,9 @@ type AgentRegistrationResponse struct {
 }
 
 func CreateNode(input NodeInput) (*NodeView, error) {
+	if err := EnsureCommercialResourceAvailable("node"); err != nil {
+		return nil, err
+	}
 	normalized, err := normalizeNodeInputV2(input, true)
 	if normalized.Name == "" {
 		return nil, errors.New("节点名不能为空")
@@ -260,7 +264,7 @@ func AuthenticateAgentToken(token string) (*model.Node, error) {
 func IsLegacyGlobalAgentToken(token string) bool {
 	token = strings.TrimSpace(token)
 	legacyToken := strings.TrimSpace(common.AgentToken)
-	return token != "" && legacyToken != "" && token == legacyToken
+	return constantTimeTokenEqual(token, legacyToken)
 }
 
 func AuthenticateLegacyAgentTokenForNode(token string, nodeID string) (*model.Node, error) {
@@ -291,10 +295,19 @@ func ValidateDiscoveryToken(token string) error {
 	if err != nil {
 		return err
 	}
-	if token != discoveryToken {
+	if !constantTimeTokenEqual(token, discoveryToken) {
 		return errors.New("Discovery Token 无效")
 	}
 	return nil
+}
+
+func constantTimeTokenEqual(a string, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" || b == "" || len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func EnsureGlobalDiscoveryToken() (string, error) {
@@ -304,9 +317,7 @@ func EnsureGlobalDiscoveryToken() (string, error) {
 	if needsInit {
 		model.InitOptionMap()
 	}
-	common.OptionMapRWMutex.RLock()
-	token := strings.TrimSpace(common.OptionMap["AgentDiscoveryToken"])
-	common.OptionMapRWMutex.RUnlock()
+	token := strings.TrimSpace(common.GetOptionValue("AgentDiscoveryToken"))
 	if token != "" {
 		return token, nil
 	}
@@ -700,6 +711,9 @@ func RegisterNodeWithAgentToken(node *model.Node, payload AgentNodePayload) (*Ag
 }
 
 func RegisterNodeWithDiscovery(payload AgentNodePayload) (*AgentRegistrationResponse, error) {
+	if err := EnsureCommercialResourceAvailable("node"); err != nil {
+		return nil, err
+	}
 	payload = normalizeAgentNodePayload(payload)
 	if err := validateAgentNodePayload(payload); err != nil {
 		return nil, err

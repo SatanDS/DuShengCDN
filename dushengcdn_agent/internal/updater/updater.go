@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +21,8 @@ import (
 )
 
 const maxChecksumAssetSize = 64 * 1024
+
+var maxAgentBinaryAssetSize int64 = 200 * 1024 * 1024
 
 var replaceAndRestartFunc = replaceAndRestart
 
@@ -295,6 +298,10 @@ func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedCh
 	if !isSHA256Hex(expectedChecksum) {
 		return fmt.Errorf("invalid expected sha256 checksum")
 	}
+	targetPath, err := safeUpdateTargetPath(targetPath)
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -308,6 +315,9 @@ func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedCh
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download returned %s", resp.Status)
 	}
+	if resp.ContentLength > maxAgentBinaryAssetSize {
+		return fmt.Errorf("agent binary asset exceeds %d bytes", maxAgentBinaryAssetSize)
+	}
 
 	tmpPath := targetPath + ".update"
 	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(tmpPath), ".exe") {
@@ -318,7 +328,8 @@ func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedCh
 		return err
 	}
 	hasher := sha256.New()
-	if _, err = io.Copy(io.MultiWriter(tmpFile, hasher), resp.Body); err != nil {
+	written, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(resp.Body, maxAgentBinaryAssetSize+1))
+	if err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)
 		return err
@@ -326,6 +337,10 @@ func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedCh
 	if err = tmpFile.Close(); err != nil {
 		os.Remove(tmpPath)
 		return err
+	}
+	if written > maxAgentBinaryAssetSize {
+		os.Remove(tmpPath)
+		return fmt.Errorf("agent binary asset exceeds %d bytes", maxAgentBinaryAssetSize)
 	}
 	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
 	if actualChecksum != expectedChecksum {
@@ -339,6 +354,28 @@ func (s *Service) downloadAndRestart(ctx context.Context, url string, expectedCh
 
 	slog.Info("agent binary updated, restarting")
 	return replaceAndRestartFunc(targetPath, tmpPath)
+}
+
+func safeUpdateTargetPath(path string) (string, error) {
+	candidate := strings.TrimSpace(path)
+	if candidate == "" {
+		return "", fmt.Errorf("target path cannot be empty")
+	}
+	if strings.Contains(candidate, "\x00") || strings.ContainsAny(candidate, "\r\n") {
+		return "", fmt.Errorf("target path contains invalid characters")
+	}
+	cleaned := filepath.Clean(candidate)
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("target path %q must be absolute", path)
+	}
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("stat target path: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("target path %q is a directory", path)
+	}
+	return cleaned, nil
 }
 
 func assetNameForGOOSGOARCH(goos string, goarch string) string {

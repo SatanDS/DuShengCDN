@@ -1,6 +1,7 @@
 package geoip
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -8,12 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/oschwald/maxminddb-golang"
 )
 
 var GeoIpUrl = "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb"
 var GeoIpFilePath = "./data/GeoLite2-Country.mmdb"
+
+var maxGeoIPDatabaseDownloadBytes int64 = 128 * 1024 * 1024
+var geoIPDownloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type GeoIpRecord struct {
 	Country struct {
@@ -99,7 +104,14 @@ func (s *MaxMindGeoIPService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 }
 
 func (s *MaxMindGeoIPService) UpdateDatabase() error {
-	resp, err := http.Get(GeoIpUrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GeoIpUrl, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create MaxMind database download request: %w", err)
+	}
+	req.Header.Set("User-Agent", "DuShengCDN-Server")
+	resp, err := geoIPDownloadHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to initiate MaxMind database download: %w", err)
 	}
@@ -107,6 +119,9 @@ func (s *MaxMindGeoIPService) UpdateDatabase() error {
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to download MaxMind database: HTTP status %s", resp.Status)
+	}
+	if resp.ContentLength > maxGeoIPDatabaseDownloadBytes {
+		return fmt.Errorf("failed to download MaxMind database: response exceeds %d bytes", maxGeoIPDatabaseDownloadBytes)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(s.dbFilePath), os.ModePerm); err != nil {
@@ -120,13 +135,19 @@ func (s *MaxMindGeoIPService) UpdateDatabase() error {
 	}
 	defer func() {
 		_ = out.Close()
+		_ = os.Remove(tempPath)
 	}()
 
-	if _, err = io.Copy(out, resp.Body); err != nil {
+	written, err := io.Copy(out, io.LimitReader(resp.Body, maxGeoIPDatabaseDownloadBytes+1))
+	if err != nil {
 		return fmt.Errorf("failed to write MaxMind database file: %w", err)
 	}
 	if err = out.Close(); err != nil {
 		return fmt.Errorf("failed to close MaxMind database file: %w", err)
+	}
+	if written > maxGeoIPDatabaseDownloadBytes {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("failed to download MaxMind database: response exceeds %d bytes", maxGeoIPDatabaseDownloadBytes)
 	}
 	if err = os.Rename(tempPath, s.dbFilePath); err != nil {
 		return fmt.Errorf("failed to move MaxMind database file into place: %w", err)

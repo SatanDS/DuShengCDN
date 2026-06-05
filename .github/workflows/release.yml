@@ -150,12 +150,15 @@ jobs:
           go mod download
           mkdir -p ../dist
           go build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION'" -o "../dist/$ASSET_NAME" .
+          (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v7
         with:
           name: server-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/${{ matrix.asset_name }}
+          path: |
+            dist/${{ matrix.asset_name }}
+            dist/${{ matrix.asset_name }}.sha256
           retention-days: 1
 
   build-agent-binaries:

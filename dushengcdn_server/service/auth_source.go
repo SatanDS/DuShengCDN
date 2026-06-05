@@ -7,6 +7,7 @@ import (
 	"dushengcdn/common"
 	"dushengcdn/model"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -256,27 +257,29 @@ func createUserFromOAuthProfile(source *model.AuthSource, profile *OAuthProfile)
 		displayName = string([]rune(displayName)[:20])
 	}
 
-	prefix := source.Type
-	if prefix == "" {
-		prefix = "oauth"
-	}
-	var username string
-	for index := 0; index < 20; index++ {
-		username = fmt.Sprintf("%s_%d", prefix, model.GetMaxUserId()+1+index)
-		if !model.IsUsernameAlreadyTaken(username) {
-			break
+	user := &model.User{}
+	for attempt := 0; attempt < 20; attempt++ {
+		username, err := newOAuthUsername(source)
+		if err != nil {
+			return nil, err
 		}
+		user = &model.User{
+			Username:    username,
+			DisplayName: displayName,
+			Email:       profile.Email,
+			Role:        common.RoleCommonUser,
+			Status:      common.UserStatusEnabled,
+		}
+		if err := user.Insert(); err != nil {
+			if isAuthSourceUniqueConstraintError(err) {
+				continue
+			}
+			return nil, err
+		}
+		break
 	}
-
-	user := &model.User{
-		Username:    username,
-		DisplayName: displayName,
-		Email:       profile.Email,
-		Role:        common.RoleCommonUser,
-		Status:      common.UserStatusEnabled,
-	}
-	if err := user.Insert(); err != nil {
-		return nil, err
+	if user.Id == 0 {
+		return nil, errors.New("OAuth 用户名生成冲突，请重试")
 	}
 	if err := model.LinkExternalAccount(&model.ExternalAccount{
 		AuthSourceID:     source.ID,
@@ -288,6 +291,27 @@ func createUserFromOAuthProfile(source *model.AuthSource, profile *OAuthProfile)
 		return nil, err
 	}
 	return user, nil
+}
+
+func newOAuthUsername(source *model.AuthSource) (string, error) {
+	prefix := "oa"
+	if source != nil {
+		switch source.Type {
+		case model.AuthSourceTypeGitHub:
+			prefix = "gh"
+		case model.AuthSourceTypeOIDC:
+			prefix = "oidc"
+		}
+	}
+	buffer := make([]byte, 4)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	randomPart := hex.EncodeToString(buffer)
+	if len(prefix)+1+len(randomPart) > 12 {
+		randomPart = randomPart[:12-len(prefix)-1]
+	}
+	return prefix + "_" + randomPart, nil
 }
 
 func exchangeGitHubProfile(ctx context.Context, source *model.AuthSource, code string, redirectURL string) (*OAuthProfile, error) {
@@ -503,4 +527,8 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func isAuthSourceUniqueConstraintError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique")
 }

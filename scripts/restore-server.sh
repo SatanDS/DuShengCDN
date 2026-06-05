@@ -124,6 +124,62 @@ abs_path() {
   fi
 }
 
+is_non_normalized_path() {
+  local path="$1"
+  [[ "$path" == *"/../"* || "$path" == *"/.." || "$path" == *"/./"* || "$path" == *"/." || "$path" == *"//"* ]]
+}
+
+path_depth() {
+  local path="${1#/}"
+  path="${path%/}"
+  if [[ -z "$path" ]]; then
+    printf '0'
+    return
+  fi
+  local -a parts
+  IFS='/' read -r -a parts <<< "$path"
+  printf '%d' "${#parts[@]}"
+}
+
+ensure_absolute_clean_path() {
+  local path="$1"
+  local label="$2"
+  [[ -n "$path" ]] || die "${label} cannot be empty"
+  [[ "$path" == /* ]] || die "${label} must be absolute: ${path}"
+  if is_non_normalized_path "$path"; then
+    die "${label} must be normalized and must not contain '.', '..', or duplicate slashes: ${path}"
+  fi
+}
+
+ensure_safe_directory_path() {
+  local path="$1"
+  local label="$2"
+  ensure_absolute_clean_path "$path" "$label"
+  local depth
+  depth="$(path_depth "$path")"
+  if (( depth < 2 )); then
+    die "${label} is too broad: ${path}"
+  fi
+  case "$path" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+      die "${label} is too broad: ${path}"
+      ;;
+  esac
+}
+
+ensure_safe_file_path() {
+  local path="$1"
+  local label="$2"
+  ensure_absolute_clean_path "$path" "$label"
+  ensure_safe_directory_path "$(dirname "$path")" "${label} parent directory"
+}
+
+path_is_within() {
+  local child="${1%/}"
+  local parent="${2%/}"
+  [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+}
+
 first_match() {
   local pattern="$1"
   find "$BACKUP_PATH" -maxdepth 1 -type f -name "$pattern" | sort | head -n 1
@@ -131,9 +187,14 @@ first_match() {
 
 cleanup_restore_extract_dir() {
   if [[ -n "${RESTORE_EXTRACT_DIR:-}" && -d "$RESTORE_EXTRACT_DIR" ]]; then
-    case "$RESTORE_EXTRACT_DIR" in
-      "${BACKUP_PATH}/.restore-data-"*) rm -rf "$RESTORE_EXTRACT_DIR" ;;
-    esac
+    if [[ -n "${BACKUP_PATH:-}" ]] &&
+      path_is_within "$RESTORE_EXTRACT_DIR" "$BACKUP_PATH" &&
+      [[ "$(basename "$RESTORE_EXTRACT_DIR")" == .restore-data-* ]] &&
+      ! is_non_normalized_path "$RESTORE_EXTRACT_DIR"; then
+      rm -rf -- "$RESTORE_EXTRACT_DIR"
+    else
+      warn "restore extract cleanup skipped because the path is outside the backup directory: ${RESTORE_EXTRACT_DIR}"
+    fi
   fi
 }
 
@@ -204,6 +265,17 @@ if [[ -z "$SQLITE_PATH" ]]; then
 fi
 SQLITE_PATH="$(abs_path "$SQLITE_PATH")"
 
+ensure_safe_directory_path "$BACKUP_PATH" "backup path"
+ensure_safe_directory_path "$DATA_DIR" "data directory"
+ensure_safe_directory_path "$PRE_RESTORE_BACKUP_DIR" "pre-restore backup directory"
+ensure_safe_file_path "$SQLITE_PATH" "SQLite path"
+if path_is_within "$BACKUP_PATH" "$DATA_DIR"; then
+  die "backup path must not be inside the data directory: ${BACKUP_PATH}"
+fi
+if path_is_within "$DATA_DIR" "$BACKUP_PATH"; then
+  die "data directory must not be inside the backup path: ${DATA_DIR}"
+fi
+
 compose_cmd=(docker compose)
 if [[ -n "$ENV_FILE" && -f "$ENV_FILE" ]]; then
   compose_cmd+=(--env-file "$ENV_FILE")
@@ -228,9 +300,33 @@ verify_manifest_checksums() {
   fi
 
   log "verifying backup checksums..."
-  if ! (cd "$BACKUP_PATH" && awk 'found && NF >= 2 { print } /^sha256:$/ { found = 1; next }' manifest.txt | sha256sum -c - >/dev/null); then
+  local checksum_file="${BACKUP_PATH}/.restore-sha256-$$.txt"
+  rm -f -- "$checksum_file"
+  if ! awk '
+    found && NF >= 2 {
+      path = $2
+      if (path ~ /^(\.\/)?[A-Za-z0-9._-]+$/ && path !~ /\.\./) {
+        print
+        next
+      }
+      printf "unsafe checksum path in manifest: %s\n", path > "/dev/stderr"
+      exit 2
+    }
+    /^sha256:$/ { found = 1; next }
+  ' "$manifest" > "$checksum_file"; then
+    rm -f -- "$checksum_file"
+    die "backup checksum manifest contains unsafe paths"
+  fi
+  if [[ ! -s "$checksum_file" ]]; then
+    rm -f -- "$checksum_file"
+    warn "manifest has no usable sha256 entries; checksum verification skipped."
+    return
+  fi
+  if ! (cd "$BACKUP_PATH" && sha256sum -c "$checksum_file" >/dev/null); then
+    rm -f -- "$checksum_file"
     die "backup checksum verification failed"
   fi
+  rm -f -- "$checksum_file"
 }
 
 server_service_running() {
@@ -255,7 +351,7 @@ backup_current_data_dir() {
     return
   fi
   log "creating safety archive for current data directory..."
-  tar -czf "${SAFETY_DIR}/current-dushengcdn-data-${TIMESTAMP}.tar.gz" -C "$(dirname "$DATA_DIR")" "$(basename "$DATA_DIR")"
+  tar -czf "${SAFETY_DIR}/current-dushengcdn-data-${TIMESTAMP}.tar.gz" -C "$(dirname "$DATA_DIR")" -- "$(basename "$DATA_DIR")"
 }
 
 backup_current_sqlite() {
@@ -264,7 +360,7 @@ backup_current_sqlite() {
     return
   fi
   log "creating safety copy for current SQLite database..."
-  cp -p "$SQLITE_PATH" "${SAFETY_DIR}/current-sqlite-${TIMESTAMP}.db"
+  cp -p -- "$SQLITE_PATH" "${SAFETY_DIR}/current-sqlite-${TIMESTAMP}.db"
 }
 
 backup_current_postgres() {
@@ -272,7 +368,7 @@ backup_current_postgres() {
   [[ -f "$COMPOSE_FILE" ]] || die "compose file not found: $COMPOSE_FILE"
   log "creating safety dump for current PostgreSQL database..."
   if ! (cd "$SERVER_DIR" && "${compose_cmd[@]}" exec -T "$POSTGRES_SERVICE" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB") > "${SAFETY_DIR}/current-postgres-${POSTGRES_DB}-${TIMESTAMP}.sql"; then
-    rm -f "${SAFETY_DIR}/current-postgres-${POSTGRES_DB}-${TIMESTAMP}.sql"
+    rm -f -- "${SAFETY_DIR}/current-postgres-${POSTGRES_DB}-${TIMESTAMP}.sql"
     die "current PostgreSQL safety dump failed. Fix PostgreSQL access or rerun with --skip-current-backup only if you accept the risk."
   fi
 }
@@ -315,6 +411,35 @@ backup_current_state() {
   log "pre-restore safety backup: $SAFETY_DIR"
 }
 
+validate_data_archive() {
+  local archive="$1"
+  tar -tzf "$archive" >/dev/null || die "data archive cannot be read: $(basename "$archive")"
+
+  local top_level=""
+  local entry=""
+  while IFS= read -r entry; do
+    entry="${entry#./}"
+    [[ -n "$entry" ]] || continue
+    case "$entry" in
+      /*|..|../*|*/../*|*/..|.|./*|*/./*|*/.|*//*)
+        die "data archive contains an unsafe path: ${entry}"
+        ;;
+    esac
+    local current_top="${entry%%/*}"
+    [[ -n "$current_top" && "$current_top" != "." && "$current_top" != ".." ]] || die "data archive contains an unsafe top-level path: ${entry}"
+    if [[ -z "$top_level" ]]; then
+      top_level="$current_top"
+    elif [[ "$current_top" != "$top_level" ]]; then
+      die "data archive must contain exactly one top-level data directory"
+    fi
+  done < <(tar -tzf "$archive")
+
+  [[ -n "$top_level" ]] || die "data archive is empty: $(basename "$archive")"
+  if tar -tvzf "$archive" | awk 'substr($1, 1, 1) == "l" || substr($1, 1, 1) == "h" { found = 1 } END { exit found ? 0 : 1 }'; then
+    die "data archive contains symbolic or hard links and will not be restored"
+  fi
+}
+
 restore_data_dir() {
   if [[ "$SKIP_DATA_DIR" == "true" ]]; then
     log "data directory restore skipped."
@@ -330,6 +455,7 @@ restore_data_dir() {
 
   local extract_dir="${BACKUP_PATH}/.restore-data-${TIMESTAMP}"
   local existing_target_backup=""
+  validate_data_archive "$archive"
   mkdir -p "$extract_dir"
   RESTORE_EXTRACT_DIR="$extract_dir"
   trap cleanup_restore_extract_dir EXIT
@@ -337,6 +463,9 @@ restore_data_dir() {
   log "restoring data directory from $(basename "$archive")..."
   tar -xzf "$archive" -C "$extract_dir"
   local extracted
+  local extracted_count
+  extracted_count="$(find "$extract_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d '[:space:]')"
+  [[ "$extracted_count" == "1" ]] || die "data archive extracted multiple top-level entries"
   extracted="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [[ -n "$extracted" ]] || die "data archive did not contain a top-level directory"
 
@@ -348,9 +477,9 @@ restore_data_dir() {
       existing_target_backup="${SAFETY_DIR}/$(basename "$DATA_DIR").before-restore"
     fi
     log "moving current data directory to ${existing_target_backup}"
-    mv "$DATA_DIR" "$existing_target_backup"
+    mv -- "$DATA_DIR" "$existing_target_backup"
   fi
-  mv "$extracted" "$DATA_DIR"
+  mv -- "$extracted" "$DATA_DIR"
   cleanup_restore_extract_dir
   RESTORE_EXTRACT_DIR=""
 }
@@ -362,7 +491,7 @@ restore_sqlite() {
 
   log "restoring SQLite database to $SQLITE_PATH..."
   mkdir -p "$(dirname "$SQLITE_PATH")"
-  cp -p "$sqlite_file" "$SQLITE_PATH"
+  cp -p -- "$sqlite_file" "$SQLITE_PATH"
 }
 
 restore_postgres() {

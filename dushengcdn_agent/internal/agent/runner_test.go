@@ -803,6 +803,35 @@ func TestRunnerHandlesUninstallRequest(t *testing.T) {
 	}
 }
 
+func TestSafeInstallDirForRemoval(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "dushengcdn-agent")
+	cleaned, err := safeInstallDirForRemoval(base)
+	if err != nil {
+		t.Fatalf("expected install dir to be accepted: %v", err)
+	}
+	if cleaned != filepath.Clean(base) {
+		t.Fatalf("unexpected cleaned path: got %q want %q", cleaned, base)
+	}
+
+	rejected := []string{
+		"",
+		".",
+		string(os.PathSeparator),
+		filepath.Join(string(os.PathSeparator), "opt"),
+		filepath.Join(string(os.PathSeparator), "etc"),
+		filepath.Join(string(os.PathSeparator), "tmp", "dushengcdn-agent"),
+		filepath.Join(string(os.PathSeparator), "srv", "edge-agent"),
+		"relative/dushengcdn-agent",
+	}
+	for _, path := range rejected {
+		t.Run(path, func(t *testing.T) {
+			if _, err := safeInstallDirForRemoval(path); err == nil {
+				t.Fatalf("expected path %q to be rejected", path)
+			}
+		})
+	}
+}
+
 func TestWebSocketBackoffSequence(t *testing.T) {
 	backoff := newWebSocketBackoff()
 	expected := []time.Duration{

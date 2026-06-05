@@ -1194,6 +1194,56 @@ func TestManagerApplyRejectsCertFilePathTraversal(t *testing.T) {
 	}
 }
 
+func TestSyncManagedFilesRejectsUnsafePaths(t *testing.T) {
+	tempDir := t.TempDir()
+	baseDir := filepath.Join(tempDir, "managed")
+	absolutePath := "/tmp/evil.txt"
+	if runtime.GOOS == "windows" {
+		absolutePath = `C:/tmp/evil.txt`
+	}
+	testCases := []string{
+		"../escape.txt",
+		`..\escape.txt`,
+		absolutePath,
+		"",
+		".",
+	}
+
+	for _, path := range testCases {
+		err := syncManagedFiles(baseDir, []managedFile{{
+			Path:    path,
+			Content: []byte("bad"),
+			Mode:    0o644,
+		}})
+		if err == nil {
+			t.Fatalf("expected unsafe managed file path %q to be rejected", path)
+		}
+	}
+
+	if _, statErr := os.Stat(filepath.Join(tempDir, "escape.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected escaped file to stay absent, stat err = %v", statErr)
+	}
+}
+
+func TestSyncManagedFilesAcceptsNestedRelativePaths(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), "managed")
+	if err := syncManagedFiles(baseDir, []managedFile{{
+		Path:    "nested/file.lua",
+		Content: []byte("ok"),
+		Mode:    0o644,
+	}}); err != nil {
+		t.Fatalf("syncManagedFiles failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(baseDir, "nested", "file.lua"))
+	if err != nil {
+		t.Fatalf("expected nested managed file to be written: %v", err)
+	}
+	if string(data) != "ok" {
+		t.Fatalf("unexpected nested managed file content: %s", string(data))
+	}
+}
+
 func TestObservabilityListenAddress(t *testing.T) {
 	if got := ObservabilityListenAddress("", 18081); got != "127.0.0.1:18081" {
 		t.Fatalf("unexpected default observability listen address: %s", got)

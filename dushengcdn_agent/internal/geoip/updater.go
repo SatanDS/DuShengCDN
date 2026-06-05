@@ -15,6 +15,8 @@ import (
 
 const minDatabaseSize = 1024 * 1024
 
+var maxDatabaseSize int64 = 128 * 1024 * 1024
+
 type Updater struct {
 	URL      string
 	Path     string
@@ -76,8 +78,12 @@ func (u *Updater) Download(ctx context.Context) error {
 		_ = tmp.Close()
 		return fmt.Errorf("download geoip database returned %s", resp.Status)
 	}
+	if resp.ContentLength > maxDatabaseSize {
+		_ = tmp.Close()
+		return fmt.Errorf("downloaded geoip database exceeds maximum size: %d bytes", resp.ContentLength)
+	}
 
-	written, err := io.Copy(tmp, resp.Body)
+	written, err := io.Copy(tmp, io.LimitReader(resp.Body, maxDatabaseSize+1))
 	if err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write geoip database: %w", err)
@@ -87,6 +93,9 @@ func (u *Updater) Download(ctx context.Context) error {
 	}
 	if written < minDatabaseSize {
 		return fmt.Errorf("downloaded geoip database is too small: %d bytes", written)
+	}
+	if written > maxDatabaseSize {
+		return fmt.Errorf("downloaded geoip database exceeds maximum size: %d bytes", written)
 	}
 	if err = os.Rename(tmpPath, targetPath); err != nil {
 		return fmt.Errorf("activate geoip database: %w", err)

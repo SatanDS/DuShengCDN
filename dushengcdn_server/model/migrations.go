@@ -130,7 +130,10 @@ func applyCurrentSchema(db *gorm.DB, backend string) error {
 	if err := ensureNodeAccessLogCurrentColumns(db); err != nil {
 		return err
 	}
-	return ensureDNSRollupObservabilityIndex(db)
+	if err := ensureDNSRollupObservabilityIndex(db); err != nil {
+		return err
+	}
+	return ensureObservabilityShardQueryIndexes(db, backend)
 }
 
 func loadDatabaseSchemaVersion(db *gorm.DB) (int, bool, error) {
@@ -1622,6 +1625,64 @@ func ensureDNSRollupObservabilityIndex(db *gorm.DB) error {
 	return nil
 }
 
+func ensureObservabilityShardQueryIndexes(db *gorm.DB, backend string) error {
+	db = sessionIgnoringSharding(db)
+	if db == nil {
+		return nil
+	}
+	indexes := []struct {
+		baseTable string
+		name      string
+		columns   []string
+	}{
+		{baseTable: "node_access_logs", name: "idx_node_access_logs_remote_addr_logged_at", columns: []string{"remote_addr", "logged_at"}},
+		{baseTable: "node_access_logs", name: "idx_node_access_logs_host_logged_at", columns: []string{"host", "logged_at"}},
+		{baseTable: "node_metric_snapshots", name: "idx_node_metric_snapshots_node_captured_at", columns: []string{"node_id", "captured_at"}},
+		{baseTable: "node_request_reports", name: "idx_node_request_reports_node_window_ended_at", columns: []string{"node_id", "window_ended_at"}},
+	}
+	for _, item := range indexes {
+		for _, table := range observabilityShardTables(item.baseTable) {
+			if !db.Migrator().HasTable(table) {
+				continue
+			}
+			indexName := fmt.Sprintf("%s_%s", item.name, strings.TrimPrefix(table, item.baseTable+"_"))
+			if err := createObservabilityShardIndexIfMissing(db, backend, table, indexName, item.columns); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func createObservabilityShardIndexIfMissing(db *gorm.DB, backend string, table string, indexName string, columns []string) error {
+	if len(columns) == 0 {
+		return nil
+	}
+	columnSQL := make([]string, 0, len(columns))
+	for _, column := range columns {
+		columnSQL = append(columnSQL, quoteIdentifier(column))
+	}
+	sql := fmt.Sprintf(
+		"CREATE INDEX IF NOT EXISTS %s ON %s (%s)",
+		quoteIdentifier(indexName),
+		quoteIdentifier(table),
+		strings.Join(columnSQL, ", "),
+	)
+	switch backend {
+	case "sqlite", "postgres":
+		if err := db.Exec(sql).Error; err != nil {
+			return fmt.Errorf("create observability shard index %s on %s failed: %w", indexName, table, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported database backend %s", backend)
+	}
+}
+
+func quoteIdentifier(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
 func ensureNodeAccessLogCurrentColumns(db *gorm.DB) error {
 	if db == nil {
 		return nil
@@ -1913,6 +1974,59 @@ func validateDatabaseSchemaV29(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV30 adds the commercial license singleton used by private deployments.
+func migrateV30(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV30(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV29(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasTable(&CommercialLicense{}) {
+		return fmt.Errorf("table commercial_licenses is missing")
+	}
+	for _, column := range []string{
+		"license_id",
+		"customer_id",
+		"customer_name",
+		"plan",
+		"status",
+		"token",
+		"token_hash",
+		"fingerprint",
+		"features_json",
+		"max_nodes",
+		"max_sites",
+		"issued_at",
+		"expires_at",
+		"last_validated_at",
+		"last_validation_error",
+	} {
+		if !db.Migrator().HasColumn(&CommercialLicense{}, column) {
+			return fmt.Errorf("column commercial_licenses.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
+// migrateV31 adds lookup indexes for DNS Worker node probe health summaries.
+func migrateV31(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV31(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV30(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasIndex(&DNSWorkerNodeProbe{}, "idx_dns_worker_node_probe_node") {
+		return fmt.Errorf("index dns_worker_node_probes.idx_dns_worker_node_probe_node is missing")
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -1943,6 +2057,8 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 26, toVersion: 27, migrate: migrateV27, validate: validateDatabaseSchemaV27},
 		{fromVersion: 27, toVersion: 28, migrate: migrateV28, validate: validateDatabaseSchemaV28},
 		{fromVersion: 28, toVersion: 29, migrate: migrateV29, validate: validateDatabaseSchemaV29},
+		{fromVersion: 29, toVersion: 30, migrate: migrateV30, validate: validateDatabaseSchemaV30},
+		{fromVersion: 30, toVersion: 31, migrate: migrateV31, validate: validateDatabaseSchemaV31},
 	}
 }
 
@@ -1990,7 +2106,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV29(db, backend)
+		return validateDatabaseSchemaV31(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2006,7 +2122,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV29(db, backend)
+	return validateDatabaseSchemaV31(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2037,7 +2153,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV29(db, backend); err != nil {
+	if err := validateDatabaseSchemaV31(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

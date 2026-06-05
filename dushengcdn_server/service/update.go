@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"dushengcdn/common"
 	"encoding/hex"
 	"encoding/json"
@@ -22,9 +23,13 @@ import (
 )
 
 const (
-	serverReleaseRepo     = "SatanDS/DuShengCDN"
-	githubReleasesAPIBase = "https://api.github.com/repos/%s/releases"
+	serverReleaseRepo            = "SatanDS/DuShengCDN"
+	githubReleasesAPIBase        = "https://api.github.com/repos/%s/releases"
+	manualServerBinaryTTL        = 15 * time.Minute
+	uploadedBinaryVersionTimeout = 10 * time.Second
 )
+
+var manualServerBinaryMaxBytes int64 = 200 * 1024 * 1024
 
 type ReleaseChannel string
 
@@ -60,18 +65,19 @@ var serverBinaryUpgradeExecutor = replaceAndRestartServer
 var serverUpgradeDispatchDelay = 500 * time.Millisecond
 
 type LatestServerRelease struct {
-	TagName          string                   `json:"tag_name"`
-	Body             string                   `json:"body"`
-	HTMLURL          string                   `json:"html_url"`
-	PublishedAt      string                   `json:"published_at"`
-	Channel          string                   `json:"channel"`
-	Prerelease       bool                     `json:"prerelease"`
-	CurrentVersion   string                   `json:"current_version"`
-	HasUpdate        bool                     `json:"has_update"`
-	UpgradeSupported bool                     `json:"upgrade_supported"`
-	InProgress       bool                     `json:"in_progress"`
-	UpgradeStatus    string                   `json:"upgrade_status"`
-	UpgradeLogs      []ServerUpgradeLogRecord `json:"upgrade_logs"`
+	TagName                 string                   `json:"tag_name"`
+	Body                    string                   `json:"body"`
+	HTMLURL                 string                   `json:"html_url"`
+	PublishedAt             string                   `json:"published_at"`
+	Channel                 string                   `json:"channel"`
+	Prerelease              bool                     `json:"prerelease"`
+	CurrentVersion          string                   `json:"current_version"`
+	HasUpdate               bool                     `json:"has_update"`
+	UpgradeSupported        bool                     `json:"upgrade_supported"`
+	AutomaticUpgradeEnabled bool                     `json:"automatic_upgrade_enabled"`
+	InProgress              bool                     `json:"in_progress"`
+	UpgradeStatus           string                   `json:"upgrade_status"`
+	UpgradeLogs             []ServerUpgradeLogRecord `json:"upgrade_logs"`
 }
 
 type ServerUpgradeLogRecord struct {
@@ -102,9 +108,12 @@ type githubAsset struct {
 }
 
 type preparedServerUpgrade struct {
-	release     *LatestServerRelease
-	downloadURL string
-	execPath    string
+	release      *LatestServerRelease
+	downloadURL  string
+	checksumURL  string
+	assetName    string
+	checksumName string
+	execPath     string
 }
 
 type UploadedServerBinary struct {
@@ -139,7 +148,10 @@ func GetLatestServerRelease(ctx context.Context, channel string) (*LatestServerR
 }
 
 func ScheduleServerUpgrade(channel string) (*LatestServerRelease, error) {
-	return nil, fmt.Errorf("server automatic upgrade is disabled in this fork; upload a reviewed server binary for manual upgrade")
+	if !common.ServerAutoUpgradeEnabled {
+		return nil, fmt.Errorf("服务端自动升级默认关闭；如需启用，请设置 DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true，并确认 Release 同时包含 Server 二进制和同名 .sha256 校验文件。也可以上传已审阅的 Server 二进制进行手动升级")
+	}
+	return scheduleServerUpgradeFromRelease(channel)
 }
 
 func scheduleServerUpgradeFromRelease(channel string) (*LatestServerRelease, error) {
@@ -245,6 +257,10 @@ func UploadManualServerBinary(ctx context.Context, fileName string, reader io.Re
 	return info, nil
 }
 
+func ManualServerBinaryMaxBytes() int64 {
+	return manualServerBinaryMaxBytes
+}
+
 func ConfirmManualServerUpgrade(uploadToken string) (*UploadedServerBinary, error) {
 	uploadToken = strings.TrimSpace(uploadToken)
 	if uploadToken == "" {
@@ -263,6 +279,11 @@ func ConfirmManualServerUpgrade(uploadToken string) (*UploadedServerBinary, erro
 	if candidate == nil {
 		manualServerBinaryState.Unlock()
 		return nil, fmt.Errorf("未找到待确认的上传升级包，请重新上传")
+	}
+	if isManualServerBinaryCandidateExpired(candidate) {
+		cleanupManualServerBinaryCandidateLocked()
+		manualServerBinaryState.Unlock()
+		return nil, fmt.Errorf("升级包已过期，请重新上传")
 	}
 	if candidate.UploadToken != uploadToken {
 		manualServerBinaryState.Unlock()
@@ -410,6 +431,7 @@ func decodeGitHubRelease(reader io.Reader) (*githubReleaseResponse, error) {
 func buildLatestServerReleaseView(release *githubReleaseResponse, channel ReleaseChannel) *LatestServerRelease {
 	currentVersion := strings.TrimSpace(common.Version)
 	isDevBuild := currentVersion == "" || strings.EqualFold(currentVersion, "dev")
+	platformUpgradeSupported := !isDevBuild && runtime.GOOS != "windows"
 	hasUpdate := false
 	if release != nil && !isDevBuild {
 		if channel == ReleaseChannelPreview {
@@ -426,13 +448,14 @@ func buildLatestServerReleaseView(release *githubReleaseResponse, channel Releas
 	inProgress, upgradeStatus, upgradeLogs := snapshotServerUpgradeState()
 
 	view := &LatestServerRelease{
-		Channel:          channel.String(),
-		CurrentVersion:   currentVersion,
-		HasUpdate:        hasUpdate,
-		UpgradeSupported: !isDevBuild && runtime.GOOS != "windows",
-		InProgress:       inProgress,
-		UpgradeStatus:    upgradeStatus,
-		UpgradeLogs:      upgradeLogs,
+		Channel:                 channel.String(),
+		CurrentVersion:          currentVersion,
+		HasUpdate:               hasUpdate,
+		UpgradeSupported:        platformUpgradeSupported && common.ServerAutoUpgradeEnabled,
+		AutomaticUpgradeEnabled: common.ServerAutoUpgradeEnabled,
+		InProgress:              inProgress,
+		UpgradeStatus:           upgradeStatus,
+		UpgradeLogs:             upgradeLogs,
 	}
 	if release != nil {
 		view.TagName = release.TagName
@@ -459,17 +482,24 @@ func prepareServerUpgrade(ctx context.Context, channel ReleaseChannel) (*prepare
 	}
 
 	assetName := serverAssetName(runtime.GOOS, runtime.GOARCH)
+	checksumAssetName := assetName + ".sha256"
 	recordServerUpgradeLog("info", fmt.Sprintf("Matching release asset: %s.", assetName))
 
 	var downloadURL string
+	var checksumURL string
 	for _, asset := range release.Assets {
-		if asset.Name == assetName {
+		switch asset.Name {
+		case assetName:
 			downloadURL = asset.BrowserDownloadURL
-			break
+		case checksumAssetName:
+			checksumURL = asset.BrowserDownloadURL
 		}
 	}
 	if downloadURL == "" {
 		return nil, fmt.Errorf("最新版本缺少当前平台的服务端二进制: %s", assetName)
+	}
+	if checksumURL == "" {
+		return nil, fmt.Errorf("最新版本缺少当前平台的服务端校验文件: %s", checksumAssetName)
 	}
 
 	execPath, err := os.Executable()
@@ -482,9 +512,12 @@ func prepareServerUpgrade(ctx context.Context, channel ReleaseChannel) (*prepare
 	recordServerUpgradeLog("info", "Verified current executable directory is writable.")
 
 	return &preparedServerUpgrade{
-		release:     view,
-		downloadURL: downloadURL,
-		execPath:    execPath,
+		release:      view,
+		downloadURL:  downloadURL,
+		checksumURL:  checksumURL,
+		assetName:    assetName,
+		checksumName: checksumAssetName,
+		execPath:     execPath,
 	}, nil
 }
 
@@ -510,6 +543,12 @@ func executeServerUpgrade(task *preparedServerUpgrade) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	expectedChecksum, err := downloadServerChecksum(ctx, task.checksumURL, task.assetName)
+	if err != nil {
+		return fmt.Errorf("下载服务端升级包校验文件失败: %w", err)
+	}
+	recordServerUpgradeLog("info", fmt.Sprintf("Downloaded checksum asset: %s.", strings.TrimSpace(task.checksumName)))
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, task.downloadURL, nil)
 	if err != nil {
 		return err
@@ -532,7 +571,105 @@ func executeServerUpgrade(task *preparedServerUpgrade) error {
 	if err != nil {
 		return err
 	}
+	if err = verifyServerBinaryChecksum(candidate.TempPath, expectedChecksum); err != nil {
+		_ = os.Remove(candidate.TempPath)
+		return err
+	}
+	recordServerUpgradeLog("info", "Binary checksum verified.")
 	return executeServerBinaryCandidateUpgrade(candidate, "auto")
+}
+
+func downloadServerChecksum(ctx context.Context, url string, assetName string) (string, error) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return "", errors.New("checksum url is empty")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "text/plain")
+	req.Header.Set("User-Agent", "DuShengCDN-Server")
+	resp, err := updateHTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("checksum download returned %s", resp.Status)
+	}
+	content, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
+	if err != nil {
+		return "", err
+	}
+	if len(content) > 64*1024 {
+		return "", errors.New("checksum asset exceeds 64 KB")
+	}
+	return parseServerChecksum(string(content), assetName)
+}
+
+func parseServerChecksum(content string, assetName string) (string, error) {
+	assetName = strings.TrimSpace(assetName)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 1 && isSHA256Hex(fields[0]) {
+			return strings.ToLower(fields[0]), nil
+		}
+		if len(fields) >= 2 && isSHA256Hex(fields[0]) {
+			fileName := strings.TrimPrefix(strings.TrimSpace(fields[1]), "*")
+			if assetName == "" || fileName == assetName || filepath.Base(fileName) == assetName {
+				return strings.ToLower(fields[0]), nil
+			}
+		}
+		if strings.HasPrefix(strings.ToLower(line), "sha256(") {
+			prefixEnd := strings.Index(line, ")=")
+			if prefixEnd > len("sha256(") {
+				fileName := line[len("sha256("):prefixEnd]
+				value := strings.TrimSpace(line[prefixEnd+2:])
+				if isSHA256Hex(value) && (assetName == "" || fileName == assetName || filepath.Base(fileName) == assetName) {
+					return strings.ToLower(value), nil
+				}
+			}
+		}
+	}
+	if assetName == "" {
+		return "", errors.New("checksum asset does not contain a valid sha256 digest")
+	}
+	return "", fmt.Errorf("checksum asset does not contain a sha256 digest for %q", assetName)
+}
+
+func verifyServerBinaryChecksum(path string, expectedChecksum string) error {
+	expectedChecksum = strings.ToLower(strings.TrimSpace(expectedChecksum))
+	if !isSHA256Hex(expectedChecksum) {
+		return errors.New("invalid expected sha256 checksum")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	hasher := sha256.New()
+	if _, err = io.Copy(hasher, file); err != nil {
+		return err
+	}
+	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
+	if actualChecksum != expectedChecksum {
+		return fmt.Errorf("服务端升级包 SHA256 校验失败: expected %s, got %s", expectedChecksum, actualChecksum)
+	}
+	return nil
+}
+
+func isSHA256Hex(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func executeServerBinaryCandidateUpgrade(task *manualServerBinaryCandidate, source string) error {
@@ -806,7 +943,7 @@ func isManualServerUpgradeSupported(currentVersion string) bool {
 }
 
 func persistUploadedServerBinary(tempDir string, fileName string, reader io.Reader) (string, error) {
-	suffix := filepath.Ext(strings.TrimSpace(fileName))
+	suffix := safeServerBinarySuffix(fileName)
 	if runtime.GOOS == "windows" && suffix == "" {
 		suffix = ".exe"
 	}
@@ -819,10 +956,17 @@ func persistUploadedServerBinary(tempDir string, fileName string, reader io.Read
 		return "", fmt.Errorf("创建临时升级文件失败: %v", err)
 	}
 	tempPath := tempFile.Name()
-	if _, err = io.Copy(tempFile, reader); err != nil {
+	limitedReader := io.LimitReader(reader, manualServerBinaryMaxBytes+1)
+	written, err := io.Copy(tempFile, limitedReader)
+	if err != nil {
 		_ = tempFile.Close()
 		_ = os.Remove(tempPath)
 		return "", fmt.Errorf("写入上传二进制失败: %v", err)
+	}
+	if written > manualServerBinaryMaxBytes {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("上传二进制超过大小限制（最大 %d MB）", manualServerBinaryMaxBytes/1024/1024)
 	}
 	if err = tempFile.Close(); err != nil {
 		_ = os.Remove(tempPath)
@@ -835,14 +979,29 @@ func persistUploadedServerBinary(tempDir string, fileName string, reader io.Read
 	return tempPath, nil
 }
 
+func safeServerBinarySuffix(fileName string) string {
+	suffix := strings.ToLower(filepath.Ext(filepath.Base(strings.TrimSpace(fileName))))
+	switch suffix {
+	case ".exe", ".bin", ".run", ".sh", ".cmd":
+		return suffix
+	default:
+		return ""
+	}
+}
+
 func detectUploadedServerBinaryVersion(ctx context.Context, filePath string) (string, error) {
 	commandCtx := ctx
 	if commandCtx == nil {
 		commandCtx = context.Background()
 	}
+	commandCtx, cancel := context.WithTimeout(commandCtx, uploadedBinaryVersionTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(commandCtx, filePath, "--version")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if errors.Is(commandCtx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("检查上传二进制版本超时")
+		}
 		return "", fmt.Errorf("检查上传二进制版本失败: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	version := strings.TrimSpace(string(output))
@@ -899,6 +1058,16 @@ func cleanupManualServerBinaryCandidateLocked() {
 	}
 	_ = os.Remove(manualServerBinaryState.candidate.TempPath)
 	manualServerBinaryState.candidate = nil
+}
+
+func isManualServerBinaryCandidateExpired(candidate *manualServerBinaryCandidate) bool {
+	if candidate == nil {
+		return true
+	}
+	if candidate.UploadedAt.IsZero() {
+		return true
+	}
+	return time.Since(candidate.UploadedAt) > manualServerBinaryTTL
 }
 
 func newUpgradeToken() (string, error) {
@@ -1064,4 +1233,15 @@ func SetServerUpgradeDispatchDelayForTest(delay time.Duration) {
 		delay = 0
 	}
 	serverUpgradeDispatchDelay = delay
+}
+
+func ManualServerBinaryMaxBytesForTest() int64 {
+	return manualServerBinaryMaxBytes
+}
+
+func SetManualServerBinaryMaxBytesForTest(maxBytes int64) {
+	if maxBytes <= 0 {
+		maxBytes = 200 * 1024 * 1024
+	}
+	manualServerBinaryMaxBytes = maxBytes
 }

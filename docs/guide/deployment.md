@@ -2,7 +2,7 @@
 
 你会学到：DuShengCDN 的推荐部署方式、Server 与 Agent 的运行要求、源码启动方式、联调步骤、升级与卸载入口。
 
-生产环境建议使用 PostgreSQL 作为 Server 数据库，并为 Server 显式配置 `SESSION_SECRET`。Agent 统一通过 OpenResty 二进制控制运行时；Docker 部署请直接使用内置 OpenResty 的 Agent 镜像。
+生产环境建议使用 PostgreSQL 作为 Server 数据库，为 Server 显式配置 `SESSION_SECRET`，并在多副本或商用部署中接入 Redis。Agent 统一通过 OpenResty 二进制控制运行时；Docker 部署请直接使用内置 OpenResty 的 Agent 镜像。
 
 ## 部署拓扑
 
@@ -32,6 +32,7 @@ Server：
 | Go | `1.25+`，仅源码运行需要 |
 | Node.js | `18+`，仅源码构建管理端需要 |
 | 数据库 | 可写 SQLite 文件目录，或可访问的 PostgreSQL 实例 |
+| Redis | 可选；多实例、商用限流和生产一致性场景建议配置 |
 | 端口 | 默认监听 `3000` |
 
 Agent：
@@ -118,10 +119,16 @@ services:
     ports:
       - "3000:3000"
     environment:
-      SESSION_SECRET: replace-with-a-long-random-string
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable
       GIN_MODE: release
       LOG_LEVEL: info
+      # 可选：多副本或商用部署建议配置 Redis。
+      # REDIS_CONN_STRING: redis://redis:6379/0
+      # REDIS_REQUIRED: "true"
+      # 可选：私有商业授权强制校验。
+      # DUSHENGCDN_LICENSE_REQUIRED: "true"
+      # DUSHENGCDN_LICENSE_PUBLIC_KEYS: base64url-or-hex-ed25519-public-key
     volumes:
       - dushengcdn-data:/data
 
@@ -139,6 +146,8 @@ docker compose logs -f dushengcdn
 ```
 
 首次访问 `http://localhost:3000`，默认账号为 `root` / `123456`。登录后请立即修改默认密码。
+
+商用或多实例部署建议额外提供 Redis 服务并设置 `REDIS_CONN_STRING`；如果不能接受 Redis 失效后降级为单进程限流和缓存，可设置 `REDIS_REQUIRED=true` 让 Server 在 Redis 不可用时直接启动失败。需要私有商业授权约束时，设置 `DUSHENGCDN_LICENSE_REQUIRED=true` 和 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，启动后在管理端「设置 -> 商业授权」安装 `dscdn_license_v1...` 许可证令牌。
 
 如果使用仓库内的源码 Compose 模板部署 Server，先复制环境变量模板：
 
@@ -196,7 +205,7 @@ pnpm build
 
 ```bash
 cd dushengcdn_server
-export SESSION_SECRET='replace-with-a-long-random-string'
+export SESSION_SECRET="$(openssl rand -hex 32)"
 export SQLITE_PATH='./dushengcdn.db'
 export LOG_LEVEL='info'
 # 可选：设置后优先使用 PostgreSQL。
@@ -449,9 +458,9 @@ export LOG_LEVEL='info'
 
 Server：
 
-* Root 用户可在管理端顶栏检查并升级正式版。
+* Root 用户可在管理端顶栏检查正式版；Server 自动升级默认关闭，生产环境推荐上传已审阅的 Server 二进制确认升级。
+* 如需允许一键自动升级，设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，并确保 Release 包含当前平台 Server 二进制和同名 `.sha256` 校验文件。
 * 如需尝试 preview 版本，可手动检查对应发布。
-* 也可通过上传 Server 二进制的方式执行确认升级。
 * 源码或 Compose 部署时，把端口映射、密码、DSN、`SESSION_SECRET` 和旧版 `AGENT_TOKEN` 这类本地部署配置放到 `dushengcdn_server/.env`，不要直接修改仓库里的 `docker-compose.yaml`。
 
 源码目录部署且只想更新面板端时：

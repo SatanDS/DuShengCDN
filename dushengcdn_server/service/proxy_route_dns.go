@@ -12,15 +12,86 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func SyncProxyRouteDNS(route *model.ProxyRoute) error {
+	return syncProxyRouteDNSWithContext(route, nil)
+}
+
+type proxyRouteDNSSyncContext struct {
+	accountsByID      map[uint]*model.DnsAccount
+	ddosActiveLoaded  bool
+	ddosActive        bool
+	trafficSummaryErr error
+}
+
+var getRequestReportTrafficSummaryForDNSProtection = model.GetRequestReportTrafficSummary
+
+func newProxyRouteDNSSyncContext(routes []*model.ProxyRoute) (*proxyRouteDNSSyncContext, error) {
+	accountIDs := make([]uint, 0)
+	seen := make(map[uint]struct{})
+	for _, route := range routes {
+		if route == nil || !shouldSyncProxyRouteCloudflareDNS(route) {
+			continue
+		}
+		for _, accountID := range proxyRouteDNSAccountCandidateIDs(route) {
+			if accountID == 0 {
+				continue
+			}
+			if _, ok := seen[accountID]; ok {
+				continue
+			}
+			seen[accountID] = struct{}{}
+			accountIDs = append(accountIDs, accountID)
+		}
+	}
+	accounts, err := model.ListDnsAccountsByIDs(accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	accountsByID := make(map[uint]*model.DnsAccount, len(accounts))
+	for _, account := range accounts {
+		if account == nil {
+			continue
+		}
+		accountsByID[account.ID] = account
+	}
+	return &proxyRouteDNSSyncContext{accountsByID: accountsByID}, nil
+}
+
+func (context *proxyRouteDNSSyncContext) accountByID(id uint) (*model.DnsAccount, error) {
+	if id == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if context == nil {
+		return model.GetDnsAccountByID(id)
+	}
+	account := context.accountsByID[id]
+	if account == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return account, nil
+}
+
+func (context *proxyRouteDNSSyncContext) ddosProtectionActive(route *model.ProxyRoute) bool {
+	if route == nil || normalizeDDOSProtectionMode(route.DDOSProtectionMode) != DDOSProtectionModeAuto {
+		return false
+	}
+	if !shouldEnableDDOSProtectionWithContext(context) {
+		return false
+	}
+	return true
+}
+
+func syncProxyRouteDNSWithContext(route *model.ProxyRoute, syncContext *proxyRouteDNSSyncContext) error {
 	if route == nil || !shouldSyncProxyRouteCloudflareDNS(route) {
 		return nil
 	}
-	ddosActive := routeDDOSProtectionActive(route)
+	ddosActive := routeDDOSProtectionActiveWithContext(route, syncContext)
 	ddosProvider := normalizeDDOSProtectionProvider(route.DDOSProtectionProvider)
-	account, err := proxyRouteDNSAccountForSync(route, ddosActive)
+	account, err := proxyRouteDNSAccountForSyncWithContext(route, ddosActive, syncContext)
 	if err != nil {
 		recordProxyRouteDNSSyncFailure(route, err)
 		return err
@@ -194,6 +265,10 @@ func ReconcileCloudflareDNSAutomation() error {
 	if err != nil {
 		return err
 	}
+	context, err := newProxyRouteDNSSyncContext(routes)
+	if err != nil {
+		return err
+	}
 	for _, route := range routes {
 		if route == nil || !shouldSyncProxyRouteCloudflareDNS(route) {
 			continue
@@ -208,7 +283,7 @@ func ReconcileCloudflareDNSAutomation() error {
 				route.DNSTTL = selection.TTL
 			}
 		}
-		if err := SyncProxyRouteDNS(route); err != nil {
+		if err := syncProxyRouteDNSWithContext(route, context); err != nil {
 			slog.Warn("cloudflare dns reconcile failed", "route_id", route.ID, "site_name", route.SiteName, "error", err)
 			continue
 		}
@@ -217,6 +292,13 @@ func ReconcileCloudflareDNSAutomation() error {
 }
 
 func routeDDOSProtectionActive(route *model.ProxyRoute) bool {
+	return routeDDOSProtectionActiveWithContext(route, nil)
+}
+
+func routeDDOSProtectionActiveWithContext(route *model.ProxyRoute, context *proxyRouteDNSSyncContext) bool {
+	if context != nil {
+		return context.ddosProtectionActive(route)
+	}
 	return route != nil &&
 		normalizeDDOSProtectionMode(route.DDOSProtectionMode) == DDOSProtectionModeAuto &&
 		shouldEnableDDOSProtection()
@@ -287,23 +369,55 @@ func selectProxyRouteDNSDefaultPoolTargets(route *model.ProxyRoute, recordType s
 }
 
 func proxyRouteDNSAccount(route *model.ProxyRoute) (*model.DnsAccount, error) {
+	return proxyRouteDNSAccountWithContext(route, nil)
+}
+
+func proxyRouteDNSAccountWithContext(route *model.ProxyRoute, context *proxyRouteDNSSyncContext) (*model.DnsAccount, error) {
 	if route == nil || route.DNSAccountID == nil || *route.DNSAccountID == 0 {
 		return nil, errors.New("规则未绑定 DNS 账号")
 	}
-	return model.GetDnsAccountByID(*route.DNSAccountID)
+	return dnsAccountByIDWithContext(*route.DNSAccountID, context)
 }
 
 func proxyRouteDNSAccountForSync(route *model.ProxyRoute, ddosActive bool) (*model.DnsAccount, error) {
+	return proxyRouteDNSAccountForSyncWithContext(route, ddosActive, nil)
+}
+
+func proxyRouteDNSAccountForSyncWithContext(route *model.ProxyRoute, ddosActive bool, context *proxyRouteDNSSyncContext) (*model.DnsAccount, error) {
 	if route == nil {
 		return nil, errors.New("规则未绑定 DNS 账号")
 	}
 	if !ddosActive || normalizeDDOSProtectionProvider(route.DDOSProtectionProvider) != DDOSProtectionProviderCloudflare {
-		return proxyRouteDNSAccount(route)
+		return proxyRouteDNSAccountWithContext(route, context)
 	}
 	if id, ok := parseDDOSProtectionCloudflareAccountID(route.DDOSProtectionTarget); ok {
+		return dnsAccountByIDWithContext(id, context)
+	}
+	return proxyRouteDNSAccountWithContext(route, context)
+}
+
+func dnsAccountByIDWithContext(id uint, context *proxyRouteDNSSyncContext) (*model.DnsAccount, error) {
+	if context == nil {
 		return model.GetDnsAccountByID(id)
 	}
-	return proxyRouteDNSAccount(route)
+	return context.accountByID(id)
+}
+
+func proxyRouteDNSAccountCandidateIDs(route *model.ProxyRoute) []uint {
+	if route == nil {
+		return nil
+	}
+	ids := make([]uint, 0, 2)
+	if route.DNSAccountID != nil && *route.DNSAccountID != 0 {
+		ids = append(ids, *route.DNSAccountID)
+	}
+	if normalizeDDOSProtectionMode(route.DDOSProtectionMode) == DDOSProtectionModeAuto &&
+		normalizeDDOSProtectionProvider(route.DDOSProtectionProvider) == DDOSProtectionProviderCloudflare {
+		if id, ok := parseDDOSProtectionCloudflareAccountID(route.DDOSProtectionTarget); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func parseDDOSProtectionCloudflareAccountID(raw string) (uint, bool) {
@@ -368,7 +482,11 @@ type nodeDNSTargetCandidate struct {
 }
 
 func selectHealthyNodeDNSTargets(recordType string, poolName string, count int, scheduleMode string) ([]string, error) {
-	nodes, err := model.ListNodes()
+	return selectHealthyNodeDNSTargetsWithOptions(recordType, poolName, count, scheduleMode, gslbDNSSchedulingOptions{})
+}
+
+func selectHealthyNodeDNSTargetsWithOptions(recordType string, poolName string, count int, scheduleMode string, options gslbDNSSchedulingOptions) ([]string, error) {
+	nodes, err := gslbDNSSchedulingNodes(options)
 	if err != nil {
 		return nil, err
 	}
@@ -524,10 +642,15 @@ func isNodeSchedulableForDNS(node *model.Node) bool {
 }
 
 func shouldEnableDDOSProtection() bool {
-	common.OptionMapRWMutex.RLock()
-	requestThreshold := strings.TrimSpace(common.OptionMap["CloudflareDDoSRequestThreshold"])
-	errorRateThreshold := strings.TrimSpace(common.OptionMap["CloudflareDDoSErrorRateThreshold"])
-	common.OptionMapRWMutex.RUnlock()
+	return shouldEnableDDOSProtectionWithContext(nil)
+}
+
+func shouldEnableDDOSProtectionWithContext(context *proxyRouteDNSSyncContext) bool {
+	if context != nil && context.ddosActiveLoaded {
+		return context.ddosActive
+	}
+	requestThreshold := strings.TrimSpace(common.GetOptionValue("CloudflareDDoSRequestThreshold"))
+	errorRateThreshold := strings.TrimSpace(common.GetOptionValue("CloudflareDDoSErrorRateThreshold"))
 	maxRequests := int64(0)
 	maxErrorRate := float64(0)
 	if requestThreshold != "" {
@@ -542,25 +665,34 @@ func shouldEnableDDOSProtection() bool {
 	if maxErrorRate <= 0 {
 		maxErrorRate = 30
 	}
-	reports, err := model.ListRequestReportsSince(time.Now().Add(-5 * time.Minute))
+	summary, err := getRequestReportTrafficSummaryForDNSProtection(time.Now().Add(-5*time.Minute), time.Now())
 	if err != nil {
+		if context != nil {
+			context.ddosActiveLoaded = true
+			context.trafficSummaryErr = err
+		}
 		slog.Warn("load request reports for ddos protection failed", "error", err)
 		return false
 	}
-	var requestCount int64
-	var errorCount int64
-	for _, report := range reports {
-		requestCount += report.RequestCount
-		errorCount += report.ErrorCount
-	}
-	if requestCount >= maxRequests {
-		return true
-	}
-	if requestCount <= 0 {
+	if summary == nil {
+		if context != nil {
+			context.ddosActiveLoaded = true
+			context.ddosActive = false
+		}
 		return false
 	}
-	errorRate := float64(errorCount) / float64(requestCount) * 100
-	return errorRate >= maxErrorRate
+	active := false
+	if summary.RequestCount >= maxRequests {
+		active = true
+	} else if summary.RequestCount > 0 {
+		errorRate := float64(summary.ErrorCount) / float64(summary.RequestCount) * 100
+		active = errorRate >= maxErrorRate
+	}
+	if context != nil {
+		context.ddosActiveLoaded = true
+		context.ddosActive = active
+	}
+	return active
 }
 
 func shouldEnableCloudflareProxyForDDOS() bool {

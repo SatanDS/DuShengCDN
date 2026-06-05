@@ -1271,9 +1271,9 @@ func syncManagedFiles(baseDir string, files []managedFile) error {
 
 	desired := make(map[string]managedFile, len(files))
 	for _, file := range files {
-		cleanPath := filepath.Clean(filepath.FromSlash(strings.TrimSpace(file.Path)))
-		if cleanPath == "." || cleanPath == "" {
-			return errors.New("managed file path cannot be empty")
+		cleanPath, err := cleanManagedFilePath(file.Path)
+		if err != nil {
+			return err
 		}
 		desired[cleanPath] = managedFile{
 			Path:    cleanPath,
@@ -1303,6 +1303,13 @@ func syncManagedFiles(baseDir string, files []managedFile) error {
 
 	for _, file := range desired {
 		targetPath := filepath.Join(baseDir, file.Path)
+		relativeToBase, err := filepath.Rel(baseDir, targetPath)
+		if err != nil {
+			return err
+		}
+		if relativeToBase == ".." || strings.HasPrefix(relativeToBase, ".."+string(os.PathSeparator)) {
+			return fmt.Errorf("managed file path %q escapes managed dir", file.Path)
+		}
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 			return err
 		}
@@ -1312,6 +1319,24 @@ func syncManagedFiles(baseDir string, files []managedFile) error {
 	}
 
 	return removeEmptyManagedDirs(baseDir)
+}
+
+func cleanManagedFilePath(raw string) (string, error) {
+	candidate := strings.TrimSpace(raw)
+	if strings.Contains(candidate, `\`) {
+		candidate = strings.ReplaceAll(candidate, `\`, "/")
+	}
+	cleanPath := filepath.Clean(filepath.FromSlash(candidate))
+	if cleanPath == "." || cleanPath == "" {
+		return "", errors.New("managed file path cannot be empty")
+	}
+	if filepath.IsAbs(cleanPath) || filepath.VolumeName(cleanPath) != "" {
+		return "", fmt.Errorf("managed file path %q must be relative", raw)
+	}
+	if cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("managed file path %q escapes managed dir", raw)
+	}
+	return cleanPath, nil
 }
 
 func removeEmptyManagedDirs(baseDir string) error {

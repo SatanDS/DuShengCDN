@@ -12,8 +12,11 @@ import (
 	"math/big"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestCreateTLSCertificateAndRenderHTTPSConfig(t *testing.T) {
@@ -178,6 +181,37 @@ func TestCreateProxyRouteSupportsWebsiteDomains(t *testing.T) {
 	}
 	if len(route.Domains) != 2 || route.Domains[1] != "www.example.com" {
 		t.Fatalf("expected domains payload to contain alias, got %#v", route.Domains)
+	}
+}
+
+func TestCreateProxyRouteRejectsDuplicateSiteNameAndAliasDomain(t *testing.T) {
+	setupServiceTestDB(t)
+
+	if _, err := CreateProxyRoute(ProxyRouteInput{
+		SiteName:  "main-site",
+		Domains:   []string{"app.example.com", "www.example.com"},
+		OriginURL: "https://origin.internal",
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("CreateProxyRoute initial failed: %v", err)
+	}
+
+	if _, err := CreateProxyRoute(ProxyRouteInput{
+		SiteName:  "main-site",
+		Domain:    "api.example.com",
+		OriginURL: "https://origin.internal",
+		Enabled:   true,
+	}); err == nil || !strings.Contains(err.Error(), "site_name already exists") {
+		t.Fatalf("expected duplicate site_name error, got %v", err)
+	}
+
+	if _, err := CreateProxyRoute(ProxyRouteInput{
+		SiteName:  "api-site",
+		Domains:   []string{"api.example.com", "www.example.com"},
+		OriginURL: "https://origin.internal",
+		Enabled:   true,
+	}); err == nil || !strings.Contains(err.Error(), "domain www.example.com already exists") {
+		t.Fatalf("expected duplicate alias domain error, got %v", err)
 	}
 }
 
@@ -483,6 +517,117 @@ func TestPublishConfigVersionRendersMultiDomainWebsite(t *testing.T) {
 	}
 }
 
+func TestListProxyRoutesBatchesLegacyCertificateInference(t *testing.T) {
+	setupServiceTestDB(t)
+
+	certPEM, keyPEM := generateCertificatePair(t, []string{"*.example.com"})
+	certificate, err := CreateTLSCertificate(TLSCertificateInput{
+		Name:    "wildcard-example",
+		CertPEM: certPEM,
+		KeyPEM:  keyPEM,
+	})
+	if err != nil {
+		t.Fatalf("CreateTLSCertificate failed: %v", err)
+	}
+
+	for _, domain := range []string{"a.example.com", "b.example.com", "c.example.com"} {
+		route := &model.ProxyRoute{
+			SiteName:                   strings.TrimSuffix(domain, ".example.com"),
+			Domain:                     domain,
+			Domains:                    mustJSON(t, []string{domain}),
+			OriginURL:                  "https://origin.internal",
+			Upstreams:                  mustJSON(t, []string{"https://origin.internal"}),
+			NodePool:                   "default",
+			Enabled:                    true,
+			EnableHTTPS:                true,
+			CertID:                     &certificate.ID,
+			CertIDs:                    mustJSON(t, []uint{certificate.ID}),
+			DomainCertIDs:              "[]",
+			CacheRules:                 "[]",
+			CustomHeaders:              "[]",
+			PoWConfig:                  "{}",
+			WAFMode:                    proxyRouteWAFModeBlock,
+			WAFConfig:                  "{}",
+			CCMode:                     proxyRouteCCModeBlock,
+			CCConfig:                   "{}",
+			RegionRestrictionMode:      proxyRouteRegionModeBlock,
+			RegionRestrictionCountries: "[]",
+			DNSRecordType:              "A",
+			DNSTargetCount:             1,
+			DNSScheduleMode:            "healthy",
+			DNSTTL:                     1,
+			DNSProviderMode:            DNSProviderModeCloudflare,
+			DNSRecordIDs:               "{}",
+			DDOSProtectionMode:         DDOSProtectionModeOff,
+			DDOSProtectionProvider:     DDOSProtectionProviderCloudflare,
+			CloudflareProxied:          false,
+			RegionRestrictionEnabled:   false,
+			BasicAuthEnabled:           false,
+			RedirectHTTP:               true,
+			LimitConnPerServer:         0,
+			LimitConnPerIP:             0,
+			CacheEnabled:               false,
+			PoWEnabled:                 false,
+			WAFEnabled:                 false,
+			CCEnabled:                  false,
+			DNSAutoSync:                false,
+			DNSAutoTarget:              false,
+			GSLBEnabled:                false,
+			DDOSProtectionTarget:       "",
+			DNSRecordName:              "",
+			DNSRecordContent:           "",
+			DNSLastSyncStatus:          "",
+			DNSLastSyncMessage:         "",
+			Remark:                     "",
+			BasicAuthUsername:          "",
+			BasicAuthPassword:          "",
+			OriginHost:                 "",
+			LimitRate:                  "",
+			CachePolicy:                "",
+			DNSZoneID:                  "",
+			GSLBPolicy:                 "{}",
+		}
+		if err := route.Insert(); err != nil {
+			t.Fatalf("insert legacy proxy route: %v", err)
+		}
+	}
+
+	const callbackName = "dushengcdn:test_tls_certificate_query_counter"
+	var certificateQueries int64
+	queryCallback := model.DB.Callback().Query()
+	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		if db.Statement.Table == "tls_certificates" ||
+			(db.Statement.Schema != nil && db.Statement.Schema.Table == "tls_certificates") ||
+			strings.Contains(db.Statement.SQL.String(), "tls_certificates") {
+			atomic.AddInt64(&certificateQueries, 1)
+		}
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queryCallback.Remove(callbackName)
+	})
+
+	routes, err := ListProxyRoutes()
+	if err != nil {
+		t.Fatalf("ListProxyRoutes failed: %v", err)
+	}
+	if len(routes) != 3 {
+		t.Fatalf("expected 3 proxy route views, got %d", len(routes))
+	}
+	for _, route := range routes {
+		if len(route.DomainCertIDs) != 1 || route.DomainCertIDs[0] != certificate.ID {
+			t.Fatalf("expected inferred domain certificate id for route %+v", route)
+		}
+	}
+	if got := atomic.LoadInt64(&certificateQueries); got != 1 {
+		t.Fatalf("expected one batched TLS certificate query, got %d", got)
+	}
+}
+
 func TestPublishConfigVersionRendersMultipleCertificatesForMultiDomainWebsite(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -553,6 +698,65 @@ func TestPublishConfigVersionRendersMultipleCertificatesForMultiDomainWebsite(t 
 	}
 	if !strings.Contains(result.Version.SnapshotJSON, `"domain_cert_ids":[`) {
 		t.Fatal("expected snapshot to include domain_cert_ids")
+	}
+}
+
+func TestCreateProxyRouteBatchesDomainCertificateCoverageLookup(t *testing.T) {
+	setupServiceTestDB(t)
+
+	appCertPEM, appKeyPEM := generateCertificatePair(t, []string{"app.example.com"})
+	appCertificate, err := CreateTLSCertificate(TLSCertificateInput{
+		Name:    "app-only",
+		CertPEM: appCertPEM,
+		KeyPEM:  appKeyPEM,
+	})
+	if err != nil {
+		t.Fatalf("CreateTLSCertificate app-only failed: %v", err)
+	}
+
+	wwwCertPEM, wwwKeyPEM := generateCertificatePair(t, []string{"www.example.com"})
+	wwwCertificate, err := CreateTLSCertificate(TLSCertificateInput{
+		Name:    "www-only",
+		CertPEM: wwwCertPEM,
+		KeyPEM:  wwwKeyPEM,
+	})
+	if err != nil {
+		t.Fatalf("CreateTLSCertificate www-only failed: %v", err)
+	}
+
+	const callbackName = "dushengcdn:test_create_route_tls_certificate_query_counter"
+	var certificateQueries int64
+	queryCallback := model.DB.Callback().Query()
+	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		if db.Statement.Table == "tls_certificates" ||
+			(db.Statement.Schema != nil && db.Statement.Schema.Table == "tls_certificates") ||
+			strings.Contains(db.Statement.SQL.String(), "tls_certificates") {
+			atomic.AddInt64(&certificateQueries, 1)
+		}
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queryCallback.Remove(callbackName)
+	})
+
+	_, err = CreateProxyRoute(ProxyRouteInput{
+		SiteName:      "batched-coverage-site",
+		Domains:       []string{"app.example.com", "www.example.com"},
+		OriginURL:     "https://origin.internal",
+		Enabled:       true,
+		EnableHTTPS:   true,
+		DomainCertIDs: []uint{appCertificate.ID, wwwCertificate.ID},
+		RedirectHTTP:  true,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+	if got := atomic.LoadInt64(&certificateQueries); got != 1 {
+		t.Fatalf("expected one batched TLS certificate lookup during route coverage validation, got %d", got)
 	}
 }
 

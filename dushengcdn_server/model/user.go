@@ -104,7 +104,9 @@ func (user *User) ValidateAndFill() (err error) {
 	if user.Username == "" || password == "" {
 		return errors.New("用户名或密码为空")
 	}
-	DB.Where(User{Username: user.Username}).First(user)
+	if err := DB.Where(User{Username: user.Username}).First(user).Error; err != nil {
+		return errors.New("用户名或密码错误，或用户已被封禁")
+	}
 	okay := security.ValidatePasswordAndHash(password, user.Password)
 	if !okay || user.Status != common.UserStatusEnabled {
 		return errors.New("用户名或密码错误，或用户已被封禁")
@@ -116,40 +118,35 @@ func (user *User) FillUserById() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	DB.Where(User{Id: user.Id}).First(user)
-	return nil
+	return DB.Where(User{Id: user.Id}).First(user).Error
 }
 
 func (user *User) FillUserByEmail() error {
 	if user.Email == "" {
 		return errors.New("email 为空！")
 	}
-	DB.Where(User{Email: user.Email}).First(user)
-	return nil
+	return DB.Where(User{Email: user.Email}).First(user).Error
 }
 
 func (user *User) FillUserByGitHubId() error {
 	if user.GitHubId == "" {
 		return errors.New("GitHub id 为空！")
 	}
-	DB.Where(User{GitHubId: user.GitHubId}).First(user)
-	return nil
+	return DB.Where(User{GitHubId: user.GitHubId}).First(user).Error
 }
 
 func (user *User) FillUserByWeChatId() error {
 	if user.WeChatId == "" {
 		return errors.New("WeChat id 为空！")
 	}
-	DB.Where(User{WeChatId: user.WeChatId}).First(user)
-	return nil
+	return DB.Where(User{WeChatId: user.WeChatId}).First(user).Error
 }
 
 func (user *User) FillUserByUsername() error {
 	if user.Username == "" {
 		return errors.New("username 为空！")
 	}
-	DB.Where(User{Username: user.Username}).First(user)
-	return nil
+	return DB.Where(User{Username: user.Username}).First(user).Error
 }
 
 func ValidateUserToken(token string) (user *User) {

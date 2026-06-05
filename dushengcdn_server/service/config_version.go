@@ -455,27 +455,21 @@ func CleanupConfigVersions(keepCount int) (int64, error) {
 	if keepCount < 3 {
 		keepCount = 3
 	}
-	var versions []model.ConfigVersion
-	if err := model.DB.Select("id", "is_active").Order("id desc").Find(&versions).Error; err != nil {
+	var keepIDs []uint
+	if err := model.DB.Model(&model.ConfigVersion{}).
+		Select("id").
+		Order("id desc").
+		Limit(keepCount).
+		Pluck("id", &keepIDs).Error; err != nil {
 		return 0, err
 	}
-	if len(versions) <= keepCount {
+	if len(keepIDs) < keepCount {
 		return 0, nil
 	}
-	var deleteIDs []uint
-	for i, v := range versions {
-		if i < keepCount {
-			continue
-		}
-		if v.IsActive {
-			continue
-		}
-		deleteIDs = append(deleteIDs, v.ID)
-	}
-	if len(deleteIDs) == 0 {
-		return 0, nil
-	}
-	result := model.DB.Where("id IN ?", deleteIDs).Delete(&model.ConfigVersion{})
+	result := model.DB.
+		Where("is_active = ?", false).
+		Where("id NOT IN ?", keepIDs).
+		Delete(&model.ConfigVersion{})
 	return result.RowsAffected, result.Error
 }
 
@@ -487,7 +481,11 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 	if requireRoutes && len(routes) == 0 {
 		return nil, errors.New("没有可发布的启用规则")
 	}
-	snapshotRoutes, err := buildSnapshotRoutes(routes)
+	routeConfigContext, err := newRouteConfigRenderContext(routes, defaultRouteConfigQueries)
+	if err != nil {
+		return nil, err
+	}
+	snapshotRoutes, err := buildSnapshotRoutesWithContext(routes, routeConfigContext)
 	if err != nil {
 		return nil, err
 	}
@@ -500,7 +498,7 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	routeConfig, supportFiles, err := renderRouteConfig(routes, openRestyConfig)
+	routeConfig, supportFiles, err := renderRouteConfigWithContext(routes, openRestyConfig, routeConfigContext)
 	if err != nil {
 		return nil, err
 	}
@@ -543,6 +541,17 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 }
 
 func buildSnapshotRoutes(routes []*model.ProxyRoute) ([]snapshotRoute, error) {
+	context, err := newRouteConfigRenderContext(routes, defaultRouteConfigQueries)
+	if err != nil {
+		return nil, err
+	}
+	return buildSnapshotRoutesWithContext(routes, context)
+}
+
+func buildSnapshotRoutesWithContext(
+	routes []*model.ProxyRoute,
+	context proxyRouteTLSCertificateLoader,
+) ([]snapshotRoute, error) {
 	items := make([]snapshotRoute, 0, len(routes))
 	for _, route := range routes {
 		domains, err := decodeStoredDomains(route.Domains, route.Domain)
@@ -598,7 +607,7 @@ func buildSnapshotRoutes(routes []*model.ProxyRoute) ([]snapshotRoute, error) {
 			EnableHTTPS:                route.EnableHTTPS,
 			CertID:                     route.CertID,
 			CertIDs:                    mustDecodeSnapshotCertIDs(route),
-			DomainCertIDs:              mustDecodeSnapshotDomainCertIDs(route, domains),
+			DomainCertIDs:              mustDecodeSnapshotDomainCertIDs(route, domains, context),
 			RedirectHTTP:               route.RedirectHTTP,
 			LimitConnPerServer:         route.LimitConnPerServer,
 			LimitConnPerIP:             route.LimitConnPerIP,
@@ -641,6 +650,7 @@ func mustDecodeSnapshotCertIDs(route *model.ProxyRoute) []uint {
 func mustDecodeSnapshotDomainCertIDs(
 	route *model.ProxyRoute,
 	domains []string,
+	context proxyRouteTLSCertificateLoader,
 ) []uint {
 	if route == nil {
 		return []uint{}
@@ -649,7 +659,7 @@ func mustDecodeSnapshotDomainCertIDs(
 	if err != nil {
 		return []uint{}
 	}
-	domainCertIDs, err := resolveProxyRouteDomainCertIDs(route, domains, certIDs)
+	domainCertIDs, err := resolveProxyRouteDomainCertIDsWithContext(route, domains, certIDs, context)
 	if err != nil {
 		return []uint{}
 	}
@@ -1114,6 +1124,106 @@ func openRestyOptionKeys() []string {
 }
 
 func renderRouteConfig(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot) (string, []SupportFile, error) {
+	return renderRouteConfigWithQueries(routes, cfg, defaultRouteConfigQueries)
+}
+
+func renderRouteConfigWithContext(
+	routes []*model.ProxyRoute,
+	cfg openRestyConfigSnapshot,
+	context proxyRouteTLSCertificateLoader,
+) (string, []SupportFile, error) {
+	if context == nil {
+		return renderRouteConfig(routes, cfg)
+	}
+	return renderRouteConfigWithContextAndQueries(routes, cfg, context)
+}
+
+type routeConfigQueries struct {
+	ListTLSCertificatesByIDs func([]uint) ([]*model.TLSCertificate, error)
+}
+
+var defaultRouteConfigQueries = routeConfigQueries{
+	ListTLSCertificatesByIDs: model.ListTLSCertificatesByIDs,
+}
+
+type routeConfigRenderContext struct {
+	certificatesByID map[uint]*model.TLSCertificate
+}
+
+func newRouteConfigRenderContext(routes []*model.ProxyRoute, queries routeConfigQueries) (*routeConfigRenderContext, error) {
+	certIDs := make([]uint, 0)
+	seen := make(map[uint]struct{})
+	for _, route := range routes {
+		if route == nil || !route.EnableHTTPS {
+			continue
+		}
+		routeCertIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
+		if err != nil {
+			continue
+		}
+		for _, certID := range routeCertIDs {
+			if certID == 0 {
+				continue
+			}
+			if _, ok := seen[certID]; ok {
+				continue
+			}
+			seen[certID] = struct{}{}
+			certIDs = append(certIDs, certID)
+		}
+	}
+	if len(certIDs) == 0 {
+		return &routeConfigRenderContext{certificatesByID: map[uint]*model.TLSCertificate{}}, nil
+	}
+	listCertificates := queries.ListTLSCertificatesByIDs
+	if listCertificates == nil {
+		listCertificates = model.ListTLSCertificatesByIDs
+	}
+	certificates, err := listCertificates(certIDs)
+	if err != nil {
+		return nil, err
+	}
+	certificatesByID := make(map[uint]*model.TLSCertificate, len(certificates))
+	for _, certificate := range certificates {
+		if certificate == nil {
+			continue
+		}
+		certificatesByID[certificate.ID] = certificate
+	}
+	return &routeConfigRenderContext{certificatesByID: certificatesByID}, nil
+}
+
+func (context *routeConfigRenderContext) loadTLSCertificates(certIDs []uint) ([]*model.TLSCertificate, error) {
+	if context == nil {
+		return loadTLSCertificates(certIDs)
+	}
+	certificates := make([]*model.TLSCertificate, 0, len(certIDs))
+	for _, certID := range certIDs {
+		if certID == 0 {
+			continue
+		}
+		certificate := context.certificatesByID[certID]
+		if certificate == nil {
+			return nil, gorm.ErrRecordNotFound
+		}
+		certificates = append(certificates, certificate)
+	}
+	return certificates, nil
+}
+
+func renderRouteConfigWithQueries(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot, queries routeConfigQueries) (string, []SupportFile, error) {
+	context, err := newRouteConfigRenderContext(routes, queries)
+	if err != nil {
+		return "", nil, err
+	}
+	return renderRouteConfigWithContextAndQueries(routes, cfg, context)
+}
+
+func renderRouteConfigWithContextAndQueries(
+	routes []*model.ProxyRoute,
+	cfg openRestyConfigSnapshot,
+	context proxyRouteTLSCertificateLoader,
+) (string, []SupportFile, error) {
 	var builder strings.Builder
 	builder.WriteString("# This file is generated by DuShengCDN. Do not edit manually.\n")
 	supportFiles := make([]SupportFile, 0)
@@ -1179,7 +1289,7 @@ func renderRouteConfig(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot) 
 		if err != nil {
 			return "", nil, fmt.Errorf("route %s cert_ids are invalid: %w", route.Domain, err)
 		}
-		domainCertIDs, err := resolveProxyRouteDomainCertIDs(route, domains, certIDs)
+		domainCertIDs, err := resolveProxyRouteDomainCertIDsWithContext(route, domains, certIDs, context)
 		if err != nil {
 			return "", nil, fmt.Errorf("route %s domain_cert_ids are invalid: %w", route.Domain, err)
 		}
@@ -1189,7 +1299,7 @@ func renderRouteConfig(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot) 
 		if len(certIDs) == 0 {
 			return "", nil, fmt.Errorf("路由 %s 未配置证书", route.Domain)
 		}
-		certificates, err := loadTLSCertificates(certIDs)
+		certificates, err := context.loadTLSCertificates(certIDs)
 		if err != nil {
 			return "", nil, fmt.Errorf("route %s certificate lookup failed: %w", route.Domain, err)
 		}
@@ -1607,11 +1717,37 @@ func validateCertificateCoverageSet(certificates []*model.TLSCertificate, domain
 }
 
 func loadTLSCertificates(certIDs []uint) ([]*model.TLSCertificate, error) {
+	uniqueIDs := make([]uint, 0, len(certIDs))
+	seen := make(map[uint]struct{}, len(certIDs))
+	for _, certID := range certIDs {
+		if certID == 0 {
+			continue
+		}
+		if _, ok := seen[certID]; ok {
+			continue
+		}
+		seen[certID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, certID)
+	}
+	loaded, err := model.ListTLSCertificatesByIDs(uniqueIDs)
+	if err != nil {
+		return nil, err
+	}
+	certificatesByID := make(map[uint]*model.TLSCertificate, len(loaded))
+	for _, certificate := range loaded {
+		if certificate == nil {
+			continue
+		}
+		certificatesByID[certificate.ID] = certificate
+	}
 	certificates := make([]*model.TLSCertificate, 0, len(certIDs))
 	for _, certID := range certIDs {
-		certificate, err := model.GetTLSCertificateByID(certID)
-		if err != nil {
-			return nil, err
+		if certID == 0 {
+			continue
+		}
+		certificate := certificatesByID[certID]
+		if certificate == nil {
+			return nil, gorm.ErrRecordNotFound
 		}
 		certificates = append(certificates, certificate)
 	}

@@ -47,6 +47,39 @@ type NodeHealthEventCleanupResult struct {
 	DeletedCount int64  `json:"deleted_count"`
 }
 
+type nodeObservabilityQueryData struct {
+	profile             *model.NodeSystemProfile
+	snapshots           []*model.NodeMetricSnapshot
+	reports             []*model.NodeRequestReport
+	accessLogRegions    []*model.NodeAccessLogRegionCount
+	metricTrendBuckets  []*model.NodeMetricSnapshotTrendBucket
+	counterTrendBuckets []*model.NodeMetricSnapshotCounterDeltaBucket
+	trafficTrendBuckets []*model.NodeRequestReportTrendBucket
+	events              []*model.NodeHealthEvent
+}
+
+type nodeObservabilityQueries struct {
+	getNodeSystemProfile           func(string) (*model.NodeSystemProfile, error)
+	listNodeMetricSnapshots        func(string, time.Time, int) ([]*model.NodeMetricSnapshot, error)
+	listNodeRequestReports         func(string, time.Time, int) ([]*model.NodeRequestReport, error)
+	listNodeAccessLogRegionCounts  func(string, time.Time, int) ([]*model.NodeAccessLogRegionCount, error)
+	listMetricSnapshotTrendBuckets func(string, time.Time, time.Time, int) ([]*model.NodeMetricSnapshotTrendBucket, error)
+	listMetricCounterDeltaBuckets  func(string, time.Time, time.Time, int) ([]*model.NodeMetricSnapshotCounterDeltaBucket, error)
+	listRequestReportTrendBuckets  func(string, time.Time, time.Time, int) ([]*model.NodeRequestReportTrendBucket, error)
+	listNodeHealthEvents           func(string, bool, int) ([]*model.NodeHealthEvent, error)
+}
+
+var defaultNodeObservabilityQueries = nodeObservabilityQueries{
+	getNodeSystemProfile:           model.GetNodeSystemProfile,
+	listNodeMetricSnapshots:        model.ListNodeMetricSnapshots,
+	listNodeRequestReports:         model.ListNodeRequestReports,
+	listNodeAccessLogRegionCounts:  model.ListNodeAccessLogRegionCounts,
+	listMetricSnapshotTrendBuckets: model.ListMetricSnapshotTrendBuckets,
+	listMetricCounterDeltaBuckets:  model.ListMetricSnapshotCounterDeltaBuckets,
+	listRequestReportTrendBuckets:  model.ListRequestReportTrendBuckets,
+	listNodeHealthEvents:           model.ListNodeHealthEvents,
+}
+
 func GetNodeObservability(id uint, query NodeObservabilityQuery) (*NodeObservabilityView, error) {
 	now := time.Now()
 	node, err := model.GetNodeByID(id)
@@ -56,58 +89,83 @@ func GetNodeObservability(id uint, query NodeObservabilityQuery) (*NodeObservabi
 
 	limit := normalizeObservabilityLimit(query.Limit)
 	since := now.Add(-normalizeObservabilityWindow(query.Hours))
+	trendSince := now.Add(-24 * time.Hour)
 
-	profile, err := model.GetNodeSystemProfile(node.NodeID)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		profile = nil
-	}
-
-	snapshots, err := model.ListNodeMetricSnapshots(node.NodeID, since, limit)
-	if err != nil {
-		return nil, err
-	}
-	reports, err := model.ListNodeRequestReports(node.NodeID, since, limit)
-	if err != nil {
-		return nil, err
-	}
-	accessLogRegions, err := model.ListNodeAccessLogRegionCounts(node.NodeID, since, 8)
-	if err != nil {
-		return nil, err
-	}
-	trendSnapshots, err := model.ListNodeMetricSnapshots(node.NodeID, now.Add(-24*time.Hour), 0)
-	if err != nil {
-		return nil, err
-	}
-	trendReports, err := model.ListNodeRequestReports(node.NodeID, now.Add(-24*time.Hour), 0)
-	if err != nil {
-		return nil, err
-	}
-	events, err := model.ListNodeHealthEvents(node.NodeID, false, limit)
+	data, err := loadNodeObservabilityQueryData(node.NodeID, since, trendSince, now, limit, defaultNodeObservabilityQueries)
 	if err != nil {
 		return nil, err
 	}
 
 	return &NodeObservabilityView{
 		NodeID:          node.NodeID,
-		Profile:         profile,
-		MetricSnapshots: snapshots,
-		TrafficReports:  reports,
-		HealthEvents:    events,
+		Profile:         data.profile,
+		MetricSnapshots: data.snapshots,
+		TrafficReports:  data.reports,
+		HealthEvents:    data.events,
 		Analytics: NodeObservabilityAnalytics{
-			Traffic:       buildTrafficWindowSummary(latestTrafficReport(reports)),
-			Distributions: buildTrafficDistributions(reports, accessLogRegions, 8),
-			Health:        buildObservabilityHealthSummary(latestMetricSnapshot(snapshots), latestTrafficReport(reports), events),
+			Traffic:       buildTrafficWindowSummary(latestTrafficReport(data.reports)),
+			Distributions: buildTrafficDistributions(data.reports, data.accessLogRegions, 8),
+			Health:        buildObservabilityHealthSummary(latestMetricSnapshot(data.snapshots), latestTrafficReport(data.reports), data.events),
 		},
 		Trends: NodeObservabilityTrends{
-			Traffic24h:  buildTrafficTrendPoints(now, trendReports),
-			Capacity24h: buildCapacityTrendPoints(now, trendSnapshots),
-			Network24h:  buildNetworkTrendPoints(now, trendSnapshots),
-			DiskIO24h:   buildDiskIOTrendPoints(now, trendSnapshots),
+			Traffic24h:  buildTrafficTrendPointsFromBuckets(now, data.trafficTrendBuckets),
+			Capacity24h: buildCapacityTrendPointsFromBuckets(now, data.metricTrendBuckets),
+			Network24h:  buildNetworkTrendPointsFromCounterBuckets(now, data.counterTrendBuckets),
+			DiskIO24h:   buildDiskIOTrendPointsFromCounterBuckets(now, data.counterTrendBuckets),
 		},
 	}, nil
+}
+
+func loadNodeObservabilityQueryData(nodeID string, since time.Time, trendSince time.Time, now time.Time, limit int, queries nodeObservabilityQueries) (*nodeObservabilityQueryData, error) {
+	data := &nodeObservabilityQueryData{}
+	if err := runConcurrentQueries(
+		func() error {
+			profile, err := queries.getNodeSystemProfile(nodeID)
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			data.profile = profile
+			return err
+		},
+		func() error {
+			rows, err := queries.listNodeMetricSnapshots(nodeID, since, limit)
+			data.snapshots = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listNodeRequestReports(nodeID, since, limit)
+			data.reports = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listNodeAccessLogRegionCounts(nodeID, since, 8)
+			data.accessLogRegions = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listMetricSnapshotTrendBuckets(nodeID, trendSince, now, 60)
+			data.metricTrendBuckets = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listMetricCounterDeltaBuckets(nodeID, trendSince, now, 60)
+			data.counterTrendBuckets = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listRequestReportTrendBuckets(nodeID, trendSince, now, 60)
+			data.trafficTrendBuckets = rows
+			return err
+		},
+		func() error {
+			rows, err := queries.listNodeHealthEvents(nodeID, false, limit)
+			data.events = rows
+			return err
+		},
+	); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func CleanupNodeHealthEvents(id uint) (*NodeHealthEventCleanupResult, error) {

@@ -39,7 +39,7 @@ func setWebRouter(router *gin.Engine, buildFS embed.FS, indexPage []byte) {
 
 func serveExportedPage(c *gin.Context, buildFS fs.FS) bool {
 	requestPath := strings.Trim(c.Request.URL.Path, "/")
-	if isOAuthCallbackPath(requestPath) {
+	if exportedOAuthCallbackPage(requestPath, c.Request.URL.Query().Get("legacy")) == "callback" {
 		requestPath = "oauth/callback"
 	}
 
@@ -60,6 +60,16 @@ func serveExportedPage(c *gin.Context, buildFS fs.FS) bool {
 	}
 
 	return false
+}
+
+func exportedOAuthCallbackPage(requestPath string, legacy string) string {
+	if legacy == "1" && requestPath == "oauth/github" {
+		return "github"
+	}
+	if isOAuthCallbackPath(requestPath) {
+		return "callback"
+	}
+	return ""
 }
 
 func isOAuthCallbackPath(requestPath string) bool {

@@ -74,6 +74,21 @@ func init() {
 	if os.Getenv("AGENT_TOKEN") != "" {
 		AgentToken = os.Getenv("AGENT_TOKEN")
 	}
+	if os.Getenv("REDIS_REQUIRED") != "" {
+		RedisRequired = readBoolEnv("REDIS_REQUIRED")
+	}
+	if os.Getenv("DUSHENGCDN_LICENSE_REQUIRED") != "" {
+		CommercialLicenseRequired = readBoolEnv("DUSHENGCDN_LICENSE_REQUIRED")
+	}
+	if os.Getenv("DUSHENGCDN_LICENSE_PUBLIC_KEYS") != "" {
+		CommercialLicensePublicKeys = os.Getenv("DUSHENGCDN_LICENSE_PUBLIC_KEYS")
+	}
+	if os.Getenv("DUSHENGCDN_LICENSE_ALLOW_UNSIGNED") != "" {
+		CommercialLicenseAllowUnsigned = readBoolEnv("DUSHENGCDN_LICENSE_ALLOW_UNSIGNED")
+	}
+	if os.Getenv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED") != "" {
+		ServerAutoUpgradeEnabled = readBoolEnv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED")
+	}
 	SetLogLevel(os.Getenv("LOG_LEVEL"))
 	if *LogDir != "" {
 		var err error
@@ -106,4 +121,13 @@ func readPositiveIntEnv(key string) int {
 		return 0
 	}
 	return value
+}
+
+func readBoolEnv(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

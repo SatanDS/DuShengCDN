@@ -40,6 +40,14 @@ func GetTLSCertificateByID(id uint) (*TLSCertificate, error) {
 	return certificate, err
 }
 
+func ListTLSCertificatesByIDs(ids []uint) (certificates []*TLSCertificate, err error) {
+	if len(ids) == 0 {
+		return []*TLSCertificate{}, nil
+	}
+	err = DB.Where("id IN ?", ids).Find(&certificates).Error
+	return certificates, err
+}
+
 func (certificate *TLSCertificate) Insert() error {
 	return DB.Create(certificate).Error
 }

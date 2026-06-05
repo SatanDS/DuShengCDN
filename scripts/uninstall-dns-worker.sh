@@ -59,6 +59,13 @@ validate_install_dir() {
   esac
 
   case "$INSTALL_DIR" in
+    *"/../"*|*/..|*"/./"*|*/.)
+      echo "Refusing to remove non-normalized install directory: '${INSTALL_DIR}'" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$INSTALL_DIR" in
     /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/Applications)
       echo "Refusing to remove unsafe install directory: '${INSTALL_DIR}'" >&2
       exit 1

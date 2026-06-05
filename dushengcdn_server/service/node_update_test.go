@@ -88,6 +88,33 @@ func geoipFloat(value float64) *float64 {
 	return &value
 }
 
+func TestAgentBootstrapTokensUseTrimmedExactMatch(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldAgentToken := common.AgentToken
+	t.Cleanup(func() {
+		common.AgentToken = oldAgentToken
+	})
+	common.AgentToken = "legacy-agent-token"
+
+	if !IsLegacyGlobalAgentToken(" legacy-agent-token ") {
+		t.Fatal("expected trimmed legacy agent token to match")
+	}
+	if IsLegacyGlobalAgentToken("legacy-agent-token-wrong") {
+		t.Fatal("expected wrong legacy agent token to be rejected")
+	}
+
+	if err := model.UpdateOption("AgentDiscoveryToken", "discovery-token"); err != nil {
+		t.Fatalf("failed to seed discovery token: %v", err)
+	}
+	if err := ValidateDiscoveryToken(" discovery-token "); err != nil {
+		t.Fatalf("expected trimmed discovery token to validate: %v", err)
+	}
+	if err := ValidateDiscoveryToken("discovery-token-wrong"); err == nil {
+		t.Fatal("expected wrong discovery token to be rejected")
+	}
+}
+
 func TestRequestNodeAgentPreviewUpdate(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -1514,7 +1541,7 @@ func TestGetNodeObservability(t *testing.T) {
 	if view.Trends.Traffic24h[len(view.Trends.Traffic24h)-1].RequestCount != 123 {
 		t.Fatalf("unexpected traffic trend tail: %+v", view.Trends.Traffic24h[len(view.Trends.Traffic24h)-1])
 	}
-	if view.Trends.Network24h[len(view.Trends.Network24h)-1].OpenrestyTxBytes != 32768 {
+	if view.Trends.Network24h[len(view.Trends.Network24h)-1].OpenrestyTxBytes != 16384 {
 		t.Fatalf("unexpected network trend tail: %+v", view.Trends.Network24h[len(view.Trends.Network24h)-1])
 	}
 	if view.Trends.DiskIO24h[len(view.Trends.DiskIO24h)-1].DiskWriteBytes != 2048 {
@@ -1774,31 +1801,37 @@ func TestGetDashboardOverview(t *testing.T) {
 	}
 	for _, item := range []*model.NodeAccessLog{
 		{
-			NodeID:     "node-dashboard-a",
-			LoggedAt:   now.Add(-30 * time.Minute),
-			RemoteAddr: "203.0.113.11",
-			Region:     "China",
-			Host:       "app.example.com",
-			Path:       "/",
-			StatusCode: 200,
+			NodeID:        "node-dashboard-a",
+			LoggedAt:      now.Add(-30 * time.Minute),
+			RemoteAddr:    "203.0.113.11",
+			Region:        "China",
+			Host:          "app.example.com",
+			Path:          "/",
+			StatusCode:    200,
+			RequestBytes:  100,
+			ResponseBytes: 1000,
 		},
 		{
-			NodeID:     "node-dashboard-a",
-			LoggedAt:   now.Add(-20 * time.Minute),
-			RemoteAddr: "203.0.113.12",
-			Region:     "China",
-			Host:       "app.example.com",
-			Path:       "/login",
-			StatusCode: 200,
+			NodeID:        "node-dashboard-a",
+			LoggedAt:      now.Add(-20 * time.Minute),
+			RemoteAddr:    "203.0.113.12",
+			Region:        "China",
+			Host:          "app.example.com",
+			Path:          "/login",
+			StatusCode:    200,
+			RequestBytes:  150,
+			ResponseBytes: 1200,
 		},
 		{
-			NodeID:     "node-dashboard-b",
-			LoggedAt:   now.Add(-10 * time.Minute),
-			RemoteAddr: "198.51.100.8",
-			Region:     "United States",
-			Host:       "edge.example.com",
-			Path:       "/edge",
-			StatusCode: 502,
+			NodeID:        "node-dashboard-b",
+			LoggedAt:      now.Add(-10 * time.Minute),
+			RemoteAddr:    "198.51.100.8",
+			Region:        "United States",
+			Host:          "edge.example.com",
+			Path:          "/edge",
+			StatusCode:    502,
+			RequestBytes:  200,
+			ResponseBytes: 2000,
 		},
 	} {
 		if err := model.DB.Create(item).Error; err != nil {
@@ -1856,7 +1889,13 @@ func TestGetDashboardOverview(t *testing.T) {
 	if view.Trends.Traffic24h[len(view.Trends.Traffic24h)-1].RequestCount != 900 {
 		t.Fatalf("unexpected dashboard traffic trend tail: %+v", view.Trends.Traffic24h[len(view.Trends.Traffic24h)-1])
 	}
-	if view.Trends.Network24h[len(view.Trends.Network24h)-1].OpenrestyRxBytes != 1900 {
+	if len(view.Distributions.StatusCodes) == 0 || view.Distributions.StatusCodes[0].Key != "200" || view.Distributions.StatusCodes[0].Value != 2 {
+		t.Fatalf("unexpected dashboard status distribution: %+v", view.Distributions.StatusCodes)
+	}
+	if len(view.Distributions.TopDomains) == 0 || view.Distributions.TopDomains[0].Key != "app.example.com" || view.Distributions.TopDomains[0].Value != 2 {
+		t.Fatalf("unexpected dashboard domain distribution: %+v", view.Distributions.TopDomains)
+	}
+	if view.Trends.Network24h[len(view.Trends.Network24h)-1].OpenrestyRxBytes != 1100 {
 		t.Fatalf("unexpected dashboard network trend tail: %+v", view.Trends.Network24h[len(view.Trends.Network24h)-1])
 	}
 	if view.Trends.DiskIO24h[len(view.Trends.DiskIO24h)-1].DiskWriteBytes != 550 {

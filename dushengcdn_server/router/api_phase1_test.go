@@ -383,8 +383,37 @@ func TestPhase1HTTPSAndCertificateImportLifecycle(t *testing.T) {
 		t.Fatalf("expected active config to expose main_config, got %#v", activeConfig["main_config"])
 	}
 	supportFiles, ok := activeConfig["support_files"].([]any)
-	if !ok || len(supportFiles) != 5 {
-		t.Fatalf("expected active config to expose 5 support files, got %#v", activeConfig["support_files"])
+	if !ok {
+		t.Fatalf("expected active config to expose support_files, got %#v", activeConfig["support_files"])
+	}
+	if len(supportFiles) != 6 {
+		t.Fatalf("expected active config to expose 6 support files, got %#v", activeConfig["support_files"])
+	}
+	supportFilePaths := make(map[string]bool, len(supportFiles))
+	for _, supportFile := range supportFiles {
+		supportFileMap, ok := supportFile.(map[string]any)
+		if !ok {
+			t.Fatalf("expected support file entry to be an object, got %#v", supportFile)
+		}
+		path, ok := supportFileMap["path"].(string)
+		if !ok || path == "" {
+			t.Fatalf("expected support file entry to expose a path, got %#v", supportFile)
+		}
+		supportFilePaths[path] = true
+	}
+	for _, expectedPath := range []string{"pow_config.json", "region_config.json", "waf_config.json", "cc_config.json"} {
+		if !supportFilePaths[expectedPath] {
+			t.Fatalf("expected active config support files to include %s, got %#v", expectedPath, supportFilePaths)
+		}
+	}
+	hasCertificateFile := false
+	hasPrivateKeyFile := false
+	for path := range supportFilePaths {
+		hasCertificateFile = hasCertificateFile || strings.HasSuffix(path, ".crt")
+		hasPrivateKeyFile = hasPrivateKeyFile || strings.HasSuffix(path, ".key")
+	}
+	if !hasCertificateFile || !hasPrivateKeyFile {
+		t.Fatalf("expected active config support files to include certificate artifacts, got %#v", supportFilePaths)
 	}
 }
 

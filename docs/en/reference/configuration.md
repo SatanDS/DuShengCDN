@@ -19,15 +19,50 @@
 | `PORT` | Server listen port | `3000` |
 | `GIN_MODE` | Gin mode | release unless `debug` |
 | `LOG_LEVEL` | Log level | `info` |
-| `SESSION_SECRET` | Session signing secret | random on startup |
+| `SESSION_SECRET` | Session signing secret; release mode requires an explicit value with at least 32 characters | random on startup in debug mode |
 | `SQLITE_PATH` | SQLite database path | `dushengcdn.db` |
 | `DSN` | PostgreSQL DSN, preferred over SQLite | empty |
 | `SQL_DSN` | Legacy PostgreSQL DSN, lower priority than `DSN` | empty |
+| `DATABASE_MAX_OPEN_CONNS` | Maximum open database connections | `30` |
+| `DATABASE_MAX_IDLE_CONNS` | Maximum idle database connections | `10` |
+| `DATABASE_CONN_MAX_LIFETIME_SECONDS` | Maximum database connection lifetime in seconds | `1800` |
 | `REDIS_CONN_STRING` | Redis connection string | empty |
+| `REDIS_REQUIRED` | Require Redis initialization to succeed; startup fails when Redis is missing or unreachable | `false` |
 | `UPLOAD_PATH` | Upload directory | `upload` |
 | `AGENT_TOKEN` | Legacy global Agent token | empty |
+| `DUSHENGCDN_LICENSE_REQUIRED` | Require a valid commercial license for gated commercial capabilities | `false` |
+| `DUSHENGCDN_LICENSE_PUBLIC_KEYS` | Ed25519 public keys for commercial license verification; base64url, standard base64, or hex; separated by comma, semicolon, whitespace, or newline | empty |
+| `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` | Allow unsigned development licenses; not recommended for production | `false` |
+| `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED` | Allow the management console to download and replace the Server binary from GitHub Releases | `false` |
 
 When `DSN` and `SQL_DSN` both exist, `DSN` wins. PostgreSQL is preferred when configured. If PostgreSQL is empty and a local SQLite file exists, Server migrates SQLite data at startup.
+
+When `REDIS_CONN_STRING` is empty, Redis-backed helpers fall back to in-process behavior. Multi-instance and commercial deployments should configure Redis; set `REDIS_REQUIRED=true` when startup must fail instead of degrading.
+
+Commercial license tokens use the `dscdn_license_v1.<payload>.<signature>` format with Ed25519 signatures. For enforced private deployments, set `DUSHENGCDN_LICENSE_REQUIRED=true`, configure `DUSHENGCDN_LICENSE_PUBLIC_KEYS`, then install the license from **Settings -> Commercial License**.
+
+Server automatic upgrades are disabled by default. Production deployments should usually check the version in the console, upload a reviewed Server binary, and confirm the manual upgrade. If `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` is enabled, the Release must include both the matching Server binary and a same-name `.sha256` file, such as `dushengcdn-server-linux-amd64.sha256`; the downloaded binary is verified before it replaces the executable.
+
+### Commercial License Issuing Tool
+
+`dushengcdn_server/cmd/license` provides an offline issuer for Ed25519 keys, signed license tokens, and signature inspection:
+
+```bash
+cd dushengcdn_server
+go run ./cmd/license keygen
+go run ./cmd/license sign \
+  -private-key "$DUSHENGCDN_LICENSE_PRIVATE_KEY" \
+  -license-id lic-2026-001 \
+  -customer-name "Example Ltd." \
+  -plan enterprise \
+  -features all \
+  -max-nodes 20 \
+  -max-sites 200 \
+  -expires-at 2027-12-31
+go run ./cmd/license inspect -token "$LICENSE_TOKEN" -public-key "$DUSHENGCDN_LICENSE_PUBLIC_KEY"
+```
+
+Set the generated `public_key` as `DUSHENGCDN_LICENSE_PUBLIC_KEYS`. Keep the `private_key` offline on the issuing side; do not put it into Server environment variables or Compose files. `features` accepts `all` or a comma-separated set of `acme-automation`, `authoritative-dns`, `cloudflare-dns`, `gslb`, `ddos-protection`, `waf`, `cc-protection`, and `geo-access-control`.
 
 ## Frontend Build Variables
 
@@ -90,6 +125,7 @@ The settings page maintains these hot-updatable options:
 | --- | --- | --- |
 | `AgentHeartbeatInterval` | Agent heartbeat interval in milliseconds | `10000` |
 | `AgentWebsocketUpgradeEnabled` | Allow Agent to upgrade from HTTP heartbeat to WebSocket | `true` |
+| `AgentDiscoveryToken` | First-registration Discovery Token for Agents; registered nodes receive node-specific `agent_token` values | generated on first read |
 | `NodeOfflineThreshold` | Node offline threshold in milliseconds | `120000` |
 | `AgentUpdateRepo` | Agent update repository | `SatanDS/DuShengCDN` |
 | `GeoIPProvider` | Node/IP region provider | `ipinfo` |

@@ -314,7 +314,7 @@ export function DashboardTopbar() {
       ? (stableReleaseQuery.data?.current_version ?? currentVersion)
       : currentVersion;
   const versionLabel = hasUpdate
-    ? `版本 ${displayedVersion} · 可升级`
+    ? `版本 ${displayedVersion} · 有更新`
     : `版本 ${displayedVersion}`;
   const versionButtonClassName = hasUpdate
     ? 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning-foreground)]'

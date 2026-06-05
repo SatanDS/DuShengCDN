@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type DNSZone struct {
 	ID          uint      `json:"id" gorm:"primaryKey"`
@@ -26,6 +29,11 @@ type DNSRecord struct {
 	Enabled   bool      `json:"enabled" gorm:"not null;default:true"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type DNSRecordCountByZone struct {
+	ZoneID uint
+	Count  int64
 }
 
 type DNSWorker struct {
@@ -74,6 +82,14 @@ func ListDNSZones() (zones []*DNSZone, err error) {
 	return zones, err
 }
 
+func ListDNSZonesByIDs(ids []uint) (zones []*DNSZone, err error) {
+	if len(ids) == 0 {
+		return []*DNSZone{}, nil
+	}
+	err = DB.Where("id IN ?", ids).Order("id asc").Find(&zones).Error
+	return zones, err
+}
+
 func GetDNSZoneByID(id uint) (*DNSZone, error) {
 	zone := &DNSZone{}
 	err := DB.First(zone, id).Error
@@ -101,6 +117,83 @@ func (zone *DNSZone) Delete() error {
 func ListDNSRecordsByZoneID(zoneID uint) (records []*DNSRecord, err error) {
 	err = DB.Where("zone_id = ?", zoneID).Order("name asc").Order("type asc").Order("id asc").Find(&records).Error
 	return records, err
+}
+
+func ListDNSRecordsByZoneIDs(zoneIDs []uint) (records []*DNSRecord, err error) {
+	if len(zoneIDs) == 0 {
+		return []*DNSRecord{}, nil
+	}
+	err = DB.Where("zone_id IN ?", zoneIDs).
+		Order("zone_id asc").
+		Order("name asc").
+		Order("type asc").
+		Order("id asc").
+		Find(&records).Error
+	return records, err
+}
+
+func ListDNSRecordsByZoneIDNameCandidates(zoneID uint, names []string, suffixes []string) (records []*DNSRecord, err error) {
+	if zoneID == 0 || (len(names) == 0 && len(suffixes) == 0) {
+		return []*DNSRecord{}, nil
+	}
+	uniqueNames := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		uniqueNames = append(uniqueNames, name)
+	}
+	uniqueSuffixes := make([]string, 0, len(suffixes))
+	seenSuffixes := make(map[string]struct{}, len(suffixes))
+	for _, suffix := range suffixes {
+		if suffix == "" {
+			continue
+		}
+		if _, ok := seenSuffixes[suffix]; ok {
+			continue
+		}
+		seenSuffixes[suffix] = struct{}{}
+		uniqueSuffixes = append(uniqueSuffixes, suffix)
+	}
+	if len(uniqueNames) == 0 && len(uniqueSuffixes) == 0 {
+		return []*DNSRecord{}, nil
+	}
+
+	conditions := make([]string, 0, 1+len(uniqueSuffixes))
+	args := make([]any, 0, 1+len(uniqueSuffixes))
+	if len(uniqueNames) > 0 {
+		conditions = append(conditions, "name IN ?")
+		args = append(args, uniqueNames)
+	}
+	for _, suffix := range uniqueSuffixes {
+		conditions = append(conditions, "name LIKE ?")
+		args = append(args, "%."+suffix)
+	}
+	err = DB.Where("zone_id = ?", zoneID).
+		Where("("+strings.Join(conditions, " OR ")+")", args...).
+		Order("name asc").
+		Order("type asc").
+		Order("id asc").
+		Find(&records).Error
+	return records, err
+}
+
+func ListDNSRecordCountsByZoneIDs(zoneIDs []uint) ([]DNSRecordCountByZone, error) {
+	if len(zoneIDs) == 0 {
+		return []DNSRecordCountByZone{}, nil
+	}
+	var counts []DNSRecordCountByZone
+	err := DB.Model(&DNSRecord{}).
+		Select("zone_id, COUNT(*) AS count").
+		Where("zone_id IN ?", zoneIDs).
+		Group("zone_id").
+		Scan(&counts).Error
+	return counts, err
 }
 
 func GetDNSRecordByID(id uint) (*DNSRecord, error) {

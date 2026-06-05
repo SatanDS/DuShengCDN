@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type ProxyRoute struct {
 	ID                         uint       `json:"id" gorm:"primaryKey"`
@@ -71,6 +74,11 @@ func ListProxyRoutes() (routes []*ProxyRoute, err error) {
 	return routes, err
 }
 
+func ListProxyRouteCertificateReferenceFields() (routes []*ProxyRoute, err error) {
+	err = DB.Select("id", "cert_id", "cert_ids", "domain_cert_ids").Order("id desc").Find(&routes).Error
+	return routes, err
+}
+
 func GetEnabledProxyRoutes() (routes []*ProxyRoute, err error) {
 	err = DB.Where("enabled = ?", true).Order("site_name asc").Order("domain asc").Find(&routes).Error
 	return routes, err
@@ -84,6 +92,52 @@ func GetProxyRouteByID(id uint) (*ProxyRoute, error) {
 
 func ListProxyRoutesByOriginID(originID uint) (routes []*ProxyRoute, err error) {
 	err = DB.Where("origin_id = ?", originID).Order("id desc").Find(&routes).Error
+	return routes, err
+}
+
+func ListProxyRoutesByIDs(ids []uint) (routes []*ProxyRoute, err error) {
+	if len(ids) == 0 {
+		return []*ProxyRoute{}, nil
+	}
+	err = DB.Where("id IN ?", ids).Find(&routes).Error
+	return routes, err
+}
+
+func ListProxyRouteIdentityCandidates(siteName string, domains []string) (routes []*ProxyRoute, err error) {
+	conditions := make([]string, 0, len(domains)+3)
+	args := make([]any, 0, len(domains)+3)
+	siteName = strings.TrimSpace(siteName)
+	if siteName != "" {
+		conditions = append(conditions, "site_name = ?", "domain = ?")
+		args = append(args, siteName, siteName)
+	}
+
+	domainValues := make([]string, 0, len(domains))
+	seenDomains := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+		if _, ok := seenDomains[domain]; ok {
+			continue
+		}
+		seenDomains[domain] = struct{}{}
+		domainValues = append(domainValues, domain)
+	}
+	if len(domainValues) > 0 {
+		conditions = append(conditions, "domain IN ?")
+		args = append(args, domainValues)
+		for _, domain := range domainValues {
+			conditions = append(conditions, "domains LIKE ?")
+			args = append(args, "%\""+domain+"\"%")
+		}
+	}
+	if len(conditions) == 0 {
+		return []*ProxyRoute{}, nil
+	}
+
+	err = DB.Where(strings.Join(conditions, " OR "), args...).Order("id asc").Find(&routes).Error
 	return routes, err
 }
 

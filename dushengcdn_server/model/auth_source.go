@@ -222,10 +222,32 @@ func LinkExternalAccount(account *ExternalAccount) error {
 	account.ExternalID = strings.TrimSpace(account.ExternalID)
 	account.ExternalUsername = strings.TrimSpace(account.ExternalUsername)
 	account.Email = strings.TrimSpace(account.Email)
-	return DB.Where(ExternalAccount{
-		AuthSourceID: account.AuthSourceID,
-		ExternalID:   account.ExternalID,
-	}).FirstOrCreate(account).Error
+	existing, err := FindExternalAccount(account.AuthSourceID, account.ExternalID)
+	if err == nil {
+		if existing.UserID != account.UserID {
+			return errors.New("该第三方账号已绑定其他用户")
+		}
+		*account = *existing
+		return nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if err := DB.Create(account).Error; err != nil {
+		if isModelUniqueConstraintError(err) {
+			existing, findErr := FindExternalAccount(account.AuthSourceID, account.ExternalID)
+			if findErr != nil {
+				return findErr
+			}
+			if existing.UserID != account.UserID {
+				return errors.New("该第三方账号已绑定其他用户")
+			}
+			*account = *existing
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func ListExternalAccountsByUserID(userID int) ([]ExternalAccountView, error) {
@@ -271,4 +293,8 @@ func DeleteExternalAccountForUser(id uint, userID int) error {
 		return errors.New("绑定记录不存在")
 	}
 	return nil
+}
+
+func isModelUniqueConstraintError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique")
 }

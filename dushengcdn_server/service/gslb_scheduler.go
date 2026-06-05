@@ -46,6 +46,65 @@ type gslbDNSTargetCandidate struct {
 
 type gslbDNSSchedulingOptions struct {
 	RequireHealthyDNSProbe bool
+	Data                   *gslbDNSSchedulingData
+}
+
+type gslbDNSSchedulingData struct {
+	Nodes            []*model.Node
+	MetricsByNode    map[string]*model.NodeMetricSnapshot
+	ProbeStatsByNode map[string]*dnsWorkerNodeProbeStats
+}
+
+type gslbDNSSchedulingDataQueries struct {
+	ListNodes func() ([]*model.Node, error)
+}
+
+var defaultGSLBDNSSchedulingDataQueries = gslbDNSSchedulingDataQueries{
+	ListNodes: model.ListNodes,
+}
+
+func loadGSLBDNSSchedulingData(includeProbeStats bool) (*gslbDNSSchedulingData, error) {
+	return loadGSLBDNSSchedulingDataWithQueries(includeProbeStats, defaultGSLBDNSSchedulingDataQueries)
+}
+
+func loadGSLBDNSSchedulingDataWithQueries(includeProbeStats bool, queries gslbDNSSchedulingDataQueries) (*gslbDNSSchedulingData, error) {
+	listNodes := queries.ListNodes
+	if listNodes == nil {
+		listNodes = model.ListNodes
+	}
+	nodes, err := listNodes()
+	if err != nil {
+		return nil, err
+	}
+	data := &gslbDNSSchedulingData{
+		Nodes:         nodes,
+		MetricsByNode: latestNodeMetricSnapshots(),
+	}
+	if includeProbeStats {
+		data.ProbeStatsByNode = buildDNSWorkerNodeProbeStatsByNodeForNodes(time.Now().UTC(), nodes)
+	}
+	return data, nil
+}
+
+func gslbDNSSchedulingNodes(options gslbDNSSchedulingOptions) ([]*model.Node, error) {
+	if options.Data != nil {
+		return options.Data.Nodes, nil
+	}
+	return model.ListNodes()
+}
+
+func gslbDNSSchedulingMetricsByNode(options gslbDNSSchedulingOptions) map[string]*model.NodeMetricSnapshot {
+	if options.Data != nil && options.Data.MetricsByNode != nil {
+		return options.Data.MetricsByNode
+	}
+	return latestNodeMetricSnapshots()
+}
+
+func gslbDNSSchedulingProbeStatsByNode(options gslbDNSSchedulingOptions) map[string]*dnsWorkerNodeProbeStats {
+	if options.Data != nil && options.Data.ProbeStatsByNode != nil {
+		return options.Data.ProbeStatsByNode
+	}
+	return buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
 }
 
 func selectProxyRouteDNSTargets(route *model.ProxyRoute, recordType string) (proxyRouteDNSTargetSelection, error) {
@@ -64,7 +123,7 @@ func selectProxyRouteDNSTargetsWithOptions(route *model.ProxyRoute, recordType s
 	if route.GSLBEnabled {
 		return selectGSLBDNSTargetsWithOptions(route, recordType, GSLBSourceContext{}, options)
 	}
-	targets, err := selectHealthyNodeDNSTargets(recordType, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode)
+	targets, err := selectHealthyNodeDNSTargetsWithOptions(recordType, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, options)
 	if err != nil {
 		return selection, err
 	}
@@ -113,7 +172,7 @@ func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string,
 	}
 	desiredTargets := selectWeightedGSLBTargets(candidates, policy)
 	if len(desiredTargets) == 0 {
-		if options.RequireHealthyDNSProbe && gslbHasCandidatesWithoutDNSProbe(recordType, policy, source) {
+		if options.RequireHealthyDNSProbe && gslbHasCandidatesWithoutDNSProbe(recordType, policy, source, options) {
 			return selection, fmt.Errorf("Agent 探测未达到调度门槛，当前来源没有可用于 %s 记录的边缘节点", recordType)
 		}
 		return selection, fmt.Errorf("no online public node IP is available for %s records in GSLB pools", recordType)
@@ -191,20 +250,21 @@ func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy
 	return buildGSLBDNSTargetCandidatesWithOptions(recordType, policy, source, gslbDNSSchedulingOptions{})
 }
 
-func gslbHasCandidatesWithoutDNSProbe(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext) bool {
-	candidates, err := buildGSLBDNSTargetCandidatesWithOptions(recordType, policy, source, gslbDNSSchedulingOptions{})
+func gslbHasCandidatesWithoutDNSProbe(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext, options gslbDNSSchedulingOptions) bool {
+	options.RequireHealthyDNSProbe = false
+	candidates, err := buildGSLBDNSTargetCandidatesWithOptions(recordType, policy, source, options)
 	return err == nil && len(candidates) > 0
 }
 
 func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext, options gslbDNSSchedulingOptions) ([]gslbDNSTargetCandidate, error) {
-	nodes, err := model.ListNodes()
+	nodes, err := gslbDNSSchedulingNodes(options)
 	if err != nil {
 		return nil, err
 	}
-	metrics := latestNodeMetricSnapshots()
+	metrics := gslbDNSSchedulingMetricsByNode(options)
 	probeStatsByNode := map[string]*dnsWorkerNodeProbeStats{}
 	if options.RequireHealthyDNSProbe {
-		probeStatsByNode = buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
+		probeStatsByNode = gslbDNSSchedulingProbeStatsByNode(options)
 	}
 	poolPolicies := matchGSLBPoolsForSource(policy.Pools, source)
 	candidates := make([]gslbDNSTargetCandidate, 0, len(nodes))
@@ -280,7 +340,7 @@ func latestNodeMetricSnapshots() map[string]*model.NodeMetricSnapshot {
 		freshness = 120 * time.Second
 	}
 	now := time.Now()
-	rows, err := model.ListMetricSnapshotsSince(now.Add(-freshness))
+	rows, err := model.ListLatestMetricSnapshotsByNode(now.Add(-freshness), now)
 	if err != nil {
 		return map[string]*model.NodeMetricSnapshot{}
 	}

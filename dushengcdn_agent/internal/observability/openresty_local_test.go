@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"bytes"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +70,18 @@ func TestCollectManagedOpenRestyMetricsHandlesUnavailableEndpoint(t *testing.T) 
 	cfg := &config.Config{OpenrestyObservabilityPort: 1}
 	if metrics := CollectManagedOpenRestyMetrics(cfg); metrics != nil {
 		t.Fatalf("expected nil metrics for unavailable endpoint, got %+v", metrics)
+	}
+}
+
+func TestFetchLocalTextRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write(bytes.Repeat([]byte("A"), int(maxLocalOpenRestyResponseBytes)+1))
+	}))
+	defer server.Close()
+
+	_, err := fetchLocalText(server.Client(), server.URL)
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("expected oversized local text response error, got %v", err)
 	}
 }
 

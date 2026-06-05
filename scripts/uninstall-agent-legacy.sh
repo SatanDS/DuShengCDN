@@ -39,10 +39,32 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$INSTALL_DIR" || "$INSTALL_DIR" == "/" || "$INSTALL_DIR" == "." ]]; then
-  echo "Refusing to remove unsafe install directory: '${INSTALL_DIR}'"
-  exit 1
-fi
+validate_install_dir() {
+  while [[ "$INSTALL_DIR" != "/" && "$INSTALL_DIR" == */ ]]; do
+    INSTALL_DIR="${INSTALL_DIR%/}"
+  done
+
+  case "$INSTALL_DIR" in
+    /*) ;;
+    *) echo "Refusing to remove non-absolute install directory: '${INSTALL_DIR}'" >&2; exit 1 ;;
+  esac
+
+  case "$INSTALL_DIR" in
+    *"/../"*|*/..|*"/./"*|*/.)
+      echo "Refusing to remove non-normalized install directory: '${INSTALL_DIR}'" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$INSTALL_DIR" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/Applications)
+      echo "Refusing to remove unsafe install directory: '${INSTALL_DIR}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_install_dir
 
 json_get_string() {
   local file="$1"
@@ -136,7 +158,7 @@ fi
 
 if [[ -d "$INSTALL_DIR" ]]; then
   echo "Removing installation directory: ${INSTALL_DIR}"
-  rm -rf "$INSTALL_DIR"
+  rm -rf -- "$INSTALL_DIR"
 else
   echo "Installation directory not found, skipping: ${INSTALL_DIR}"
 fi

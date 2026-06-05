@@ -3,6 +3,7 @@ package service
 import (
 	"dushengcdn/model"
 	"errors"
+	"log/slog"
 	"time"
 
 	ristretto "github.com/dgraph-io/ristretto/v2"
@@ -34,9 +35,21 @@ type agentTokenAuthCache struct {
 var nodeAgentTokenCache = newAgentTokenAuthCache()
 
 func newAgentTokenAuthCache() *agentTokenAuthCache {
+	positive, positiveErr := newAgentTokenPositiveCache()
+	negative, negativeErr := newAgentTokenNegativeCache()
+	if positiveErr != nil || negativeErr != nil {
+		slog.Warn(
+			"agent token cache disabled",
+			"positive_error", positiveErr,
+			"negative_error", negativeErr,
+		)
+		positive = nil
+		negative = nil
+	}
+
 	return &agentTokenAuthCache{
-		positive: mustNewAgentTokenPositiveCache(),
-		negative: mustNewAgentTokenNegativeCache(),
+		positive: positive,
+		negative: negative,
 		now:      time.Now,
 		loadNodeByToken: func(token string) (*model.Node, error) {
 			return model.GetNodeByAgentToken(token)
@@ -44,32 +57,37 @@ func newAgentTokenAuthCache() *agentTokenAuthCache {
 	}
 }
 
-func mustNewAgentTokenPositiveCache() *ristretto.Cache[string, cachedAgentNode] {
-	cache, err := ristretto.NewCache(&ristretto.Config[string, cachedAgentNode]{
+func newAgentTokenPositiveCache() (*ristretto.Cache[string, cachedAgentNode], error) {
+	return ristretto.NewCache(&ristretto.Config[string, cachedAgentNode]{
 		NumCounters: 1e5,
 		MaxCost:     2e4,
 		BufferItems: 64,
 	})
-	if err != nil {
-		panic(err)
-	}
-	return cache
 }
 
-func mustNewAgentTokenNegativeCache() *ristretto.Cache[string, cachedMissingAgentToken] {
-	cache, err := ristretto.NewCache(&ristretto.Config[string, cachedMissingAgentToken]{
+func newAgentTokenNegativeCache() (*ristretto.Cache[string, cachedMissingAgentToken], error) {
+	return ristretto.NewCache(&ristretto.Config[string, cachedMissingAgentToken]{
 		NumCounters: 1e5,
 		MaxCost:     agentTokenNegativeCacheCap,
 		BufferItems: 64,
 	})
-	if err != nil {
-		panic(err)
-	}
-	return cache
 }
 
 func (c *agentTokenAuthCache) authenticate(token string) (*model.Node, error) {
-	now := c.now()
+	if c == nil {
+		return model.GetNodeByAgentToken(token)
+	}
+
+	nowFunc := c.now
+	if nowFunc == nil {
+		nowFunc = time.Now
+	}
+	loadNodeByToken := c.loadNodeByToken
+	if loadNodeByToken == nil {
+		loadNodeByToken = model.GetNodeByAgentToken
+	}
+
+	now := nowFunc()
 	if node, ok := c.getNode(token, now); ok {
 		return node, nil
 	}
@@ -77,7 +95,7 @@ func (c *agentTokenAuthCache) authenticate(token string) (*model.Node, error) {
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	node, err := c.loadNodeByToken(token)
+	node, err := loadNodeByToken(token)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.storeMissing(token, now.Add(agentTokenNegativeCacheTTL))
@@ -90,6 +108,9 @@ func (c *agentTokenAuthCache) authenticate(token string) (*model.Node, error) {
 }
 
 func (c *agentTokenAuthCache) getNode(token string, now time.Time) (*model.Node, bool) {
+	if c == nil || c.positive == nil {
+		return nil, false
+	}
 	entry, ok := c.positive.Get(token)
 	if !ok {
 		return nil, false
@@ -102,6 +123,9 @@ func (c *agentTokenAuthCache) getNode(token string, now time.Time) (*model.Node,
 }
 
 func (c *agentTokenAuthCache) isMissing(token string, now time.Time) bool {
+	if c == nil || c.negative == nil {
+		return false
+	}
 	entry, ok := c.negative.Get(token)
 	if !ok {
 		return false
@@ -114,39 +138,58 @@ func (c *agentTokenAuthCache) isMissing(token string, now time.Time) bool {
 }
 
 func (c *agentTokenAuthCache) storeNode(token string, node *model.Node, expiresAt time.Time) {
-	if token == "" || node == nil {
+	if c == nil || token == "" || node == nil {
 		return
 	}
-	c.negative.Del(token)
-	c.positive.Set(token, cachedAgentNode{
-		node:      cloneCachedNode(node),
-		expiresAt: expiresAt,
-	}, 1)
-	c.positive.Wait()
+	if c.negative != nil {
+		c.negative.Del(token)
+	}
+	if c.positive != nil {
+		c.positive.Set(token, cachedAgentNode{
+			node:      cloneCachedNode(node),
+			expiresAt: expiresAt,
+		}, 1)
+		c.positive.Wait()
+	}
 }
 
 func (c *agentTokenAuthCache) storeMissing(token string, expiresAt time.Time) {
-	if token == "" {
+	if c == nil || token == "" {
 		return
 	}
-	c.positive.Del(token)
-	c.negative.Set(token, cachedMissingAgentToken{
-		expiresAt: expiresAt,
-	}, 1)
-	c.negative.Wait()
+	if c.positive != nil {
+		c.positive.Del(token)
+	}
+	if c.negative != nil {
+		c.negative.Set(token, cachedMissingAgentToken{
+			expiresAt: expiresAt,
+		}, 1)
+		c.negative.Wait()
+	}
 }
 
 func (c *agentTokenAuthCache) invalidate(token string) {
-	if token == "" {
+	if c == nil || token == "" {
 		return
 	}
-	c.positive.Del(token)
-	c.negative.Del(token)
+	if c.positive != nil {
+		c.positive.Del(token)
+	}
+	if c.negative != nil {
+		c.negative.Del(token)
+	}
 }
 
 func (c *agentTokenAuthCache) reset() {
-	c.positive.Clear()
-	c.negative.Clear()
+	if c == nil {
+		return
+	}
+	if c.positive != nil {
+		c.positive.Clear()
+	}
+	if c.negative != nil {
+		c.negative.Clear()
+	}
 }
 
 func cloneCachedNode(node *model.Node) *model.Node {
@@ -165,10 +208,14 @@ func refreshAgentTokenCache(node *model.Node) {
 	if node == nil {
 		return
 	}
+	nowFunc := nodeAgentTokenCache.now
+	if nowFunc == nil {
+		nowFunc = time.Now
+	}
 	nodeAgentTokenCache.storeNode(
 		node.AgentToken,
 		node,
-		nodeAgentTokenCache.now().Add(agentTokenPositiveCacheTTL),
+		nowFunc().Add(agentTokenPositiveCacheTTL),
 	)
 }
 

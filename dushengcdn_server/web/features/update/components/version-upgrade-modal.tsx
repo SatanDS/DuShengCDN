@@ -54,7 +54,7 @@ function getUpgradeBadge(release: LatestReleaseInfo | null | undefined) {
         return {label: '升级中', variant: 'warning' as const};
     }
     if (release.has_update) {
-        return {label: '可升级', variant: 'warning' as const};
+        return {label: '有更新', variant: 'warning' as const};
     }
     return {label: '最新', variant: 'success' as const};
 }
@@ -120,6 +120,7 @@ export function VersionUpgradeModal({
     );
     const showConfirmManualUpgradeAction = canConfirmManualUpgrade;
     const upgradeLogs = release?.upgrade_logs ?? [];
+    const automaticUpgradeEnabled = release?.automatic_upgrade_enabled ?? false;
 
     useEffect(() => {
         if (!isOpen) {
@@ -132,7 +133,7 @@ export function VersionUpgradeModal({
             isOpen={isOpen}
             onClose={onClose}
             title="版本"
-            description="默认检查正式版更新；你也可以手动检查 preview 发布并选择升级，或上传 Server 二进制确认升级。升级开始后服务会短暂重启。"
+            description="默认检查正式版更新；你也可以手动检查 preview 发布。Server 自动升级默认关闭，生产环境建议上传已审阅的 Server 二进制确认升级。"
             size="lg"
         >
             <div className="space-y-6">
@@ -213,7 +214,7 @@ export function VersionUpgradeModal({
                                 ) : (
                                     <StatusBadge label="正式发布" variant="info"/>
                                 )}
-                                {!release.upgrade_supported ? (
+                                {!release.upgrade_supported && automaticUpgradeEnabled ? (
                                     <StatusBadge
                                         label="当前平台不支持自动升级"
                                         variant="danger"
@@ -221,6 +222,9 @@ export function VersionUpgradeModal({
                                 ) : null}
                                 {release.in_progress ? (
                                     <StatusBadge label="升级任务执行中" variant="warning"/>
+                                ) : null}
+                                {!automaticUpgradeEnabled ? (
+                                    <StatusBadge label="自动升级关闭" variant="info"/>
                                 ) : null}
                             </div>
                             <div
@@ -258,9 +262,13 @@ export function VersionUpgradeModal({
                                             ? '升级中...'
                                             : release.in_progress
                                                 ? '升级中...'
-                                                : selectedChannel === 'preview'
-                                                    ? '升级预览版'
-                                                    : '升级正式版'}
+                                                : !release.has_update
+                                                    ? '无需升级'
+                                                    : !automaticUpgradeEnabled
+                                                        ? '自动升级关闭'
+                                                        : selectedChannel === 'preview'
+                                                            ? '升级预览版'
+                                                            : '升级正式版'}
                                     </PrimaryButton>
                                 </div>
                             ) : null}

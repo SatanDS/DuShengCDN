@@ -56,7 +56,7 @@ go run . --port 3000 --log-dir ./logs
 | `PORT` | Server 监听端口 | `3000` |
 | `GIN_MODE` | Gin 运行模式 | 非 `debug` 时按 release |
 | `LOG_LEVEL` | 日志等级 | `info` |
-| `SESSION_SECRET` | Session 签名密钥 | 启动时随机生成 |
+| `SESSION_SECRET` | Session 签名密钥；release 模式必须显式配置且不少于 32 字符 | debug 模式启动时随机生成 |
 | `SQLITE_PATH` | SQLite 数据库文件路径 | `dushengcdn.db` |
 | `DSN` | PostgreSQL DSN，设置后优先于 SQLite | 空 |
 | `SQL_DSN` | 兼容旧命名的 PostgreSQL DSN，优先级低于 `DSN` | 空 |
@@ -64,8 +64,13 @@ go run . --port 3000 --log-dir ./logs
 | `DATABASE_MAX_IDLE_CONNS` | Server 到数据库的最大空闲连接数 | `10` |
 | `DATABASE_CONN_MAX_LIFETIME_SECONDS` | 数据库连接最长复用时间，秒 | `1800` |
 | `REDIS_CONN_STRING` | Redis 连接串 | 空 |
+| `REDIS_REQUIRED` | 是否要求 Redis 初始化成功；为 `true` 且连接串缺失或连接失败时启动失败 | `false` |
 | `UPLOAD_PATH` | 上传目录 | `upload` |
 | `AGENT_TOKEN` | 兼容旧部署的全局 Agent Token | 空 |
+| `DUSHENGCDN_LICENSE_REQUIRED` | 是否强制要求安装有效商业授权；开启后未授权会限制受控商业能力 | `false` |
+| `DUSHENGCDN_LICENSE_PUBLIC_KEYS` | 商业授权 Ed25519 公钥列表，支持 base64url、标准 base64 或 hex，多个值可用逗号、分号、空格或换行分隔 | 空 |
+| `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` | 是否允许安装未签名开发授权；仅用于内测或离线验证，不建议生产开启 | `false` |
+| `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED` | 是否允许管理端从 GitHub Release 自动下载并替换 Server 二进制 | `false` |
 
 说明：
 
@@ -74,9 +79,34 @@ go run . --port 3000 --log-dir ./logs
 * `DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS` 和 `DATABASE_CONN_MAX_LIFETIME_SECONDS` 用于限制 Server 侧连接池。生产环境遇到 PostgreSQL `too many clients already` 时，优先检查是否有异常 SQL 或日志写入错误持续重试，再按数据库容量调整这些值。
 * 当目标 PostgreSQL 数据库为空且本地 `SQLITE_PATH` 文件存在时，Server 启动阶段会自动迁移 SQLite 数据，并在日志中输出按表迁移进度。
 * `SESSION_SECRET` 生产环境必须显式配置。
-* `REDIS_CONN_STRING` 未配置时，相关能力回退为进程内实现。
+* `REDIS_CONN_STRING` 未配置时，相关能力回退为进程内实现；多副本或商用部署建议配置 Redis，以获得跨实例一致的限流和运行时辅助状态。
+* `REDIS_REQUIRED=true` 适合不能接受 Redis 降级启动的生产环境；开启后 Redis 未配置或连接失败会阻止 Server 启动。
 * `AGENT_TOKEN` 仅用于升级兼容旧版 Agent。新部署应使用 Discovery Token 首次注册，或使用节点详情里的专属 `agent_token`；旧全局 Token 请求必须携带已存在的 `node_id`，且不能覆盖已经切换为专属 Token 的节点。
+* 商业授权令牌格式为 `dscdn_license_v1.<payload>.<signature>`，签名算法为 Ed25519；生产强制授权时应同时配置 `DUSHENGCDN_LICENSE_REQUIRED=true` 和 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，再到管理端「设置 -> 商业授权」安装许可证。
+* `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` 只适合开发、演示或签发链路联调；生产环境应保持关闭并使用签名授权。
+* Server 自动升级默认关闭；生产环境推荐在管理端检查版本后上传已审阅的 Server 二进制手动升级。开启 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` 时，Release 必须包含当前平台 Server 二进制和同名 `.sha256` 校验文件，例如 `dushengcdn-server-linux-amd64.sha256`，下载后必须通过 SHA-256 校验才会替换可执行文件。
 * 源码 Compose 部署 Server 时，推荐复制 `dushengcdn_server/.env.example` 为 `.env` 后再修改端口、密码和 DSN，避免直接修改仓库模板导致后续 `git pull` 冲突。
+
+### 商业授权签发工具
+
+`dushengcdn_server/cmd/license` 提供离线签发工具，用于生成 Ed25519 密钥、签发许可证令牌和验签预览：
+
+```bash
+cd dushengcdn_server
+go run ./cmd/license keygen
+go run ./cmd/license sign \
+  -private-key "$DUSHENGCDN_LICENSE_PRIVATE_KEY" \
+  -license-id lic-2026-001 \
+  -customer-name "Example Ltd." \
+  -plan enterprise \
+  -features all \
+  -max-nodes 20 \
+  -max-sites 200 \
+  -expires-at 2027-12-31
+go run ./cmd/license inspect -token "$LICENSE_TOKEN" -public-key "$DUSHENGCDN_LICENSE_PUBLIC_KEY"
+```
+
+`keygen` 输出的 `public_key` 配置到 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`；`private_key` 只用于签发端，应离线保存，不要放进 Server 环境变量或 Compose 文件。`features` 可使用 `all`，或组合 `acme-automation`、`authoritative-dns`、`cloudflare-dns`、`gslb`、`ddos-protection`、`waf`、`cc-protection`、`geo-access-control`。
 
 ## 运行时 Option
 
@@ -86,6 +116,7 @@ go run . --port 3000 --log-dir ./logs
 | --- | --- | --- |
 | `AgentHeartbeatInterval` | Agent 心跳间隔（毫秒） | `10000` |
 | `AgentWebsocketUpgradeEnabled` | 是否允许 Agent 在 HTTP 心跳成功后升级为 WebSocket | `true` |
+| `AgentDiscoveryToken` | Agent 首次自动注册使用的 Discovery Token；节点注册后会返回专属 `agent_token`，后续应优先使用节点专属 Token | 首次读取时自动生成 |
 | `NodeOfflineThreshold` | 节点离线阈值（毫秒） | `120000` |
 | `AgentUpdateRepo` | Agent 自更新仓库 | `SatanDS/DuShengCDN` |
 | `GeoIPProvider` | 节点/IP 归属解析方式 | `ipinfo` |
@@ -358,7 +389,7 @@ DNS Worker 心跳会把本地 GeoIP 国家库状态同步到 Server，包括 `ge
 ### 生产 Server + PostgreSQL
 
 ```bash
-export SESSION_SECRET='replace-with-a-long-random-string'
+export SESSION_SECRET="$(openssl rand -hex 32)"
 export DSN='postgres://dushengcdn:replace-with-strong-password@postgres:5432/dushengcdn?sslmode=disable'
 export GIN_MODE='release'
 export LOG_LEVEL='info'
