@@ -28,12 +28,14 @@ import {
   deleteExternalAccountBinding,
   generateAccessToken,
   getAuthSources,
+  getCommercialLicenseIssuerStatus,
   getBootstrapToken,
   getCommercialLicenseStatus,
   getExternalAccountBindings,
   getOptions,
   getSettingsProfile,
   installCommercialLicense,
+  issueCommercialLicense,
   lookupGeoIP,
   rotateBootstrapToken,
   updateOptions,
@@ -42,6 +44,8 @@ import {
 import { AuthSourceModal } from '@/features/settings/components/auth-source-modal';
 import type {
   BootstrapTokenPayload,
+  CommercialLicenseIssuePayload,
+  CommercialLicenseIssueResult,
   CommercialLicenseStatusPayload,
   DatabaseCleanupResult,
   DatabaseCleanupTarget,
@@ -72,6 +76,10 @@ const externalAccountBindingsQueryKey = [
   'external-accounts',
 ] as const;
 const commercialLicenseQueryKey = ['settings', 'commercial-license'] as const;
+const commercialLicenseIssuerQueryKey = [
+  'settings',
+  'commercial-license-issuer',
+] as const;
 const installerScriptUrl =
   'https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh';
 
@@ -167,6 +175,44 @@ const defaultProfileFields: UpdateSelfPayload = {
   display_name: '',
   password: '',
 };
+
+type CommercialLicenseIssueForm = Omit<
+  CommercialLicenseIssuePayload,
+  'max_nodes' | 'max_sites'
+> & {
+  max_nodes: string;
+  max_sites: string;
+};
+
+const defaultCommercialLicenseIssueFields: CommercialLicenseIssueForm = {
+  license_id: '',
+  customer_id: '',
+  customer_name: '',
+  plan: 'business',
+  features: ['all'],
+  max_nodes: '20',
+  max_sites: '200',
+  issued_at: '',
+  expires_at: '',
+};
+
+const commercialLicensePlanOptions = [
+  { value: 'business', label: '商业版' },
+  { value: 'professional', label: '专业版' },
+  { value: 'enterprise', label: '企业版' },
+];
+
+const commercialLicenseFeatureOptions = [
+  { value: 'all', label: '全部商业能力' },
+  { value: 'acme-automation', label: 'ACME 自动证书' },
+  { value: 'authoritative-dns', label: '自建权威 DNS' },
+  { value: 'cloudflare-dns', label: 'Cloudflare DNS' },
+  { value: 'gslb', label: 'GSLB 智能调度' },
+  { value: 'ddos-protection', label: 'DDoS 自动防护' },
+  { value: 'waf', label: 'WAF' },
+  { value: 'cc-protection', label: 'CC 防护' },
+  { value: 'geo-access-control', label: '区域访问控制' },
+];
 
 type CleanupModalState = {
   target: DatabaseCleanupTarget;
@@ -315,6 +361,11 @@ function formatLicenseLimit(current: number, max: number) {
   return max > 0 ? `${current} / ${max}` : `${current} / 不限`;
 }
 
+function parseLicenseLimitInput(value: string) {
+  const limit = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(limit) && limit > 0 ? limit : 0;
+}
+
 function getLicenseBadgeVariant(
   status: CommercialLicenseStatusPayload['status'],
 ) {
@@ -367,6 +418,10 @@ export function SettingsPage() {
     useState<CleanupModalState | null>(null);
   const [cleanupRetentionDays, setCleanupRetentionDays] = useState('');
   const [commercialLicenseToken, setCommercialLicenseToken] = useState('');
+  const [commercialLicenseIssueFields, setCommercialLicenseIssueFields] =
+    useState(defaultCommercialLicenseIssueFields);
+  const [issuedCommercialLicense, setIssuedCommercialLicense] =
+    useState<CommercialLicenseIssueResult | null>(null);
 
   const isRoot = (user?.role ?? 0) >= 100;
 
@@ -435,6 +490,12 @@ export function SettingsPage() {
   const commercialLicenseQuery = useQuery({
     queryKey: commercialLicenseQueryKey,
     queryFn: getCommercialLicenseStatus,
+    enabled: isRoot,
+  });
+
+  const commercialLicenseIssuerQuery = useQuery({
+    queryKey: commercialLicenseIssuerQueryKey,
+    queryFn: getCommercialLicenseIssuerStatus,
     enabled: isRoot,
   });
 
@@ -911,6 +972,85 @@ export function SettingsPage() {
         setFeedback({ tone: 'success', message: '商业授权已安装。' });
       },
       '安装商业授权',
+    );
+  };
+
+  const updateCommercialLicenseIssueField = <
+    Key extends keyof CommercialLicenseIssueForm,
+  >(
+    key: Key,
+    value: CommercialLicenseIssueForm[Key],
+  ) => {
+    setCommercialLicenseIssueFields((previous) => ({
+      ...previous,
+      [key]: value,
+    }));
+  };
+
+  const toggleCommercialLicenseIssueFeature = (
+    feature: string,
+    checked: boolean,
+  ) => {
+    setCommercialLicenseIssueFields((previous) => {
+      if (feature === 'all') {
+        return {
+          ...previous,
+          features: checked ? ['all'] : [],
+        };
+      }
+
+      const withoutAll = previous.features.filter(
+        (item) => item !== 'all' && item !== feature,
+      );
+      return {
+        ...previous,
+        features: checked ? [...withoutAll, feature] : withoutAll,
+      };
+    });
+  };
+
+  const handleIssueCommercialLicense = () => {
+    const payload: CommercialLicenseIssuePayload = {
+      license_id: commercialLicenseIssueFields.license_id.trim(),
+      customer_id: commercialLicenseIssueFields.customer_id.trim(),
+      customer_name: commercialLicenseIssueFields.customer_name.trim(),
+      plan: commercialLicenseIssueFields.plan.trim(),
+      features: commercialLicenseIssueFields.features,
+      max_nodes: parseLicenseLimitInput(commercialLicenseIssueFields.max_nodes),
+      max_sites: parseLicenseLimitInput(commercialLicenseIssueFields.max_sites),
+      issued_at: commercialLicenseIssueFields.issued_at?.trim() || undefined,
+      expires_at: commercialLicenseIssueFields.expires_at?.trim() || undefined,
+    };
+
+    if (!payload.license_id) {
+      setFeedback({ tone: 'danger', message: '请输入授权编号。' });
+      return;
+    }
+    if (!payload.customer_id && !payload.customer_name) {
+      setFeedback({ tone: 'danger', message: '请输入客户名称或客户编号。' });
+      return;
+    }
+    if (!payload.plan) {
+      setFeedback({ tone: 'danger', message: '请选择授权版本。' });
+      return;
+    }
+    if (payload.features.length === 0) {
+      setFeedback({ tone: 'danger', message: '请至少选择一项授权能力。' });
+      return;
+    }
+
+    void runBusyAction(
+      'commercial-license-issue',
+      async () => {
+        const result = await issueCommercialLicense(payload);
+        setIssuedCommercialLicense(result);
+        setCommercialLicenseToken(result.token);
+        setFeedback({
+          tone: 'success',
+          message: '商业授权 token 已生成，并已填入安装框。',
+        });
+      },
+      '生成商业授权',
     );
   };
 
@@ -1992,7 +2132,10 @@ export function SettingsPage() {
     }
 
     if (activeTab === 'license') {
-      if (commercialLicenseQuery.isLoading) {
+      if (
+        commercialLicenseQuery.isLoading ||
+        commercialLicenseIssuerQuery.isLoading
+      ) {
         return <LoadingState />;
       }
 
@@ -2001,6 +2144,15 @@ export function SettingsPage() {
           <ErrorState
             title="商业授权加载失败"
             description={getErrorMessage(commercialLicenseQuery.error)}
+          />
+        );
+      }
+
+      if (commercialLicenseIssuerQuery.isError) {
+        return (
+          <ErrorState
+            title="商业授权签发器加载失败"
+            description={getErrorMessage(commercialLicenseIssuerQuery.error)}
           />
         );
       }
@@ -2014,9 +2166,10 @@ export function SettingsPage() {
           />
         );
       }
+      const issuer = commercialLicenseIssuerQuery.data;
 
       return (
-        <div className="grid gap-6 xl:grid-cols-[1fr_1fr] xl:items-start">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] xl:items-start">
           <AppCard
             title="授权状态"
             description="服务端会根据授权有效期和资源额度控制节点、站点创建。"
@@ -2144,47 +2297,290 @@ export function SettingsPage() {
             </div>
           </AppCard>
 
-          <AppCard
-            title="安装授权"
-            description="许可证支持离线签名校验，安装后会立即刷新资源额度。"
-            action={
-              <PrimaryButton
-                type="button"
-                onClick={handleInstallCommercialLicense}
-                disabled={busyKey === 'commercial-license-install'}
-              >
-                {busyKey === 'commercial-license-install'
-                  ? '安装中...'
-                  : '安装授权'}
-              </PrimaryButton>
-            }
-          >
-            <div className="space-y-5">
-              <ResourceField
-                label="许可证内容"
-                hint="粘贴 dscdn_license_v1 开头的授权令牌。"
-              >
-                <ResourceTextarea
-                  value={commercialLicenseToken}
-                  onChange={(event) =>
-                    setCommercialLicenseToken(event.target.value)
-                  }
-                  placeholder="dscdn_license_v1..."
-                  className="min-h-52 font-mono"
-                />
-              </ResourceField>
-              {license.last_validated_at ? (
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    最近校验
-                  </p>
-                  <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                    {formatDateTime(new Date(license.last_validated_at))}
-                  </p>
+          <div className="space-y-6">
+            <AppCard
+              title="安装授权"
+              description="许可证支持离线签名校验，安装后会立即刷新资源额度。"
+              action={
+                <PrimaryButton
+                  type="button"
+                  onClick={handleInstallCommercialLicense}
+                  disabled={busyKey === 'commercial-license-install'}
+                >
+                  {busyKey === 'commercial-license-install'
+                    ? '安装中...'
+                    : '安装授权'}
+                </PrimaryButton>
+              }
+            >
+              <div className="space-y-5">
+                <ResourceField
+                  label="许可证内容"
+                  hint="粘贴 dscdn_license_v1 开头的授权令牌。"
+                >
+                  <ResourceTextarea
+                    value={commercialLicenseToken}
+                    onChange={(event) =>
+                      setCommercialLicenseToken(event.target.value)
+                    }
+                    placeholder="dscdn_license_v1..."
+                    className="min-h-52 font-mono"
+                  />
+                </ResourceField>
+                <div className="flex flex-wrap gap-3">
+                  <SecondaryButton
+                    type="button"
+                    onClick={() =>
+                      void handleCopy(commercialLicenseToken, '授权 token 已复制。')
+                    }
+                    disabled={!commercialLicenseToken.trim()}
+                  >
+                    复制 token
+                  </SecondaryButton>
+                  {license.last_validated_at ? (
+                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--foreground-secondary)]">
+                      最近校验：
+                      {formatDateTime(new Date(license.last_validated_at))}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-          </AppCard>
+              </div>
+            </AppCard>
+
+            <AppCard
+              title="开发者签发"
+              description="填写客户信息、到期时间和资源额度，直接生成可交付的商业授权 token。"
+              action={
+                <PrimaryButton
+                  type="button"
+                  onClick={handleIssueCommercialLicense}
+                  disabled={
+                    busyKey === 'commercial-license-issue' ||
+                    !issuer?.available
+                  }
+                >
+                  {busyKey === 'commercial-license-issue'
+                    ? '生成中...'
+                    : '生成授权'}
+                </PrimaryButton>
+              }
+            >
+              <div className="space-y-5">
+                <InlineMessage
+                  tone={issuer?.available ? 'success' : 'warning'}
+                  message={
+                    issuer?.message ||
+                    '未配置签发私钥时，此处只显示安装授权能力。'
+                  }
+                />
+
+                {issuer?.available ? (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                        签发公钥指纹
+                      </p>
+                      <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
+                        {issuer.public_key_fingerprint}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                        客户验签公钥
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-2 text-left text-sm break-all text-[var(--brand-primary)]"
+                        onClick={() =>
+                          void handleCopy(
+                            issuer.public_key,
+                            '签发公钥已复制。',
+                          )
+                        }
+                      >
+                        {issuer.public_key}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <ResourceField label="授权编号">
+                    <ResourceInput
+                      value={commercialLicenseIssueFields.license_id}
+                      onChange={(event) =>
+                        updateCommercialLicenseIssueField(
+                          'license_id',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="lic-2026-001"
+                    />
+                  </ResourceField>
+                  <ResourceField label="授权版本">
+                    <ResourceSelect
+                      value={commercialLicenseIssueFields.plan}
+                      onChange={(event) =>
+                        updateCommercialLicenseIssueField(
+                          'plan',
+                          event.target.value,
+                        )
+                      }
+                    >
+                      {commercialLicensePlanOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </ResourceSelect>
+                  </ResourceField>
+                  <ResourceField
+                    label="客户名称"
+                    hint="客户名称和客户编号至少填写一项。"
+                  >
+                    <ResourceInput
+                      value={commercialLicenseIssueFields.customer_name}
+                      onChange={(event) =>
+                        updateCommercialLicenseIssueField(
+                          'customer_name',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="Example Ltd."
+                    />
+                  </ResourceField>
+                  <ResourceField label="客户编号">
+                    <ResourceInput
+                      value={commercialLicenseIssueFields.customer_id}
+                      onChange={(event) =>
+                        updateCommercialLicenseIssueField(
+                          'customer_id',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="cust-001"
+                    />
+                  </ResourceField>
+                  <ResourceField
+                    label="节点额度"
+                    hint="填写 0 表示不限。"
+                  >
+                    <ResourceInput
+                      type="number"
+                      min="0"
+                      value={commercialLicenseIssueFields.max_nodes}
+                      onChange={(event) =>
+                        updateCommercialLicenseIssueField(
+                          'max_nodes',
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </ResourceField>
+                  <ResourceField
+                    label="站点额度"
+                    hint="填写 0 表示不限。"
+                  >
+                    <ResourceInput
+                      type="number"
+                      min="0"
+                      value={commercialLicenseIssueFields.max_sites}
+                      onChange={(event) =>
+                        updateCommercialLicenseIssueField(
+                          'max_sites',
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </ResourceField>
+                  <ResourceField
+                    label="签发时间"
+                    hint="留空表示当前时间，支持 YYYY-MM-DD 或 RFC3339。"
+                  >
+                    <ResourceInput
+                      value={commercialLicenseIssueFields.issued_at ?? ''}
+                      onChange={(event) =>
+                        updateCommercialLicenseIssueField(
+                          'issued_at',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="now"
+                    />
+                  </ResourceField>
+                  <ResourceField
+                    label="到期时间"
+                    hint="留空表示长期有效，支持 YYYY-MM-DD 或 RFC3339。"
+                  >
+                    <ResourceInput
+                      value={commercialLicenseIssueFields.expires_at ?? ''}
+                      onChange={(event) =>
+                        updateCommercialLicenseIssueField(
+                          'expires_at',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="2027-12-31"
+                    />
+                  </ResourceField>
+                </div>
+
+                <ResourceField label="授权能力" container="div">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {commercialLicenseFeatureOptions.map((option) => (
+                      <ToggleField
+                        key={option.value}
+                        label={option.label}
+                        checked={commercialLicenseIssueFields.features.includes(
+                          option.value,
+                        )}
+                        disabled={
+                          option.value !== 'all' &&
+                          commercialLicenseIssueFields.features.includes('all')
+                        }
+                        onChange={(checked) =>
+                          toggleCommercialLicenseIssueFeature(
+                            option.value,
+                            checked,
+                          )
+                        }
+                      />
+                    ))}
+                  </div>
+                </ResourceField>
+
+                {issuedCommercialLicense ? (
+                  <div className="space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <StatusBadge
+                        label={issuedCommercialLicense.status_label}
+                        variant={getLicenseBadgeVariant(
+                          issuedCommercialLicense.status,
+                        )}
+                      />
+                      {issuedCommercialLicense.signature_verified ? (
+                        <StatusBadge label="签发验签通过" variant="success" />
+                      ) : null}
+                      <SecondaryButton
+                        type="button"
+                        onClick={() =>
+                          void handleCopy(
+                            issuedCommercialLicense.token,
+                            '授权 token 已复制。',
+                          )
+                        }
+                      >
+                        复制新 token
+                      </SecondaryButton>
+                    </div>
+                    <CodeBlock className="max-h-40 break-all whitespace-pre-wrap">
+                      {issuedCommercialLicense.token}
+                    </CodeBlock>
+                  </div>
+                ) : null}
+              </div>
+            </AppCard>
+          </div>
         </div>
       );
     }

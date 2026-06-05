@@ -135,6 +135,8 @@ go run ./cmd/license sign \
   -expires-at 2027-12-31
 ```
 
+开发者专属签发面板可额外配置 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY` 或 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE`，然后在管理端「设置 -> 商业授权 -> 开发者签发」填写客户信息、到期时间、节点额度和站点额度直接生成可交付的 `dscdn_license_v1...` token；签发私钥只应放在签发端，客户部署只配置公钥。
+
 源码 Compose 部署时，也可以在仓库根目录使用一体化脚本启动面板并默认安装同机 DNS Worker。脚本会在首次部署时自动生成 `.env` 里的数据库密码、`SESSION_SECRET`、`DUSHENGCDN_INITIAL_ROOT_PASSWORD` 和 `DSN`；如果升级旧源码部署且检测到已有 `dushengcdn_server/postgres-data`，会保留 `.env.example` 中的数据库密码和 DSN，避免旧 PostgreSQL 数据目录因密码不一致导致面板打不开。脚本会先检查本机是否已部署 DNS Worker；发现已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口时，会跳过 Worker 自动安装，避免覆盖现有配置。
 
 ```bash

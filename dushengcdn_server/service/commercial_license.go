@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -46,6 +47,18 @@ type CommercialLicenseInstallInput struct {
 	Token string `json:"token"`
 }
 
+type CommercialLicenseIssueInput struct {
+	LicenseID    string   `json:"license_id"`
+	CustomerID   string   `json:"customer_id"`
+	CustomerName string   `json:"customer_name"`
+	Plan         string   `json:"plan"`
+	Features     []string `json:"features"`
+	MaxNodes     int      `json:"max_nodes"`
+	MaxSites     int      `json:"max_sites"`
+	IssuedAt     string   `json:"issued_at"`
+	ExpiresAt    string   `json:"expires_at"`
+}
+
 type CommercialLicensePayload struct {
 	LicenseID    string     `json:"license_id"`
 	CustomerID   string     `json:"customer_id"`
@@ -84,6 +97,23 @@ type CommercialLicenseView struct {
 	LastValidatedAt     *time.Time `json:"last_validated_at"`
 	LastValidationError string     `json:"last_validation_error"`
 	SignatureVerified   bool       `json:"signature_verified"`
+}
+
+type CommercialLicenseIssuerStatus struct {
+	Available            bool   `json:"available"`
+	PublicKey            string `json:"public_key"`
+	PublicKeyFingerprint string `json:"public_key_fingerprint"`
+	Message              string `json:"message"`
+}
+
+type CommercialLicenseIssueResult struct {
+	Token                string                   `json:"token"`
+	Payload              CommercialLicensePayload `json:"payload"`
+	Status               string                   `json:"status"`
+	StatusLabel          string                   `json:"status_label"`
+	PublicKey            string                   `json:"public_key"`
+	PublicKeyFingerprint string                   `json:"public_key_fingerprint"`
+	SignatureVerified    bool                     `json:"signature_verified"`
 }
 
 type parsedCommercialLicense struct {
@@ -133,6 +163,69 @@ func ClearCommercialLicense() (*CommercialLicenseView, error) {
 		return nil, err
 	}
 	return buildCommercialLicenseViewWithDB(model.DB, nil)
+}
+
+func GetCommercialLicenseIssuerStatus() CommercialLicenseIssuerStatus {
+	privateKey, err := commercialLicenseIssuerPrivateKey()
+	if err != nil {
+		return CommercialLicenseIssuerStatus{
+			Available: false,
+			Message:   err.Error(),
+		}
+	}
+	if privateKey == nil {
+		return CommercialLicenseIssuerStatus{
+			Available: false,
+			Message:   "未配置许可证签发私钥",
+		}
+	}
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	publicKeyEncoded := base64.RawURLEncoding.EncodeToString(publicKey)
+	return CommercialLicenseIssuerStatus{
+		Available:            true,
+		PublicKey:            publicKeyEncoded,
+		PublicKeyFingerprint: commercialLicenseKeyFingerprint(publicKey),
+		Message:              "签发器可用",
+	}
+}
+
+func IssueCommercialLicense(input CommercialLicenseIssueInput) (*CommercialLicenseIssueResult, error) {
+	privateKey, err := commercialLicenseIssuerPrivateKey()
+	if err != nil {
+		return nil, err
+	}
+	if privateKey == nil {
+		return nil, errors.New("未配置许可证签发私钥")
+	}
+
+	payload, err := buildCommercialLicenseIssuePayload(input)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	signature := ed25519.Sign(privateKey, raw)
+	token := commercialLicenseTokenPrefix +
+		base64.RawURLEncoding.EncodeToString(raw) +
+		"." +
+		base64.RawURLEncoding.EncodeToString(signature)
+
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	status, validationError := validateCommercialLicensePayload(payload, commercialLicenseNow())
+	if status == CommercialLicenseStatusInvalid {
+		return nil, errors.New(validationError)
+	}
+	return &CommercialLicenseIssueResult{
+		Token:                token,
+		Payload:              payload,
+		Status:               status,
+		StatusLabel:          commercialLicenseStatusLabel(status),
+		PublicKey:            base64.RawURLEncoding.EncodeToString(publicKey),
+		PublicKeyFingerprint: commercialLicenseKeyFingerprint(publicKey),
+		SignatureVerified:    ed25519.Verify(publicKey, raw, signature),
+	}, nil
 }
 
 func EnsureCommercialResourceAvailable(resource string) error {
@@ -516,6 +609,68 @@ func normalizeCommercialLicensePayload(payload CommercialLicensePayload) Commerc
 	return payload
 }
 
+func buildCommercialLicenseIssuePayload(input CommercialLicenseIssueInput) (CommercialLicensePayload, error) {
+	payload := normalizeCommercialLicensePayload(CommercialLicensePayload{
+		LicenseID:    input.LicenseID,
+		CustomerID:   input.CustomerID,
+		CustomerName: input.CustomerName,
+		Plan:         input.Plan,
+		Features:     input.Features,
+		MaxNodes:     input.MaxNodes,
+		MaxSites:     input.MaxSites,
+	})
+	if payload.Plan == "" {
+		payload.Plan = "business"
+	}
+	now := commercialLicenseNow().UTC().Truncate(time.Second)
+	issuedAt := now
+	if strings.TrimSpace(input.IssuedAt) != "" {
+		parsed, err := parseCommercialLicenseIssueTime(input.IssuedAt, true)
+		if err != nil {
+			return payload, fmt.Errorf("签发时间无效: %w", err)
+		}
+		if parsed != nil {
+			issuedAt = *parsed
+		}
+	}
+	payload.IssuedAt = &issuedAt
+	if strings.TrimSpace(input.ExpiresAt) != "" {
+		expiresAt, err := parseCommercialLicenseIssueTime(input.ExpiresAt, false)
+		if err != nil {
+			return payload, fmt.Errorf("到期时间无效: %w", err)
+		}
+		payload.ExpiresAt = expiresAt
+	}
+	if payload.ExpiresAt != nil && !payload.ExpiresAt.After(issuedAt) {
+		return payload, errors.New("到期时间必须晚于签发时间")
+	}
+	status, validationError := validateCommercialLicensePayload(payload, now)
+	if status == CommercialLicenseStatusInvalid {
+		return payload, errors.New(validationError)
+	}
+	return payload, nil
+}
+
+func parseCommercialLicenseIssueTime(raw string, allowNow bool) (*time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil, nil
+	}
+	if allowNow && strings.EqualFold(value, "now") {
+		now := commercialLicenseNow().UTC().Truncate(time.Second)
+		return &now, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		utc := parsed.UTC()
+		return &utc, nil
+	}
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		utc := parsed.UTC()
+		return &utc, nil
+	}
+	return nil, errors.New("需要填写 RFC3339 或 YYYY-MM-DD")
+}
+
 func normalizeCommercialLicensePlan(plan string) string {
 	plan = strings.ToLower(strings.TrimSpace(plan))
 	if plan == "" {
@@ -620,6 +775,56 @@ func commercialLicensePublicKeys() ([]ed25519.PublicKey, error) {
 	return keys, nil
 }
 
+func commercialLicenseIssuerPrivateKey() (ed25519.PrivateKey, error) {
+	raw := strings.TrimSpace(common.CommercialLicenseIssuerPrivateKey)
+	if envRaw := strings.TrimSpace(os.Getenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY")); envRaw != "" {
+		raw = envRaw
+	}
+	path := strings.TrimSpace(common.CommercialLicenseIssuerPrivateKeyFile)
+	if envPath := strings.TrimSpace(os.Getenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE")); envPath != "" {
+		path = envPath
+	}
+	if raw != "" && path != "" {
+		return nil, errors.New("许可证签发私钥不能同时配置 inline 和 file")
+	}
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("读取许可证签发私钥失败: %w", err)
+		}
+		raw = strings.TrimSpace(string(data))
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	decoded, err := decodeCommercialLicenseKey(raw, ed25519.PrivateKeySize, "许可证签发私钥")
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.PrivateKey(decoded), nil
+}
+
+func decodeCommercialLicenseKey(raw string, expectedSize int, label string) ([]byte, error) {
+	value := strings.TrimSpace(raw)
+	value = strings.TrimPrefix(value, "base64url:")
+	value = strings.TrimPrefix(value, "base64:")
+	value = strings.TrimPrefix(value, "hex:")
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		decoded, err = base64.StdEncoding.DecodeString(value)
+	}
+	if err != nil {
+		decoded, err = hex.DecodeString(value)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s编码无效", label)
+	}
+	if len(decoded) != expectedSize {
+		return nil, fmt.Errorf("%s长度无效", label)
+	}
+	return decoded, nil
+}
+
 func commercialLicenseAllowUnsigned() bool {
 	if common.CommercialLicenseAllowUnsigned {
 		return true
@@ -657,6 +862,11 @@ func commercialLicenseFingerprint(token string) string {
 		return ""
 	}
 	return hash[:16]
+}
+
+func commercialLicenseKeyFingerprint(key []byte) string {
+	sum := sha256.Sum256(key)
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 func commercialLicenseStatusLabel(status string) string {

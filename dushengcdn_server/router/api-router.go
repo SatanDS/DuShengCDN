@@ -92,6 +92,8 @@ func SetApiRouter(router *gin.Engine) {
 			licenseRoute.GET("/status", controller.GetCommercialLicense)
 			licenseRoute.POST("/install", controller.InstallCommercialLicense)
 			licenseRoute.POST("/clear", controller.ClearCommercialLicense)
+			licenseRoute.GET("/issuer", controller.GetCommercialLicenseIssuer)
+			licenseRoute.POST("/issue", controller.IssueCommercialLicense)
 		}
 		proxyRoute := apiRouter.Group("/proxy-routes")
 		proxyRoute.Use(middleware.AdminAuth())

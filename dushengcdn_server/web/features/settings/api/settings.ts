@@ -4,6 +4,9 @@ import type {
   BootstrapTokenPayload,
   AuthSource,
   AuthSourcePayload,
+  CommercialLicenseIssuePayload,
+  CommercialLicenseIssueResult,
+  CommercialLicenseIssuerStatusPayload,
   CommercialLicenseStatusPayload,
   DatabaseCleanupPayload,
   DatabaseCleanupResult,
@@ -61,6 +64,17 @@ export function installCommercialLicense(token: string) {
 export function clearCommercialLicense() {
   return apiRequest<CommercialLicenseStatusPayload>('/license/clear', {
     method: 'POST',
+  });
+}
+
+export function getCommercialLicenseIssuerStatus() {
+  return apiRequest<CommercialLicenseIssuerStatusPayload>('/license/issuer');
+}
+
+export function issueCommercialLicense(payload: CommercialLicenseIssuePayload) {
+  return apiRequest<CommercialLicenseIssueResult>('/license/issue', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }
 

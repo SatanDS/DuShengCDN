@@ -112,6 +112,45 @@ export interface CommercialLicenseStatusPayload {
   signature_verified: boolean;
 }
 
+export interface CommercialLicenseIssuerStatusPayload {
+  available: boolean;
+  public_key: string;
+  public_key_fingerprint: string;
+  message: string;
+}
+
+export interface CommercialLicenseIssuePayload {
+  license_id: string;
+  customer_id: string;
+  customer_name: string;
+  plan: string;
+  features: string[];
+  max_nodes: number;
+  max_sites: number;
+  issued_at?: string;
+  expires_at?: string;
+}
+
+export interface CommercialLicenseIssueResult {
+  token: string;
+  payload: {
+    license_id: string;
+    customer_id: string;
+    customer_name: string;
+    plan: string;
+    features: string[];
+    max_nodes: number;
+    max_sites: number;
+    issued_at?: string | null;
+    expires_at?: string | null;
+  };
+  status: CommercialLicenseStatus;
+  status_label: string;
+  public_key: string;
+  public_key_fingerprint: string;
+  signature_verified: boolean;
+}
+
 export interface UpdateSelfPayload {
   username: string;
   display_name: string;

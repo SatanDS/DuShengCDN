@@ -61,3 +61,38 @@ func ClearCommercialLicense(c *gin.Context) {
 	}
 	respondSuccess(c, view)
 }
+
+// GetCommercialLicenseIssuer godoc
+// @Summary Get commercial license issuer status
+// @Tags License
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/license/issuer [get]
+func GetCommercialLicenseIssuer(c *gin.Context) {
+	respondSuccess(c, service.GetCommercialLicenseIssuerStatus())
+}
+
+// IssueCommercialLicense godoc
+// @Summary Issue commercial license token
+// @Tags License
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param payload body service.CommercialLicenseIssueInput true "License issue payload"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/license/issue [post]
+func IssueCommercialLicense(c *gin.Context) {
+	var input service.CommercialLicenseIssueInput
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "")
+		return
+	}
+	result, err := service.IssueCommercialLicense(input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, result)
+}

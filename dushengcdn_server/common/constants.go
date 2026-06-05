@@ -79,6 +79,8 @@ var RedisRequired = false
 var CommercialLicenseRequired = false
 var CommercialLicensePublicKeys = ""
 var CommercialLicenseAllowUnsigned = false
+var CommercialLicenseIssuerPrivateKey = ""
+var CommercialLicenseIssuerPrivateKeyFile = ""
 var ServerAutoUpgradeEnabled = false
 
 // V3 operational settings (hot-reloadable via Option table)

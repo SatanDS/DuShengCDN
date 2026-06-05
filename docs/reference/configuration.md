@@ -71,6 +71,8 @@ go run . --port 3000 --log-dir ./logs
 | `DUSHENGCDN_LICENSE_REQUIRED` | 是否强制要求安装有效商业授权；开启后未授权会限制受控商业能力 | `false` |
 | `DUSHENGCDN_LICENSE_PUBLIC_KEYS` | 商业授权 Ed25519 公钥列表，支持 base64url、标准 base64 或 hex，多个值可用逗号、分号、空格或换行分隔 | 空 |
 | `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` | 是否允许安装未签名开发授权；仅用于内测或离线验证，不建议生产开启 | `false` |
+| `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY` | 开发者授权面板使用的 Ed25519 签发私钥，支持 base64url、标准 base64 或 hex；只应配置在签发端 | 空 |
+| `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE` | 开发者授权面板读取签发私钥的文件路径；与 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY` 二选一 | 空 |
 | `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED` | 是否允许管理端从 GitHub Release 自动下载并替换 Server 二进制 | `false` |
 
 说明：
@@ -86,6 +88,7 @@ go run . --port 3000 --log-dir ./logs
 * `AGENT_TOKEN` 仅用于升级兼容旧版 Agent。新部署应使用 Discovery Token 首次注册，或使用节点详情里的专属 `agent_token`；旧全局 Token 请求必须携带已存在的 `node_id`，且不能覆盖已经切换为专属 Token 的节点。
 * 商业授权令牌格式为 `dscdn_license_v1.<payload>.<signature>`，签名算法为 Ed25519；生产强制授权时应同时配置 `DUSHENGCDN_LICENSE_REQUIRED=true` 和 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，再到管理端「设置 -> 商业授权」安装许可证。
 * `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` 只适合开发、演示或签发链路联调；生产环境应保持关闭并使用签名授权。
+* 开发者签发面板需要额外配置 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY` 或 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE`。该私钥只用于生成许可证，不应配置在客户生产部署中；客户部署只需要 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`。
 * Server 自动升级默认关闭；生产环境推荐在管理端检查版本后上传已审阅的 Server 二进制手动升级。开启 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` 时，Release 必须包含当前平台 Server 二进制和同名 `.sha256` 校验文件，例如 `dushengcdn-server-linux-amd64.sha256`，下载后必须通过 SHA-256 校验才会替换可执行文件。
 * 源码 Compose 部署 Server 时，推荐复制 `dushengcdn_server/.env.example` 为 `.env` 后再修改端口、密码和 DSN；生产 Compose 会强制要求 `POSTGRES_PASSWORD`、`SESSION_SECRET` 和 `DSN`，避免使用公开占位密码启动。
 
@@ -109,6 +112,20 @@ go run ./cmd/license inspect -token "$LICENSE_TOKEN" -public-key "$DUSHENGCDN_LI
 ```
 
 `keygen` 输出的 `public_key` 配置到 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`；`private_key` 只用于签发端，应离线保存，不要放进 Server 环境变量或 Compose 文件。`features` 可使用 `all`，或组合 `acme-automation`、`authoritative-dns`、`cloudflare-dns`、`gslb`、`ddos-protection`、`waf`、`cc-protection`、`geo-access-control`。
+
+如需在管理端直接签发客户授权，可把 `keygen` 输出的 `private_key` 配置到专用签发面板所在的 Server：
+
+```env
+DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY=base64url-ed25519-private-key
+```
+
+或使用文件方式：
+
+```env
+DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE=/run/secrets/dushengcdn-license-private-key
+```
+
+重启 Server 后，root 管理员进入「设置 -> 商业授权 -> 开发者签发」，填写授权编号、客户信息、授权版本、节点额度、站点额度、到期时间和授权能力即可生成 `dscdn_license_v1...` token。面板会展示签发公钥和公钥指纹；把签发公钥配置到客户部署的 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，再让客户在「设置 -> 商业授权」安装生成的 token。
 
 ## 运行时 Option
 

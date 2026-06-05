@@ -92,6 +92,12 @@ func init() {
 	if os.Getenv("DUSHENGCDN_LICENSE_ALLOW_UNSIGNED") != "" {
 		CommercialLicenseAllowUnsigned = readBoolEnv("DUSHENGCDN_LICENSE_ALLOW_UNSIGNED")
 	}
+	if os.Getenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY") != "" {
+		CommercialLicenseIssuerPrivateKey = os.Getenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY")
+	}
+	if os.Getenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE") != "" {
+		CommercialLicenseIssuerPrivateKeyFile = os.Getenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE")
+	}
 	if os.Getenv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED") != "" {
 		ServerAutoUpgradeEnabled = readBoolEnv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED")
 	}

@@ -345,6 +345,95 @@ func TestInstallCommercialLicenseVerifiesSignatureAndAppliesLimits(t *testing.T)
 	}
 }
 
+func TestIssueCommercialLicenseSignsInstallableToken(t *testing.T) {
+	setupServiceTestDB(t)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+	privateKeyRaw := base64.RawURLEncoding.EncodeToString(privateKey)
+	publicKeyRaw := base64.RawURLEncoding.EncodeToString(publicKey)
+	withCommercialLicenseTestConfig(t, true, publicKeyRaw, false)
+	withCommercialLicenseIssuerTestConfig(t, privateKeyRaw, "")
+
+	now := time.Date(2026, 6, 4, 8, 0, 0, 0, time.UTC)
+	restoreNow := setCommercialLicenseNowForTest(t, now)
+	defer restoreNow()
+
+	result, err := IssueCommercialLicense(CommercialLicenseIssueInput{
+		LicenseID:    "lic-panel-001",
+		CustomerID:   "cust-001",
+		CustomerName: "Panel Customer",
+		Plan:         "enterprise",
+		Features:     []string{"all"},
+		MaxNodes:     10,
+		MaxSites:     50,
+		ExpiresAt:    "2027-06-04",
+	})
+	if err != nil {
+		t.Fatalf("IssueCommercialLicense failed: %v", err)
+	}
+	if !strings.HasPrefix(result.Token, commercialLicenseTokenPrefix) {
+		t.Fatalf("expected signed token, got %q", result.Token)
+	}
+	if !result.SignatureVerified || result.PublicKey != publicKeyRaw || result.PublicKeyFingerprint == "" {
+		t.Fatalf("unexpected issue result: %+v", result)
+	}
+
+	view, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: result.Token})
+	if err != nil {
+		t.Fatalf("InstallCommercialLicense failed: %v", err)
+	}
+	if view.Status != CommercialLicenseStatusValid || !view.SignatureVerified {
+		t.Fatalf("expected valid installed license, got %+v", view)
+	}
+	if view.LicenseID != "lic-panel-001" || view.CustomerID != "cust-001" || view.MaxNodes != 10 || view.MaxSites != 50 {
+		t.Fatalf("unexpected installed license view: %+v", view)
+	}
+}
+
+func TestIssueCommercialLicenseRequiresConfiguredIssuerKey(t *testing.T) {
+	setupServiceTestDB(t)
+	withCommercialLicenseTestConfig(t, true, "", false)
+	withCommercialLicenseIssuerTestConfig(t, "", "")
+
+	if _, err := IssueCommercialLicense(CommercialLicenseIssueInput{
+		LicenseID:    "lic-missing-key",
+		CustomerName: "Panel Customer",
+		Plan:         "business",
+	}); err == nil {
+		t.Fatal("expected missing issuer key error")
+	}
+
+	status := GetCommercialLicenseIssuerStatus()
+	if status.Available {
+		t.Fatalf("expected unavailable issuer status, got %+v", status)
+	}
+}
+
+func TestIssueCommercialLicenseRejectsExpiredPayload(t *testing.T) {
+	setupServiceTestDB(t)
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+	withCommercialLicenseTestConfig(t, true, "", false)
+	withCommercialLicenseIssuerTestConfig(t, base64.RawURLEncoding.EncodeToString(privateKey), "")
+
+	now := time.Date(2026, 6, 4, 8, 0, 0, 0, time.UTC)
+	restoreNow := setCommercialLicenseNowForTest(t, now)
+	defer restoreNow()
+
+	if _, err := IssueCommercialLicense(CommercialLicenseIssueInput{
+		LicenseID:    "lic-expired",
+		CustomerName: "Panel Customer",
+		Plan:         "business",
+		ExpiresAt:    "2026-01-01",
+	}); err == nil {
+		t.Fatal("expected expired payload error")
+	}
+}
+
 func TestCommercialLicenseNodeQuotaSerializesConcurrentCreates(t *testing.T) {
 	setupServiceTestDB(t)
 	withCommercialLicenseTestConfig(t, true, "", true)
@@ -537,6 +626,20 @@ func withCommercialLicenseTestConfig(t *testing.T, required bool, publicKeys str
 		common.CommercialLicenseRequired = previousRequired
 		common.CommercialLicensePublicKeys = previousPublicKeys
 		common.CommercialLicenseAllowUnsigned = previousAllowUnsigned
+	})
+}
+
+func withCommercialLicenseIssuerTestConfig(t *testing.T, privateKey string, privateKeyFile string) {
+	t.Helper()
+	previousPrivateKey := common.CommercialLicenseIssuerPrivateKey
+	previousPrivateKeyFile := common.CommercialLicenseIssuerPrivateKeyFile
+	t.Setenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY", "")
+	t.Setenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE", "")
+	common.CommercialLicenseIssuerPrivateKey = privateKey
+	common.CommercialLicenseIssuerPrivateKeyFile = privateKeyFile
+	t.Cleanup(func() {
+		common.CommercialLicenseIssuerPrivateKey = previousPrivateKey
+		common.CommercialLicenseIssuerPrivateKeyFile = previousPrivateKeyFile
 	})
 }
 
