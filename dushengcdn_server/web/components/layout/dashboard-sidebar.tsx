@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
@@ -159,6 +159,8 @@ function SidebarNavItem({
   navigationItems,
   isSidebarCollapsed,
   forceExpanded,
+  expandedItems,
+  onToggleExpand,
   onNavigate,
   depth = 0,
 }: {
@@ -167,18 +169,19 @@ function SidebarNavItem({
   navigationItems: NavigationItem[];
   isSidebarCollapsed: boolean;
   forceExpanded?: boolean;
+  expandedItems: Set<string>;
+  onToggleExpand: (href: string) => void;
   onNavigate?: () => void;
   depth?: number;
 }) {
   const active = isNavigationItemActive(currentPath, item, navigationItems);
   const hasChildren = Boolean(item.children?.length);
   const showLabel = forceExpanded || !isSidebarCollapsed;
+  const expanded = !hasChildren || expandedItems.has(item.href);
 
   return (
     <div className="space-y-2">
-      <Link
-        href={item.href}
-        onClick={onNavigate}
+      <div
         className={cn(
           'flex min-h-[50px] items-center gap-3 rounded-2xl border px-3 py-2.5 transition-colors',
           depth > 0 && 'ml-3 rounded-xl',
@@ -187,16 +190,50 @@ function SidebarNavItem({
             : 'border-transparent text-[var(--foreground-secondary)] hover:border-[var(--border-default)] hover:bg-[var(--surface-muted)] hover:text-[var(--foreground-primary)]',
         )}
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--control-background)] text-[var(--foreground-primary)]">
-          <SidebarIcon icon={item.icon} />
-        </span>
-        {showLabel ? (
-          <span className="min-w-0 flex-1 text-sm font-medium">
-            {item.label}
+        <Link
+          href={item.href}
+          onClick={onNavigate}
+          className="flex min-w-0 flex-1 items-center gap-3"
+        >
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--control-background)] text-[var(--foreground-primary)]">
+            <SidebarIcon icon={item.icon} />
           </span>
+          {showLabel ? (
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+              {item.label}
+            </span>
+          ) : null}
+        </Link>
+        {showLabel && hasChildren ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleExpand(item.href);
+            }}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl text-[var(--foreground-secondary)] transition hover:bg-[var(--control-background)] hover:text-[var(--foreground-primary)]"
+            aria-expanded={expanded}
+            aria-label={expanded ? `收起${item.label}` : `展开${item.label}`}
+          >
+            <svg
+              className={cn(
+                'h-4 w-4 transition-transform',
+                expanded ? 'rotate-180' : 'rotate-0',
+              )}
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              viewBox="0 0 24 24"
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
         ) : null}
-      </Link>
-      {showLabel && hasChildren ? (
+      </div>
+      {showLabel && hasChildren && expanded ? (
         <div className="space-y-2">
           {item.children?.map((child) => (
             <SidebarNavItem
@@ -206,6 +243,8 @@ function SidebarNavItem({
               navigationItems={navigationItems}
               isSidebarCollapsed={isSidebarCollapsed}
               forceExpanded={forceExpanded}
+              expandedItems={expandedItems}
+              onToggleExpand={onToggleExpand}
               onNavigate={onNavigate}
               depth={depth + 1}
             />
@@ -230,6 +269,39 @@ function SidebarContent({
   onNavigate?: () => void;
 }) {
   const showLabel = forceExpanded || !isSidebarCollapsed;
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(() => {
+    const initialExpandedItems = new Set<string>();
+    for (const item of navigationItems) {
+      if (isNavigationItemActive(currentPath, item, navigationItems)) {
+        initialExpandedItems.add(item.href);
+      }
+    }
+    return initialExpandedItems;
+  });
+
+  useEffect(() => {
+    setExpandedItems((previous) => {
+      const next = new Set(previous);
+      for (const item of navigationItems) {
+        if (isNavigationItemActive(currentPath, item, navigationItems)) {
+          next.add(item.href);
+        }
+      }
+      return next;
+    });
+  }, [currentPath, navigationItems]);
+
+  const handleToggleExpand = (href: string) => {
+    setExpandedItems((previous) => {
+      const next = new Set(previous);
+      if (next.has(href)) {
+        next.delete(href);
+      } else {
+        next.add(href);
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="flex h-full flex-col gap-5">
@@ -266,6 +338,8 @@ function SidebarContent({
               navigationItems={navigationItems}
               isSidebarCollapsed={isSidebarCollapsed}
               forceExpanded={forceExpanded}
+              expandedItems={expandedItems}
+              onToggleExpand={handleToggleExpand}
               onNavigate={onNavigate}
             />
           ))}
@@ -290,9 +364,10 @@ export function DashboardSidebar() {
     (state) => state.setMobileSidebarOpen,
   );
   const { user } = useAuth();
-  const navigationItems = filterNavigationItemsByRole(
-    dashboardNavigation,
-    user?.role ?? 0,
+  const userRole = user?.role ?? 0;
+  const navigationItems = useMemo(
+    () => filterNavigationItemsByRole(dashboardNavigation, userRole),
+    [userRole],
   );
 
   useEffect(() => {
