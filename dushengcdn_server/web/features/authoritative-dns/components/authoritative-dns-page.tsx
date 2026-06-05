@@ -160,7 +160,7 @@ type MigrationRecheckResult = {
   simulations: DNSGSLBSimulationResult[];
 };
 
-const dnsObservabilityWindowHours = 24;
+const dnsObservabilityWindowHours = 6;
 
 const migrationRecheckStepTemplates: Array<{
   key: MigrationRecheckStepKey;

@@ -391,6 +391,31 @@ type dnsObservabilityLastRollupRow struct {
 	WindowMinutes int
 }
 
+type dnsObservabilityRollupSampleRow struct {
+	ID              uint
+	WindowStart     time.Time
+	WindowMinutes   int
+	WorkerID        string
+	ZoneID          uint
+	ProxyRouteID    uint
+	SourceScope     string
+	QName           string
+	QType           string
+	RCode           string
+	QueryCount      int64
+	TotalDurationMs int64
+	MaxDurationMs   int64
+	TargetSummary   string
+}
+
+type dnsObservabilityTotalsRow struct {
+	RCode           string
+	Dynamic         int
+	QueryCount      int64
+	TotalDurationMs int64
+	MaxDurationMs   int64
+}
+
 type dnsWorkerHealthRollupRow struct {
 	WorkerID        string
 	QueryCount      int64
@@ -408,18 +433,16 @@ type dnsObservabilitySummaryQueryData struct {
 	zoneCounts          map[uint]int64
 	routeCounts         map[uint]int64
 	targetCounts        map[string]int64
+	dynamicQueries      int64
 	trendPoints         []DNSObservabilityTrendPointView
 	workerHealthRollups []dnsWorkerHealthRollupRow
 	lastRollupAt        *time.Time
 }
 
 type dnsObservabilitySummaryQueries struct {
-	queryStringCounts        func(DNSObservabilitySummaryInput, dnsObservabilityWindow, string, int) (map[string]int64, error)
-	queryUintCounts          func(DNSObservabilitySummaryInput, dnsObservabilityWindow, string, int, string) (map[uint]int64, error)
-	queryTopTargets          func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) (map[string]int64, error)
-	queryTrendPoints         func(DNSObservabilitySummaryInput, dnsObservabilityWindow) ([]DNSObservabilityTrendPointView, error)
-	queryWorkerHealthRollups func(DNSObservabilitySummaryInput, dnsObservabilityWindow) ([]dnsWorkerHealthRollupRow, error)
-	queryLastRollupAt        func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*time.Time, error)
+	queryTotals       func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error)
+	queryRecentRows   func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error)
+	queryLastRollupAt func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*time.Time, error)
 }
 
 type dnsObservabilitySummaryLabelData struct {
@@ -435,12 +458,9 @@ type dnsObservabilitySummaryLabelQueries struct {
 }
 
 var defaultDNSObservabilitySummaryQueries = dnsObservabilitySummaryQueries{
-	queryStringCounts:        queryDNSObservabilityStringCounts,
-	queryUintCounts:          queryDNSObservabilityUintCounts,
-	queryTopTargets:          queryDNSObservabilityTopTargets,
-	queryTrendPoints:         queryDNSObservabilityTrendPoints,
-	queryWorkerHealthRollups: queryDNSWorkerHealthRollups,
-	queryLastRollupAt:        queryDNSObservabilityLastRollupAt,
+	queryTotals:       queryDNSObservabilityTotals,
+	queryRecentRows:   queryDNSObservabilityRecentRows,
+	queryLastRollupAt: queryDNSObservabilityLastRollupAt,
 }
 
 var defaultDNSObservabilitySummaryLabelQueries = dnsObservabilitySummaryLabelQueries{
@@ -1070,9 +1090,7 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 			summary.NegativeQueries += count
 		}
 	}
-	for _, count := range data.routeCounts {
-		summary.DynamicQueries += count
-	}
+	summary.DynamicQueries = data.dynamicQueries
 	if summary.TotalQueries > summary.DynamicQueries {
 		summary.StaticQueries = summary.TotalQueries - summary.DynamicQueries
 	}
@@ -1097,66 +1115,30 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 }
 
 func loadDNSObservabilitySummaryQueryData(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, queries dnsObservabilitySummaryQueries) (*dnsObservabilitySummaryQueryData, error) {
-	data := &dnsObservabilitySummaryQueryData{}
+	var totals *dnsObservabilitySummaryQueryData
+	var recentRows []dnsObservabilityRollupSampleRow
+	var lastRollupAt *time.Time
 	if err := runConcurrentQueries(
 		func() error {
-			rows, err := queries.queryStringCounts(input, window, "rcode", 0)
-			data.rcodeCounts = rows
+			rows, err := queries.queryTotals(input, window)
+			totals = rows
 			return err
 		},
 		func() error {
-			rows, err := queries.queryStringCounts(input, window, "qtype", 0)
-			data.qtypeCounts = rows
-			return err
-		},
-		func() error {
-			rows, err := queries.queryStringCounts(input, window, "qname", 8)
-			data.qnameCounts = rows
-			return err
-		},
-		func() error {
-			rows, err := queries.queryStringCounts(input, window, "worker_id", 8)
-			data.workerCounts = rows
-			return err
-		},
-		func() error {
-			rows, err := queries.queryStringCounts(input, window, "source_scope", 8)
-			data.sourceScopeCounts = rows
-			return err
-		},
-		func() error {
-			rows, err := queries.queryUintCounts(input, window, "zone_id", 0, "zone_id > 0")
-			data.zoneCounts = rows
-			return err
-		},
-		func() error {
-			rows, err := queries.queryUintCounts(input, window, "proxy_route_id", 0, "proxy_route_id > 0")
-			data.routeCounts = rows
-			return err
-		},
-		func() error {
-			rows, err := queries.queryTopTargets(input, window, 8)
-			data.targetCounts = rows
-			return err
-		},
-		func() error {
-			rows, err := queries.queryTrendPoints(input, window)
-			data.trendPoints = rows
-			return err
-		},
-		func() error {
-			rows, err := queries.queryWorkerHealthRollups(input, window)
-			data.workerHealthRollups = rows
+			rows, err := queries.queryRecentRows(input, window, normalizeDNSObservabilityHeavyCounterScanLimit())
+			recentRows = rows
 			return err
 		},
 		func() error {
 			value, err := queries.queryLastRollupAt(input, window)
-			data.lastRollupAt = value
+			lastRollupAt = value
 			return err
 		},
 	); err != nil {
 		return nil, err
 	}
+	data := mergeDNSObservabilitySummaryQueryData(totals, buildDNSObservabilitySummaryDataFromRows(window, recentRows))
+	data.lastRollupAt = lastRollupAt
 	return data, nil
 }
 
@@ -4035,6 +4017,146 @@ func dnsRollupEndMaxSelectExpression() string {
 	}
 }
 
+func queryDNSObservabilityTotals(input DNSObservabilitySummaryInput, window dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
+	rcodeExpression := "COALESCE(NULLIF(TRIM(r_code), ''), 'NOERROR')"
+	dynamicExpression := "CASE WHEN proxy_route_id > 0 THEN 1 ELSE 0 END"
+	var rows []dnsObservabilityTotalsRow
+	if err := dnsObservabilityBaseQuery(input, window).
+		Select(rcodeExpression + " AS r_code, " + dynamicExpression + " AS dynamic, SUM(query_count) AS query_count, SUM(total_duration_ms) AS total_duration_ms, MAX(max_duration_ms) AS max_duration_ms").
+		Group(rcodeExpression).
+		Group(dynamicExpression).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	data := newDNSObservabilitySummaryQueryData(window)
+	for _, row := range rows {
+		if row.QueryCount <= 0 {
+			continue
+		}
+		rcode := normalizeDNSRCode(row.RCode)
+		data.rcodeCounts[rcode] += row.QueryCount
+		if row.Dynamic > 0 {
+			data.dynamicQueries += row.QueryCount
+		}
+		data.workerHealthRollups = append(data.workerHealthRollups, dnsWorkerHealthRollupRow{
+			QueryCount:      row.QueryCount,
+			ErrorQueries:    dnsObservabilityErrorQueries(rcode, row.QueryCount),
+			TotalDurationMs: row.TotalDurationMs,
+			MaxDurationMs:   row.MaxDurationMs,
+		})
+	}
+	return data, nil
+}
+
+func queryDNSObservabilityRecentRows(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, limit int) ([]dnsObservabilityRollupSampleRow, error) {
+	if limit <= 0 {
+		limit = normalizeDNSObservabilityHeavyCounterScanLimit()
+	}
+	var rows []dnsObservabilityRollupSampleRow
+	err := dnsObservabilityBaseQuery(input, window).
+		Select("id, window_start, window_minutes, worker_id, zone_id, proxy_route_id, source_scope, q_name AS q_name, q_type AS q_type, r_code AS r_code, query_count, total_duration_ms, max_duration_ms, target_summary").
+		Order("window_start DESC").
+		Order("id DESC").
+		Limit(limit).
+		Scan(&rows).Error
+	return rows, err
+}
+
+func newDNSObservabilitySummaryQueryData(window dnsObservabilityWindow) *dnsObservabilitySummaryQueryData {
+	return &dnsObservabilitySummaryQueryData{
+		rcodeCounts:         map[string]int64{},
+		qtypeCounts:         map[string]int64{},
+		qnameCounts:         map[string]int64{},
+		workerCounts:        map[string]int64{},
+		sourceScopeCounts:   map[string]int64{},
+		zoneCounts:          map[uint]int64{},
+		routeCounts:         map[uint]int64{},
+		targetCounts:        map[string]int64{},
+		trendPoints:         initDNSObservabilityTrendPoints(window.WindowStart, window.WindowEnd, window.Hours),
+		workerHealthRollups: []dnsWorkerHealthRollupRow{},
+	}
+}
+
+func buildDNSObservabilitySummaryDataFromRows(window dnsObservabilityWindow, rows []dnsObservabilityRollupSampleRow) *dnsObservabilitySummaryQueryData {
+	data := newDNSObservabilitySummaryQueryData(window)
+	for _, row := range rows {
+		if row.QueryCount <= 0 {
+			continue
+		}
+		rcode := normalizeDNSRCode(row.RCode)
+		qtype := normalizeDNSObservabilityStringCountKey("qtype", row.QType)
+		qname := normalizeDNSObservabilityStringCountKey("qname", row.QName)
+		sourceScope := normalizeDNSObservabilityStringCountKey("source_scope", row.SourceScope)
+		workerID := normalizeDNSObservabilityStringCountKey("worker_id", row.WorkerID)
+		data.rcodeCounts[rcode] += row.QueryCount
+		data.qtypeCounts[qtype] += row.QueryCount
+		data.qnameCounts[qname] += row.QueryCount
+		if workerID != "" {
+			data.workerCounts[workerID] += row.QueryCount
+		}
+		data.sourceScopeCounts[sourceScope] += row.QueryCount
+		if row.ZoneID > 0 {
+			data.zoneCounts[row.ZoneID] += row.QueryCount
+		}
+		if row.ProxyRouteID > 0 {
+			data.routeCounts[row.ProxyRouteID] += row.QueryCount
+			data.dynamicQueries += row.QueryCount
+		}
+		for target, targetCount := range decodeDNSTargetSummary(row.TargetSummary) {
+			if targetCount > 0 {
+				data.targetCounts[target] += targetCount
+			}
+		}
+		rollupEnd := row.WindowStart.UTC().Add(time.Duration(normalizeDNSRollupWindow(row.WindowMinutes)) * time.Minute)
+		applyDNSObservabilityTrendPoint(data.trendPoints, rollupEnd, rcode, row.ProxyRouteID > 0, row.QueryCount)
+		data.workerHealthRollups = append(data.workerHealthRollups, dnsWorkerHealthRollupRow{
+			WorkerID:        workerID,
+			QueryCount:      row.QueryCount,
+			ErrorQueries:    dnsObservabilityErrorQueries(rcode, row.QueryCount),
+			TotalDurationMs: row.TotalDurationMs,
+			MaxDurationMs:   row.MaxDurationMs,
+		})
+	}
+	data.qnameCounts = limitDNSObservabilityCounterMap(data.qnameCounts, 8)
+	data.targetCounts = limitDNSObservabilityCounterMap(data.targetCounts, 8)
+	data.workerCounts = limitDNSObservabilityCounterMap(data.workerCounts, 8)
+	data.sourceScopeCounts = limitDNSObservabilityCounterMap(data.sourceScopeCounts, 8)
+	data.zoneCounts = limitDNSObservabilityUintCounterMap(data.zoneCounts, 8)
+	data.routeCounts = limitDNSObservabilityUintCounterMap(data.routeCounts, 8)
+	return data
+}
+
+func mergeDNSObservabilitySummaryQueryData(totals *dnsObservabilitySummaryQueryData, sampled *dnsObservabilitySummaryQueryData) *dnsObservabilitySummaryQueryData {
+	if totals == nil && sampled == nil {
+		return newDNSObservabilitySummaryQueryData(normalizeDNSObservabilityWindow(1))
+	}
+	if totals == nil {
+		return sampled
+	}
+	if sampled == nil {
+		return totals
+	}
+	totals.qtypeCounts = sampled.qtypeCounts
+	totals.qnameCounts = sampled.qnameCounts
+	totals.workerCounts = sampled.workerCounts
+	totals.sourceScopeCounts = sampled.sourceScopeCounts
+	totals.zoneCounts = sampled.zoneCounts
+	totals.routeCounts = sampled.routeCounts
+	totals.targetCounts = sampled.targetCounts
+	totals.trendPoints = sampled.trendPoints
+	totals.workerHealthRollups = sampled.workerHealthRollups
+	return totals
+}
+
+func dnsObservabilityErrorQueries(rcode string, count int64) int64 {
+	switch normalizeDNSRCode(rcode) {
+	case "SERVFAIL", "REFUSED":
+		return count
+	default:
+		return 0
+	}
+}
+
 func queryDNSObservabilityStringCounts(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, field string, limit int) (map[string]int64, error) {
 	expression := dnsObservabilityStringCountExpression(field)
 	if expression == "" {
@@ -4184,6 +4306,39 @@ func limitDNSObservabilityCounterMap(counts map[string]int64, limit int) map[str
 	limited := make(map[string]int64, len(items))
 	for _, item := range items {
 		limited[item.Key] = item.Count
+	}
+	return limited
+}
+
+func limitDNSObservabilityUintCounterMap(counts map[uint]int64, limit int) map[uint]int64 {
+	if limit <= 0 || len(counts) <= limit {
+		return counts
+	}
+	items := make([]struct {
+		key   uint
+		count int64
+	}, 0, len(counts))
+	for key, count := range counts {
+		if key == 0 || count <= 0 {
+			continue
+		}
+		items = append(items, struct {
+			key   uint
+			count int64
+		}{key: key, count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count == items[j].count {
+			return items[i].key < items[j].key
+		}
+		return items[i].count > items[j].count
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	limited := make(map[uint]int64, len(items))
+	for _, item := range items {
+		limited[item.key] = item.count
 	}
 	return limited
 }

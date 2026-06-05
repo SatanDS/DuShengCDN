@@ -11,7 +11,7 @@ import (
 )
 
 func TestLoadDNSObservabilitySummaryQueryDataRunsQueriesConcurrently(t *testing.T) {
-	const queryCount = 11
+	const queryCount = 3
 	started := make(chan struct{}, queryCount)
 	release := make(chan struct{})
 	var calls atomic.Int32
@@ -23,23 +23,11 @@ func TestLoadDNSObservabilitySummaryQueryDataRunsQueriesConcurrently(t *testing.
 	}
 
 	queries := dnsObservabilitySummaryQueries{
-		queryStringCounts: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, string, int) (map[string]int64, error) {
+		queryTotals: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
 			markStartedAndWait()
-			return map[string]int64{}, nil
+			return newDNSObservabilitySummaryQueryData(normalizeDNSObservabilityWindow(1)), nil
 		},
-		queryUintCounts: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, string, int, string) (map[uint]int64, error) {
-			markStartedAndWait()
-			return map[uint]int64{}, nil
-		},
-		queryTopTargets: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) (map[string]int64, error) {
-			markStartedAndWait()
-			return map[string]int64{}, nil
-		},
-		queryTrendPoints: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) ([]DNSObservabilityTrendPointView, error) {
-			markStartedAndWait()
-			return nil, nil
-		},
-		queryWorkerHealthRollups: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) ([]dnsWorkerHealthRollupRow, error) {
+		queryRecentRows: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error) {
 			markStartedAndWait()
 			return nil, nil
 		},
@@ -78,7 +66,7 @@ func TestLoadDNSObservabilitySummaryQueryDataRunsQueriesConcurrently(t *testing.
 func TestLoadDNSObservabilitySummaryQueryDataReturnsQueryError(t *testing.T) {
 	wantErr := errors.New("dns observability query failed")
 	queries := successfulDNSObservabilitySummaryQueries()
-	queries.queryTopTargets = func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) (map[string]int64, error) {
+	queries.queryRecentRows = func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error) {
 		return nil, wantErr
 	}
 
@@ -213,19 +201,10 @@ func TestDNSRouteLabelsLoadsRoutesByIDs(t *testing.T) {
 
 func successfulDNSObservabilitySummaryQueries() dnsObservabilitySummaryQueries {
 	return dnsObservabilitySummaryQueries{
-		queryStringCounts: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, string, int) (map[string]int64, error) {
-			return map[string]int64{}, nil
+		queryTotals: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
+			return newDNSObservabilitySummaryQueryData(normalizeDNSObservabilityWindow(1)), nil
 		},
-		queryUintCounts: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, string, int, string) (map[uint]int64, error) {
-			return map[uint]int64{}, nil
-		},
-		queryTopTargets: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) (map[string]int64, error) {
-			return map[string]int64{}, nil
-		},
-		queryTrendPoints: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) ([]DNSObservabilityTrendPointView, error) {
-			return nil, nil
-		},
-		queryWorkerHealthRollups: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) ([]dnsWorkerHealthRollupRow, error) {
+		queryRecentRows: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error) {
 			return nil, nil
 		},
 		queryLastRollupAt: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*time.Time, error) {
