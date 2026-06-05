@@ -670,8 +670,14 @@ func buildAggregatedObservabilityMeteringOverview(source meteringOverviewAggrega
 		overview.ResponseBytes = summary.ResponseBytes
 		overview.UpstreamBytes = summary.UpstreamBytes
 		overview.UpstreamBytesSupported = summary.UpstreamBytesHitCount > 0
+		overview.CacheHitCount = summary.CacheHitCount
+		overview.CacheMissCount = summary.CacheMissCount
+		overview.CacheBypassCount = summary.CacheBypassCount
+		overview.CacheExpiredCount = summary.CacheExpiredCount
+		overview.CacheStaleCount = summary.CacheStaleCount
+		overview.CacheClassifiedCount = summary.CacheClassifiedCount
 	}
-	if cache := source.cache; cache != nil {
+	if cache := source.cache; cache != nil && cache.CacheClassifiedCount > 0 {
 		overview.CacheHitCount = cache.CacheHitCount
 		overview.CacheMissCount = cache.CacheMissCount
 		overview.CacheBypassCount = cache.CacheBypassCount

@@ -476,6 +476,27 @@ func TestBuildObservabilityMeteringOverviewAggregatesBillingSignals(t *testing.T
 	}
 }
 
+func TestBuildAggregatedObservabilityMeteringOverviewFallsBackToAccessLogCacheSummary(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Hour)
+	view := buildAggregatedObservabilityMeteringOverview(meteringOverviewAggregatedDataSource{
+		now: now,
+		summary: &model.NodeAccessLogMeteringSummary{
+			RequestCount:         3,
+			CacheHitCount:        1,
+			CacheMissCount:       1,
+			CacheBypassCount:     1,
+			CacheClassifiedCount: 3,
+		},
+		cache: &model.NodeRequestReportCacheSummary{},
+	})
+	if view.CacheHitCount != 1 || view.CacheMissCount != 1 || view.CacheBypassCount != 1 || view.CacheClassifiedCount != 3 {
+		t.Fatalf("expected access-log cache summary fallback, got %+v", view)
+	}
+	if view.CacheHitRatePercent < 33.3 || view.CacheHitRatePercent > 33.4 {
+		t.Fatalf("expected cache hit rate from access logs, got %f", view.CacheHitRatePercent)
+	}
+}
+
 func TestGetObservabilityMeteringOverviewUsesAggregatedAccessLogs(t *testing.T) {
 	setupServiceTestDB(t)
 
