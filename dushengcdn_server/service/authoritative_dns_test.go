@@ -3829,8 +3829,8 @@ func TestAuthoritativeDNSObservabilityLimitsHeavyCounterScans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
 	}
-	if summary.TotalQueries != 103 {
-		t.Fatalf("expected totals to keep the full window, got %+v", summary)
+	if summary.TotalQueries != 3 || summary.SuccessfulQueries != 3 {
+		t.Fatalf("expected totals to use the bounded recent rollup sample, got %+v", summary)
 	}
 	assertCounter(t, summary.TopQNames, "newest.example.com", "newest.example.com", 1)
 	assertCounter(t, summary.TopQNames, "newer.example.com", "newer.example.com", 2)

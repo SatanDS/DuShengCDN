@@ -11,7 +11,7 @@ import (
 )
 
 func TestLoadDNSObservabilitySummaryQueryDataRunsQueriesConcurrently(t *testing.T) {
-	const queryCount = 3
+	const queryCount = 2
 	started := make(chan struct{}, queryCount)
 	release := make(chan struct{})
 	var calls atomic.Int32
@@ -23,10 +23,6 @@ func TestLoadDNSObservabilitySummaryQueryDataRunsQueriesConcurrently(t *testing.
 	}
 
 	queries := dnsObservabilitySummaryQueries{
-		queryTotals: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
-			markStartedAndWait()
-			return newDNSObservabilitySummaryQueryData(normalizeDNSObservabilityWindow(1)), nil
-		},
 		queryRecentRows: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error) {
 			markStartedAndWait()
 			return nil, nil
@@ -201,9 +197,6 @@ func TestDNSRouteLabelsLoadsRoutesByIDs(t *testing.T) {
 
 func successfulDNSObservabilitySummaryQueries() dnsObservabilitySummaryQueries {
 	return dnsObservabilitySummaryQueries{
-		queryTotals: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
-			return newDNSObservabilitySummaryQueryData(normalizeDNSObservabilityWindow(1)), nil
-		},
 		queryRecentRows: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error) {
 			return nil, nil
 		},
