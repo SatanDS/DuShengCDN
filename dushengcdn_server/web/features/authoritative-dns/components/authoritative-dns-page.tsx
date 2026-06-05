@@ -3610,6 +3610,14 @@ function DNSQueryTrendPanel({ summary }: { summary: DNSObservabilitySummary }) {
   const labels = summary.trend_points.map((point) =>
     formatTrendHour(point.bucket_started_at),
   );
+  const trendTotals = summary.trend_points.reduce(
+    (totals, point) => ({
+      queryCount: totals.queryCount + point.query_count,
+      servfailQueries: totals.servfailQueries + point.servfail_queries,
+      nxdomainQueries: totals.nxdomainQueries + point.nxdomain_queries,
+    }),
+    { queryCount: 0, servfailQueries: 0, nxdomainQueries: 0 },
+  );
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-4 xl:col-span-2">
       <h3 className="text-sm font-semibold text-[var(--foreground-primary)]">
@@ -3625,6 +3633,7 @@ function DNSQueryTrendPanel({ summary }: { summary: DNSObservabilitySummary }) {
               color: '#2563eb',
               fillColor: 'rgba(37,99,235,0.14)',
               values: summary.trend_points.map((point) => point.query_count),
+              summaryValue: trendTotals.queryCount,
               variant: 'area',
               valueFormatter: formatCount,
             },
@@ -3634,6 +3643,7 @@ function DNSQueryTrendPanel({ summary }: { summary: DNSObservabilitySummary }) {
               values: summary.trend_points.map(
                 (point) => point.servfail_queries,
               ),
+              summaryValue: trendTotals.servfailQueries,
               valueFormatter: formatCount,
             },
             {
@@ -3642,6 +3652,7 @@ function DNSQueryTrendPanel({ summary }: { summary: DNSObservabilitySummary }) {
               values: summary.trend_points.map(
                 (point) => point.nxdomain_queries,
               ),
+              summaryValue: trendTotals.nxdomainQueries,
               valueFormatter: formatCount,
             },
           ]}

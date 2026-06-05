@@ -11,6 +11,7 @@ type TrendChartSeries = {
   color: string;
   fillColor?: string;
   values: number[];
+  summaryValue?: number;
   variant?: 'line' | 'area';
   valueFormatter?: (value: number) => string;
 };
@@ -175,7 +176,8 @@ export function TrendChart({
       <div className="space-y-4">
         <div className="flex flex-wrap gap-3">
           {series.map((item) => {
-            const latestValue = item.values[item.values.length - 1] ?? 0;
+            const summaryValue =
+              item.summaryValue ?? item.values[item.values.length - 1] ?? 0;
             const formatter = item.valueFormatter ?? defaultFormatter;
             return (
                 <div
@@ -192,7 +194,7 @@ export function TrendChart({
                     </p>
                   </div>
                   <p className="mt-2 text-lg font-semibold text-[var(--foreground-primary)]">
-                    {formatter(latestValue)}
+                    {formatter(summaryValue)}
                   </p>
                 </div>
             );

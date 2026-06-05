@@ -150,15 +150,15 @@ describe('Authoritative DNS page', () => {
                     },
                     {
                       bucket_started_at: '2026-05-31T08:00:00Z',
-                      query_count: 88,
-                      successful_queries: 84,
-                      negative_queries: 3,
-                      error_queries: 1,
-                      dynamic_queries: 70,
-                      static_queries: 18,
-                      noerror_queries: 84,
-                      nxdomain_queries: 3,
-                      servfail_queries: 1,
+                      query_count: 0,
+                      successful_queries: 0,
+                      negative_queries: 0,
+                      error_queries: 0,
+                      dynamic_queries: 0,
+                      static_queries: 0,
+                      noerror_queries: 0,
+                      nxdomain_queries: 0,
+                      servfail_queries: 0,
                     },
                   ],
                   snapshot_consistency: {
@@ -1116,6 +1116,22 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('来源作用域')).toBeInTheDocument();
     expect(screen.getByText('香港')).toBeInTheDocument();
     expect(await screen.findByText('查询趋势')).toBeInTheDocument();
+    const trendPanel = screen.getByText('查询趋势').parentElement;
+    expect(
+      within(trendPanel as HTMLElement)
+        .getByText('查询量')
+        .closest('div')?.parentElement,
+    ).toHaveTextContent('40');
+    expect(
+      within(trendPanel as HTMLElement)
+        .getByText('服务异常')
+        .closest('div')?.parentElement,
+    ).toHaveTextContent('2');
+    expect(
+      within(trendPanel as HTMLElement)
+        .getByText('域名不存在')
+        .closest('div')?.parentElement,
+    ).toHaveTextContent('2');
     expect(screen.getByText('解析配置不一致')).toBeInTheDocument();
     expect(
       screen.getByText(/在线响应端当前使用了 2 个配置版本/),
