@@ -146,4 +146,82 @@ describe('AccessLogsPage', () => {
       ),
     );
   });
+
+  it('applies the host filter from the detail log search field', async () => {
+    stubMatchMedia();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes('/access-logs/metering-overview')) {
+        return jsonResponse({
+          generated_at: '2026-06-02T14:30:00Z',
+          window_started_at: '2026-06-01T14:30:00Z',
+          window_ended_at: '2026-06-02T14:30:00Z',
+          request_count: 0,
+          response_bytes: 0,
+          request_bytes: 0,
+          upstream_bytes: 0,
+          upstream_bytes_supported: true,
+          cache_hit_count: 0,
+          cache_classified_count: 0,
+          cache_hit_rate_percent: 0,
+          bandwidth_p95_bps: 0,
+          node_availability_percent: 100,
+          online_nodes: 0,
+          total_nodes: 0,
+          site_traffic: [],
+          node_traffic: [],
+          status_codes: [],
+          top_urls: [],
+          top_ips: [],
+          top_regions: [],
+          bandwidth_trend: [],
+        });
+      }
+
+      if (url.includes('/access-logs/ip-summary')) {
+        return jsonResponse({
+          items: [],
+          page: 0,
+          page_size: 20,
+          has_more: false,
+          total_ip: 0,
+          sort_by: 'total_requests',
+          sort_order: 'desc',
+        });
+      }
+
+      if (url.includes('/access-logs/')) {
+        return jsonResponse({
+          items: [],
+          page: 0,
+          page_size: 20,
+          has_more: false,
+          total_record: 0,
+          total_ip: 0,
+        });
+      }
+
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAccessLogsPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /明细日志/ }));
+    await userEvent.type(screen.getByPlaceholderText('按域名搜索'), 'satandu.com');
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) => {
+          const url = String(input);
+          return (
+            url.includes('/access-logs/') &&
+            url.includes('host=satandu.com')
+          );
+        }),
+      ).toBe(true),
+    );
+  });
 });

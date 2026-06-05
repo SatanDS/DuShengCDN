@@ -1,5 +1,6 @@
 'use client';
 
+import type { KeyboardEvent } from 'react';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -444,6 +445,13 @@ export function AccessLogsPage() {
     setIPPage(0);
   };
 
+  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      handleSearch();
+    }
+  };
+
   const handleReset = () => {
     const empty = { nodeId: '', remoteAddr: '', host: '', path: '' };
     setDraft(empty);
@@ -571,6 +579,7 @@ export function AccessLogsPage() {
                 <ResourceField label="节点 ID">
                   <ResourceInput
                     value={draft.nodeId}
+                    onKeyDown={handleSearchKeyDown}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -583,6 +592,7 @@ export function AccessLogsPage() {
                 <ResourceField label="来源 IP">
                   <ResourceInput
                     value={draft.remoteAddr}
+                    onKeyDown={handleSearchKeyDown}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -595,6 +605,7 @@ export function AccessLogsPage() {
                 <ResourceField label="访问域名">
                   <ResourceInput
                     value={draft.host}
+                    onKeyDown={handleSearchKeyDown}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -615,6 +626,7 @@ export function AccessLogsPage() {
                   <ResourceInput
                     value={draft.path}
                     disabled={activeTab === 'ip'}
+                    onKeyDown={handleSearchKeyDown}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,

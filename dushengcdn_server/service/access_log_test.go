@@ -195,6 +195,55 @@ func TestListAccessLogsUsesDefaultPageSize(t *testing.T) {
 	}
 }
 
+func TestListAccessLogsFiltersByHostDomain(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now()
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:     "node-domain-filter",
+			LoggedAt:   now.Add(-3 * time.Minute),
+			RemoteAddr: "47.86.192.73",
+			Host:       "www.satandu.com",
+			Path:       "/api/dns-worker-heartbeat",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-domain-filter",
+			LoggedAt:   now.Add(-2 * time.Minute),
+			RemoteAddr: "129.226.213.145",
+			Host:       "8.211.168.34",
+			Path:       "/",
+			StatusCode: 404,
+		},
+		{
+			NodeID:     "node-domain-filter",
+			LoggedAt:   now.Add(-1 * time.Minute),
+			RemoteAddr: "47.86.192.73",
+			Host:       "api.satandu.com",
+			Path:       "/api/dns-snapshot",
+			StatusCode: 200,
+		},
+	})
+
+	result, err := ListAccessLogs(AccessLogQuery{
+		Host:     "satandu.com",
+		Page:     0,
+		PageSize: 20,
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogs failed: %v", err)
+	}
+	if result.TotalRecord != 2 || len(result.Items) != 2 {
+		t.Fatalf("expected only satandu.com hosts, got %+v", result)
+	}
+	for _, item := range result.Items {
+		if !strings.Contains(item.Host, "satandu.com") {
+			t.Fatalf("expected domain filter to exclude unrelated host, got %+v", result.Items)
+		}
+	}
+}
+
 func TestListFoldedAccessLogsAndIPSummaries(t *testing.T) {
 	setupServiceTestDB(t)
 

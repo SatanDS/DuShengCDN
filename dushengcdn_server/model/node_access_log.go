@@ -2,6 +2,8 @@ package model
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -1028,8 +1030,8 @@ func applyNodeAccessLogFilters(db *gorm.DB, query NodeAccessLogQuery) *gorm.DB {
 	if trimmed := strings.TrimSpace(query.RemoteAddr); trimmed != "" {
 		db = db.Where("remote_addr LIKE ?", "%"+trimmed+"%")
 	}
-	if trimmed := strings.TrimSpace(query.Host); trimmed != "" {
-		db = db.Where("host LIKE ?", "%"+trimmed+"%")
+	if patterns := nodeAccessLogHostFilterPatterns(query.Host); len(patterns) > 0 {
+		db = db.Where(nodeAccessLogHostWhereClause(), patterns...)
 	}
 	if trimmed := strings.TrimSpace(query.Path); trimmed != "" {
 		db = db.Where("path LIKE ?", "%"+trimmed+"%")
@@ -1096,9 +1098,9 @@ func buildNodeAccessLogRawWhereClause(query NodeAccessLogQuery) (string, []any) 
 		whereClauses = append(whereClauses, "remote_addr LIKE ?")
 		args = append(args, "%"+trimmed+"%")
 	}
-	if trimmed := strings.TrimSpace(query.Host); trimmed != "" {
-		whereClauses = append(whereClauses, "host LIKE ?")
-		args = append(args, "%"+trimmed+"%")
+	if patterns := nodeAccessLogHostFilterPatterns(query.Host); len(patterns) > 0 {
+		whereClauses = append(whereClauses, nodeAccessLogHostWhereClause())
+		args = append(args, patterns...)
 	}
 	if trimmed := strings.TrimSpace(query.Path); trimmed != "" {
 		whereClauses = append(whereClauses, "path LIKE ?")
@@ -1109,6 +1111,47 @@ func buildNodeAccessLogRawWhereClause(query NodeAccessLogQuery) (string, []any) 
 		args = append(args, query.Since)
 	}
 	return strings.Join(whereClauses, " AND "), args
+}
+
+func nodeAccessLogHostWhereClause() string {
+	return "(LOWER(TRIM(host)) = ? OR LOWER(TRIM(host)) LIKE ? OR LOWER(TRIM(host)) LIKE ?)"
+}
+
+func nodeAccessLogHostFilterPatterns(raw string) []any {
+	host := normalizeNodeAccessLogHostFilter(raw)
+	if host == "" {
+		return nil
+	}
+	return []any{host, "%." + host, "%" + host + "%"}
+}
+
+func normalizeNodeAccessLogHostFilter(raw string) string {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	if value == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(value); err == nil && parsed.Host != "" {
+		value = parsed.Host
+	} else if strings.Contains(value, "://") {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	value = strings.Trim(value, "[]")
+	if slash := strings.IndexAny(value, "/?#"); slash >= 0 {
+		value = value[:slash]
+	}
+	if colon := strings.LastIndex(value, ":"); colon > -1 && !strings.Contains(value[:colon], ":") {
+		value = value[:colon]
+	}
+	value = strings.TrimSuffix(value, ".")
+	value = strings.TrimPrefix(value, "*.")
+	if value == "" || strings.ContainsAny(value, " \t\r\n") {
+		return ""
+	}
+	return value
 }
 
 func listNodeAccessLogsAcrossShardsInMemory(query NodeAccessLogQuery) ([]*NodeAccessLog, error) {

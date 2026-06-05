@@ -77,7 +77,7 @@ func GetAccessLogIPSummaries(c *gin.Context) {
 	result, err := service.ListAccessLogIPSummaries(service.AccessLogIPSummaryQuery{
 		NodeID:     c.Query("node_id"),
 		RemoteAddr: c.Query("remote_addr"),
-		Host:       c.Query("host"),
+		Host:       firstNonEmptyQuery(c, "host", "domain"),
 		Page:       readQueryInt(c, "p"),
 		PageSize:   readQueryInt(c, "page_size"),
 		SortBy:     c.Query("sort_by"),
@@ -106,7 +106,7 @@ func GetAccessLogIPTrend(c *gin.Context) {
 	result, err := service.GetAccessLogIPTrend(service.AccessLogIPTrendQuery{
 		NodeID:        c.Query("node_id"),
 		RemoteAddr:    c.Query("remote_addr"),
-		Host:          c.Query("host"),
+		Host:          firstNonEmptyQuery(c, "host", "domain"),
 		Hours:         readQueryInt(c, "hours"),
 		BucketMinutes: readQueryInt(c, "bucket_minutes"),
 	})
@@ -163,7 +163,7 @@ func readAccessLogQuery(c *gin.Context) service.AccessLogQuery {
 	return service.AccessLogQuery{
 		NodeID:     c.Query("node_id"),
 		RemoteAddr: c.Query("remote_addr"),
-		Host:       c.Query("host"),
+		Host:       firstNonEmptyQuery(c, "host", "domain"),
 		Path:       c.Query("path"),
 		Page:       readQueryInt(c, "p"),
 		PageSize:   readQueryInt(c, "page_size"),
@@ -175,4 +175,13 @@ func readAccessLogQuery(c *gin.Context) service.AccessLogQuery {
 func readQueryInt(c *gin.Context, key string) int {
 	value, _ := strconv.Atoi(c.DefaultQuery(key, "0"))
 	return value
+}
+
+func firstNonEmptyQuery(c *gin.Context, keys ...string) string {
+	for _, key := range keys {
+		if value := c.Query(key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
