@@ -445,19 +445,48 @@ GeoIP 地区限制说明：
 git clone https://github.com/SatanDS/DuShengCDN.git /opt/dushengcdn
 ```
 
-服务器使用 Docker Compose 部署时，更新面板端：
+服务器使用 Docker Compose 源码部署时，更新面板端：
 
 ```bash
 cd /opt/dushengcdn
 bash scripts/backup-server.sh
+
 git fetch origin main
 git pull --ff-only origin main
+
 cd dushengcdn_server
 cp -n .env.example .env
-sed -i "s/^SESSION_SECRET=.*/SESSION_SECRET=$(openssl rand -hex 32)/" .env
-sed -i 's/replace-with-strong-password/your-postgres-password/g' .env
+
 DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
 docker compose ps
+docker compose logs -n 100 dushengcdn
+```
+
+首次部署时先编辑 `dushengcdn_server/.env`，写入真实的 `DUSHENGCDN_HTTP_PORT`、`POSTGRES_PASSWORD`、`SESSION_SECRET`、`DSN` 和旧版 Agent 兼容需要的 `AGENT_TOKEN`。后续升级不要在命令里重新生成 `SESSION_SECRET` 或替换数据库密码，避免已经登录的会话失效或 PostgreSQL 连接失败。
+
+如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `3010:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token，迁移到 `dushengcdn_server/.env`；确认没有需要保留的源码修改后，再使用强制同步流程：
+
+```bash
+cd /opt/dushengcdn
+bash scripts/backup-server.sh
+
+git fetch origin main
+git reset --hard origin/main
+
+cd dushengcdn_server
+cp -n .env.example .env
+
+DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build
+docker compose ps
+docker compose logs -n 100 dushengcdn
+```
+
+升级后可以直接检查面板健康接口：
+
+```bash
+cd /opt/dushengcdn/dushengcdn_server
+panel_port="$(grep -E '^DUSHENGCDN_HTTP_PORT=' .env | tail -n1 | cut -d= -f2-)"
+curl -I "http://127.0.0.1:${panel_port:-3010}/api/status"
 ```
 
 如需从备份恢复，先停止 Server 容器但保持 PostgreSQL 服务可访问，再使用恢复脚本：
@@ -473,7 +502,7 @@ docker compose up -d
 
 恢复脚本会校验 `manifest.txt` 中的 SHA-256 信息，在覆盖前为当前数据库和 `dushengcdn-data` 再生成一份 `backups/pre-restore/<timestamp>/` 安全备份，并且默认拒绝在 `dushengcdn` 服务仍运行时恢复。
 
-后续端口、数据库密码、`SESSION_SECRET`、DSN、旧版 `AGENT_TOKEN` 等本地部署参数都改 `.env`，不要直接改仓库里的 `dushengcdn_server/docker-compose.yaml`。这样后续 `git pull --ff-only origin main` 不会因为本地 Compose 模板改动被阻塞。
+后续端口、数据库密码、`SESSION_SECRET`、DSN、旧版 `AGENT_TOKEN` 等本地部署参数都改 `.env`，不要直接改仓库里的 `dushengcdn_server/docker-compose.yaml`。这样后续 `git pull --ff-only origin main` 不会因为本地 Compose 模板改动被阻塞。源码 Compose 构建时会通过 `DUSHENGCDN_VERSION` 把当前 Git 版本写入 Server 或 Agent；顶栏“版本”显示当前运行中的后端版本，节点列表显示 Agent 上报的版本。
 
 如果升级后面板打不开，先运行只读诊断脚本：
 
@@ -493,8 +522,6 @@ git pull --ff-only origin main
 DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f docker-compose.agent.yaml up -d --build
 docker compose -f docker-compose.agent.yaml ps
 ```
-
-如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `3010:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token，迁移到 `dushengcdn_server/.env`；确认没有需要保留的源码修改后，再使用 `git fetch origin main && git reset --hard origin/main` 拉回新版。源码 Compose 构建时会通过 `DUSHENGCDN_VERSION` 把当前 Git 版本写入 Server 或 Agent；顶栏“版本”显示当前运行中的后端版本，节点列表显示 Agent 上报的版本。
 
 Server 自动升级默认关闭，生产环境推荐在顶栏检查版本后上传已审阅的 Server 二进制确认升级；如需启用自动升级，设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，Release 必须同时包含当前平台 Server 二进制和同名 `.sha256` 校验文件。节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。DNS Worker 使用安装脚本部署时也可重复执行脚本升级，脚本会优先下载对应平台的 DNS Worker Release 资产并校验 `.sha256`。没有 Release 资产时，安装脚本会从源码构建并写入当前 Git 版本；源码构建会复用本机 Go，自动下载 Go 时会多源重试。
 
