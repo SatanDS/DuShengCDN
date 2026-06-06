@@ -145,7 +145,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: dushengcdn_server/go.mod
+          go-version: '1.26.3'
           cache-dependency-path: dushengcdn_server/go.sum
 
       - name: Build Server
@@ -212,7 +212,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: dushengcdn_agent/go.mod
+          go-version: '1.26.3'
           cache-dependency-path: dushengcdn_agent/go.sum
 
       - name: Build Agent
@@ -282,7 +282,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: dushengcdn_server/go.mod
+          go-version: '1.26.3'
           cache-dependency-path: dushengcdn_server/go.sum
 
       - name: Build DNS Worker
