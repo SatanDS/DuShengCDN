@@ -284,16 +284,16 @@ function NodeVersionStack({ nodes }: { nodes: NodeItem[] }) {
   }
 
   return (
-    <div className="scrollbar-none max-h-28 min-w-[180px] space-y-2 overflow-y-auto pr-1">
+    <div className="scrollbar-none max-h-28 min-w-0 max-w-full space-y-2 overflow-y-auto pr-1">
       {versions.map((item) => (
         <div
           key={`${item.id}-${item.label}`}
-          className="rounded-xl border border-[color-mix(in_srgb,var(--border-default)_62%,transparent)] bg-[color-mix(in_srgb,var(--surface-panel)_92%,transparent)] px-2.5 py-2 shadow-none"
+          className="min-w-0 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2"
         >
           <p className="truncate text-xs font-medium text-[var(--foreground-primary)]">
             {item.name}
           </p>
-          <p className="mt-1 break-all text-xs text-[var(--foreground-secondary)]">
+          <p className="mt-1 min-w-0 break-all text-xs text-[var(--foreground-secondary)]">
             {item.label}
           </p>
         </div>
