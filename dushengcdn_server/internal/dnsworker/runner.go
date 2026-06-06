@@ -46,7 +46,12 @@ func (r *Runner) Run(ctx context.Context) error {
 		return nil
 	}
 	if err := r.pullSnapshot(ctx); err != nil {
+		r.Store.SetLastError(err)
 		slog.Warn("initial dns snapshot pull failed", "error", err)
+	}
+	if err := r.sendHeartbeat(ctx); err != nil {
+		r.Store.SetLastError(err)
+		slog.Warn("initial dns worker heartbeat failed", "error", err)
 	}
 	go r.syncLoop(ctx)
 	return r.DNSServer.Run(ctx)
@@ -126,6 +131,19 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 	})
 	if err != nil {
 		r.Rollups.Restore(rollups)
+		slog.Warn(
+			"dns worker heartbeat failed",
+			"snapshot_version", r.Store.Version(),
+			"rollups", len(rollups),
+			"error", err,
+		)
+		return err
 	}
-	return err
+	slog.Info(
+		"dns worker heartbeat sent",
+		"status", status,
+		"snapshot_version", r.Store.Version(),
+		"rollups", len(rollups),
+	)
+	return nil
 }
