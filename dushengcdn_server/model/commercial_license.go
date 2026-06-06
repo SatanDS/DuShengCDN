@@ -27,6 +27,11 @@ type CommercialLicense struct {
 	MaxSites            int        `json:"max_sites" gorm:"not null;default:0"`
 	IssuedAt            *time.Time `json:"issued_at"`
 	ExpiresAt           *time.Time `json:"expires_at"`
+	ActivationID        string     `json:"activation_id" gorm:"size:128;index;not null;default:''"`
+	MachineFingerprint  string     `json:"machine_fingerprint" gorm:"size:128;not null;default:''"`
+	LeaseToken          string     `json:"-" gorm:"type:text;not null;default:''"`
+	LeaseExpiresAt      *time.Time `json:"lease_expires_at"`
+	LastLeaseRenewedAt  *time.Time `json:"last_lease_renewed_at"`
 	LastValidatedAt     *time.Time `json:"last_validated_at"`
 	LastValidationError string     `json:"last_validation_error" gorm:"type:text;not null;default:''"`
 	CreatedAt           time.Time  `json:"created_at"`

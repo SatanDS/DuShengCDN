@@ -98,6 +98,7 @@ func main() {
 	backgroundCtx, cancelBackgroundTasks := context.WithCancel(context.Background())
 	defer cancelBackgroundTasks()
 	service.StartDatabaseAutoCleanupScheduler(backgroundCtx)
+	service.StartCommercialLicenseLeaseRenewer(backgroundCtx)
 
 	job.InitCronJobs()
 	defer job.StopCronJobs()

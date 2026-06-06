@@ -86,11 +86,19 @@ func SetApiRouter(router *gin.Engine) {
 			updateRoute.POST("/manual-upgrade", controller.ConfirmManualServerUpgrade)
 			updateRoute.POST("/upgrade", controller.UpgradeServer)
 		}
+		licenseActivationRoute := apiRouter.Group("/license/activation")
+		licenseActivationRoute.Use(middleware.CriticalRateLimit())
+		{
+			licenseActivationRoute.POST("/activate", controller.ActivateCommercialLicenseLease)
+			licenseActivationRoute.POST("/renew", controller.RenewCommercialLicenseActivationLease)
+		}
 		licenseRoute := apiRouter.Group("/license")
 		licenseRoute.Use(middleware.RootAuth(), middleware.NoTokenAuth())
 		{
 			licenseRoute.GET("/status", controller.GetCommercialLicense)
 			licenseRoute.POST("/install", controller.InstallCommercialLicense)
+			licenseRoute.POST("/activate", controller.ActivateCommercialLicense)
+			licenseRoute.POST("/renew", controller.RenewCommercialLicenseLease)
 			licenseRoute.POST("/clear", controller.ClearCommercialLicense)
 			licenseRoute.GET("/issuer", controller.GetCommercialLicenseIssuer)
 			licenseRoute.POST("/issue", controller.IssueCommercialLicense)

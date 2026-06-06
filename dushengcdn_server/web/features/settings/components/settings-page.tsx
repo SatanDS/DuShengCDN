@@ -22,6 +22,7 @@ import {
 } from '@/features/auth/api/auth';
 import { getPublicStatus } from '@/features/auth/api/public';
 import {
+  activateCommercialLicense,
   bindEmail,
   clearCommercialLicense,
   cleanupDatabaseObservability,
@@ -373,6 +374,9 @@ function getLicenseBadgeVariant(
     case 'valid':
       return 'success';
     case 'expiring':
+      return 'warning';
+    case 'activation_required':
+    case 'lease_expired':
       return 'warning';
     case 'community':
       return 'info';
@@ -972,6 +976,20 @@ export function SettingsPage() {
         setFeedback({ tone: 'success', message: '商业授权已安装。' });
       },
       '安装商业授权',
+    );
+  };
+
+  const handleActivateCommercialLicense = () => {
+    void runBusyAction(
+      'commercial-license-activate',
+      async () => {
+        await activateCommercialLicense();
+        await queryClient.invalidateQueries({
+          queryKey: commercialLicenseQueryKey,
+        });
+        setFeedback({ tone: 'success', message: '在线授权租约已更新。' });
+      },
+      '更新在线授权租约',
     );
   };
 
@@ -2175,15 +2193,28 @@ export function SettingsPage() {
             description="服务端会根据授权有效期和资源额度控制节点、站点创建。"
             action={
               license.fingerprint ? (
-                <DangerButton
-                  type="button"
-                  onClick={() => void handleClearCommercialLicense()}
-                  disabled={busyKey === 'commercial-license-clear'}
-                >
-                  {busyKey === 'commercial-license-clear'
-                    ? '清除中...'
-                    : '清除授权'}
-                </DangerButton>
+                <div className="flex flex-wrap gap-3">
+                  {license.online_activation_required ? (
+                    <SecondaryButton
+                      type="button"
+                      onClick={handleActivateCommercialLicense}
+                      disabled={busyKey === 'commercial-license-activate'}
+                    >
+                      {busyKey === 'commercial-license-activate'
+                        ? '续约中...'
+                        : '在线激活/续约'}
+                    </SecondaryButton>
+                  ) : null}
+                  <DangerButton
+                    type="button"
+                    onClick={() => void handleClearCommercialLicense()}
+                    disabled={busyKey === 'commercial-license-clear'}
+                  >
+                    {busyKey === 'commercial-license-clear'
+                      ? '清除中...'
+                      : '清除授权'}
+                  </DangerButton>
+                </div>
               ) : null
             }
           >
@@ -2199,6 +2230,14 @@ export function SettingsPage() {
                 />
                 {license.signature_verified ? (
                   <StatusBadge label="签名已验证" variant="success" />
+                ) : null}
+                {license.online_activation_required ? (
+                  <StatusBadge
+                    label={license.lease_status_label || '在线租约'}
+                    variant={
+                      license.lease_status === 'valid' ? 'success' : 'warning'
+                    }
+                  />
                 ) : null}
               </div>
 
@@ -2250,6 +2289,49 @@ export function SettingsPage() {
                     </p>
                   ) : null}
                 </div>
+                {license.online_activation_required ? (
+                  <>
+                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                        在线租约
+                      </p>
+                      <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                        {license.lease_expires_at
+                          ? formatDateTime(new Date(license.lease_expires_at))
+                          : '未激活'}
+                      </p>
+                      {license.lease_renew_before_at ? (
+                        <p className="mt-1 text-xs text-[var(--foreground-secondary)]">
+                          提前续约：
+                          {formatDateTime(
+                            new Date(license.lease_renew_before_at),
+                          )}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                        激活标识
+                      </p>
+                      <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
+                        {license.activation_id || '未激活'}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4 md:col-span-2">
+                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                        机器指纹
+                      </p>
+                      <p className="mt-2 text-xs break-all text-[var(--foreground-primary)]">
+                        {license.machine_fingerprint || '未生成'}
+                      </p>
+                      {license.build_watermark ? (
+                        <p className="mt-1 text-xs break-all text-[var(--foreground-secondary)]">
+                          构建水印：{license.build_watermark}
+                        </p>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">

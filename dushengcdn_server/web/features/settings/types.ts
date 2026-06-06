@@ -82,7 +82,9 @@ export type CommercialLicenseStatus =
   | 'valid'
   | 'expiring'
   | 'expired'
-  | 'invalid';
+  | 'invalid'
+  | 'activation_required'
+  | 'lease_expired';
 
 export interface CommercialLicenseStatusPayload {
   status: CommercialLicenseStatus;
@@ -107,6 +109,17 @@ export interface CommercialLicenseStatusPayload {
   issued_at?: string | null;
   expires_at?: string | null;
   days_until_expiry?: number | null;
+  online_activation_required: boolean;
+  activation_configured: boolean;
+  activation_id: string;
+  machine_fingerprint: string;
+  lease_expires_at?: string | null;
+  lease_renew_before_at?: string | null;
+  last_lease_renewed_at?: string | null;
+  lease_status: string;
+  lease_status_label: string;
+  lease_seconds_remaining: number;
+  build_watermark: string;
   last_validated_at?: string | null;
   last_validation_error: string;
   signature_verified: boolean;

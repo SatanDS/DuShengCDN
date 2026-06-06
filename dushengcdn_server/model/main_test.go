@@ -2763,6 +2763,9 @@ func TestEnsureDatabaseSchemaUpToDateAddsCommercialLicenseTable(t *testing.T) {
 	if !db.Migrator().HasColumn(&CommercialLicense{}, "token_hash") {
 		t.Fatal("expected commercial_licenses.token_hash column to exist")
 	}
+	if !db.Migrator().HasTable(&CommercialLicenseActivation{}) {
+		t.Fatal("expected commercial_license_activations table to exist")
+	}
 	version, exists, err := loadDatabaseSchemaVersion(db)
 	if err != nil {
 		t.Fatalf("loadDatabaseSchemaVersion: %v", err)

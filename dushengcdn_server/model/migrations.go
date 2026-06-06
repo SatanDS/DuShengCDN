@@ -2027,6 +2027,49 @@ func validateDatabaseSchemaV31(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV32 adds online activation lease state to commercial licenses.
+func migrateV32(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV32(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV31(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasTable(&CommercialLicenseActivation{}) {
+		return fmt.Errorf("table commercial_license_activations is missing")
+	}
+	for _, column := range []string{
+		"activation_id",
+		"machine_fingerprint",
+		"lease_token",
+		"lease_expires_at",
+		"last_lease_renewed_at",
+	} {
+		if !db.Migrator().HasColumn(&CommercialLicense{}, column) {
+			return fmt.Errorf("column commercial_licenses.%s is missing", column)
+		}
+	}
+	for _, column := range []string{
+		"activation_id",
+		"license_id",
+		"customer_id",
+		"machine_fingerprint",
+		"server_version",
+		"build_watermark",
+		"instance_hostname",
+		"revoked_at",
+		"last_lease_issued_at",
+		"last_lease_expires_at",
+	} {
+		if !db.Migrator().HasColumn(&CommercialLicenseActivation{}, column) {
+			return fmt.Errorf("column commercial_license_activations.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -2059,6 +2102,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 28, toVersion: 29, migrate: migrateV29, validate: validateDatabaseSchemaV29},
 		{fromVersion: 29, toVersion: 30, migrate: migrateV30, validate: validateDatabaseSchemaV30},
 		{fromVersion: 30, toVersion: 31, migrate: migrateV31, validate: validateDatabaseSchemaV31},
+		{fromVersion: 31, toVersion: 32, migrate: migrateV32, validate: validateDatabaseSchemaV32},
 	}
 }
 
@@ -2106,7 +2150,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV31(db, backend)
+		return validateDatabaseSchemaV32(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2122,7 +2166,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV31(db, backend)
+	return validateDatabaseSchemaV32(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2153,7 +2197,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV31(db, backend); err != nil {
+	if err := validateDatabaseSchemaV32(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

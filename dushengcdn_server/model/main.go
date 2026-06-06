@@ -52,6 +52,7 @@ func registeredModels() []any {
 		&AcmeAccount{},
 		&DnsAccount{},
 		&CommercialLicense{},
+		&CommercialLicenseActivation{},
 	}
 }
 

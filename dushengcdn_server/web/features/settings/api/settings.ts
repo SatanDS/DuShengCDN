@@ -61,6 +61,12 @@ export function installCommercialLicense(token: string) {
   });
 }
 
+export function activateCommercialLicense() {
+  return apiRequest<CommercialLicenseStatusPayload>('/license/activate', {
+    method: 'POST',
+  });
+}
+
 export function clearCommercialLicense() {
   return apiRequest<CommercialLicenseStatusPayload>('/license/clear', {
     method: 'POST',

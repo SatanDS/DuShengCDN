@@ -98,6 +98,24 @@ func init() {
 	if os.Getenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE") != "" {
 		CommercialLicenseIssuerPrivateKeyFile = os.Getenv("DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY_FILE")
 	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_LICENSE_ACTIVATION_URL")) != "" {
+		CommercialLicenseActivationURL = strings.TrimSpace(os.Getenv("DUSHENGCDN_LICENSE_ACTIVATION_URL"))
+	}
+	if os.Getenv("DUSHENGCDN_LICENSE_ONLINE_ACTIVATION_REQUIRED") != "" {
+		CommercialLicenseOnlineActivationRequired = readBoolEnv("DUSHENGCDN_LICENSE_ONLINE_ACTIVATION_REQUIRED")
+	}
+	if os.Getenv("DUSHENGCDN_LICENSE_ACTIVATION_SERVER_ENABLED") != "" {
+		CommercialLicenseActivationServerEnabled = readBoolEnv("DUSHENGCDN_LICENSE_ACTIVATION_SERVER_ENABLED")
+	}
+	if value := readPositiveIntEnv("DUSHENGCDN_LICENSE_LEASE_DURATION_HOURS"); value > 0 {
+		CommercialLicenseLeaseDuration = time.Duration(value) * time.Hour
+	}
+	if value := readPositiveIntEnv("DUSHENGCDN_LICENSE_LEASE_RENEW_BEFORE_HOURS"); value > 0 {
+		CommercialLicenseLeaseRenewBefore = time.Duration(value) * time.Hour
+	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_BUILD_WATERMARK")) != "" {
+		CommercialBuildWatermark = strings.TrimSpace(os.Getenv("DUSHENGCDN_BUILD_WATERMARK"))
+	}
 	if os.Getenv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED") != "" {
 		ServerAutoUpgradeEnabled = readBoolEnv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED")
 	}

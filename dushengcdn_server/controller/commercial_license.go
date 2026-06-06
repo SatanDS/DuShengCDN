@@ -46,6 +46,47 @@ func InstallCommercialLicense(c *gin.Context) {
 	respondSuccess(c, view)
 }
 
+// ActivateCommercialLicense godoc
+// @Summary Activate or renew commercial license lease
+// @Tags License
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param payload body service.CommercialLicenseActivateInput false "Activation payload"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/license/activate [post]
+func ActivateCommercialLicense(c *gin.Context) {
+	var input service.CommercialLicenseActivateInput
+	if err := decodeOptionalJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "")
+		return
+	}
+	view, err := service.ActivateCommercialLicense(input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
+// RenewCommercialLicenseLease godoc
+// @Summary Renew commercial license lease
+// @Tags License
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/license/renew [post]
+func RenewCommercialLicenseLease(c *gin.Context) {
+	view, err := service.RenewCommercialLicenseLease()
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
 // ClearCommercialLicense godoc
 // @Summary Clear commercial license
 // @Tags License
@@ -95,4 +136,42 @@ func IssueCommercialLicense(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, result)
+}
+
+// ActivateCommercialLicenseLease godoc
+// @Summary Issue short-lived commercial license lease
+// @Tags License
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param payload body service.CommercialLicenseActivationRequest true "Activation request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/license/activation/activate [post]
+func ActivateCommercialLicenseLease(c *gin.Context) {
+	var input service.CommercialLicenseActivationRequest
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "")
+		return
+	}
+	result, err := service.ServeCommercialLicenseActivation(input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, result)
+}
+
+// RenewCommercialLicenseActivationLease godoc
+// @Summary Renew short-lived commercial license lease
+// @Tags License
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param payload body service.CommercialLicenseActivationRequest true "Activation request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/license/activation/renew [post]
+func RenewCommercialLicenseActivationLease(c *gin.Context) {
+	ActivateCommercialLicenseLease(c)
 }

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,7 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -16,18 +23,22 @@ import (
 	"dushengcdn/common"
 	"dushengcdn/model"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 const (
-	commercialLicenseTokenPrefix     = "dscdn_license_v1."
-	CommercialLicenseStatusCommunity = "community"
-	CommercialLicenseStatusMissing   = "missing"
-	CommercialLicenseStatusValid     = "valid"
-	CommercialLicenseStatusExpiring  = "expiring"
-	CommercialLicenseStatusExpired   = "expired"
-	CommercialLicenseStatusInvalid   = "invalid"
+	commercialLicenseTokenPrefix              = "dscdn_license_v1."
+	commercialLicenseLeaseTokenPrefix         = "dscdn_lease_v1."
+	CommercialLicenseStatusCommunity          = "community"
+	CommercialLicenseStatusMissing            = "missing"
+	CommercialLicenseStatusValid              = "valid"
+	CommercialLicenseStatusExpiring           = "expiring"
+	CommercialLicenseStatusExpired            = "expired"
+	CommercialLicenseStatusInvalid            = "invalid"
+	CommercialLicenseStatusActivationRequired = "activation_required"
+	CommercialLicenseStatusLeaseExpired       = "lease_expired"
 
 	CommercialFeatureACMEAutomation   = "acme-automation"
 	CommercialFeatureAuthoritativeDNS = "authoritative-dns"
@@ -42,9 +53,14 @@ const (
 
 var commercialLicenseNow = time.Now
 var commercialLicenseResourceMu sync.Mutex
+var commercialLicenseHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 type CommercialLicenseInstallInput struct {
 	Token string `json:"token"`
+}
+
+type CommercialLicenseActivateInput struct {
+	ActivationURL string `json:"activation_url"`
 }
 
 type CommercialLicenseIssueInput struct {
@@ -71,32 +87,55 @@ type CommercialLicensePayload struct {
 	ExpiresAt    *time.Time `json:"expires_at"`
 }
 
+type CommercialLicenseLeasePayload struct {
+	LeaseID            string     `json:"lease_id"`
+	ActivationID       string     `json:"activation_id"`
+	LicenseID          string     `json:"license_id"`
+	CustomerID         string     `json:"customer_id"`
+	MachineFingerprint string     `json:"machine_fingerprint"`
+	ServerVersion      string     `json:"server_version"`
+	BuildWatermark     string     `json:"build_watermark"`
+	IssuedAt           *time.Time `json:"issued_at"`
+	ExpiresAt          *time.Time `json:"expires_at"`
+}
+
 type CommercialLicenseView struct {
-	Status              string     `json:"status"`
-	StatusLabel         string     `json:"status_label"`
-	Licensed            bool       `json:"licensed"`
-	Required            bool       `json:"required"`
-	LicenseID           string     `json:"license_id"`
-	CustomerID          string     `json:"customer_id"`
-	CustomerName        string     `json:"customer_name"`
-	Plan                string     `json:"plan"`
-	PlanLabel           string     `json:"plan_label"`
-	Fingerprint         string     `json:"fingerprint"`
-	Features            []string   `json:"features"`
-	MaxNodes            int        `json:"max_nodes"`
-	MaxSites            int        `json:"max_sites"`
-	CurrentNodes        int64      `json:"current_nodes"`
-	CurrentSites        int64      `json:"current_sites"`
-	NodeLimitExceeded   bool       `json:"node_limit_exceeded"`
-	SiteLimitExceeded   bool       `json:"site_limit_exceeded"`
-	CanCreateNodes      bool       `json:"can_create_nodes"`
-	CanCreateSites      bool       `json:"can_create_sites"`
-	IssuedAt            *time.Time `json:"issued_at"`
-	ExpiresAt           *time.Time `json:"expires_at"`
-	DaysUntilExpiry     *int       `json:"days_until_expiry"`
-	LastValidatedAt     *time.Time `json:"last_validated_at"`
-	LastValidationError string     `json:"last_validation_error"`
-	SignatureVerified   bool       `json:"signature_verified"`
+	Status                   string     `json:"status"`
+	StatusLabel              string     `json:"status_label"`
+	Licensed                 bool       `json:"licensed"`
+	Required                 bool       `json:"required"`
+	LicenseID                string     `json:"license_id"`
+	CustomerID               string     `json:"customer_id"`
+	CustomerName             string     `json:"customer_name"`
+	Plan                     string     `json:"plan"`
+	PlanLabel                string     `json:"plan_label"`
+	Fingerprint              string     `json:"fingerprint"`
+	Features                 []string   `json:"features"`
+	MaxNodes                 int        `json:"max_nodes"`
+	MaxSites                 int        `json:"max_sites"`
+	CurrentNodes             int64      `json:"current_nodes"`
+	CurrentSites             int64      `json:"current_sites"`
+	NodeLimitExceeded        bool       `json:"node_limit_exceeded"`
+	SiteLimitExceeded        bool       `json:"site_limit_exceeded"`
+	CanCreateNodes           bool       `json:"can_create_nodes"`
+	CanCreateSites           bool       `json:"can_create_sites"`
+	IssuedAt                 *time.Time `json:"issued_at"`
+	ExpiresAt                *time.Time `json:"expires_at"`
+	DaysUntilExpiry          *int       `json:"days_until_expiry"`
+	OnlineActivationRequired bool       `json:"online_activation_required"`
+	ActivationConfigured     bool       `json:"activation_configured"`
+	ActivationID             string     `json:"activation_id"`
+	MachineFingerprint       string     `json:"machine_fingerprint"`
+	LeaseExpiresAt           *time.Time `json:"lease_expires_at"`
+	LeaseRenewBeforeAt       *time.Time `json:"lease_renew_before_at"`
+	LastLeaseRenewedAt       *time.Time `json:"last_lease_renewed_at"`
+	LeaseStatus              string     `json:"lease_status"`
+	LeaseStatusLabel         string     `json:"lease_status_label"`
+	LeaseSecondsRemaining    int64      `json:"lease_seconds_remaining"`
+	BuildWatermark           string     `json:"build_watermark"`
+	LastValidatedAt          *time.Time `json:"last_validated_at"`
+	LastValidationError      string     `json:"last_validation_error"`
+	SignatureVerified        bool       `json:"signature_verified"`
 }
 
 type CommercialLicenseIssuerStatus struct {
@@ -116,10 +155,34 @@ type CommercialLicenseIssueResult struct {
 	SignatureVerified    bool                     `json:"signature_verified"`
 }
 
+type CommercialLicenseActivationRequest struct {
+	LicenseToken       string `json:"license_token"`
+	LeaseToken         string `json:"lease_token"`
+	ActivationID       string `json:"activation_id"`
+	MachineFingerprint string `json:"machine_fingerprint"`
+	ServerVersion      string `json:"server_version"`
+	BuildWatermark     string `json:"build_watermark"`
+	InstanceHostname   string `json:"instance_hostname"`
+}
+
+type CommercialLicenseActivationResponse struct {
+	LeaseToken     string    `json:"lease_token"`
+	ActivationID   string    `json:"activation_id"`
+	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+	RenewBeforeAt  time.Time `json:"renew_before_at"`
+}
+
 type parsedCommercialLicense struct {
 	payload           CommercialLicensePayload
 	rawPayload        []byte
 	status            string
+	validationError   string
+	signatureVerified bool
+}
+
+type parsedCommercialLicenseLease struct {
+	payload           CommercialLicenseLeasePayload
+	rawPayload        []byte
 	validationError   string
 	signatureVerified bool
 }
@@ -155,7 +218,18 @@ func InstallCommercialLicense(input CommercialLicenseInstallInput) (*CommercialL
 	if err := model.SaveCommercialLicense(license); err != nil {
 		return nil, err
 	}
-	return buildCommercialLicenseView(license)
+	view, err := buildCommercialLicenseView(license)
+	if err != nil {
+		return nil, err
+	}
+	if common.CommercialLicenseOnlineActivationRequired && strings.TrimSpace(common.CommercialLicenseActivationURL) != "" {
+		activatedView, activateErr := ActivateCommercialLicense(CommercialLicenseActivateInput{})
+		if activateErr == nil {
+			return activatedView, nil
+		}
+		view.LastValidationError = activateErr.Error()
+	}
+	return view, nil
 }
 
 func ClearCommercialLicense() (*CommercialLicenseView, error) {
@@ -163,6 +237,112 @@ func ClearCommercialLicense() (*CommercialLicenseView, error) {
 		return nil, err
 	}
 	return buildCommercialLicenseViewWithDB(model.DB, nil)
+}
+
+func ActivateCommercialLicense(input CommercialLicenseActivateInput) (*CommercialLicenseView, error) {
+	license, err := getCommercialLicenseWithDB(model.DB)
+	if err != nil {
+		return nil, err
+	}
+	if license == nil || strings.TrimSpace(license.Token) == "" {
+		return nil, errors.New("commercial license is not installed")
+	}
+	activationURL := strings.TrimSpace(input.ActivationURL)
+	if activationURL == "" {
+		activationURL = strings.TrimSpace(common.CommercialLicenseActivationURL)
+	}
+	if activationURL == "" {
+		return nil, errors.New("commercial license activation URL is not configured")
+	}
+	response, err := requestCommercialLicenseLease(activationURL, license)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyCommercialLicenseLease(model.DB, license, response, commercialLicenseNow().UTC()); err != nil {
+		return nil, err
+	}
+	return GetCommercialLicenseStatus()
+}
+
+func RenewCommercialLicenseLease() (*CommercialLicenseView, error) {
+	return ActivateCommercialLicense(CommercialLicenseActivateInput{})
+}
+
+func ServeCommercialLicenseActivation(input CommercialLicenseActivationRequest) (*CommercialLicenseActivationResponse, error) {
+	if !common.CommercialLicenseActivationServerEnabled {
+		return nil, errors.New("commercial license activation server is not enabled")
+	}
+	privateKey, err := commercialLicenseIssuerPrivateKey()
+	if err != nil {
+		return nil, err
+	}
+	if privateKey == nil {
+		return nil, errors.New("commercial license issuer private key is not configured")
+	}
+	licenseToken := strings.TrimSpace(input.LicenseToken)
+	if licenseToken == "" {
+		return nil, errors.New("license_token is required")
+	}
+	parsed, err := parseCommercialLicenseToken(licenseToken, commercialLicenseNow())
+	if err != nil {
+		return nil, err
+	}
+	if parsed.status != CommercialLicenseStatusValid && parsed.status != CommercialLicenseStatusExpiring {
+		if parsed.validationError != "" {
+			return nil, errors.New(parsed.validationError)
+		}
+		return nil, commercialLicenseStatusOperationError(parsed.status)
+	}
+
+	machineFingerprint := normalizeCommercialMachineFingerprint(input.MachineFingerprint)
+	if machineFingerprint == "" {
+		return nil, errors.New("machine_fingerprint is required")
+	}
+	activationID := strings.TrimSpace(input.ActivationID)
+	if activationID == "" {
+		activationID = uuid.NewString()
+	}
+	if strings.TrimSpace(input.LeaseToken) != "" {
+		lease, err := parseCommercialLicenseLeaseToken(input.LeaseToken, commercialLicenseNow())
+		if err == nil {
+			if lease.payload.LicenseID != parsed.payload.LicenseID {
+				return nil, errors.New("lease does not match license")
+			}
+			if lease.payload.MachineFingerprint != machineFingerprint {
+				return nil, errors.New("lease does not match machine fingerprint")
+			}
+			if strings.TrimSpace(lease.payload.ActivationID) != "" {
+				activationID = lease.payload.ActivationID
+			}
+		}
+	}
+
+	now := commercialLicenseNow().UTC().Truncate(time.Second)
+	expiresAt := now.Add(commercialLicenseLeaseDuration())
+	if err := upsertCommercialLicenseActivationRecord(activationID, parsed.payload, input, machineFingerprint, now, expiresAt); err != nil {
+		return nil, err
+	}
+	payload := CommercialLicenseLeasePayload{
+		LeaseID:            uuid.NewString(),
+		ActivationID:       activationID,
+		LicenseID:          parsed.payload.LicenseID,
+		CustomerID:         parsed.payload.CustomerID,
+		MachineFingerprint: machineFingerprint,
+		ServerVersion:      truncateForDatabase(strings.TrimSpace(input.ServerVersion), 64),
+		BuildWatermark:     truncateForDatabase(strings.TrimSpace(input.BuildWatermark), 128),
+		IssuedAt:           &now,
+		ExpiresAt:          &expiresAt,
+	}
+	token, err := signCommercialLicenseLease(privateKey, payload)
+	if err != nil {
+		return nil, err
+	}
+	return &CommercialLicenseActivationResponse{
+		LeaseToken:     token,
+		ActivationID:   activationID,
+		LeaseExpiresAt: expiresAt,
+		RenewBeforeAt:  expiresAt.Add(-commercialLicenseLeaseRenewBefore()),
+	}, nil
 }
 
 func GetCommercialLicenseIssuerStatus() CommercialLicenseIssuerStatus {
@@ -331,7 +511,7 @@ func getCommercialLicenseGateState() (*commercialLicenseGateState, error) {
 		state.Features = decodeCommercialLicenseFeatures(license.FeaturesJSON)
 		return state, nil
 	}
-	state.Status = parsed.status
+	state.Status, _ = commercialLicenseStatusWithLease(license, parsed.status, "")
 	state.Features = normalizeCommercialLicenseFeatures(parsed.payload.Features)
 	return state, nil
 }
@@ -371,6 +551,10 @@ func commercialLicenseStatusOperationError(status string) error {
 		return errors.New("商业许可证已过期，请更新授权")
 	case CommercialLicenseStatusInvalid:
 		return errors.New("商业许可证无效，请重新安装授权")
+	case CommercialLicenseStatusActivationRequired:
+		return errors.New("commercial license online activation is required")
+	case CommercialLicenseStatusLeaseExpired:
+		return errors.New("commercial license lease has expired; renew activation")
 	default:
 		return errors.New("商业许可证状态不允许执行该操作")
 	}
@@ -464,25 +648,30 @@ func buildCommercialLicenseViewWithDB(db *gorm.DB, license *model.CommercialLice
 func buildCommercialLicenseViewFromParts(payload CommercialLicensePayload, license *model.CommercialLicense, nodeCount int64, siteCount int64, status string, validationError string, signatureVerified bool) *CommercialLicenseView {
 	features := normalizeCommercialLicenseFeatures(payload.Features)
 	maxNodes := normalizeCommercialLicenseLimit(payload.MaxNodes)
+	status, validationError = commercialLicenseStatusWithLease(license, status, validationError)
 	maxSites := normalizeCommercialLicenseLimit(payload.MaxSites)
 	view := &CommercialLicenseView{
-		Status:              status,
-		StatusLabel:         commercialLicenseStatusLabel(status),
-		Licensed:            status == CommercialLicenseStatusValid || status == CommercialLicenseStatusExpiring,
-		Required:            common.CommercialLicenseRequired,
-		LicenseID:           strings.TrimSpace(payload.LicenseID),
-		CustomerID:          strings.TrimSpace(payload.CustomerID),
-		CustomerName:        strings.TrimSpace(payload.CustomerName),
-		Plan:                normalizeCommercialLicensePlan(payload.Plan),
-		Features:            features,
-		MaxNodes:            maxNodes,
-		MaxSites:            maxSites,
-		CurrentNodes:        nodeCount,
-		CurrentSites:        siteCount,
-		IssuedAt:            payload.IssuedAt,
-		ExpiresAt:           payload.ExpiresAt,
-		LastValidationError: validationError,
-		SignatureVerified:   signatureVerified,
+		Status:                   status,
+		StatusLabel:              commercialLicenseStatusLabel(status),
+		Licensed:                 status == CommercialLicenseStatusValid || status == CommercialLicenseStatusExpiring,
+		Required:                 common.CommercialLicenseRequired,
+		LicenseID:                strings.TrimSpace(payload.LicenseID),
+		CustomerID:               strings.TrimSpace(payload.CustomerID),
+		CustomerName:             strings.TrimSpace(payload.CustomerName),
+		Plan:                     normalizeCommercialLicensePlan(payload.Plan),
+		Features:                 features,
+		MaxNodes:                 maxNodes,
+		MaxSites:                 maxSites,
+		CurrentNodes:             nodeCount,
+		CurrentSites:             siteCount,
+		IssuedAt:                 payload.IssuedAt,
+		ExpiresAt:                payload.ExpiresAt,
+		OnlineActivationRequired: common.CommercialLicenseOnlineActivationRequired,
+		ActivationConfigured:     strings.TrimSpace(common.CommercialLicenseActivationURL) != "",
+		MachineFingerprint:       currentCommercialMachineFingerprint(),
+		BuildWatermark:           strings.TrimSpace(common.CommercialBuildWatermark),
+		LastValidationError:      validationError,
+		SignatureVerified:        signatureVerified,
 	}
 	view.PlanLabel = commercialLicensePlanLabel(view.Plan)
 	view.NodeLimitExceeded = maxNodes > 0 && nodeCount > int64(maxNodes)
@@ -496,6 +685,15 @@ func buildCommercialLicenseViewFromParts(payload CommercialLicensePayload, licen
 	if license != nil {
 		view.Fingerprint = strings.TrimSpace(license.Fingerprint)
 		view.LastValidatedAt = license.LastValidatedAt
+		view.ActivationID = strings.TrimSpace(license.ActivationID)
+		view.MachineFingerprint = valueOrFallback(strings.TrimSpace(license.MachineFingerprint), view.MachineFingerprint)
+		view.LeaseExpiresAt = license.LeaseExpiresAt
+		view.LastLeaseRenewedAt = license.LastLeaseRenewedAt
+	}
+	view.LeaseStatus, view.LeaseStatusLabel, view.LeaseSecondsRemaining = commercialLicenseLeaseViewState(license)
+	if view.LeaseExpiresAt != nil {
+		renewBeforeAt := view.LeaseExpiresAt.UTC().Add(-commercialLicenseLeaseRenewBefore())
+		view.LeaseRenewBeforeAt = &renewBeforeAt
 	}
 	if view.Fingerprint == "" && license != nil {
 		view.Fingerprint = commercialLicenseFingerprint(license.Token)
@@ -883,6 +1081,10 @@ func commercialLicenseStatusLabel(status string) string {
 		return "授权过期"
 	case CommercialLicenseStatusInvalid:
 		return "授权无效"
+	case CommercialLicenseStatusActivationRequired:
+		return "待在线激活"
+	case CommercialLicenseStatusLeaseExpired:
+		return "在线租约过期"
 	default:
 		return "未知状态"
 	}
@@ -927,4 +1129,352 @@ func commercialLicenseFeatureLabel(feature string) string {
 	default:
 		return feature
 	}
+}
+
+func requestCommercialLicenseLease(activationURL string, license *model.CommercialLicense) (*CommercialLicenseActivationResponse, error) {
+	endpoint, err := commercialLicenseActivationEndpoint(activationURL)
+	if err != nil {
+		return nil, err
+	}
+	hostname, _ := os.Hostname()
+	payload := CommercialLicenseActivationRequest{
+		LicenseToken:       strings.TrimSpace(license.Token),
+		LeaseToken:         strings.TrimSpace(license.LeaseToken),
+		ActivationID:       strings.TrimSpace(license.ActivationID),
+		MachineFingerprint: currentCommercialMachineFingerprint(),
+		ServerVersion:      common.Version,
+		BuildWatermark:     strings.TrimSpace(common.CommercialBuildWatermark),
+		InstanceHostname:   truncateForDatabase(strings.TrimSpace(hostname), 255),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := commercialLicenseHTTPClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("request commercial license activation failed: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read commercial license activation response failed: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("commercial license activation failed with HTTP %d", response.StatusCode)
+	}
+	var wrapped struct {
+		Success bool                                `json:"success"`
+		Message string                              `json:"message"`
+		Data    CommercialLicenseActivationResponse `json:"data"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err == nil && (wrapped.Success || wrapped.Data.LeaseToken != "") {
+		if !wrapped.Success {
+			return nil, errors.New(valueOrFallback(wrapped.Message, "commercial license activation failed"))
+		}
+		return &wrapped.Data, nil
+	}
+	var direct CommercialLicenseActivationResponse
+	if err := json.Unmarshal(body, &direct); err != nil {
+		return nil, fmt.Errorf("decode commercial license activation response failed: %w", err)
+	}
+	if strings.TrimSpace(direct.LeaseToken) == "" {
+		return nil, errors.New("commercial license activation response did not include a lease token")
+	}
+	return &direct, nil
+}
+
+func commercialLicenseActivationEndpoint(rawURL string) (string, error) {
+	value := strings.TrimSpace(rawURL)
+	if value == "" {
+		return "", errors.New("commercial license activation URL is not configured")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", errors.New("commercial license activation URL is invalid")
+	}
+	if strings.HasSuffix(parsed.Path, "/activation/activate") {
+		return parsed.String(), nil
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/api/license/activation/activate"
+	parsed.RawQuery = ""
+	return parsed.String(), nil
+}
+
+func applyCommercialLicenseLease(db *gorm.DB, license *model.CommercialLicense, response *CommercialLicenseActivationResponse, now time.Time) error {
+	if db == nil {
+		db = model.DB
+	}
+	if license == nil || response == nil {
+		return errors.New("commercial license lease update is incomplete")
+	}
+	lease, err := parseCommercialLicenseLeaseToken(response.LeaseToken, now)
+	if err != nil {
+		return err
+	}
+	parsedLicense, err := parseCommercialLicenseToken(license.Token, now)
+	if err != nil {
+		return err
+	}
+	if lease.payload.LicenseID != parsedLicense.payload.LicenseID {
+		return errors.New("commercial license lease does not match installed license")
+	}
+	machineFingerprint := currentCommercialMachineFingerprint()
+	if lease.payload.MachineFingerprint != machineFingerprint {
+		return errors.New("commercial license lease does not match this machine")
+	}
+	updates := map[string]any{
+		"activation_id":         valueOrFallback(strings.TrimSpace(response.ActivationID), strings.TrimSpace(lease.payload.ActivationID)),
+		"machine_fingerprint":   machineFingerprint,
+		"lease_token":           strings.TrimSpace(response.LeaseToken),
+		"lease_expires_at":      lease.payload.ExpiresAt,
+		"last_lease_renewed_at": &now,
+		"last_validated_at":     &now,
+		"last_validation_error": "",
+	}
+	return db.Model(&model.CommercialLicense{}).Where("id = ?", 1).Updates(updates).Error
+}
+
+func parseCommercialLicenseLeaseToken(token string, now time.Time) (*parsedCommercialLicenseLease, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, errors.New("commercial license lease token is empty")
+	}
+	compact := strings.TrimPrefix(token, commercialLicenseLeaseTokenPrefix)
+	parts := strings.Split(compact, ".")
+	if len(parts) != 2 {
+		return nil, errors.New("commercial license lease token format is invalid")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, errors.New("commercial license lease payload encoding is invalid")
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, errors.New("commercial license lease signature encoding is invalid")
+	}
+	publicKeys, err := commercialLicensePublicKeys()
+	if err != nil {
+		return nil, err
+	}
+	if len(publicKeys) == 0 {
+		return nil, errors.New("commercial license public key is not configured")
+	}
+	verified := false
+	for _, publicKey := range publicKeys {
+		if ed25519.Verify(publicKey, payloadBytes, signature) {
+			verified = true
+			break
+		}
+	}
+	if !verified {
+		return nil, errors.New("commercial license lease signature is invalid")
+	}
+	var payload CommercialLicenseLeasePayload
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return nil, errors.New("commercial license lease payload is invalid")
+	}
+	payload.MachineFingerprint = normalizeCommercialMachineFingerprint(payload.MachineFingerprint)
+	if strings.TrimSpace(payload.LeaseID) == "" || strings.TrimSpace(payload.LicenseID) == "" {
+		return nil, errors.New("commercial license lease payload is missing required fields")
+	}
+	if payload.MachineFingerprint == "" {
+		return nil, errors.New("commercial license lease payload is missing machine fingerprint")
+	}
+	if payload.IssuedAt != nil && payload.IssuedAt.After(now.Add(5*time.Minute)) {
+		return nil, errors.New("commercial license lease was issued in the future")
+	}
+	if payload.ExpiresAt == nil || !payload.ExpiresAt.After(now) {
+		return nil, errors.New("commercial license lease has expired")
+	}
+	return &parsedCommercialLicenseLease{
+		payload:           payload,
+		rawPayload:        payloadBytes,
+		signatureVerified: true,
+	}, nil
+}
+
+func signCommercialLicenseLease(privateKey ed25519.PrivateKey, payload CommercialLicenseLeasePayload) (string, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	signature := ed25519.Sign(privateKey, raw)
+	return commercialLicenseLeaseTokenPrefix +
+		base64.RawURLEncoding.EncodeToString(raw) +
+		"." +
+		base64.RawURLEncoding.EncodeToString(signature), nil
+}
+
+func upsertCommercialLicenseActivationRecord(activationID string, payload CommercialLicensePayload, input CommercialLicenseActivationRequest, machineFingerprint string, issuedAt time.Time, expiresAt time.Time) error {
+	if model.DB == nil {
+		return nil
+	}
+	var existing model.CommercialLicenseActivation
+	err := model.DB.Where("activation_id = ?", activationID).First(&existing).Error
+	if err == nil && existing.RevokedAt != nil {
+		return errors.New("commercial license activation has been revoked")
+	}
+	record := model.CommercialLicenseActivation{
+		ActivationID:       activationID,
+		LicenseID:          strings.TrimSpace(payload.LicenseID),
+		CustomerID:         strings.TrimSpace(payload.CustomerID),
+		MachineFingerprint: machineFingerprint,
+		ServerVersion:      truncateForDatabase(strings.TrimSpace(input.ServerVersion), 64),
+		BuildWatermark:     truncateForDatabase(strings.TrimSpace(input.BuildWatermark), 128),
+		InstanceHostname:   truncateForDatabase(strings.TrimSpace(input.InstanceHostname), 255),
+		LastLeaseIssuedAt:  &issuedAt,
+		LastLeaseExpiresAt: &expiresAt,
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.DB.Create(&record).Error
+	}
+	if err != nil {
+		return err
+	}
+	return model.DB.Model(&existing).Updates(map[string]any{
+		"license_id":            record.LicenseID,
+		"customer_id":           record.CustomerID,
+		"machine_fingerprint":   record.MachineFingerprint,
+		"server_version":        record.ServerVersion,
+		"build_watermark":       record.BuildWatermark,
+		"instance_hostname":     record.InstanceHostname,
+		"last_lease_issued_at":  record.LastLeaseIssuedAt,
+		"last_lease_expires_at": record.LastLeaseExpiresAt,
+	}).Error
+}
+
+func commercialLicenseStatusWithLease(license *model.CommercialLicense, status string, validationError string) (string, string) {
+	if status != CommercialLicenseStatusValid && status != CommercialLicenseStatusExpiring {
+		return status, validationError
+	}
+	if !common.CommercialLicenseOnlineActivationRequired {
+		return status, validationError
+	}
+	if license == nil || strings.TrimSpace(license.LeaseToken) == "" {
+		return CommercialLicenseStatusActivationRequired, valueOrFallback(validationError, "commercial license online activation is required")
+	}
+	if _, err := parseCommercialLicenseLeaseToken(license.LeaseToken, commercialLicenseNow()); err != nil {
+		return CommercialLicenseStatusLeaseExpired, err.Error()
+	}
+	return status, validationError
+}
+
+func commercialLicenseLeaseViewState(license *model.CommercialLicense) (string, string, int64) {
+	if !common.CommercialLicenseOnlineActivationRequired {
+		return "not_required", "不需要在线激活", 0
+	}
+	if license == nil || strings.TrimSpace(license.LeaseToken) == "" {
+		return "missing", "未激活", 0
+	}
+	lease, err := parseCommercialLicenseLeaseToken(license.LeaseToken, commercialLicenseNow())
+	if err != nil {
+		return "expired", "租约过期", 0
+	}
+	if lease.payload.ExpiresAt == nil {
+		return "invalid", "租约无效", 0
+	}
+	remaining := int64(lease.payload.ExpiresAt.Sub(commercialLicenseNow()).Seconds())
+	if remaining < 0 {
+		remaining = 0
+	}
+	return "valid", "租约有效", remaining
+}
+
+func commercialLicenseLeaseDuration() time.Duration {
+	if common.CommercialLicenseLeaseDuration > 0 {
+		return common.CommercialLicenseLeaseDuration
+	}
+	return 72 * time.Hour
+}
+
+func commercialLicenseLeaseRenewBefore() time.Duration {
+	if common.CommercialLicenseLeaseRenewBefore > 0 {
+		return common.CommercialLicenseLeaseRenewBefore
+	}
+	return 6 * time.Hour
+}
+
+func currentCommercialMachineFingerprint() string {
+	hostname, _ := os.Hostname()
+	parts := []string{
+		"dushengcdn-machine-v1",
+		runtime.GOOS,
+		runtime.GOARCH,
+		strings.ToLower(strings.TrimSpace(hostname)),
+		strings.TrimSpace(common.SQLitePath),
+		strings.TrimSpace(common.SQLDSN),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])
+}
+
+func normalizeCommercialMachineFingerprint(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if len(value) > 128 {
+		return value[:128]
+	}
+	return value
+}
+
+func valueOrFallback(value string, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+func StartCommercialLicenseLeaseRenewer(ctx context.Context) {
+	if !common.CommercialLicenseOnlineActivationRequired || strings.TrimSpace(common.CommercialLicenseActivationURL) == "" {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+				next := runCommercialLicenseLeaseRenewOnce()
+				timer.Reset(next)
+			}
+		}
+	}()
+}
+
+func runCommercialLicenseLeaseRenewOnce() time.Duration {
+	next := time.Hour
+	license, err := getCommercialLicenseWithDB(model.DB)
+	if err != nil {
+		slog.Warn("load commercial license for lease renewal failed", "error", err)
+		return next
+	}
+	if license == nil || strings.TrimSpace(license.Token) == "" {
+		return next
+	}
+	now := commercialLicenseNow().UTC()
+	if license.LeaseExpiresAt != nil {
+		renewAt := license.LeaseExpiresAt.UTC().Add(-commercialLicenseLeaseRenewBefore())
+		if now.Before(renewAt) {
+			wait := renewAt.Sub(now)
+			if wait < next {
+				next = wait
+			}
+			return next
+		}
+	}
+	if _, err := RenewCommercialLicenseLease(); err != nil {
+		slog.Warn("commercial license lease renewal failed", "error", err)
+		return 30 * time.Minute
+	}
+	slog.Info("commercial license lease renewed")
+	return next
 }

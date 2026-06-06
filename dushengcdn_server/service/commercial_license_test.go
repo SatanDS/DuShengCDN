@@ -1,10 +1,13 @@
 package service
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -434,6 +437,146 @@ func TestIssueCommercialLicenseRejectsExpiredPayload(t *testing.T) {
 	}
 }
 
+func TestCommercialLicenseOnlineActivationIssuesAndStores72HourLease(t *testing.T) {
+	setupServiceTestDB(t)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+	publicKeyRaw := base64.RawURLEncoding.EncodeToString(publicKey)
+	privateKeyRaw := base64.RawURLEncoding.EncodeToString(privateKey)
+	withCommercialLicenseTestConfig(t, true, publicKeyRaw, false)
+	withCommercialLicenseIssuerTestConfig(t, privateKeyRaw, "")
+	withCommercialLicenseOnlineActivationTestConfig(t, true, "", 72*time.Hour, 6*time.Hour)
+
+	now := time.Date(2026, 6, 6, 8, 0, 0, 0, time.UTC)
+	restoreNow := setCommercialLicenseNowForTest(t, now)
+	defer restoreNow()
+
+	token := buildSignedCommercialLicenseToken(t, privateKey, CommercialLicensePayload{
+		LicenseID:    "lic-online",
+		CustomerID:   "cust-online",
+		CustomerName: "Online Customer",
+		Plan:         "enterprise",
+		Features:     []string{"all"},
+	})
+	if _, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: token}); err != nil {
+		t.Fatalf("InstallCommercialLicense failed: %v", err)
+	}
+	view, err := GetCommercialLicenseStatus()
+	if err != nil {
+		t.Fatalf("GetCommercialLicenseStatus failed: %v", err)
+	}
+	if view.Status != CommercialLicenseStatusActivationRequired || view.Licensed {
+		t.Fatalf("expected activation required before lease, got %+v", view)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input CommercialLicenseActivationRequest
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode activation request: %v", err)
+		}
+		result, err := ServeCommercialLicenseActivation(input)
+		if err != nil {
+			t.Fatalf("ServeCommercialLicenseActivation failed: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    result,
+		})
+	}))
+	defer server.Close()
+	common.CommercialLicenseActivationURL = server.URL
+
+	view, err = ActivateCommercialLicense(CommercialLicenseActivateInput{})
+	if err != nil {
+		t.Fatalf("ActivateCommercialLicense failed: %v", err)
+	}
+	if view.Status != CommercialLicenseStatusValid || !view.Licensed {
+		t.Fatalf("expected valid activated license, got %+v", view)
+	}
+	if view.LeaseExpiresAt == nil || !view.LeaseExpiresAt.Equal(now.Add(72*time.Hour)) {
+		t.Fatalf("unexpected lease expiry: %+v", view.LeaseExpiresAt)
+	}
+	if view.LeaseRenewBeforeAt == nil || !view.LeaseRenewBeforeAt.Equal(now.Add(66*time.Hour)) {
+		t.Fatalf("unexpected renew-before time: %+v", view.LeaseRenewBeforeAt)
+	}
+}
+
+func TestCommercialLicenseLeaseExpiresAndRenewerRefreshesBeforeDeadline(t *testing.T) {
+	setupServiceTestDB(t)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+	withCommercialLicenseTestConfig(t, true, base64.RawURLEncoding.EncodeToString(publicKey), false)
+	withCommercialLicenseIssuerTestConfig(t, base64.RawURLEncoding.EncodeToString(privateKey), "")
+	withCommercialLicenseOnlineActivationTestConfig(t, true, "", 72*time.Hour, 6*time.Hour)
+
+	now := time.Date(2026, 6, 6, 8, 0, 0, 0, time.UTC)
+	restoreNow := setCommercialLicenseNowForTest(t, now)
+	defer restoreNow()
+
+	token := buildSignedCommercialLicenseToken(t, privateKey, CommercialLicensePayload{
+		LicenseID:    "lic-renew",
+		CustomerName: "Renew Customer",
+		Plan:         "enterprise",
+		Features:     []string{"all"},
+	})
+	if _, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: token}); err != nil {
+		t.Fatalf("InstallCommercialLicense failed: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input CommercialLicenseActivationRequest
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode activation request: %v", err)
+		}
+		result, err := ServeCommercialLicenseActivation(input)
+		if err != nil {
+			t.Fatalf("ServeCommercialLicenseActivation failed: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": result})
+	}))
+	defer server.Close()
+	common.CommercialLicenseActivationURL = server.URL
+
+	if _, err := ActivateCommercialLicense(CommercialLicenseActivateInput{}); err != nil {
+		t.Fatalf("initial activation failed: %v", err)
+	}
+
+	renewNow := now.Add(66*time.Hour + time.Minute)
+	restoreNow()
+	restoreNow = setCommercialLicenseNowForTest(t, renewNow)
+	defer restoreNow()
+	next := runCommercialLicenseLeaseRenewOnce()
+	if next != time.Hour {
+		t.Fatalf("expected default next interval after renewal, got %v", next)
+	}
+	view, err := GetCommercialLicenseStatus()
+	if err != nil {
+		t.Fatalf("GetCommercialLicenseStatus failed: %v", err)
+	}
+	if view.LeaseExpiresAt == nil || !view.LeaseExpiresAt.Equal(renewNow.Add(72*time.Hour)) {
+		t.Fatalf("expected renewed lease expiry, got %+v", view.LeaseExpiresAt)
+	}
+
+	expiredNow := renewNow.Add(73 * time.Hour)
+	restoreNow()
+	restoreNow = setCommercialLicenseNowForTest(t, expiredNow)
+	view, err = GetCommercialLicenseStatus()
+	if err != nil {
+		t.Fatalf("GetCommercialLicenseStatus after expiry failed: %v", err)
+	}
+	if view.Status != CommercialLicenseStatusLeaseExpired {
+		t.Fatalf("expected lease expired status, got %+v", view)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	StartCommercialLicenseLeaseRenewer(ctx)
+}
+
 func TestCommercialLicenseNodeQuotaSerializesConcurrentCreates(t *testing.T) {
 	setupServiceTestDB(t)
 	withCommercialLicenseTestConfig(t, true, "", true)
@@ -640,6 +783,27 @@ func withCommercialLicenseIssuerTestConfig(t *testing.T, privateKey string, priv
 	t.Cleanup(func() {
 		common.CommercialLicenseIssuerPrivateKey = previousPrivateKey
 		common.CommercialLicenseIssuerPrivateKeyFile = previousPrivateKeyFile
+	})
+}
+
+func withCommercialLicenseOnlineActivationTestConfig(t *testing.T, required bool, activationURL string, leaseDuration time.Duration, renewBefore time.Duration) {
+	t.Helper()
+	previousRequired := common.CommercialLicenseOnlineActivationRequired
+	previousActivationURL := common.CommercialLicenseActivationURL
+	previousActivationServerEnabled := common.CommercialLicenseActivationServerEnabled
+	previousLeaseDuration := common.CommercialLicenseLeaseDuration
+	previousRenewBefore := common.CommercialLicenseLeaseRenewBefore
+	common.CommercialLicenseOnlineActivationRequired = required
+	common.CommercialLicenseActivationURL = activationURL
+	common.CommercialLicenseActivationServerEnabled = true
+	common.CommercialLicenseLeaseDuration = leaseDuration
+	common.CommercialLicenseLeaseRenewBefore = renewBefore
+	t.Cleanup(func() {
+		common.CommercialLicenseOnlineActivationRequired = previousRequired
+		common.CommercialLicenseActivationURL = previousActivationURL
+		common.CommercialLicenseActivationServerEnabled = previousActivationServerEnabled
+		common.CommercialLicenseLeaseDuration = previousLeaseDuration
+		common.CommercialLicenseLeaseRenewBefore = previousRenewBefore
 	})
 }
 
