@@ -184,6 +184,7 @@ function SidebarNavItem({
       <div
         className={cn(
           'flex min-h-[50px] items-center gap-3 rounded-2xl border px-3 py-2.5 transition-colors',
+          !showLabel && 'justify-center gap-0 px-0',
           depth > 0 && 'ml-3 rounded-xl',
           active
             ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] text-[var(--foreground-primary)]'
@@ -193,7 +194,10 @@ function SidebarNavItem({
         <Link
           href={item.href}
           onClick={onNavigate}
-          className="flex min-w-0 flex-1 items-center gap-3"
+          className={cn(
+            'flex min-w-0 items-center gap-3',
+            showLabel ? 'flex-1' : 'flex-1 justify-center',
+          )}
         >
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--control-background)] text-[var(--foreground-primary)]">
             <SidebarIcon icon={item.icon} />
@@ -305,7 +309,12 @@ function SidebarContent({
 
   return (
     <div className="flex h-full flex-col gap-5">
-      <div className="sidebar-brand-panel flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] px-3 py-3 shadow-[var(--shadow-soft)] backdrop-blur">
+      <div
+        className={cn(
+          'sidebar-brand-panel flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] px-3 py-3 shadow-[var(--shadow-soft)] backdrop-blur',
+          !showLabel && 'justify-center gap-0 px-0',
+        )}
+      >
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-white/70 bg-white/80 shadow-sm">
           <Image
             src="/satan-du-leaf.png"
@@ -329,7 +338,12 @@ function SidebarContent({
       </div>
 
       <nav className="flex-1 space-y-2">
-        <div className="flex max-h-full min-h-0 flex-col gap-2 overflow-y-auto pr-1">
+        <div
+          className={cn(
+            'flex max-h-full min-h-0 flex-col gap-2 overflow-y-auto',
+            showLabel ? 'pr-1' : 'pr-0',
+          )}
+        >
           {navigationItems.map((item) => (
             <SidebarNavItem
               key={item.href}
@@ -402,8 +416,8 @@ export function DashboardSidebar() {
 
       <aside
         className={cn(
-          'sticky top-0 z-10 hidden h-screen shrink-0 overflow-hidden border-r border-[var(--border-default)] bg-[var(--surface-panel)]/95 px-3 py-5 backdrop-blur min-[1000px]:block',
-          isSidebarCollapsed ? 'w-[76px]' : 'w-[200px]',
+          'sticky top-0 z-10 hidden h-screen shrink-0 overflow-hidden border-r border-[var(--border-default)] bg-[var(--surface-panel)]/95 py-5 backdrop-blur min-[1000px]:block',
+          isSidebarCollapsed ? 'w-[72px] px-2' : 'w-[200px] px-3',
         )}
       >
         <SidebarContent
