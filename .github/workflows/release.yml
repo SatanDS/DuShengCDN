@@ -165,7 +165,7 @@ jobs:
           mkdir -p ../dist
           go build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY'" -o "../dist/$ASSET_NAME" .
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
-          go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
+          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v7
@@ -229,7 +229,7 @@ jobs:
           mkdir -p ../dist
           go build -trimpath -ldflags "-s -w -X 'dushengcdn-agent/internal/config.AgentVersion=$VERSION' -X 'dushengcdn-agent/internal/config.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY'" -o "../dist/$ASSET_NAME" ./cmd/agent
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
-          go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
+          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload Agent Artifact
         uses: actions/upload-artifact@v7
@@ -295,7 +295,7 @@ jobs:
           mkdir -p ../dist
           go build -trimpath -ldflags "-s -w -X 'main.version=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/dns-worker
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
-          go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
+          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload DNS Worker Artifact
         uses: actions/upload-artifact@v7
