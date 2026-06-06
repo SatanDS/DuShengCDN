@@ -299,7 +299,7 @@ func (provider *authoritativeDNSChallengeProvider) CleanUp(domain, token, keyAut
 }
 
 func (provider *authoritativeDNSChallengeProvider) Timeout() (timeout, interval time.Duration) {
-	return 60 * time.Second, 2 * time.Second
+	return 180 * time.Second, 3 * time.Second
 }
 
 var _ challenge.ProviderTimeout = (*authoritativeDNSChallengeProvider)(nil)

@@ -379,6 +379,17 @@ func TestAuthoritativeDNSChallengeProviderCreatesAndCleansTXTRecord(t *testing.T
 	}
 }
 
+func TestAuthoritativeDNSChallengeProviderAllowsSnapshotPropagation(t *testing.T) {
+	provider := newAuthoritativeDNSChallengeProvider(1)
+	timeout, interval := provider.Timeout()
+	if timeout < 180*time.Second {
+		t.Fatalf("expected authoritative DNS challenge timeout to allow snapshot propagation, got %s", timeout)
+	}
+	if interval <= 0 || interval > 10*time.Second {
+		t.Fatalf("expected a reasonable authoritative DNS challenge polling interval, got %s", interval)
+	}
+}
+
 func TestApplyTLSCertificateWithAuthoritativeDNS(t *testing.T) {
 	setupServiceTestDB(t)
 
