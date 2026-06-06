@@ -132,6 +132,44 @@ function hasRuntimeConfigChanges(diff: ConfigDiffState) {
   return hasDraftChanges(diff);
 }
 
+function getDomainChangeCount(diff: ConfigDiffState) {
+  return (
+    diff.added_domains.length +
+    diff.removed_domains.length +
+    diff.modified_domains.length
+  );
+}
+
+function getSiteChangeCount(diff: ConfigDiffState) {
+  return (
+    diff.added_sites.length +
+    diff.removed_sites.length +
+    diff.modified_sites.length
+  );
+}
+
+function buildPublishSummaryItems(diff: ConfigDiffState) {
+  const domainChangeCount = getDomainChangeCount(diff);
+  const items = [
+    diff.added_sites.length > 0
+      ? `新增网站 ${diff.added_sites.length} 个`
+      : '',
+    diff.removed_sites.length > 0
+      ? `删除网站 ${diff.removed_sites.length} 个`
+      : '',
+    diff.modified_sites.length > 0
+      ? `修改网站 ${diff.modified_sites.length} 个`
+      : '',
+    domainChangeCount > 0 ? `域名变更 ${domainChangeCount} 项` : '',
+    diff.changed_option_keys.length > 0
+      ? `代理服务参数 ${diff.changed_option_keys.length} 项`
+      : '',
+    diff.main_config_changed ? '主配置变更' : '',
+  ].filter(Boolean);
+
+  return items.length > 0 ? items : ['运行配置已变更'];
+}
+
 function getDraftStatus(diff: ConfigDiffState | undefined) {
   if (!diff) {
     return {
@@ -142,14 +180,8 @@ function getDraftStatus(diff: ConfigDiffState | undefined) {
   }
 
   if (hasRuntimeConfigChanges(diff)) {
-    const siteChangeCount =
-      diff.added_sites.length +
-      diff.removed_sites.length +
-      diff.modified_sites.length;
-    const domainChangeCount =
-      diff.added_domains.length +
-      diff.removed_domains.length +
-      diff.modified_domains.length;
+    const siteChangeCount = getSiteChangeCount(diff);
+    const domainChangeCount = getDomainChangeCount(diff);
     const summaryItems = [
       siteChangeCount > 0 ? `网站 ${siteChangeCount} 项` : '',
       domainChangeCount > 0 ? `域名 ${domainChangeCount} 项` : '',
@@ -725,16 +757,7 @@ export function ProxyRoutesPage() {
       return;
     }
 
-    const summary = [
-      `新增网站 ${latestDiff.added_sites.length} 个`,
-      `删除网站 ${latestDiff.removed_sites.length} 个`,
-      `修改网站 ${latestDiff.modified_sites.length} 个`,
-      `域名变更 ${
-        latestDiff.added_domains.length +
-        latestDiff.removed_domains.length +
-        latestDiff.modified_domains.length
-      } 项`,
-    ].join('，');
+    const summary = buildPublishSummaryItems(latestDiff).join('，');
 
     const confirmed = await confirmDialog({
       title: '发布当前配置',
@@ -858,6 +881,9 @@ export function ProxyRoutesPage() {
               <p>新增网站：{diff?.added_sites.length ?? 0}</p>
               <p>删除网站：{diff?.removed_sites.length ?? 0}</p>
               <p>修改网站：{diff?.modified_sites.length ?? 0}</p>
+              <p>域名变更：{diff ? getDomainChangeCount(diff) : 0}</p>
+              <p>代理服务参数：{diff?.changed_option_keys.length ?? 0}</p>
+              {diff?.main_config_changed ? <p>主配置：已变更</p> : null}
             </div>
           </AppCard>
         </div>

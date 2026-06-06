@@ -435,6 +435,104 @@ describe('Proxy route website pages', () => {
     ).toBe(false);
   });
 
+  it('shows proxy service option changes in the publish confirmation', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+
+      if (url.includes('/proxy-routes/')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: '',
+              data: [buildRoute()],
+            }),
+          ),
+        );
+      }
+
+      if (url.includes('/nodes/')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: '',
+              data: [],
+            }),
+          ),
+        );
+      }
+
+      if (url.includes('/config-versions/diff')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: '',
+              data: buildDiff({
+                snapshot_changed: true,
+                runtime_config_changed: true,
+                main_config_changed: true,
+                changed_option_keys: ['OpenRestyWorkerProcesses'],
+              }),
+            }),
+          ),
+        );
+      }
+
+      if (url.includes('/config-versions/publish') && method === 'POST') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: '',
+              data: {
+                id: 2,
+                version: '20260401-001',
+                checksum: 'checksum',
+                is_active: true,
+                created_by: 'root',
+                created_at: '2026-04-01T00:00:00Z',
+                snapshot_json: '{}',
+                main_config: '',
+                rendered_config: '',
+                support_files_json: '[]',
+              },
+            }),
+          ),
+        );
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithProviders(<ProxyRoutesPage />);
+
+    expect(await screen.findByText('有待发布变更')).toBeInTheDocument();
+    expect(await screen.findByText('代理服务参数：1')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '发布配置' }));
+
+    const dialog = await screen.findByRole('dialog', {
+      name: '发布当前配置',
+    });
+    expect(within(dialog).getByText(/代理服务参数 1 项/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/主配置变更/)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: '发布' }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some((call) =>
+          String(call[0]).includes('/config-versions/publish'),
+        ),
+      ).toBe(true);
+    });
+  });
+
   it('renders selected feature section as an expandable configuration page', async () => {
     const user = userEvent.setup();
     searchParamsMock = new URLSearchParams('section=cache');
