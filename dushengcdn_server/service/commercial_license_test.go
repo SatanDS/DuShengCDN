@@ -503,6 +503,87 @@ func TestCommercialLicenseOnlineActivationIssuesAndStores72HourLease(t *testing.
 	}
 }
 
+func TestCommercialLicenseRevocationBlocksLeaseRenewalByLicenseID(t *testing.T) {
+	setupServiceTestDB(t)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+	withCommercialLicenseTestConfig(t, true, base64.RawURLEncoding.EncodeToString(publicKey), false)
+	withCommercialLicenseIssuerTestConfig(t, base64.RawURLEncoding.EncodeToString(privateKey), "")
+	withCommercialLicenseOnlineActivationTestConfig(t, true, "", 72*time.Hour, 6*time.Hour)
+
+	now := time.Date(2026, 6, 6, 8, 0, 0, 0, time.UTC)
+	restoreNow := setCommercialLicenseNowForTest(t, now)
+	defer restoreNow()
+
+	token := buildSignedCommercialLicenseToken(t, privateKey, CommercialLicensePayload{
+		LicenseID:    "lic-revoke",
+		CustomerID:   "cust-revoke",
+		CustomerName: "Revoke Customer",
+		Plan:         "enterprise",
+		Features:     []string{"all"},
+	})
+	initial, err := ServeCommercialLicenseActivation(CommercialLicenseActivationRequest{
+		LicenseToken:       token,
+		MachineFingerprint: "machine-a",
+		ServerVersion:      "v1",
+	})
+	if err != nil {
+		t.Fatalf("initial activation failed: %v", err)
+	}
+	if initial.LeaseToken == "" || initial.ActivationID == "" {
+		t.Fatalf("expected initial lease and activation id, got %+v", initial)
+	}
+	activations, err := ListCommercialLicenseActivations()
+	if err != nil {
+		t.Fatalf("ListCommercialLicenseActivations failed: %v", err)
+	}
+	if len(activations) != 1 || activations[0].LicenseID != "lic-revoke" || activations[0].LeaseStatus != "active" {
+		t.Fatalf("unexpected activation list: %+v", activations)
+	}
+
+	revoked, err := RevokeCommercialLicense(CommercialLicenseRevocationInput{
+		LicenseID:  "lic-revoke",
+		CustomerID: "cust-revoke",
+		Reason:     "unpaid",
+	})
+	if err != nil {
+		t.Fatalf("RevokeCommercialLicense failed: %v", err)
+	}
+	if len(revoked) != 1 || revoked[0].LicenseRevokedAt == nil || revoked[0].LeaseStatus != "license_revoked" {
+		t.Fatalf("expected revoked activation view, got %+v", revoked)
+	}
+
+	_, err = ServeCommercialLicenseActivation(CommercialLicenseActivationRequest{
+		LicenseToken:       token,
+		LeaseToken:         initial.LeaseToken,
+		ActivationID:       initial.ActivationID,
+		MachineFingerprint: "machine-a",
+		ServerVersion:      "v2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("expected revoked license renewal error, got %v", err)
+	}
+
+	if _, err = RestoreCommercialLicense(CommercialLicenseRevocationInput{LicenseID: "lic-revoke"}); err != nil {
+		t.Fatalf("RestoreCommercialLicense failed: %v", err)
+	}
+	renewed, err := ServeCommercialLicenseActivation(CommercialLicenseActivationRequest{
+		LicenseToken:       token,
+		LeaseToken:         initial.LeaseToken,
+		ActivationID:       initial.ActivationID,
+		MachineFingerprint: "machine-a",
+		ServerVersion:      "v3",
+	})
+	if err != nil {
+		t.Fatalf("expected restored license to renew: %v", err)
+	}
+	if renewed.ActivationID != initial.ActivationID {
+		t.Fatalf("expected restored renewal to keep activation id, got %s want %s", renewed.ActivationID, initial.ActivationID)
+	}
+}
+
 func TestCommercialLicenseActivationEndpointNormalizesSatanduDefault(t *testing.T) {
 	cases := map[string]string{
 		"https://www.satandu.com":                                 "https://www.satandu.com/api/license/activation/activate",

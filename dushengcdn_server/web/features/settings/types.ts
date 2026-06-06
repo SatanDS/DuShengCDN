@@ -164,6 +164,31 @@ export interface CommercialLicenseIssueResult {
   signature_verified: boolean;
 }
 
+export interface CommercialLicenseActivationRecord {
+  id: number;
+  activation_id: string;
+  license_id: string;
+  customer_id: string;
+  machine_fingerprint: string;
+  server_version: string;
+  build_watermark: string;
+  instance_hostname: string;
+  revoked_at?: string | null;
+  license_revoked_at?: string | null;
+  license_revoke_reason: string;
+  last_lease_issued_at?: string | null;
+  last_lease_expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  lease_status: string;
+}
+
+export interface CommercialLicenseRevocationPayload {
+  license_id: string;
+  customer_id?: string;
+  reason?: string;
+}
+
 export interface UpdateSelfPayload {
   username: string;
   display_name: string;

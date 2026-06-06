@@ -29,6 +29,7 @@ import {
   deleteExternalAccountBinding,
   generateAccessToken,
   getAuthSources,
+  getCommercialLicenseActivations,
   getCommercialLicenseIssuerStatus,
   getBootstrapToken,
   getCommercialLicenseStatus,
@@ -38,6 +39,8 @@ import {
   installCommercialLicense,
   issueCommercialLicense,
   lookupGeoIP,
+  restoreCommercialLicense,
+  revokeCommercialLicense,
   rotateBootstrapToken,
   updateOptions,
   updateSelf,
@@ -45,6 +48,7 @@ import {
 import { AuthSourceModal } from '@/features/settings/components/auth-source-modal';
 import type {
   BootstrapTokenPayload,
+  CommercialLicenseActivationRecord,
   CommercialLicenseIssuePayload,
   CommercialLicenseIssueResult,
   CommercialLicenseStatusPayload,
@@ -80,6 +84,10 @@ const commercialLicenseQueryKey = ['settings', 'commercial-license'] as const;
 const commercialLicenseIssuerQueryKey = [
   'settings',
   'commercial-license-issuer',
+] as const;
+const commercialLicenseActivationsQueryKey = [
+  'settings',
+  'commercial-license-activations',
 ] as const;
 const installerScriptUrl =
   'https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh';
@@ -385,6 +393,21 @@ function getLicenseBadgeVariant(
   }
 }
 
+function getActivationStatusBadge(record: CommercialLicenseActivationRecord) {
+  switch (record.lease_status) {
+    case 'active':
+      return { label: '租约有效', variant: 'success' as const };
+    case 'license_revoked':
+      return { label: '授权已停用', variant: 'danger' as const };
+    case 'activation_revoked':
+      return { label: '机器已停用', variant: 'danger' as const };
+    case 'expired':
+      return { label: '租约过期', variant: 'warning' as const };
+    default:
+      return { label: '未签租约', variant: 'info' as const };
+  }
+}
+
 function buildDiscoveryCommand(serverUrl: string, discoveryToken: string) {
   return [
     `curl -fsSL ${installerScriptUrl} | bash -s -- \\`,
@@ -501,6 +524,12 @@ export function SettingsPage() {
     queryKey: commercialLicenseIssuerQueryKey,
     queryFn: getCommercialLicenseIssuerStatus,
     enabled: isRoot,
+  });
+
+  const commercialLicenseActivationsQuery = useQuery({
+    queryKey: commercialLicenseActivationsQueryKey,
+    queryFn: getCommercialLicenseActivations,
+    enabled: isRoot && activeTab === 'license',
   });
 
   useEffect(() => {
@@ -1069,6 +1098,59 @@ export function SettingsPage() {
         });
       },
       '生成商业授权',
+    );
+  };
+
+  const handleRevokeCommercialLicense = async (
+    record: CommercialLicenseActivationRecord,
+  ) => {
+    const licenseID = record.license_id.trim();
+    if (!licenseID) {
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: '停用商业授权',
+      message: `停用授权 ${licenseID} 后，授权服务器将拒绝它后续激活和续租。客户已有租约最长会在 72 小时后失效。`,
+      confirmLabel: '停用授权',
+      tone: 'danger',
+    });
+    if (!confirmed) {
+      return;
+    }
+    void runBusyAction(
+      `commercial-license-revoke-${licenseID}`,
+      async () => {
+        await revokeCommercialLicense({
+          license_id: licenseID,
+          customer_id: record.customer_id,
+          reason: 'manual revoke',
+        });
+        await queryClient.invalidateQueries({
+          queryKey: commercialLicenseActivationsQueryKey,
+        });
+        setFeedback({ tone: 'success', message: '授权已停用，后续续租会被拒绝。' });
+      },
+      '停用商业授权',
+    );
+  };
+
+  const handleRestoreCommercialLicense = (
+    record: CommercialLicenseActivationRecord,
+  ) => {
+    const licenseID = record.license_id.trim();
+    if (!licenseID) {
+      return;
+    }
+    void runBusyAction(
+      `commercial-license-restore-${licenseID}`,
+      async () => {
+        await restoreCommercialLicense({ license_id: licenseID });
+        await queryClient.invalidateQueries({
+          queryKey: commercialLicenseActivationsQueryKey,
+        });
+        setFeedback({ tone: 'success', message: '授权已恢复，可以继续激活和续租。' });
+      },
+      '恢复商业授权',
     );
   };
 
@@ -2660,6 +2742,142 @@ export function SettingsPage() {
                     </CodeBlock>
                   </div>
                 ) : null}
+
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-semibold text-[var(--foreground-primary)]">
+                        激活记录
+                      </h3>
+                      <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
+                        查看客户机器最近签发的在线租约，并按授权编号停用后续续租。
+                      </p>
+                    </div>
+                    <SecondaryButton
+                      type="button"
+                      onClick={() =>
+                        void commercialLicenseActivationsQuery.refetch()
+                      }
+                    >
+                      刷新记录
+                    </SecondaryButton>
+                  </div>
+
+                  {commercialLicenseActivationsQuery.isLoading ? (
+                    <LoadingState />
+                  ) : commercialLicenseActivationsQuery.isError ? (
+                    <ErrorState
+                      title="激活记录加载失败"
+                      description={getErrorMessage(
+                        commercialLicenseActivationsQuery.error,
+                      )}
+                    />
+                  ) : (commercialLicenseActivationsQuery.data?.length ?? 0) >
+                    0 ? (
+                    <div className="space-y-3">
+                      {commercialLicenseActivationsQuery.data?.map((record) => {
+                        const badge = getActivationStatusBadge(record);
+                        const isRevoked = Boolean(record.license_revoked_at);
+                        const revokeBusyKey = `commercial-license-revoke-${record.license_id}`;
+                        const restoreBusyKey = `commercial-license-restore-${record.license_id}`;
+                        return (
+                          <div
+                            key={record.activation_id || record.id}
+                            className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-4">
+                              <div className="min-w-0 space-y-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <StatusBadge
+                                    label={badge.label}
+                                    variant={badge.variant}
+                                  />
+                                  <span className="text-sm font-semibold break-all text-[var(--foreground-primary)]">
+                                    {record.license_id || '未知授权编号'}
+                                  </span>
+                                  {record.customer_id ? (
+                                    <span className="text-sm text-[var(--foreground-secondary)]">
+                                      {record.customer_id}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="grid gap-2 text-xs text-[var(--foreground-secondary)] md:grid-cols-2">
+                                  <span className="break-all">
+                                    激活 ID：{record.activation_id || '—'}
+                                  </span>
+                                  <span className="break-all">
+                                    机器指纹：{record.machine_fingerprint || '—'}
+                                  </span>
+                                  <span>
+                                    服务端版本：{record.server_version || '—'}
+                                  </span>
+                                  <span>
+                                    主机名：{record.instance_hostname || '—'}
+                                  </span>
+                                  <span>
+                                    最近签发：
+                                    {record.last_lease_issued_at
+                                      ? formatDateTime(
+                                          record.last_lease_issued_at,
+                                        )
+                                      : '—'}
+                                  </span>
+                                  <span>
+                                    租约到期：
+                                    {record.last_lease_expires_at
+                                      ? formatDateTime(
+                                          record.last_lease_expires_at,
+                                        )
+                                      : '—'}
+                                  </span>
+                                </div>
+                                {isRevoked ? (
+                                  <p className="text-xs text-[var(--status-danger-foreground)]">
+                                    停用时间：
+                                    {formatDateTime(record.license_revoked_at)}
+                                    {record.license_revoke_reason
+                                      ? ` · ${record.license_revoke_reason}`
+                                      : ''}
+                                  </p>
+                                ) : null}
+                              </div>
+                              {isRevoked ? (
+                                <SecondaryButton
+                                  type="button"
+                                  onClick={() =>
+                                    handleRestoreCommercialLicense(record)
+                                  }
+                                  disabled={busyKey === restoreBusyKey}
+                                >
+                                  {busyKey === restoreBusyKey
+                                    ? '恢复中...'
+                                    : '恢复授权'}
+                                </SecondaryButton>
+                              ) : (
+                                <DangerButton
+                                  type="button"
+                                  onClick={() =>
+                                    void handleRevokeCommercialLicense(record)
+                                  }
+                                  disabled={busyKey === revokeBusyKey}
+                                >
+                                  {busyKey === revokeBusyKey
+                                    ? '停用中...'
+                                    : '停用授权'}
+                                </DangerButton>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <EmptyState
+                      title="暂无激活记录"
+                      description="客户安装授权并完成在线激活后，会在这里显示最近签发的租约记录。"
+                    />
+                  )}
+                </div>
               </div>
             </AppCard>
           </div>

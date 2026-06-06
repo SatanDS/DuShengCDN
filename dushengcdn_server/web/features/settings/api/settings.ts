@@ -2,11 +2,13 @@ import { apiRequest } from '@/lib/api/client';
 
 import type {
   BootstrapTokenPayload,
+  CommercialLicenseActivationRecord,
   AuthSource,
   AuthSourcePayload,
   CommercialLicenseIssuePayload,
   CommercialLicenseIssueResult,
   CommercialLicenseIssuerStatusPayload,
+  CommercialLicenseRevocationPayload,
   CommercialLicenseStatusPayload,
   DatabaseCleanupPayload,
   DatabaseCleanupResult,
@@ -79,6 +81,28 @@ export function getCommercialLicenseIssuerStatus() {
 
 export function issueCommercialLicense(payload: CommercialLicenseIssuePayload) {
   return apiRequest<CommercialLicenseIssueResult>('/license/issue', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getCommercialLicenseActivations() {
+  return apiRequest<CommercialLicenseActivationRecord[]>('/license/activations');
+}
+
+export function revokeCommercialLicense(
+  payload: CommercialLicenseRevocationPayload,
+) {
+  return apiRequest<CommercialLicenseActivationRecord[]>('/license/revoke', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function restoreCommercialLicense(
+  payload: CommercialLicenseRevocationPayload,
+) {
+  return apiRequest<CommercialLicenseActivationRecord[]>('/license/restore', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

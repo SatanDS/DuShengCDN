@@ -172,6 +172,31 @@ type CommercialLicenseActivationResponse struct {
 	RenewBeforeAt  time.Time `json:"renew_before_at"`
 }
 
+type CommercialLicenseActivationView struct {
+	ID                  uint       `json:"id"`
+	ActivationID        string     `json:"activation_id"`
+	LicenseID           string     `json:"license_id"`
+	CustomerID          string     `json:"customer_id"`
+	MachineFingerprint  string     `json:"machine_fingerprint"`
+	ServerVersion       string     `json:"server_version"`
+	BuildWatermark      string     `json:"build_watermark"`
+	InstanceHostname    string     `json:"instance_hostname"`
+	RevokedAt           *time.Time `json:"revoked_at"`
+	LicenseRevokedAt    *time.Time `json:"license_revoked_at"`
+	LicenseRevokeReason string     `json:"license_revoke_reason"`
+	LastLeaseIssuedAt   *time.Time `json:"last_lease_issued_at"`
+	LastLeaseExpiresAt  *time.Time `json:"last_lease_expires_at"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+	LeaseStatus         string     `json:"lease_status"`
+}
+
+type CommercialLicenseRevocationInput struct {
+	LicenseID  string `json:"license_id"`
+	CustomerID string `json:"customer_id"`
+	Reason     string `json:"reason"`
+}
+
 type parsedCommercialLicense struct {
 	payload           CommercialLicensePayload
 	rawPayload        []byte
@@ -293,6 +318,9 @@ func ServeCommercialLicenseActivation(input CommercialLicenseActivationRequest) 
 		}
 		return nil, commercialLicenseStatusOperationError(parsed.status)
 	}
+	if err := ensureCommercialLicenseNotRevoked(parsed.payload.LicenseID); err != nil {
+		return nil, err
+	}
 
 	machineFingerprint := normalizeCommercialMachineFingerprint(input.MachineFingerprint)
 	if machineFingerprint == "" {
@@ -367,6 +395,135 @@ func GetCommercialLicenseIssuerStatus() CommercialLicenseIssuerStatus {
 		PublicKeyFingerprint: commercialLicenseKeyFingerprint(publicKey),
 		Message:              "签发器可用",
 	}
+}
+
+func ListCommercialLicenseActivations() ([]CommercialLicenseActivationView, error) {
+	if model.DB == nil {
+		return []CommercialLicenseActivationView{}, nil
+	}
+	var activations []model.CommercialLicenseActivation
+	if err := model.DB.Order("updated_at desc").Limit(200).Find(&activations).Error; err != nil {
+		return nil, err
+	}
+	var revocations []model.CommercialLicenseRevocation
+	if err := model.DB.Find(&revocations).Error; err != nil {
+		return nil, err
+	}
+	revocationByLicenseID := make(map[string]model.CommercialLicenseRevocation, len(revocations))
+	for _, revocation := range revocations {
+		licenseID := strings.TrimSpace(revocation.LicenseID)
+		if licenseID == "" {
+			continue
+		}
+		revocationByLicenseID[licenseID] = revocation
+	}
+	now := commercialLicenseNow().UTC()
+	views := make([]CommercialLicenseActivationView, 0, len(activations))
+	for _, activation := range activations {
+		view := CommercialLicenseActivationView{
+			ID:                 activation.ID,
+			ActivationID:       activation.ActivationID,
+			LicenseID:          activation.LicenseID,
+			CustomerID:         activation.CustomerID,
+			MachineFingerprint: activation.MachineFingerprint,
+			ServerVersion:      activation.ServerVersion,
+			BuildWatermark:     activation.BuildWatermark,
+			InstanceHostname:   activation.InstanceHostname,
+			RevokedAt:          activation.RevokedAt,
+			LastLeaseIssuedAt:  activation.LastLeaseIssuedAt,
+			LastLeaseExpiresAt: activation.LastLeaseExpiresAt,
+			CreatedAt:          activation.CreatedAt,
+			UpdatedAt:          activation.UpdatedAt,
+			LeaseStatus:        "missing",
+		}
+		if activation.LastLeaseExpiresAt != nil {
+			if activation.LastLeaseExpiresAt.After(now) {
+				view.LeaseStatus = "active"
+			} else {
+				view.LeaseStatus = "expired"
+			}
+		}
+		if activation.RevokedAt != nil {
+			view.LeaseStatus = "activation_revoked"
+		}
+		if revocation, ok := revocationByLicenseID[strings.TrimSpace(activation.LicenseID)]; ok {
+			view.LicenseRevokedAt = revocation.RevokedAt
+			view.LicenseRevokeReason = revocation.Reason
+			if revocation.RevokedAt != nil {
+				view.LeaseStatus = "license_revoked"
+			}
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
+func ensureCommercialLicenseNotRevoked(licenseID string) error {
+	licenseID = strings.TrimSpace(licenseID)
+	if model.DB == nil || licenseID == "" {
+		return nil
+	}
+	var revocation model.CommercialLicenseRevocation
+	err := model.DB.Where("license_id = ? AND revoked_at IS NOT NULL", licenseID).First(&revocation).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.New("commercial license has been revoked")
+}
+
+func RevokeCommercialLicense(input CommercialLicenseRevocationInput) ([]CommercialLicenseActivationView, error) {
+	licenseID := strings.TrimSpace(input.LicenseID)
+	if licenseID == "" {
+		return nil, errors.New("license_id is required")
+	}
+	if model.DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	now := commercialLicenseNow().UTC()
+	record := model.CommercialLicenseRevocation{
+		LicenseID:  licenseID,
+		CustomerID: truncateForDatabase(strings.TrimSpace(input.CustomerID), 128),
+		Reason:     truncateForDatabase(strings.TrimSpace(input.Reason), 255),
+		RevokedAt:  &now,
+	}
+	var existing model.CommercialLicenseRevocation
+	err := model.DB.Where("license_id = ?", licenseID).First(&existing).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := model.DB.Create(&record).Error; err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	} else {
+		if record.CustomerID == "" {
+			record.CustomerID = existing.CustomerID
+		}
+		if err := model.DB.Model(&existing).Updates(map[string]any{
+			"customer_id": record.CustomerID,
+			"reason":      record.Reason,
+			"revoked_at":  record.RevokedAt,
+		}).Error; err != nil {
+			return nil, err
+		}
+	}
+	return ListCommercialLicenseActivations()
+}
+
+func RestoreCommercialLicense(input CommercialLicenseRevocationInput) ([]CommercialLicenseActivationView, error) {
+	licenseID := strings.TrimSpace(input.LicenseID)
+	if licenseID == "" {
+		return nil, errors.New("license_id is required")
+	}
+	if model.DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	if err := model.DB.Where("license_id = ?", licenseID).Delete(&model.CommercialLicenseRevocation{}).Error; err != nil {
+		return nil, err
+	}
+	return ListCommercialLicenseActivations()
 }
 
 func IssueCommercialLicense(input CommercialLicenseIssueInput) (*CommercialLicenseIssueResult, error) {

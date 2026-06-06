@@ -138,6 +138,70 @@ func IssueCommercialLicense(c *gin.Context) {
 	respondSuccess(c, result)
 }
 
+// ListCommercialLicenseActivations godoc
+// @Summary List commercial license activations
+// @Tags License
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/license/activations [get]
+func ListCommercialLicenseActivations(c *gin.Context) {
+	result, err := service.ListCommercialLicenseActivations()
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, result)
+}
+
+// RevokeCommercialLicense godoc
+// @Summary Revoke commercial license by license id
+// @Tags License
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param payload body service.CommercialLicenseRevocationInput true "License revocation payload"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/license/revoke [post]
+func RevokeCommercialLicense(c *gin.Context) {
+	var input service.CommercialLicenseRevocationInput
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "")
+		return
+	}
+	result, err := service.RevokeCommercialLicense(input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, result)
+}
+
+// RestoreCommercialLicense godoc
+// @Summary Restore commercial license by license id
+// @Tags License
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param payload body service.CommercialLicenseRevocationInput true "License revocation payload"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/license/restore [post]
+func RestoreCommercialLicense(c *gin.Context) {
+	var input service.CommercialLicenseRevocationInput
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "")
+		return
+	}
+	result, err := service.RestoreCommercialLicense(input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, result)
+}
+
 // ActivateCommercialLicenseLease godoc
 // @Summary Issue short-lived commercial license lease
 // @Tags License
