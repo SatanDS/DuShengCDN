@@ -330,6 +330,11 @@ jobs:
     if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Download Server Artifacts
         uses: actions/download-artifact@v8
         with:
@@ -360,6 +365,95 @@ jobs:
             exit 1
           fi
 
+      - name: Generate Release Notes
+        id: release_notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+          GH_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          MANUAL_NOTES="docs/release-notes/$VERSION.md"
+          CHANNEL_LABEL="正式版"
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            CHANNEL_LABEL="预览版"
+          fi
+
+          PREVIOUS_RELEASE_TAG=""
+          while IFS=$'\t' read -r tag prerelease; do
+            if [[ -z "$tag" || "$tag" == "$VERSION" ]]; then
+              continue
+            fi
+            if [[ "$IS_PRERELEASE" == "true" && "$prerelease" == "true" ]]; then
+              PREVIOUS_RELEASE_TAG="$tag"
+              break
+            fi
+            if [[ "$IS_PRERELEASE" != "true" && "$prerelease" == "false" ]]; then
+              PREVIOUS_RELEASE_TAG="$tag"
+              break
+            fi
+          done < <(gh release list --repo "$DUSHENGCDN_RELEASE_REPOSITORY" --limit 50 --json tagName,isPrerelease --jq '.[] | [.tagName, .isPrerelease] | @tsv' || true)
+
+          PREVIOUS_REF=""
+          PREVIOUS_LABEL=""
+          if [[ "$PREVIOUS_RELEASE_TAG" =~ -g([0-9a-f]{7,40})$ ]]; then
+            PREVIOUS_SHA="${BASH_REMATCH[1]}"
+            if git cat-file -e "$PREVIOUS_SHA^{commit}" 2>/dev/null; then
+              PREVIOUS_REF="$PREVIOUS_SHA"
+              PREVIOUS_LABEL="$PREVIOUS_RELEASE_TAG"
+            fi
+          fi
+          if [[ -z "$PREVIOUS_REF" && -n "$PREVIOUS_RELEASE_TAG" ]] && git rev-parse -q --verify "refs/tags/$PREVIOUS_RELEASE_TAG" >/dev/null; then
+            PREVIOUS_REF="$PREVIOUS_RELEASE_TAG"
+            PREVIOUS_LABEL="$PREVIOUS_RELEASE_TAG"
+          fi
+          if [[ -z "$PREVIOUS_REF" ]]; then
+            PREVIOUS_TAG="$(git tag --list 'v*' --sort=-v:refname | grep -Fxv "$VERSION" | head -n1 || true)"
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              PREVIOUS_REF="$PREVIOUS_TAG"
+              PREVIOUS_LABEL="$PREVIOUS_TAG"
+            fi
+          fi
+
+          {
+            echo "## 更新内容"
+            echo
+            if [[ -f "$MANUAL_NOTES" ]]; then
+              cat "$MANUAL_NOTES"
+            else
+              if [[ -n "$PREVIOUS_REF" ]]; then
+                mapfile -t COMMITS < <(git log --no-merges --format='%s' "$PREVIOUS_REF..HEAD" | sed '/^[[:space:]]*$/d' | head -n 30)
+              else
+                mapfile -t COMMITS < <(git log --no-merges --format='%s' -n 30 HEAD | sed '/^[[:space:]]*$/d')
+              fi
+              if [[ "${#COMMITS[@]}" -eq 0 ]]; then
+                echo "- 商业版二进制自动构建发布。"
+              else
+                for subject in "${COMMITS[@]}"; do
+                  echo "- $subject"
+                done
+              fi
+            fi
+            echo
+            echo "## 升级说明"
+            echo
+            echo "- 发布类型：$CHANNEL_LABEL"
+            echo "- 发布版本：$VERSION"
+            if [[ -n "$PREVIOUS_LABEL" ]]; then
+              echo "- 对比基线：$PREVIOUS_LABEL"
+            fi
+            echo "- 本 Release 只包含商业版二进制、SHA-256 校验文件和签名文件，不发布源码。"
+            echo "- 面板检测到该版本后，可在版本面板中查看更新说明并执行手动或自动升级。"
+            echo
+            echo "## 发布资产"
+            echo
+            find dist -maxdepth 1 -type f -printf '- %f\n' | sort
+          } > "$NOTES_FILE"
+
+          echo "path=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
@@ -372,9 +466,7 @@ jobs:
           draft: false
           prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
           make_latest: ${{ needs.prepare.outputs.is_prerelease == 'true' && 'false' || 'true' }}
-          body: |
-            DuShengCDN commercial binary release.
-            Assets include detached SHA-256 checksums and release signatures.
+          body_path: ${{ steps.release_notes.outputs.path }}
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
