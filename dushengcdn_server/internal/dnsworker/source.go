@@ -10,9 +10,20 @@ import (
 )
 
 type SourceResolver struct {
-	reader       *maxminddb.Reader
-	databasePath string
-	lastError    string
+	reader                   *maxminddb.Reader
+	asnReader                *maxminddb.Reader
+	databasePath             string
+	asnDatabasePath          string
+	lastError                string
+	asnLastError             string
+	databaseType             string
+	asnDatabaseType          string
+	countryEnabled           bool
+	asnEnabled               bool
+	operatorEnabled          bool
+	operatorCIDRs            *OperatorCIDRMatcher
+	operatorCIDRDatabasePath string
+	operatorCIDRLastError    string
 }
 
 type SourceLookup interface {
@@ -20,9 +31,18 @@ type SourceLookup interface {
 }
 
 type SourceResolverStatus struct {
-	Enabled      bool
-	DatabasePath string
-	LastError    string
+	Enabled                  bool
+	DatabasePath             string
+	ASNDatabasePath          string
+	LastError                string
+	ASNLastError             string
+	DatabaseType             string
+	ASNDatabaseType          string
+	CountryEnabled           bool
+	ASNEnabled               bool
+	OperatorEnabled          bool
+	OperatorCIDRDatabasePath string
+	OperatorCIDRLastError    string
 }
 
 type geoRecord struct {
@@ -35,27 +55,70 @@ type geoRecord struct {
 	Organization           string `maxminddb:"organization"`
 }
 
-func NewSourceResolver(mmdbPath string) (*SourceResolver, error) {
+func NewSourceResolver(mmdbPath string, extraPaths ...string) (*SourceResolver, error) {
 	resolver := &SourceResolver{
 		databasePath: strings.TrimSpace(mmdbPath),
 	}
-	if resolver.databasePath == "" {
-		return resolver, nil
+	if len(extraPaths) > 0 {
+		resolver.asnDatabasePath = strings.TrimSpace(extraPaths[0])
 	}
-	reader, err := maxminddb.Open(resolver.databasePath)
-	if err != nil {
-		resolver.lastError = err.Error()
-		return resolver, err
+	if len(extraPaths) > 1 {
+		resolver.operatorCIDRDatabasePath = strings.TrimSpace(extraPaths[1])
 	}
-	resolver.reader = reader
-	return resolver, nil
+	var firstErr error
+	if resolver.databasePath != "" {
+		reader, err := maxminddb.Open(resolver.databasePath)
+		if err != nil {
+			resolver.lastError = err.Error()
+			firstErr = err
+		} else {
+			resolver.reader = reader
+			resolver.detectMMDBCapabilities(reader, false)
+		}
+	}
+	if resolver.asnDatabasePath != "" && resolver.asnDatabasePath != resolver.databasePath {
+		reader, err := maxminddb.Open(resolver.asnDatabasePath)
+		if err != nil {
+			resolver.asnLastError = err.Error()
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			resolver.asnReader = reader
+			resolver.detectMMDBCapabilities(reader, true)
+		}
+	}
+	if resolver.operatorCIDRDatabasePath != "" {
+		matcher, err := LoadOperatorCIDRMatcher(resolver.operatorCIDRDatabasePath)
+		if err != nil {
+			resolver.operatorCIDRLastError = err.Error()
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			resolver.operatorCIDRs = matcher
+			if matcher != nil && matcher.Count() > 0 {
+				resolver.operatorEnabled = true
+			}
+		}
+	}
+	return resolver, firstErr
 }
 
 func (r *SourceResolver) Close() error {
 	if r == nil || r.reader == nil {
+		if r != nil && r.asnReader != nil {
+			return r.asnReader.Close()
+		}
 		return nil
 	}
-	return r.reader.Close()
+	err := r.reader.Close()
+	if r.asnReader != nil {
+		if asnErr := r.asnReader.Close(); err == nil {
+			err = asnErr
+		}
+	}
+	return err
 }
 
 func (r *SourceResolver) Status() SourceResolverStatus {
@@ -63,9 +126,18 @@ func (r *SourceResolver) Status() SourceResolverStatus {
 		return SourceResolverStatus{}
 	}
 	return SourceResolverStatus{
-		Enabled:      r.reader != nil,
-		DatabasePath: r.databasePath,
-		LastError:    r.lastError,
+		Enabled:                  r.reader != nil,
+		DatabasePath:             r.databasePath,
+		ASNDatabasePath:          r.asnDatabasePath,
+		LastError:                r.lastError,
+		ASNLastError:             r.asnLastError,
+		DatabaseType:             r.databaseType,
+		ASNDatabaseType:          r.asnDatabaseType,
+		CountryEnabled:           r.countryEnabled,
+		ASNEnabled:               r.asnEnabled,
+		OperatorEnabled:          r.operatorEnabled,
+		OperatorCIDRDatabasePath: r.operatorCIDRDatabasePath,
+		OperatorCIDRLastError:    r.operatorCIDRLastError,
 	}
 }
 
@@ -86,8 +158,61 @@ func (r *SourceResolver) Resolve(request *dns.Msg, remoteAddr net.Addr) SourceCo
 			ctx.Operator = classifySourceOperator(record.ISP, record.Organization, record.AutonomousOrganization)
 		}
 	}
+	if r != nil && r.asnReader != nil && sourceIP != nil && ctx.ASN == 0 {
+		var record geoRecord
+		if err := r.asnReader.Lookup(sourceIP, &record); err == nil {
+			ctx.ASN = record.ASN
+			if ctx.Operator == "" {
+				ctx.Operator = classifySourceOperator(record.ISP, record.Organization, record.AutonomousOrganization)
+			}
+		}
+	}
+	if r != nil && r.operatorCIDRs != nil && sourceIP != nil {
+		if operator := r.operatorCIDRs.Lookup(sourceIP); operator != "" {
+			ctx.Operator = operator
+			if ctx.Country == "" {
+				ctx.Country = "CN"
+			}
+		}
+	}
 	ctx.ScopeKey = sourceScopeKey(ctx)
 	return ctx
+}
+
+func (r *SourceResolver) detectMMDBCapabilities(reader *maxminddb.Reader, asnOnly bool) {
+	if r == nil || reader == nil {
+		return
+	}
+	databaseTypeName := strings.TrimSpace(reader.Metadata.DatabaseType)
+	if asnOnly {
+		r.asnDatabaseType = databaseTypeName
+	} else {
+		r.databaseType = databaseTypeName
+	}
+	databaseType := strings.ToLower(databaseTypeName)
+	switch {
+	case strings.Contains(databaseType, "country") ||
+		strings.Contains(databaseType, "city") ||
+		strings.Contains(databaseType, "enterprise"):
+		if !asnOnly {
+			r.countryEnabled = true
+		}
+	}
+	switch {
+	case strings.Contains(databaseType, "asn") ||
+		strings.Contains(databaseType, "isp") ||
+		strings.Contains(databaseType, "enterprise"):
+		r.asnEnabled = true
+	}
+	switch {
+	case strings.Contains(databaseType, "isp") ||
+		strings.Contains(databaseType, "enterprise") ||
+		strings.Contains(databaseType, "asn"):
+		r.operatorEnabled = true
+	}
+	if databaseType == "" && !asnOnly {
+		r.countryEnabled = true
+	}
 }
 
 func classifySourceOperator(values ...string) string {

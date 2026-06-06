@@ -14,18 +14,21 @@ services:
 
     volumes:
       - ./dushengcdn_dns/data:/data
-      # Optional: put GeoLite2-Country.mmdb in ./dushengcdn_dns/geoip/ to enable country-code GSLB pools.
-      # Source CIDR pools do not require GeoIP.
-      # - ./dushengcdn_dns/geoip/GeoLite2-Country.mmdb:/geoip/GeoLite2-Country.mmdb:ro
+      # Optional: mount source databases for country/ASN/operator GSLB pools.
+      # Operator CIDR lists can come from gaoyifan/china-operator-ip.
+      # - ./dushengcdn_dns/geoip:/geoip:ro
+      # - ./dushengcdn_dns/operator-cidr:/operator-cidr:ro
 
     environment:
       DUSHENGCDN_DNS_WORKER_SERVER_URL: ${DUSHENGCDN_DNS_WORKER_SERVER_URL:?set DUSHENGCDN_DNS_WORKER_SERVER_URL in .env}
       DUSHENGCDN_DNS_WORKER_TOKEN: ${DUSHENGCDN_DNS_WORKER_TOKEN:?set DUSHENGCDN_DNS_WORKER_TOKEN in .env}
       DUSHENGCDN_DNS_WORKER_LISTEN_ADDR: ${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-:53}
       DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH: ${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-/data/dns-worker-snapshot.json}
-      # Uncomment together with the GeoIP volume above when country-code pools are used.
+      # Uncomment together with the source database volumes above when country/ASN/operator pools are used.
       # DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH: "/geoip/GeoLite2-Country.mmdb"
       DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH: ${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH:-}
+      DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH: ${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH:-}
+      DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH: ${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH:-}
       DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL: ${DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL:-10s}
       DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE: ${DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE:-5m}
       DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT: ${DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT:-200}

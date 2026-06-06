@@ -12,39 +12,45 @@ import (
 )
 
 type Config struct {
-	ServerURL         string
-	Token             string
-	ListenAddr        string
-	SnapshotPath      string
-	GeoIPDatabasePath string
-	HeartbeatInterval time.Duration
-	RequestTimeout    time.Duration
-	SnapshotMaxAge    time.Duration
-	QueryRateLimit    int
-	UDPResponseSize   int
-	Version           string
+	ServerURL                string
+	Token                    string
+	ListenAddr               string
+	SnapshotPath             string
+	GeoIPDatabasePath        string
+	ASNDatabasePath          string
+	OperatorCIDRDatabasePath string
+	HeartbeatInterval        time.Duration
+	RequestTimeout           time.Duration
+	SnapshotMaxAge           time.Duration
+	QueryRateLimit           int
+	UDPResponseSize          int
+	Version                  string
 }
 
 func LoadConfig(args []string, version string) (*Config, error) {
 	cfg := &Config{
-		ServerURL:         strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SERVER_URL")),
-		Token:             strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_TOKEN")),
-		ListenAddr:        strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_LISTEN_ADDR")),
-		SnapshotPath:      strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH")),
-		GeoIPDatabasePath: strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH")),
-		HeartbeatInterval: parseDurationEnv("DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL", DefaultHeartbeatInterval),
-		RequestTimeout:    parseDurationEnv("DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT", DefaultRequestTimeout),
-		SnapshotMaxAge:    parseDurationEnv("DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE", DefaultSnapshotMaxAge),
-		QueryRateLimit:    parseIntEnv("DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT", DefaultQueryRateLimit),
-		UDPResponseSize:   parseIntEnv("DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE", DefaultUDPResponseSize),
-		Version:           version,
+		ServerURL:                strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SERVER_URL")),
+		Token:                    strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_TOKEN")),
+		ListenAddr:               strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_LISTEN_ADDR")),
+		SnapshotPath:             strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH")),
+		GeoIPDatabasePath:        strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH")),
+		ASNDatabasePath:          strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH")),
+		OperatorCIDRDatabasePath: strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH")),
+		HeartbeatInterval:        parseDurationEnv("DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL", DefaultHeartbeatInterval),
+		RequestTimeout:           parseDurationEnv("DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT", DefaultRequestTimeout),
+		SnapshotMaxAge:           parseDurationEnv("DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE", DefaultSnapshotMaxAge),
+		QueryRateLimit:           parseIntEnv("DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT", DefaultQueryRateLimit),
+		UDPResponseSize:          parseIntEnv("DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE", DefaultUDPResponseSize),
+		Version:                  version,
 	}
 	fs := flag.NewFlagSet("dns-worker", flag.ContinueOnError)
 	fs.StringVar(&cfg.ServerURL, "server-url", cfg.ServerURL, "DuShengCDN Server URL")
 	fs.StringVar(&cfg.Token, "token", cfg.Token, "DNS Worker token")
 	fs.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "DNS UDP/TCP listen address")
 	fs.StringVar(&cfg.SnapshotPath, "snapshot-path", cfg.SnapshotPath, "local snapshot cache path")
-	fs.StringVar(&cfg.GeoIPDatabasePath, "geoip-database", cfg.GeoIPDatabasePath, "optional MaxMind country database path")
+	fs.StringVar(&cfg.GeoIPDatabasePath, "geoip-database", cfg.GeoIPDatabasePath, "optional MaxMind-compatible country/ASN/ISP MMDB path")
+	fs.StringVar(&cfg.ASNDatabasePath, "asn-database", cfg.ASNDatabasePath, "optional MaxMind-compatible ASN MMDB path")
+	fs.StringVar(&cfg.OperatorCIDRDatabasePath, "operator-cidr-database", cfg.OperatorCIDRDatabasePath, "optional China operator CIDR list directory or file path")
 	fs.DurationVar(&cfg.HeartbeatInterval, "heartbeat-interval", cfg.HeartbeatInterval, "heartbeat and snapshot pull interval")
 	fs.DurationVar(&cfg.RequestTimeout, "request-timeout", cfg.RequestTimeout, "Server request timeout")
 	fs.DurationVar(&cfg.SnapshotMaxAge, "snapshot-max-age", cfg.SnapshotMaxAge, "maximum age for dynamic DNS answers")

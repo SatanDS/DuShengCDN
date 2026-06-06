@@ -81,16 +81,25 @@ type DNSWorkerInput struct {
 }
 
 type DNSWorkerHeartbeatInput struct {
-	Version             string                                    `json:"version"`
-	Status              string                                    `json:"status"`
-	LastSnapshotVersion string                                    `json:"last_snapshot_version"`
-	LastSnapshotAt      *time.Time                                `json:"last_snapshot_at"`
-	LastError           string                                    `json:"last_error"`
-	GeoIPEnabled        bool                                      `json:"geoip_enabled"`
-	GeoIPDatabasePath   string                                    `json:"geoip_database_path"`
-	GeoIPLastError      string                                    `json:"geoip_last_error"`
-	Rollups             []DNSQueryRollupInput                     `json:"rollups"`
-	SchedulingStates    []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
+	Version                  string                                    `json:"version"`
+	Status                   string                                    `json:"status"`
+	LastSnapshotVersion      string                                    `json:"last_snapshot_version"`
+	LastSnapshotAt           *time.Time                                `json:"last_snapshot_at"`
+	LastError                string                                    `json:"last_error"`
+	GeoIPEnabled             bool                                      `json:"geoip_enabled"`
+	GeoIPDatabasePath        string                                    `json:"geoip_database_path"`
+	ASNDatabasePath          string                                    `json:"asn_database_path"`
+	GeoIPLastError           string                                    `json:"geoip_last_error"`
+	ASNLastError             string                                    `json:"asn_last_error"`
+	GeoIPDatabaseType        string                                    `json:"geoip_database_type"`
+	ASNDatabaseType          string                                    `json:"asn_database_type"`
+	GeoIPCountryEnabled      bool                                      `json:"geoip_country_enabled"`
+	GeoIPASNEnabled          bool                                      `json:"geoip_asn_enabled"`
+	GeoIPOperatorEnabled     bool                                      `json:"geoip_operator_enabled"`
+	OperatorCIDRDatabasePath string                                    `json:"operator_cidr_database_path"`
+	OperatorCIDRLastError    string                                    `json:"operator_cidr_last_error"`
+	Rollups                  []DNSQueryRollupInput                     `json:"rollups"`
+	SchedulingStates         []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type DNSQueryRollupInput struct {
@@ -137,32 +146,41 @@ type DNSRecordView struct {
 }
 
 type DNSWorkerView struct {
-	ID                  uint                       `json:"id"`
-	WorkerID            string                     `json:"worker_id"`
-	Name                string                     `json:"name"`
-	Token               string                     `json:"token,omitempty"`
-	PublicAddress       string                     `json:"public_address"`
-	Version             string                     `json:"version"`
-	Status              string                     `json:"status"`
-	LastSnapshotVersion string                     `json:"last_snapshot_version"`
-	LastSnapshotAt      *time.Time                 `json:"last_snapshot_at"`
-	LastSeenAt          *time.Time                 `json:"last_seen_at"`
-	LastHeartbeatAt     *time.Time                 `json:"last_heartbeat_at"`
-	LastRollupAt        *time.Time                 `json:"last_rollup_at"`
-	LastRollupCount     int64                      `json:"last_rollup_count"`
-	LastError           string                     `json:"last_error"`
-	GeoIPEnabled        bool                       `json:"geoip_enabled"`
-	GeoIPDatabasePath   string                     `json:"geoip_database_path"`
-	GeoIPLastError      string                     `json:"geoip_last_error"`
-	LastProbeAt         *time.Time                 `json:"last_probe_at"`
-	LastProbeQuery      string                     `json:"last_probe_query"`
-	LastProbeResults    []DNSWorkerProbeResultView `json:"last_probe_results"`
-	ProbeStatus         string                     `json:"probe_status"`
-	ProbeHealthy        bool                       `json:"probe_healthy"`
-	ProbeAgeSeconds     int64                      `json:"probe_age_seconds"`
-	ProbeMessage        string                     `json:"probe_message"`
-	CreatedAt           time.Time                  `json:"created_at"`
-	UpdatedAt           time.Time                  `json:"updated_at"`
+	ID                       uint                       `json:"id"`
+	WorkerID                 string                     `json:"worker_id"`
+	Name                     string                     `json:"name"`
+	Token                    string                     `json:"token,omitempty"`
+	PublicAddress            string                     `json:"public_address"`
+	Version                  string                     `json:"version"`
+	Status                   string                     `json:"status"`
+	LastSnapshotVersion      string                     `json:"last_snapshot_version"`
+	LastSnapshotAt           *time.Time                 `json:"last_snapshot_at"`
+	LastSeenAt               *time.Time                 `json:"last_seen_at"`
+	LastHeartbeatAt          *time.Time                 `json:"last_heartbeat_at"`
+	LastRollupAt             *time.Time                 `json:"last_rollup_at"`
+	LastRollupCount          int64                      `json:"last_rollup_count"`
+	LastError                string                     `json:"last_error"`
+	GeoIPEnabled             bool                       `json:"geoip_enabled"`
+	GeoIPDatabasePath        string                     `json:"geoip_database_path"`
+	ASNDatabasePath          string                     `json:"asn_database_path"`
+	GeoIPLastError           string                     `json:"geoip_last_error"`
+	ASNLastError             string                     `json:"asn_last_error"`
+	GeoIPDatabaseType        string                     `json:"geoip_database_type"`
+	ASNDatabaseType          string                     `json:"asn_database_type"`
+	GeoIPCountryEnabled      bool                       `json:"geoip_country_enabled"`
+	GeoIPASNEnabled          bool                       `json:"geoip_asn_enabled"`
+	GeoIPOperatorEnabled     bool                       `json:"geoip_operator_enabled"`
+	OperatorCIDRDatabasePath string                     `json:"operator_cidr_database_path"`
+	OperatorCIDRLastError    string                     `json:"operator_cidr_last_error"`
+	LastProbeAt              *time.Time                 `json:"last_probe_at"`
+	LastProbeQuery           string                     `json:"last_probe_query"`
+	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
+	ProbeStatus              string                     `json:"probe_status"`
+	ProbeHealthy             bool                       `json:"probe_healthy"`
+	ProbeAgeSeconds          int64                      `json:"probe_age_seconds"`
+	ProbeMessage             string                     `json:"probe_message"`
+	CreatedAt                time.Time                  `json:"created_at"`
+	UpdatedAt                time.Time                  `json:"updated_at"`
 }
 
 type DNSWorkerProbeInput struct {
@@ -490,18 +508,23 @@ type DNSWorkerSnapshotVersionView struct {
 }
 
 type DNSWorkerSnapshotWorkerView struct {
-	WorkerID        string     `json:"worker_id"`
-	Name            string     `json:"name"`
-	Status          string     `json:"status"`
-	SnapshotVersion string     `json:"snapshot_version"`
-	LastSnapshotAt  *time.Time `json:"last_snapshot_at"`
-	LastSeenAt      *time.Time `json:"last_seen_at"`
-	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
-	LastRollupAt    *time.Time `json:"last_rollup_at"`
-	LastRollupCount int64      `json:"last_rollup_count"`
-	Stale           bool       `json:"stale"`
-	GeoIPEnabled    bool       `json:"geoip_enabled"`
-	GeoIPLastError  string     `json:"geoip_last_error"`
+	WorkerID              string     `json:"worker_id"`
+	Name                  string     `json:"name"`
+	Status                string     `json:"status"`
+	SnapshotVersion       string     `json:"snapshot_version"`
+	LastSnapshotAt        *time.Time `json:"last_snapshot_at"`
+	LastSeenAt            *time.Time `json:"last_seen_at"`
+	LastHeartbeatAt       *time.Time `json:"last_heartbeat_at"`
+	LastRollupAt          *time.Time `json:"last_rollup_at"`
+	LastRollupCount       int64      `json:"last_rollup_count"`
+	Stale                 bool       `json:"stale"`
+	GeoIPEnabled          bool       `json:"geoip_enabled"`
+	GeoIPLastError        string     `json:"geoip_last_error"`
+	ASNLastError          string     `json:"asn_last_error"`
+	GeoIPCountryEnabled   bool       `json:"geoip_country_enabled"`
+	GeoIPASNEnabled       bool       `json:"geoip_asn_enabled"`
+	GeoIPOperatorEnabled  bool       `json:"geoip_operator_enabled"`
+	OperatorCIDRLastError string     `json:"operator_cidr_last_error"`
 }
 
 type DNSWorkerHealthSummaryView struct {
@@ -525,39 +548,48 @@ type DNSWorkerHealthSummaryView struct {
 }
 
 type DNSWorkerHealthItemView struct {
-	WorkerID                string                     `json:"worker_id"`
-	Name                    string                     `json:"name"`
-	Status                  string                     `json:"status"`
-	PublicAddress           string                     `json:"public_address"`
-	QueryCount              int64                      `json:"query_count"`
-	ErrorQueries            int64                      `json:"error_queries"`
-	ErrorRatePercent        float64                    `json:"error_rate_percent"`
-	AverageLatencyMs        float64                    `json:"average_latency_ms"`
-	MaxLatencyMs            int64                      `json:"max_latency_ms"`
-	LastSeenAt              *time.Time                 `json:"last_seen_at"`
-	LastHeartbeatAt         *time.Time                 `json:"last_heartbeat_at"`
-	LastRollupAt            *time.Time                 `json:"last_rollup_at"`
-	LastRollupCount         int64                      `json:"last_rollup_count"`
-	LastSnapshotAt          *time.Time                 `json:"last_snapshot_at"`
-	SnapshotAgeSeconds      int64                      `json:"snapshot_age_seconds"`
-	SnapshotStale           bool                       `json:"snapshot_stale"`
-	GeoIPEnabled            bool                       `json:"geoip_enabled"`
-	GeoIPDatabasePath       string                     `json:"geoip_database_path"`
-	GeoIPLastError          string                     `json:"geoip_last_error"`
-	LastError               string                     `json:"last_error"`
-	LastProbeAt             *time.Time                 `json:"last_probe_at"`
-	LastProbeResults        []DNSWorkerProbeResultView `json:"last_probe_results"`
-	ProbeStatus             string                     `json:"probe_status"`
-	ProbeHealthy            bool                       `json:"probe_healthy"`
-	ProbeAgeSeconds         int64                      `json:"probe_age_seconds"`
-	ProbeMessage            string                     `json:"probe_message"`
-	NodeProbeTotalCount     int                        `json:"node_probe_total_count"`
-	NodeProbeHealthyCount   int                        `json:"node_probe_healthy_count"`
-	NodeProbeStaleCount     int                        `json:"node_probe_stale_count"`
-	NodeProbeHealthyPercent float64                    `json:"node_probe_healthy_percent"`
-	NodeProbeAverageRTTMs   float64                    `json:"node_probe_average_rtt_ms"`
-	NodeProbeMaxRTTMs       int64                      `json:"node_probe_max_rtt_ms"`
-	NodeProbes              []DNSWorkerNodeProbeView   `json:"node_probes"`
+	WorkerID                 string                     `json:"worker_id"`
+	Name                     string                     `json:"name"`
+	Status                   string                     `json:"status"`
+	PublicAddress            string                     `json:"public_address"`
+	QueryCount               int64                      `json:"query_count"`
+	ErrorQueries             int64                      `json:"error_queries"`
+	ErrorRatePercent         float64                    `json:"error_rate_percent"`
+	AverageLatencyMs         float64                    `json:"average_latency_ms"`
+	MaxLatencyMs             int64                      `json:"max_latency_ms"`
+	LastSeenAt               *time.Time                 `json:"last_seen_at"`
+	LastHeartbeatAt          *time.Time                 `json:"last_heartbeat_at"`
+	LastRollupAt             *time.Time                 `json:"last_rollup_at"`
+	LastRollupCount          int64                      `json:"last_rollup_count"`
+	LastSnapshotAt           *time.Time                 `json:"last_snapshot_at"`
+	SnapshotAgeSeconds       int64                      `json:"snapshot_age_seconds"`
+	SnapshotStale            bool                       `json:"snapshot_stale"`
+	GeoIPEnabled             bool                       `json:"geoip_enabled"`
+	GeoIPDatabasePath        string                     `json:"geoip_database_path"`
+	GeoIPLastError           string                     `json:"geoip_last_error"`
+	ASNDatabasePath          string                     `json:"asn_database_path"`
+	ASNLastError             string                     `json:"asn_last_error"`
+	GeoIPDatabaseType        string                     `json:"geoip_database_type"`
+	ASNDatabaseType          string                     `json:"asn_database_type"`
+	GeoIPCountryEnabled      bool                       `json:"geoip_country_enabled"`
+	GeoIPASNEnabled          bool                       `json:"geoip_asn_enabled"`
+	GeoIPOperatorEnabled     bool                       `json:"geoip_operator_enabled"`
+	OperatorCIDRDatabasePath string                     `json:"operator_cidr_database_path"`
+	OperatorCIDRLastError    string                     `json:"operator_cidr_last_error"`
+	LastError                string                     `json:"last_error"`
+	LastProbeAt              *time.Time                 `json:"last_probe_at"`
+	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
+	ProbeStatus              string                     `json:"probe_status"`
+	ProbeHealthy             bool                       `json:"probe_healthy"`
+	ProbeAgeSeconds          int64                      `json:"probe_age_seconds"`
+	ProbeMessage             string                     `json:"probe_message"`
+	NodeProbeTotalCount      int                        `json:"node_probe_total_count"`
+	NodeProbeHealthyCount    int                        `json:"node_probe_healthy_count"`
+	NodeProbeStaleCount      int                        `json:"node_probe_stale_count"`
+	NodeProbeHealthyPercent  float64                    `json:"node_probe_healthy_percent"`
+	NodeProbeAverageRTTMs    float64                    `json:"node_probe_average_rtt_ms"`
+	NodeProbeMaxRTTMs        int64                      `json:"node_probe_max_rtt_ms"`
+	NodeProbes               []DNSWorkerNodeProbeView   `json:"node_probes"`
 }
 
 type DNSWorkerNodeProbeView struct {
@@ -1315,7 +1347,16 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	worker.LastError = truncateForDatabase(strings.TrimSpace(input.LastError), 16000)
 	worker.GeoIPEnabled = input.GeoIPEnabled
 	worker.GeoIPDatabasePath = truncateForDatabase(strings.TrimSpace(input.GeoIPDatabasePath), 512)
+	worker.ASNDatabasePath = truncateForDatabase(strings.TrimSpace(input.ASNDatabasePath), 512)
 	worker.GeoIPLastError = truncateForDatabase(strings.TrimSpace(input.GeoIPLastError), 16000)
+	worker.ASNLastError = truncateForDatabase(strings.TrimSpace(input.ASNLastError), 16000)
+	worker.GeoIPDatabaseType = truncateForDatabase(strings.TrimSpace(input.GeoIPDatabaseType), 128)
+	worker.ASNDatabaseType = truncateForDatabase(strings.TrimSpace(input.ASNDatabaseType), 128)
+	worker.GeoIPCountryEnabled = input.GeoIPCountryEnabled
+	worker.GeoIPASNEnabled = input.GeoIPASNEnabled
+	worker.GeoIPOperatorEnabled = input.GeoIPOperatorEnabled
+	worker.OperatorCIDRDatabasePath = truncateForDatabase(strings.TrimSpace(input.OperatorCIDRDatabasePath), 512)
+	worker.OperatorCIDRLastError = truncateForDatabase(strings.TrimSpace(input.OperatorCIDRLastError), 16000)
 	rollupMeta := summarizeDNSQueryRollupInputs(input.Rollups)
 	if rollupMeta.count > 0 {
 		worker.LastRollupAt = &rollupMeta.lastRollupAt
@@ -2621,31 +2662,40 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 	probeAt := normalizeDNSWorkerProbeAt(worker.LastProbeAt, now, worker.UpdatedAt, worker.CreatedAt)
 	probeState := evaluateDNSWorkerProbeState(now, probeAt, probeResults)
 	view := DNSWorkerView{
-		ID:                  worker.ID,
-		WorkerID:            worker.WorkerID,
-		Name:                worker.Name,
-		PublicAddress:       worker.PublicAddress,
-		Version:             worker.Version,
-		Status:              normalizeDNSWorkerStatus(worker.Status),
-		LastSnapshotVersion: worker.LastSnapshotVersion,
-		LastSnapshotAt:      worker.LastSnapshotAt,
-		LastSeenAt:          worker.LastSeenAt,
-		LastHeartbeatAt:     worker.LastHeartbeatAt,
-		LastRollupAt:        worker.LastRollupAt,
-		LastRollupCount:     worker.LastRollupCount,
-		LastError:           worker.LastError,
-		GeoIPEnabled:        worker.GeoIPEnabled,
-		GeoIPDatabasePath:   worker.GeoIPDatabasePath,
-		GeoIPLastError:      worker.GeoIPLastError,
-		LastProbeAt:         probeAt,
-		LastProbeQuery:      worker.LastProbeQuery,
-		LastProbeResults:    probeResults,
-		ProbeStatus:         probeState.status,
-		ProbeHealthy:        probeState.healthy,
-		ProbeAgeSeconds:     probeState.ageSeconds,
-		ProbeMessage:        probeState.message,
-		CreatedAt:           worker.CreatedAt,
-		UpdatedAt:           worker.UpdatedAt,
+		ID:                       worker.ID,
+		WorkerID:                 worker.WorkerID,
+		Name:                     worker.Name,
+		PublicAddress:            worker.PublicAddress,
+		Version:                  worker.Version,
+		Status:                   normalizeDNSWorkerStatus(worker.Status),
+		LastSnapshotVersion:      worker.LastSnapshotVersion,
+		LastSnapshotAt:           worker.LastSnapshotAt,
+		LastSeenAt:               worker.LastSeenAt,
+		LastHeartbeatAt:          worker.LastHeartbeatAt,
+		LastRollupAt:             worker.LastRollupAt,
+		LastRollupCount:          worker.LastRollupCount,
+		LastError:                worker.LastError,
+		GeoIPEnabled:             worker.GeoIPEnabled,
+		GeoIPDatabasePath:        worker.GeoIPDatabasePath,
+		ASNDatabasePath:          worker.ASNDatabasePath,
+		GeoIPLastError:           worker.GeoIPLastError,
+		ASNLastError:             worker.ASNLastError,
+		GeoIPDatabaseType:        worker.GeoIPDatabaseType,
+		ASNDatabaseType:          worker.ASNDatabaseType,
+		GeoIPCountryEnabled:      worker.GeoIPCountryEnabled,
+		GeoIPASNEnabled:          worker.GeoIPASNEnabled,
+		GeoIPOperatorEnabled:     worker.GeoIPOperatorEnabled,
+		OperatorCIDRDatabasePath: worker.OperatorCIDRDatabasePath,
+		OperatorCIDRLastError:    worker.OperatorCIDRLastError,
+		LastProbeAt:              probeAt,
+		LastProbeQuery:           worker.LastProbeQuery,
+		LastProbeResults:         probeResults,
+		ProbeStatus:              probeState.status,
+		ProbeHealthy:             probeState.healthy,
+		ProbeAgeSeconds:          probeState.ageSeconds,
+		ProbeMessage:             probeState.message,
+		CreatedAt:                worker.CreatedAt,
+		UpdatedAt:                worker.UpdatedAt,
 	}
 	if includeToken {
 		view.Token = worker.Token
@@ -4679,18 +4729,23 @@ func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsisten
 			workerName = worker.WorkerID
 		}
 		item := DNSWorkerSnapshotWorkerView{
-			WorkerID:        worker.WorkerID,
-			Name:            workerName,
-			Status:          status,
-			SnapshotVersion: snapshotVersion,
-			LastSnapshotAt:  snapshotAt,
-			LastSeenAt:      worker.LastSeenAt,
-			LastHeartbeatAt: worker.LastHeartbeatAt,
-			LastRollupAt:    worker.LastRollupAt,
-			LastRollupCount: worker.LastRollupCount,
-			Stale:           stale,
-			GeoIPEnabled:    worker.GeoIPEnabled,
-			GeoIPLastError:  worker.GeoIPLastError,
+			WorkerID:              worker.WorkerID,
+			Name:                  workerName,
+			Status:                status,
+			SnapshotVersion:       snapshotVersion,
+			LastSnapshotAt:        snapshotAt,
+			LastSeenAt:            worker.LastSeenAt,
+			LastHeartbeatAt:       worker.LastHeartbeatAt,
+			LastRollupAt:          worker.LastRollupAt,
+			LastRollupCount:       worker.LastRollupCount,
+			Stale:                 stale,
+			GeoIPEnabled:          worker.GeoIPEnabled,
+			GeoIPLastError:        worker.GeoIPLastError,
+			ASNLastError:          worker.ASNLastError,
+			GeoIPCountryEnabled:   worker.GeoIPCountryEnabled,
+			GeoIPASNEnabled:       worker.GeoIPASNEnabled,
+			GeoIPOperatorEnabled:  worker.GeoIPOperatorEnabled,
+			OperatorCIDRLastError: worker.OperatorCIDRLastError,
 		}
 		view.Workers = append(view.Workers, item)
 		if status != dnsWorkerStatusOnline {
@@ -4904,39 +4959,48 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			view.NodeProbeMaxRTTMs = nodeProbeStats.maxRTTMs
 		}
 		view.Workers = append(view.Workers, DNSWorkerHealthItemView{
-			WorkerID:                worker.WorkerID,
-			Name:                    workerName,
-			Status:                  status,
-			PublicAddress:           worker.PublicAddress,
-			QueryCount:              stats.queryCount,
-			ErrorQueries:            stats.errorQueries,
-			ErrorRatePercent:        ratioPercent(stats.errorQueries, stats.queryCount),
-			AverageLatencyMs:        averageMilliseconds(stats.totalDurationMs, stats.queryCount),
-			MaxLatencyMs:            stats.maxDurationMs,
-			LastSeenAt:              worker.LastSeenAt,
-			LastHeartbeatAt:         worker.LastHeartbeatAt,
-			LastRollupAt:            worker.LastRollupAt,
-			LastRollupCount:         worker.LastRollupCount,
-			LastSnapshotAt:          snapshotAt,
-			SnapshotAgeSeconds:      snapshotAgeSeconds,
-			SnapshotStale:           snapshotStale,
-			GeoIPEnabled:            worker.GeoIPEnabled,
-			GeoIPDatabasePath:       worker.GeoIPDatabasePath,
-			GeoIPLastError:          worker.GeoIPLastError,
-			LastError:               worker.LastError,
-			LastProbeAt:             probeAt,
-			LastProbeResults:        probeResults,
-			ProbeStatus:             probeState.status,
-			ProbeHealthy:            probeState.healthy,
-			ProbeAgeSeconds:         probeState.ageSeconds,
-			ProbeMessage:            probeState.message,
-			NodeProbeTotalCount:     nodeProbeStats.totalCount,
-			NodeProbeHealthyCount:   nodeProbeStats.healthyCount,
-			NodeProbeStaleCount:     nodeProbeStats.staleCount,
-			NodeProbeHealthyPercent: ratioPercent(int64(nodeProbeStats.healthyCount), int64(nodeProbeStats.totalCount)),
-			NodeProbeAverageRTTMs:   averageFloat(nodeProbeStats.totalAverageRTTMs, nodeProbeStats.averageSamples),
-			NodeProbeMaxRTTMs:       nodeProbeStats.maxRTTMs,
-			NodeProbes:              nodeProbeStats.probes,
+			WorkerID:                 worker.WorkerID,
+			Name:                     workerName,
+			Status:                   status,
+			PublicAddress:            worker.PublicAddress,
+			QueryCount:               stats.queryCount,
+			ErrorQueries:             stats.errorQueries,
+			ErrorRatePercent:         ratioPercent(stats.errorQueries, stats.queryCount),
+			AverageLatencyMs:         averageMilliseconds(stats.totalDurationMs, stats.queryCount),
+			MaxLatencyMs:             stats.maxDurationMs,
+			LastSeenAt:               worker.LastSeenAt,
+			LastHeartbeatAt:          worker.LastHeartbeatAt,
+			LastRollupAt:             worker.LastRollupAt,
+			LastRollupCount:          worker.LastRollupCount,
+			LastSnapshotAt:           snapshotAt,
+			SnapshotAgeSeconds:       snapshotAgeSeconds,
+			SnapshotStale:            snapshotStale,
+			GeoIPEnabled:             worker.GeoIPEnabled,
+			GeoIPDatabasePath:        worker.GeoIPDatabasePath,
+			GeoIPLastError:           worker.GeoIPLastError,
+			ASNDatabasePath:          worker.ASNDatabasePath,
+			ASNLastError:             worker.ASNLastError,
+			GeoIPDatabaseType:        worker.GeoIPDatabaseType,
+			ASNDatabaseType:          worker.ASNDatabaseType,
+			GeoIPCountryEnabled:      worker.GeoIPCountryEnabled,
+			GeoIPASNEnabled:          worker.GeoIPASNEnabled,
+			GeoIPOperatorEnabled:     worker.GeoIPOperatorEnabled,
+			OperatorCIDRDatabasePath: worker.OperatorCIDRDatabasePath,
+			OperatorCIDRLastError:    worker.OperatorCIDRLastError,
+			LastError:                worker.LastError,
+			LastProbeAt:              probeAt,
+			LastProbeResults:         probeResults,
+			ProbeStatus:              probeState.status,
+			ProbeHealthy:             probeState.healthy,
+			ProbeAgeSeconds:          probeState.ageSeconds,
+			ProbeMessage:             probeState.message,
+			NodeProbeTotalCount:      nodeProbeStats.totalCount,
+			NodeProbeHealthyCount:    nodeProbeStats.healthyCount,
+			NodeProbeStaleCount:      nodeProbeStats.staleCount,
+			NodeProbeHealthyPercent:  ratioPercent(int64(nodeProbeStats.healthyCount), int64(nodeProbeStats.totalCount)),
+			NodeProbeAverageRTTMs:    averageFloat(nodeProbeStats.totalAverageRTTMs, nodeProbeStats.averageSamples),
+			NodeProbeMaxRTTMs:        nodeProbeStats.maxRTTMs,
+			NodeProbes:               nodeProbeStats.probes,
 		})
 	}
 	if view.TotalWorkerCount > 0 {

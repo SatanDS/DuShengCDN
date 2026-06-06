@@ -24,9 +24,15 @@ func NewRunner(cfg *Config) (*Runner, error) {
 	if snapshot, _, _, _ := store.Current(); snapshot != nil {
 		scheduler.LoadSnapshotStates(snapshot)
 	}
-	sourceResolver, err := NewSourceResolver(cfg.GeoIPDatabasePath)
+	sourceResolver, err := NewSourceResolver(cfg.GeoIPDatabasePath, cfg.ASNDatabasePath, cfg.OperatorCIDRDatabasePath)
 	if err != nil {
-		slog.Warn("open dns worker geoip database failed", "path", cfg.GeoIPDatabasePath, "error", err)
+		slog.Warn(
+			"open dns worker source database failed",
+			"geoip_path", cfg.GeoIPDatabasePath,
+			"asn_path", cfg.ASNDatabasePath,
+			"operator_cidr_path", cfg.OperatorCIDRDatabasePath,
+			"error", err,
+		)
 	}
 	rollups := NewRollupAggregator(time.Minute)
 	client := NewAPIClient(cfg.ServerURL, cfg.Token, cfg.RequestTimeout)
@@ -118,16 +124,25 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		sourceStatus = r.SourceResolver.Status()
 	}
 	err := r.Client.SendHeartbeat(ctx, HeartbeatInput{
-		Version:             r.Config.Version,
-		Status:              status,
-		LastSnapshotVersion: r.Store.Version(),
-		LastSnapshotAt:      r.Store.LoadedAt(),
-		LastError:           r.Store.LastError(),
-		GeoIPEnabled:        sourceStatus.Enabled,
-		GeoIPDatabasePath:   sourceStatus.DatabasePath,
-		GeoIPLastError:      sourceStatus.LastError,
-		Rollups:             rollups,
-		SchedulingStates:    schedulingStates,
+		Version:                  r.Config.Version,
+		Status:                   status,
+		LastSnapshotVersion:      r.Store.Version(),
+		LastSnapshotAt:           r.Store.LoadedAt(),
+		LastError:                r.Store.LastError(),
+		GeoIPEnabled:             sourceStatus.Enabled,
+		GeoIPDatabasePath:        sourceStatus.DatabasePath,
+		ASNDatabasePath:          sourceStatus.ASNDatabasePath,
+		GeoIPLastError:           sourceStatus.LastError,
+		ASNLastError:             sourceStatus.ASNLastError,
+		GeoIPDatabaseType:        sourceStatus.DatabaseType,
+		ASNDatabaseType:          sourceStatus.ASNDatabaseType,
+		GeoIPCountryEnabled:      sourceStatus.CountryEnabled,
+		GeoIPASNEnabled:          sourceStatus.ASNEnabled,
+		GeoIPOperatorEnabled:     sourceStatus.OperatorEnabled,
+		OperatorCIDRDatabasePath: sourceStatus.OperatorCIDRDatabasePath,
+		OperatorCIDRLastError:    sourceStatus.OperatorCIDRLastError,
+		Rollups:                  rollups,
+		SchedulingStates:         schedulingStates,
 	})
 	if err != nil {
 		r.Rollups.Restore(rollups)

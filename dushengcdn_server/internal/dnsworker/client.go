@@ -25,16 +25,25 @@ type apiResponse[T any] struct {
 }
 
 type HeartbeatInput struct {
-	Version             string                    `json:"version"`
-	Status              string                    `json:"status"`
-	LastSnapshotVersion string                    `json:"last_snapshot_version"`
-	LastSnapshotAt      *time.Time                `json:"last_snapshot_at"`
-	LastError           string                    `json:"last_error"`
-	GeoIPEnabled        bool                      `json:"geoip_enabled"`
-	GeoIPDatabasePath   string                    `json:"geoip_database_path"`
-	GeoIPLastError      string                    `json:"geoip_last_error"`
-	Rollups             []QueryRollupPayload      `json:"rollups"`
-	SchedulingStates    []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
+	Version                  string                    `json:"version"`
+	Status                   string                    `json:"status"`
+	LastSnapshotVersion      string                    `json:"last_snapshot_version"`
+	LastSnapshotAt           *time.Time                `json:"last_snapshot_at"`
+	LastError                string                    `json:"last_error"`
+	GeoIPEnabled             bool                      `json:"geoip_enabled"`
+	GeoIPDatabasePath        string                    `json:"geoip_database_path"`
+	ASNDatabasePath          string                    `json:"asn_database_path"`
+	GeoIPLastError           string                    `json:"geoip_last_error"`
+	ASNLastError             string                    `json:"asn_last_error"`
+	GeoIPDatabaseType        string                    `json:"geoip_database_type"`
+	ASNDatabaseType          string                    `json:"asn_database_type"`
+	GeoIPCountryEnabled      bool                      `json:"geoip_country_enabled"`
+	GeoIPASNEnabled          bool                      `json:"geoip_asn_enabled"`
+	GeoIPOperatorEnabled     bool                      `json:"geoip_operator_enabled"`
+	OperatorCIDRDatabasePath string                    `json:"operator_cidr_database_path"`
+	OperatorCIDRLastError    string                    `json:"operator_cidr_last_error"`
+	Rollups                  []QueryRollupPayload      `json:"rollups"`
+	SchedulingStates         []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type QueryRollupPayload struct {

@@ -52,7 +52,16 @@ export interface DNSWorkerItem {
   last_error: string;
   geoip_enabled: boolean;
   geoip_database_path: string;
+  asn_database_path: string;
   geoip_last_error: string;
+  asn_last_error: string;
+  geoip_database_type: string;
+  asn_database_type: string;
+  geoip_country_enabled: boolean;
+  geoip_asn_enabled: boolean;
+  geoip_operator_enabled: boolean;
+  operator_cidr_database_path: string;
+  operator_cidr_last_error: string;
   last_probe_at?: string | null;
   last_probe_query: string;
   last_probe_results: DNSWorkerProbeResult[];
@@ -298,6 +307,11 @@ export interface DNSWorkerSnapshotWorker {
   stale: boolean;
   geoip_enabled: boolean;
   geoip_last_error: string;
+  asn_last_error: string;
+  geoip_country_enabled: boolean;
+  geoip_asn_enabled: boolean;
+  geoip_operator_enabled: boolean;
+  operator_cidr_last_error: string;
 }
 
 export interface DNSWorkerSnapshotConsistency {
@@ -354,6 +368,15 @@ export interface DNSWorkerHealthItem {
   geoip_enabled: boolean;
   geoip_database_path: string;
   geoip_last_error: string;
+  asn_database_path: string;
+  asn_last_error: string;
+  geoip_database_type: string;
+  asn_database_type: string;
+  geoip_country_enabled: boolean;
+  geoip_asn_enabled: boolean;
+  geoip_operator_enabled: boolean;
+  operator_cidr_database_path: string;
+  operator_cidr_last_error: string;
   last_error: string;
   last_probe_at?: string | null;
   last_probe_results: DNSWorkerProbeResult[];

@@ -18,10 +18,20 @@ CREATE_SERVICE="true"
 AUTO_INSTALL_DEPS="true"
 LISTEN_ADDR=":53"
 SNAPSHOT_PATH=""
+SOURCE_DATABASE_PROFILE="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}"
 GEOIP_DATABASE=""
 GEOIP_DATABASE_EXPLICIT="false"
 GEOIP_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb}"
 AUTO_GEOIP_DOWNLOAD="true"
+ASN_DATABASE=""
+ASN_DATABASE_EXPLICIT="false"
+ASN_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb}"
+AUTO_ASN_DOWNLOAD="true"
+OPERATOR_CIDR_DATABASE=""
+OPERATOR_CIDR_DATABASE_EXPLICIT="false"
+OPERATOR_CIDR_BASE_URL="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL:-https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists}"
+OPERATOR_CIDR_FILES="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES:-chinanet.txt chinanet6.txt cmcc.txt cmcc6.txt unicom.txt unicom6.txt cernet.txt cernet6.txt cstnet.txt cstnet6.txt drpeng.txt drpeng6.txt googlecn.txt googlecn6.txt}"
+AUTO_OPERATOR_CIDR_DOWNLOAD="true"
 HEARTBEAT_INTERVAL="10s"
 REQUEST_TIMEOUT="10s"
 SNAPSHOT_MAX_AGE="5m"
@@ -44,9 +54,23 @@ Options:
   --install-dir DIR          Installation directory (default: /opt/dushengcdn-dns-worker)
   --listen ADDR              DNS UDP/TCP listen address (default: :53)
   --snapshot-path PATH       Snapshot cache path (default: INSTALL_DIR/data/dns-worker-snapshot.json)
-  --geoip-database PATH      Optional local MaxMind Country MMDB path
+  --source-database-profile PROFILE
+                             Source database preset: full, country, asn, operator, none (default: full)
+  --geoip-database PATH      Optional local MaxMind Country/City/Enterprise MMDB path
   --geoip-database-url URL   Country MMDB download URL (default: Loyalsoldier GeoLite2-Country)
+  --asn-database PATH        Optional local MaxMind ASN MMDB path
+  --asn-database-url URL     ASN MMDB download URL (default: Loyalsoldier GeoLite2-ASN)
+  --operator-cidr-database PATH
+                             Optional local gaoyifan/china-operator-ip CIDR directory or file
+  --operator-cidr-base-url URL
+                             Operator CIDR raw base URL (default: gaoyifan/china-operator-ip ip-lists)
+  --operator-cidr-files LIST Space-separated operator CIDR files to download
   --no-geoip-download        Do not download Country MMDB automatically
+  --no-asn-download          Do not download ASN MMDB automatically
+  --no-operator-cidr-download
+                             Do not download China operator CIDR lists automatically
+  --no-source-database-download
+                             Do not download any source database automatically
   --heartbeat-interval DUR   Heartbeat and snapshot pull interval (default: 10s)
   --request-timeout DUR      Server request timeout (default: 10s)
   --snapshot-max-age DUR     Maximum dynamic-answer snapshot age (default: 5m)
@@ -64,9 +88,11 @@ Options:
 Examples:
   install-dns-worker.sh --server-url https://cdn.example.com --token worker-token
   install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --geoip-database /var/lib/GeoLite2-Country.mmdb
-  install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --no-geoip-download
+  install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --source-database-profile operator
+  install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --no-source-database-download
 
 Notes:
+  The full preset downloads Country + ASN MMDBs and gaoyifan/china-operator-ip operator CIDR lists.
   Reinstall keeps the data directory and snapshot cache, then replaces the binary
   and environment file. Use uninstall-dns-worker.sh to remove local data.
 EOF
@@ -80,9 +106,18 @@ while [[ $# -gt 0 ]]; do
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --listen) LISTEN_ADDR="$2"; shift 2 ;;
     --snapshot-path) SNAPSHOT_PATH="$2"; shift 2 ;;
+    --source-database-profile) SOURCE_DATABASE_PROFILE="$2"; shift 2 ;;
     --geoip-database) GEOIP_DATABASE="$2"; GEOIP_DATABASE_EXPLICIT="true"; shift 2 ;;
     --geoip-database-url) GEOIP_DATABASE_URL="$2"; shift 2 ;;
+    --asn-database) ASN_DATABASE="$2"; ASN_DATABASE_EXPLICIT="true"; shift 2 ;;
+    --asn-database-url) ASN_DATABASE_URL="$2"; shift 2 ;;
+    --operator-cidr-database) OPERATOR_CIDR_DATABASE="$2"; OPERATOR_CIDR_DATABASE_EXPLICIT="true"; shift 2 ;;
+    --operator-cidr-base-url) OPERATOR_CIDR_BASE_URL="$2"; shift 2 ;;
+    --operator-cidr-files) OPERATOR_CIDR_FILES="$2"; shift 2 ;;
     --no-geoip-download) AUTO_GEOIP_DOWNLOAD="false"; shift ;;
+    --no-asn-download) AUTO_ASN_DOWNLOAD="false"; shift ;;
+    --no-operator-cidr-download) AUTO_OPERATOR_CIDR_DOWNLOAD="false"; shift ;;
+    --no-source-database-download) AUTO_GEOIP_DOWNLOAD="false"; AUTO_ASN_DOWNLOAD="false"; AUTO_OPERATOR_CIDR_DOWNLOAD="false"; shift ;;
     --heartbeat-interval) HEARTBEAT_INTERVAL="$2"; shift 2 ;;
     --request-timeout) REQUEST_TIMEOUT="$2"; shift 2 ;;
     --snapshot-max-age) SNAPSHOT_MAX_AGE="$2"; shift 2 ;;
@@ -439,19 +474,53 @@ sha256_file() {
   fi
 }
 
-download_geoip_database() {
+normalize_source_database_profile() {
+  SOURCE_DATABASE_PROFILE="$(printf '%s' "$SOURCE_DATABASE_PROFILE" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "$SOURCE_DATABASE_PROFILE" in
+    full|country|asn|operator|none) ;;
+    no|false|disabled|off) SOURCE_DATABASE_PROFILE="none" ;;
+    *) die "--source-database-profile must be full, country, asn, operator, or none." ;;
+  esac
+}
+
+source_profile_wants_country() {
+  case "$SOURCE_DATABASE_PROFILE" in
+    full|country) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+source_profile_wants_asn() {
+  case "$SOURCE_DATABASE_PROFILE" in
+    full|asn) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+source_profile_wants_operator() {
+  case "$SOURCE_DATABASE_PROFILE" in
+    full|operator) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+download_source_database_file() {
+  local target="$1"
+  local url="$2"
+  local label="$3"
+  local tmp_prefix="$4"
   local parent tmp bytes
 
-  if [[ -z "$GEOIP_DATABASE" || -z "$GEOIP_DATABASE_URL" ]]; then
+  if [[ -z "$target" || -z "$url" ]]; then
     return 1
   fi
 
-  parent="$(dirname "$GEOIP_DATABASE")"
-  log "Downloading GeoIP Country database..."
+  parent="$(dirname "$target")"
+  log "Downloading ${label}..."
   if [[ "$NEEDS_ROOT" == "true" ]]; then
     run_as_root mkdir -p "$parent"
-    tmp="$(mktemp "/tmp/dushengcdn-dns-worker-geoip.XXXXXX")"
-    if ! curl -fsSL -o "$tmp" "$GEOIP_DATABASE_URL"; then
+    tmp="$(mktemp "/tmp/dushengcdn-dns-worker-${tmp_prefix}.XXXXXX")"
+    if ! curl -fsSL -o "$tmp" "$url"; then
       rm -f "$tmp"
       return 1
     fi
@@ -460,12 +529,12 @@ download_geoip_database() {
       rm -f "$tmp"
       return 1
     fi
-    run_as_root install -m 0644 "$tmp" "$GEOIP_DATABASE"
+    run_as_root install -m 0644 "$tmp" "$target"
     rm -f "$tmp"
   else
     mkdir -p "$parent"
-    tmp="$(mktemp "${parent}/.GeoLite2-Country.XXXXXX")"
-    if ! curl -fsSL -o "$tmp" "$GEOIP_DATABASE_URL"; then
+    tmp="$(mktemp "${parent}/.${tmp_prefix}.XXXXXX")"
+    if ! curl -fsSL -o "$tmp" "$url"; then
       rm -f "$tmp"
       return 1
     fi
@@ -474,15 +543,22 @@ download_geoip_database() {
       rm -f "$tmp"
       return 1
     fi
-    mv -f "$tmp" "$GEOIP_DATABASE"
-    chmod 0644 "$GEOIP_DATABASE"
+    mv -f "$tmp" "$target"
+    chmod 0644 "$target"
   fi
 
-  log "GeoIP Country database ready: ${GEOIP_DATABASE}"
+  log "${label} ready: ${target}"
   return 0
 }
 
 prepare_geoip_database() {
+  if ! source_profile_wants_country; then
+    if [[ "$GEOIP_DATABASE_EXPLICIT" != "true" ]]; then
+      GEOIP_DATABASE=""
+    fi
+    return
+  fi
+
   if [[ "$AUTO_GEOIP_DOWNLOAD" != "true" ]]; then
     if [[ "$GEOIP_DATABASE_EXPLICIT" != "true" ]]; then
       GEOIP_DATABASE=""
@@ -495,7 +571,7 @@ prepare_geoip_database() {
     return
   fi
 
-  if download_geoip_database; then
+  if download_source_database_file "$GEOIP_DATABASE" "$GEOIP_DATABASE_URL" "GeoIP Country database" "GeoLite2-Country"; then
     return
   fi
 
@@ -506,6 +582,131 @@ prepare_geoip_database() {
   fi
   if [[ "$GEOIP_DATABASE_EXPLICIT" != "true" ]]; then
     GEOIP_DATABASE=""
+  fi
+}
+
+prepare_asn_database() {
+  if ! source_profile_wants_asn; then
+    if [[ "$ASN_DATABASE_EXPLICIT" != "true" ]]; then
+      ASN_DATABASE=""
+    fi
+    return
+  fi
+
+  if [[ "$AUTO_ASN_DOWNLOAD" != "true" ]]; then
+    if [[ "$ASN_DATABASE_EXPLICIT" != "true" ]]; then
+      ASN_DATABASE=""
+    fi
+    return
+  fi
+
+  if [[ "$ASN_DATABASE_EXPLICIT" == "true" && -f "$ASN_DATABASE" ]]; then
+    log "Using existing GeoIP ASN database: ${ASN_DATABASE}"
+    return
+  fi
+
+  if download_source_database_file "$ASN_DATABASE" "$ASN_DATABASE_URL" "GeoIP ASN database" "GeoLite2-ASN"; then
+    return
+  fi
+
+  log "GeoIP ASN database download failed; ASN pool matching will fall back unless a valid database already exists."
+  if [[ -f "$ASN_DATABASE" ]]; then
+    log "Using existing GeoIP ASN database: ${ASN_DATABASE}"
+    return
+  fi
+  if [[ "$ASN_DATABASE_EXPLICIT" != "true" ]]; then
+    ASN_DATABASE=""
+  fi
+}
+
+download_operator_cidr_database() {
+  local parent url target tmp bytes downloaded any_success
+
+  if [[ -z "$OPERATOR_CIDR_DATABASE" || -z "$OPERATOR_CIDR_BASE_URL" || -z "$OPERATOR_CIDR_FILES" ]]; then
+    return 1
+  fi
+  if [[ -e "$OPERATOR_CIDR_DATABASE" && ! -d "$OPERATOR_CIDR_DATABASE" ]]; then
+    log "Using existing operator CIDR file: ${OPERATOR_CIDR_DATABASE}"
+    return 0
+  fi
+
+  parent="$OPERATOR_CIDR_DATABASE"
+  log "Downloading China operator CIDR lists from gaoyifan/china-operator-ip..."
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root mkdir -p "$parent"
+  else
+    mkdir -p "$parent"
+  fi
+
+  any_success="false"
+  for downloaded in $OPERATOR_CIDR_FILES; do
+    target="${parent}/${downloaded}"
+    url="${OPERATOR_CIDR_BASE_URL%/}/${downloaded}"
+    if [[ "$NEEDS_ROOT" == "true" ]]; then
+      tmp="$(mktemp "/tmp/dushengcdn-dns-worker-operator-cidr.XXXXXX")"
+      if curl -fsSL -o "$tmp" "$url"; then
+        bytes="$(wc -c < "$tmp" | tr -d '[:space:]')"
+        if [[ "${bytes:-0}" -gt 16 ]]; then
+          run_as_root install -m 0644 "$tmp" "$target"
+          any_success="true"
+        fi
+      fi
+      rm -f "$tmp"
+    else
+      tmp="$(mktemp "${parent}/.operator-cidr.XXXXXX")"
+      if curl -fsSL -o "$tmp" "$url"; then
+        bytes="$(wc -c < "$tmp" | tr -d '[:space:]')"
+        if [[ "${bytes:-0}" -gt 16 ]]; then
+          mv -f "$tmp" "$target"
+          chmod 0644 "$target"
+          any_success="true"
+        else
+          rm -f "$tmp"
+        fi
+      else
+        rm -f "$tmp"
+      fi
+    fi
+  done
+
+  if [[ "$any_success" == "true" ]]; then
+    log "China operator CIDR database ready: ${OPERATOR_CIDR_DATABASE}"
+    return 0
+  fi
+  return 1
+}
+
+prepare_operator_cidr_database() {
+  if ! source_profile_wants_operator; then
+    if [[ "$OPERATOR_CIDR_DATABASE_EXPLICIT" != "true" ]]; then
+      OPERATOR_CIDR_DATABASE=""
+    fi
+    return
+  fi
+
+  if [[ "$AUTO_OPERATOR_CIDR_DOWNLOAD" != "true" ]]; then
+    if [[ "$OPERATOR_CIDR_DATABASE_EXPLICIT" != "true" ]]; then
+      OPERATOR_CIDR_DATABASE=""
+    fi
+    return
+  fi
+
+  if [[ "$OPERATOR_CIDR_DATABASE_EXPLICIT" == "true" && -e "$OPERATOR_CIDR_DATABASE" ]]; then
+    log "Using existing China operator CIDR database: ${OPERATOR_CIDR_DATABASE}"
+    return
+  fi
+
+  if download_operator_cidr_database; then
+    return
+  fi
+
+  log "China operator CIDR download failed; operator pool matching will fall back unless a valid database already exists."
+  if [[ -e "$OPERATOR_CIDR_DATABASE" ]]; then
+    log "Using existing China operator CIDR database: ${OPERATOR_CIDR_DATABASE}"
+    return
+  fi
+  if [[ "$OPERATOR_CIDR_DATABASE_EXPLICIT" != "true" ]]; then
+    OPERATOR_CIDR_DATABASE=""
   fi
 }
 
@@ -608,14 +809,27 @@ fi
 
 validate_install_dir
 validate_build_go_dir
+normalize_source_database_profile
 if [[ -z "$SNAPSHOT_PATH" ]]; then
   SNAPSHOT_PATH="${INSTALL_DIR}/data/dns-worker-snapshot.json"
 fi
-if [[ -z "$GEOIP_DATABASE" && "$AUTO_GEOIP_DOWNLOAD" == "true" ]]; then
+if [[ -z "$GEOIP_DATABASE" && "$AUTO_GEOIP_DOWNLOAD" == "true" ]] && source_profile_wants_country; then
   GEOIP_DATABASE="${INSTALL_DIR}/data/geoip/GeoLite2-Country.mmdb"
 fi
-if [[ "$AUTO_GEOIP_DOWNLOAD" != "true" && "$GEOIP_DATABASE_EXPLICIT" != "true" ]]; then
+if [[ "$AUTO_GEOIP_DOWNLOAD" != "true" && "$GEOIP_DATABASE_EXPLICIT" != "true" ]] || ! source_profile_wants_country; then
   GEOIP_DATABASE=""
+fi
+if [[ -z "$ASN_DATABASE" && "$AUTO_ASN_DOWNLOAD" == "true" ]] && source_profile_wants_asn; then
+  ASN_DATABASE="${INSTALL_DIR}/data/geoip/GeoLite2-ASN.mmdb"
+fi
+if [[ "$AUTO_ASN_DOWNLOAD" != "true" && "$ASN_DATABASE_EXPLICIT" != "true" ]] || ! source_profile_wants_asn; then
+  ASN_DATABASE=""
+fi
+if [[ -z "$OPERATOR_CIDR_DATABASE" && "$AUTO_OPERATOR_CIDR_DOWNLOAD" == "true" ]] && source_profile_wants_operator; then
+  OPERATOR_CIDR_DATABASE="${INSTALL_DIR}/data/operator-cidr"
+fi
+if [[ "$AUTO_OPERATOR_CIDR_DOWNLOAD" != "true" && "$OPERATOR_CIDR_DATABASE_EXPLICIT" != "true" ]] || ! source_profile_wants_operator; then
+  OPERATOR_CIDR_DATABASE=""
 fi
 
 if [[ "$OS" == "linux" && "$CREATE_SERVICE" == "true" && ! -d /etc/systemd/system ]]; then
@@ -638,6 +852,20 @@ if [[ -n "$GEOIP_DATABASE" ]]; then
   GEOIP_PARENT="$(dirname "$GEOIP_DATABASE")"
   if [[ ! -e "$GEOIP_PARENT" || ! -w "$GEOIP_PARENT" ]]; then
     NEEDS_ROOT="true"
+  fi
+fi
+if [[ -n "$ASN_DATABASE" ]]; then
+  ASN_PARENT="$(dirname "$ASN_DATABASE")"
+  if [[ ! -e "$ASN_PARENT" || ! -w "$ASN_PARENT" ]]; then
+    NEEDS_ROOT="true"
+  fi
+fi
+if [[ -n "$OPERATOR_CIDR_DATABASE" ]]; then
+  if [[ "$OPERATOR_CIDR_DATABASE" == */* ]]; then
+    OPERATOR_CIDR_PARENT="$(dirname "$OPERATOR_CIDR_DATABASE")"
+    if [[ ! -e "$OPERATOR_CIDR_PARENT" || ! -w "$OPERATOR_CIDR_PARENT" ]]; then
+      NEEDS_ROOT="true"
+    fi
   fi
 fi
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" ]]; then
@@ -694,6 +922,8 @@ fi
 trap - EXIT
 
 prepare_geoip_database
+prepare_asn_database
+prepare_operator_cidr_database
 
 ENV_FILE="${INSTALL_DIR}/dns-worker.env"
 ENV_MODE="0600"
@@ -705,6 +935,8 @@ DUSHENGCDN_DNS_WORKER_TOKEN=$(env_quote "$TOKEN")
 DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=$(env_quote "$LISTEN_ADDR")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=$(env_quote "$SNAPSHOT_PATH")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=$(env_quote "$GEOIP_DATABASE")
+DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=$(env_quote "$ASN_DATABASE")
+DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=$(env_quote "$OPERATOR_CIDR_DATABASE")
 DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL=$(env_quote "$HEARTBEAT_INTERVAL")
 DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT=$(env_quote "$REQUEST_TIMEOUT")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE=$(env_quote "$SNAPSHOT_MAX_AGE")
@@ -719,6 +951,8 @@ DUSHENGCDN_DNS_WORKER_TOKEN=$(env_quote "$TOKEN")
 DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=$(env_quote "$LISTEN_ADDR")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=$(env_quote "$SNAPSHOT_PATH")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=$(env_quote "$GEOIP_DATABASE")
+DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=$(env_quote "$ASN_DATABASE")
+DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=$(env_quote "$OPERATOR_CIDR_DATABASE")
 DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL=$(env_quote "$HEARTBEAT_INTERVAL")
 DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT=$(env_quote "$REQUEST_TIMEOUT")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE=$(env_quote "$SNAPSHOT_MAX_AGE")

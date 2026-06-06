@@ -2118,6 +2118,34 @@ func validateDatabaseSchemaV34(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV35 adds DNS Worker source database capability fields.
+func migrateV35(db *gorm.DB, backend string) error {
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV35(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV34(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{
+		"asn_database_path",
+		"asn_last_error",
+		"geo_ip_database_type",
+		"asn_database_type",
+		"geo_ip_country_enabled",
+		"geo_ip_asn_enabled",
+		"geo_ip_operator_enabled",
+		"operator_cidr_database_path",
+		"operator_cidr_last_error",
+	} {
+		if !db.Migrator().HasColumn(&DNSWorker{}, column) {
+			return fmt.Errorf("column dns_workers.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -2153,6 +2181,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 31, toVersion: 32, migrate: migrateV32, validate: validateDatabaseSchemaV32},
 		{fromVersion: 32, toVersion: 33, migrate: migrateV33, validate: validateDatabaseSchemaV33},
 		{fromVersion: 33, toVersion: 34, migrate: migrateV34, validate: validateDatabaseSchemaV34},
+		{fromVersion: 34, toVersion: 35, migrate: migrateV35, validate: validateDatabaseSchemaV35},
 	}
 }
 
@@ -2200,7 +2229,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV34(db, backend)
+		return validateDatabaseSchemaV35(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2216,7 +2245,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV34(db, backend)
+	return validateDatabaseSchemaV35(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2247,7 +2276,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV34(db, backend); err != nil {
+	if err := validateDatabaseSchemaV35(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

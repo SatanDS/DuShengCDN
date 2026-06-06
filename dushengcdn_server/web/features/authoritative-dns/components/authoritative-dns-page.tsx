@@ -466,6 +466,36 @@ function getWorkerStatusVariant(status: DNSWorkerItem['status']) {
   return status === 'online' ? 'success' : 'warning';
 }
 
+function getWorkerSourceCapabilityCounts(workers: DNSWorkerItem[]) {
+  const onlineWorkers = workers.filter((worker) => worker.status === 'online');
+  const source = onlineWorkers.length > 0 ? onlineWorkers : workers;
+  return {
+    total: source.length,
+    country: source.filter((worker) => worker.geoip_country_enabled).length,
+    asn: source.filter((worker) => worker.geoip_asn_enabled).length,
+    operator: source.filter((worker) => worker.geoip_operator_enabled).length,
+  };
+}
+
+function getWorkerSourceCapabilityMessage(workers: DNSWorkerItem[]) {
+  const counts = getWorkerSourceCapabilityCounts(workers);
+  if (counts.total === 0) {
+    return '尚未创建 DNS 响应端，运营商/ASN 规则会在响应端部署并上报识别库后生效。';
+  }
+  return `识别库能力：国家 ${counts.country}/${counts.total}，ASN ${counts.asn}/${counts.total}，运营商 ${counts.operator}/${counts.total}。运营商来自 gaoyifan/china-operator-ip CIDR 库，ASN 来自 GeoLite2-ASN 或兼容 MMDB。`;
+}
+
+function getWorkerSourceCapabilityTone(workers: DNSWorkerItem[]) {
+  const counts = getWorkerSourceCapabilityCounts(workers);
+  if (counts.total === 0) {
+    return 'info' as const;
+  }
+  if (counts.asn === counts.total && counts.operator === counts.total) {
+    return 'success' as const;
+  }
+  return 'info' as const;
+}
+
 function formatCount(value: number) {
   return value.toLocaleString('zh-CN');
 }
@@ -2141,6 +2171,10 @@ function WorkersPanel({
         />
       ) : (
         <div className="space-y-4">
+          <InlineMessage
+            tone={getWorkerSourceCapabilityTone(workers)}
+            message={getWorkerSourceCapabilityMessage(workers)}
+          />
           {workers.map((worker) => (
             <div
               key={worker.id}
@@ -2169,6 +2203,18 @@ function WorkersPanel({
                         worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'
                       }
                       variant={worker.geoip_enabled ? 'success' : 'warning'}
+                    />
+                    <StatusBadge
+                      label={worker.geoip_country_enabled ? '国家支持' : '国家未支持'}
+                      variant={worker.geoip_country_enabled ? 'success' : 'warning'}
+                    />
+                    <StatusBadge
+                      label={worker.geoip_asn_enabled ? 'ASN 支持' : 'ASN 未支持'}
+                      variant={worker.geoip_asn_enabled ? 'success' : 'warning'}
+                    />
+                    <StatusBadge
+                      label={worker.geoip_operator_enabled ? '运营商支持' : '运营商未支持'}
+                      variant={worker.geoip_operator_enabled ? 'success' : 'warning'}
                     />
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -2214,15 +2260,27 @@ function WorkersPanel({
                       tone="info"
                       message={`国家识别库加载失败：${worker.geoip_last_error}`}
                     />
+                  ) : worker.asn_last_error ? (
+                    <InlineMessage
+                      tone="info"
+                      message={`ASN 识别库加载失败：${worker.asn_last_error}`}
+                    />
+                  ) : worker.operator_cidr_last_error ? (
+                    <InlineMessage
+                      tone="info"
+                      message={`运营商 CIDR 库加载失败：${worker.operator_cidr_last_error}`}
+                    />
                   ) : !worker.geoip_enabled ? (
                     <InlineMessage
                       tone="info"
                       message="未加载国家识别库；按国家匹配节点池不会命中，仍可按来源网段或全局规则调度。"
                     />
                   ) : (
-                    <p className="text-xs break-all text-[var(--foreground-secondary)]">
-                      国家识别库：{worker.geoip_database_path || '已加载'}
-                    </p>
+                    <div className="space-y-1 text-xs break-all text-[var(--foreground-secondary)]">
+                      <p>国家识别库：{worker.geoip_database_path || '已加载'}</p>
+                      <p>ASN 识别库：{worker.asn_database_path || '未配置独立 ASN 库'}</p>
+                      <p>运营商 CIDR 库：{worker.operator_cidr_database_path || '未配置'}</p>
+                    </div>
                   )}
                   {worker.probe_message ? (
                     <p className="text-xs text-[var(--foreground-secondary)]">
@@ -3588,6 +3646,14 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
             label={worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'}
             variant={worker.geoip_enabled ? 'success' : 'warning'}
           />
+          <StatusBadge
+            label={worker.geoip_asn_enabled ? 'ASN 支持' : 'ASN 未支持'}
+            variant={worker.geoip_asn_enabled ? 'success' : 'warning'}
+          />
+          <StatusBadge
+            label={worker.geoip_operator_enabled ? '运营商支持' : '运营商未支持'}
+            variant={worker.geoip_operator_enabled ? 'success' : 'warning'}
+          />
         </div>
       </div>
 
@@ -3659,6 +3725,18 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           className="mt-3"
           tone="info"
           message={`国家识别库加载失败：${worker.geoip_last_error}`}
+        />
+      ) : worker.asn_last_error ? (
+        <InlineMessage
+          className="mt-3"
+          tone="info"
+          message={`ASN 识别库加载失败：${worker.asn_last_error}`}
+        />
+      ) : worker.operator_cidr_last_error ? (
+        <InlineMessage
+          className="mt-3"
+          tone="info"
+          message={`运营商 CIDR 库加载失败：${worker.operator_cidr_last_error}`}
         />
       ) : !worker.geoip_enabled ? (
         <InlineMessage
@@ -4483,6 +4561,7 @@ function WorkerTokenModal({
   const installCommand = `curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-dns-worker.sh | bash -s -- \\
   --server-url ${serverUrl} \\
   --token ${token || 'YOUR_DNS_WORKER_TOKEN'} \\
+  --source-database-profile full \\
   --query-rate-limit 200 \\
   --udp-response-size 1232`;
   const dockerCommand = `docker run -d --name dushengcdn-dns-worker --restart unless-stopped \\
@@ -4490,6 +4569,9 @@ function WorkerTokenModal({
   -v dushengcdn-dns-worker-data:/data \\
   -e DUSHENGCDN_DNS_WORKER_SERVER_URL=${serverUrl} \\
   -e DUSHENGCDN_DNS_WORKER_TOKEN=${token || 'YOUR_DNS_WORKER_TOKEN'} \\
+  -e DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=/data/geoip/GeoLite2-Country.mmdb \\
+  -e DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=/data/geoip/GeoLite2-ASN.mmdb \\
+  -e DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=/data/operator-cidr \\
   -e DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \\
   -e DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232 \\
   ghcr.io/satands/dushengcdn-dns-worker:latest`;
@@ -4499,6 +4581,9 @@ go run ./cmd/dns-worker \\
   --token ${token || 'YOUR_DNS_WORKER_TOKEN'} \\
   --listen :53 \\
   --snapshot-path /var/lib/dushengcdn-dns-worker/snapshot.json \\
+  --geoip-database /var/lib/dushengcdn-dns-worker/geoip/GeoLite2-Country.mmdb \\
+  --asn-database /var/lib/dushengcdn-dns-worker/geoip/GeoLite2-ASN.mmdb \\
+  --operator-cidr-database /var/lib/dushengcdn-dns-worker/operator-cidr \\
   --query-rate-limit 200 \\
   --udp-response-size 1232`;
 

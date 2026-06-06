@@ -2714,12 +2714,19 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 	heartbeatAt := time.Now().UTC().Truncate(time.Minute)
 	view, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
-		Version:             "v1.0.0",
-		Status:              "online",
-		LastSnapshotVersion: "abc123",
-		LastSnapshotAt:      &heartbeatAt,
-		GeoIPEnabled:        true,
-		GeoIPDatabasePath:   "/opt/dushengcdn-dns-worker/data/geoip/GeoLite2-Country.mmdb",
+		Version:                  "v1.0.0",
+		Status:                   "online",
+		LastSnapshotVersion:      "abc123",
+		LastSnapshotAt:           &heartbeatAt,
+		GeoIPEnabled:             true,
+		GeoIPDatabasePath:        "/opt/dushengcdn-dns-worker/data/geoip/GeoLite2-Country.mmdb",
+		ASNDatabasePath:          "/opt/dushengcdn-dns-worker/data/geoip/GeoLite2-ASN.mmdb",
+		GeoIPDatabaseType:        "GeoLite2-Country",
+		ASNDatabaseType:          "GeoLite2-ASN",
+		GeoIPCountryEnabled:      true,
+		GeoIPASNEnabled:          true,
+		GeoIPOperatorEnabled:     true,
+		OperatorCIDRDatabasePath: "/opt/dushengcdn-dns-worker/data/operator-cidr",
 		Rollups: []DNSQueryRollupInput{
 			{
 				WindowStart:     heartbeatAt,
@@ -2752,6 +2759,12 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 	if !view.GeoIPEnabled || view.GeoIPDatabasePath == "" {
 		t.Fatalf("expected heartbeat view to include geoip status: %+v", view)
+	}
+	if !view.GeoIPCountryEnabled || !view.GeoIPASNEnabled || !view.GeoIPOperatorEnabled {
+		t.Fatalf("expected heartbeat view to include source capabilities: %+v", view)
+	}
+	if view.ASNDatabasePath == "" || view.OperatorCIDRDatabasePath == "" {
+		t.Fatalf("expected heartbeat view to include source database paths: %+v", view)
 	}
 	if view.LastHeartbeatAt == nil {
 		t.Fatalf("expected heartbeat timestamp in view: %+v", view)

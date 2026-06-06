@@ -17,8 +17,14 @@ import { LoadingState } from '@/components/feedback/loading-state';
 import { useToastFeedback } from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
-import { getDNSZones } from '@/features/authoritative-dns/api/authoritative-dns';
-import type { DNSZoneItem } from '@/features/authoritative-dns/types';
+import {
+  getDNSWorkers,
+  getDNSZones,
+} from '@/features/authoritative-dns/api/authoritative-dns';
+import type {
+  DNSWorkerItem,
+  DNSZoneItem,
+} from '@/features/authoritative-dns/types';
 import { getDnsAccounts } from '@/features/dns-accounts/api/dns-accounts';
 import type { DnsAccountItem } from '@/features/dns-accounts/types';
 import { getManagedDomains } from '@/features/managed-domains/api/managed-domains';
@@ -320,6 +326,25 @@ const gslbOperatorOptions = [
 ] as const;
 
 let gslbPoolRowSequence = 0;
+
+function getDNSWorkerCapabilitySummary(workers: DNSWorkerItem[]) {
+  const onlineWorkers = workers.filter((worker) => worker.status === 'online');
+  const source = onlineWorkers.length > 0 ? onlineWorkers : workers;
+  return {
+    total: source.length,
+    country: source.filter((worker) => worker.geoip_country_enabled).length,
+    asn: source.filter((worker) => worker.geoip_asn_enabled).length,
+    operator: source.filter((worker) => worker.geoip_operator_enabled).length,
+  };
+}
+
+function formatDNSWorkerCapabilitySummary(workers: DNSWorkerItem[]) {
+  const summary = getDNSWorkerCapabilitySummary(workers);
+  if (summary.total === 0) {
+    return '尚未检测到 DNS 响应端，运营商/ASN 调度会在响应端部署并上报识别库后生效。';
+  }
+  return `当前响应端识别库：国家 ${summary.country}/${summary.total}，ASN ${summary.asn}/${summary.total}，运营商 ${summary.operator}/${summary.total}。运营商识别使用 gaoyifan/china-operator-ip CIDR 库；ASN 识别使用 GeoLite2-ASN 或兼容 MMDB。`;
+}
 
 function normalizeSelectedCertificateIDs(rows: DomainListRow[]) {
   return Array.from(
@@ -1021,6 +1046,10 @@ export function DNSAutomationSection({
       ),
     [nodePoolOptions],
   );
+  const dnsWorkersQuery = useQuery({
+    queryKey: ['authoritative-dns', 'workers', 'source-capabilities'],
+    queryFn: getDNSWorkers,
+  });
 
   return (
     <ConfigSectionShell
@@ -1437,6 +1466,14 @@ export function DNSAutomationSection({
 
             {gslbEnabled ? (
               <>
+                {isAuthoritativeMode ? (
+                  <InlineMessage
+                    tone="info"
+                    message={formatDNSWorkerCapabilitySummary(
+                      dnsWorkersQuery.data ?? [],
+                    )}
+                  />
+                ) : null}
                 <ResourceField
                   label={
                     <span className="flex flex-wrap items-center gap-3">

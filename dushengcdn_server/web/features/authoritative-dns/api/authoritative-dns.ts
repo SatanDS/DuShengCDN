@@ -169,6 +169,15 @@ function normalizeDNSWorker(worker: DNSWorkerItem) {
     last_probe_results: asArray(worker.last_probe_results),
     probe_status: worker.probe_status || 'unknown',
     last_rollup_count: worker.last_rollup_count ?? 0,
+    asn_database_path: worker.asn_database_path ?? '',
+    asn_last_error: worker.asn_last_error ?? '',
+    geoip_database_type: worker.geoip_database_type ?? '',
+    asn_database_type: worker.asn_database_type ?? '',
+    geoip_country_enabled: Boolean(worker.geoip_country_enabled),
+    geoip_asn_enabled: Boolean(worker.geoip_asn_enabled),
+    geoip_operator_enabled: Boolean(worker.geoip_operator_enabled),
+    operator_cidr_database_path: worker.operator_cidr_database_path ?? '',
+    operator_cidr_last_error: worker.operator_cidr_last_error ?? '',
   };
 }
 
@@ -295,6 +304,11 @@ function normalizeDNSWorkerSnapshotConsistency(
     workers: asArray(consistency.workers).map((worker) => ({
       ...worker,
       last_rollup_count: worker.last_rollup_count ?? 0,
+      asn_last_error: worker.asn_last_error ?? '',
+      geoip_country_enabled: Boolean(worker.geoip_country_enabled),
+      geoip_asn_enabled: Boolean(worker.geoip_asn_enabled),
+      geoip_operator_enabled: Boolean(worker.geoip_operator_enabled),
+      operator_cidr_last_error: worker.operator_cidr_last_error ?? '',
     })),
   };
 }
@@ -330,6 +344,15 @@ function normalizeDNSWorkerHealthSummary(
       last_probe_results: asArray(worker.last_probe_results),
       probe_status: worker.probe_status || 'unknown',
       last_rollup_count: worker.last_rollup_count ?? 0,
+      asn_database_path: worker.asn_database_path ?? '',
+      asn_last_error: worker.asn_last_error ?? '',
+      geoip_database_type: worker.geoip_database_type ?? '',
+      asn_database_type: worker.asn_database_type ?? '',
+      geoip_country_enabled: Boolean(worker.geoip_country_enabled),
+      geoip_asn_enabled: Boolean(worker.geoip_asn_enabled),
+      geoip_operator_enabled: Boolean(worker.geoip_operator_enabled),
+      operator_cidr_database_path: worker.operator_cidr_database_path ?? '',
+      operator_cidr_last_error: worker.operator_cidr_last_error ?? '',
       node_probes: asArray(worker.node_probes).map((probe) => ({
         ...probe,
         probe_status: probe.probe_status || 'unknown',

@@ -37,28 +37,37 @@ type DNSRecordCountByZone struct {
 }
 
 type DNSWorker struct {
-	ID                  uint       `json:"id" gorm:"primaryKey"`
-	WorkerID            string     `json:"worker_id" gorm:"uniqueIndex;size:64;not null"`
-	Name                string     `json:"name" gorm:"size:128;not null"`
-	Token               string     `json:"-" gorm:"size:128;index;not null"`
-	PublicAddress       string     `json:"public_address" gorm:"size:255"`
-	Version             string     `json:"version" gorm:"size:64"`
-	Status              string     `json:"status" gorm:"size:16;not null;default:'offline'"`
-	LastSnapshotVersion string     `json:"last_snapshot_version" gorm:"size:128"`
-	LastSnapshotAt      *time.Time `json:"last_snapshot_at"`
-	LastSeenAt          *time.Time `json:"last_seen_at"`
-	LastHeartbeatAt     *time.Time `json:"last_heartbeat_at" gorm:"index"`
-	LastRollupAt        *time.Time `json:"last_rollup_at"`
-	LastRollupCount     int64      `json:"last_rollup_count" gorm:"not null;default:0"`
-	LastError           string     `json:"last_error" gorm:"type:text"`
-	GeoIPEnabled        bool       `json:"geoip_enabled" gorm:"not null;default:false"`
-	GeoIPDatabasePath   string     `json:"geoip_database_path" gorm:"size:512;not null;default:''"`
-	GeoIPLastError      string     `json:"geoip_last_error" gorm:"type:text;not null;default:''"`
-	LastProbeAt         *time.Time `json:"last_probe_at"`
-	LastProbeQuery      string     `json:"last_probe_query" gorm:"size:255"`
-	LastProbeResult     string     `json:"last_probe_result" gorm:"type:text;not null;default:'[]'"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                       uint       `json:"id" gorm:"primaryKey"`
+	WorkerID                 string     `json:"worker_id" gorm:"uniqueIndex;size:64;not null"`
+	Name                     string     `json:"name" gorm:"size:128;not null"`
+	Token                    string     `json:"-" gorm:"size:128;index;not null"`
+	PublicAddress            string     `json:"public_address" gorm:"size:255"`
+	Version                  string     `json:"version" gorm:"size:64"`
+	Status                   string     `json:"status" gorm:"size:16;not null;default:'offline'"`
+	LastSnapshotVersion      string     `json:"last_snapshot_version" gorm:"size:128"`
+	LastSnapshotAt           *time.Time `json:"last_snapshot_at"`
+	LastSeenAt               *time.Time `json:"last_seen_at"`
+	LastHeartbeatAt          *time.Time `json:"last_heartbeat_at" gorm:"index"`
+	LastRollupAt             *time.Time `json:"last_rollup_at"`
+	LastRollupCount          int64      `json:"last_rollup_count" gorm:"not null;default:0"`
+	LastError                string     `json:"last_error" gorm:"type:text"`
+	GeoIPEnabled             bool       `json:"geoip_enabled" gorm:"not null;default:false"`
+	GeoIPDatabasePath        string     `json:"geoip_database_path" gorm:"size:512;not null;default:''"`
+	GeoIPLastError           string     `json:"geoip_last_error" gorm:"type:text;not null;default:''"`
+	ASNDatabasePath          string     `json:"asn_database_path" gorm:"column:asn_database_path;size:512;not null;default:''"`
+	ASNLastError             string     `json:"asn_last_error" gorm:"column:asn_last_error;type:text;not null;default:''"`
+	GeoIPDatabaseType        string     `json:"geoip_database_type" gorm:"column:geo_ip_database_type;size:128;not null;default:''"`
+	ASNDatabaseType          string     `json:"asn_database_type" gorm:"column:asn_database_type;size:128;not null;default:''"`
+	GeoIPCountryEnabled      bool       `json:"geoip_country_enabled" gorm:"column:geo_ip_country_enabled;not null;default:false"`
+	GeoIPASNEnabled          bool       `json:"geoip_asn_enabled" gorm:"column:geo_ip_asn_enabled;not null;default:false"`
+	GeoIPOperatorEnabled     bool       `json:"geoip_operator_enabled" gorm:"column:geo_ip_operator_enabled;not null;default:false"`
+	OperatorCIDRDatabasePath string     `json:"operator_cidr_database_path" gorm:"column:operator_cidr_database_path;size:512;not null;default:''"`
+	OperatorCIDRLastError    string     `json:"operator_cidr_last_error" gorm:"column:operator_cidr_last_error;type:text;not null;default:''"`
+	LastProbeAt              *time.Time `json:"last_probe_at"`
+	LastProbeQuery           string     `json:"last_probe_query" gorm:"size:255"`
+	LastProbeResult          string     `json:"last_probe_result" gorm:"type:text;not null;default:'[]'"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
 type DNSQueryRollup struct {

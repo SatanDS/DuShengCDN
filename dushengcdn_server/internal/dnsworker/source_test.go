@@ -2,6 +2,7 @@ package dnsworker
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -34,5 +35,29 @@ func TestSourceResolverStatusReportsGeoIPOpenError(t *testing.T) {
 	}
 	if source.Country != "" || source.ScopeKey != "global" {
 		t.Fatalf("expected unresolved country to fall back to global, got %+v", source)
+	}
+}
+
+func TestSourceResolverUsesOperatorCIDRDatabase(t *testing.T) {
+	dir := t.TempDir()
+	operatorDir := filepath.Join(dir, "operator-cidr")
+	if err := os.Mkdir(operatorDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(operatorDir, "unicom.txt"), []byte("198.51.100.0/24\n"), 0o644); err != nil {
+		t.Fatalf("write operator CIDR: %v", err)
+	}
+
+	resolver, err := NewSourceResolver("", "", operatorDir)
+	if err != nil {
+		t.Fatalf("NewSourceResolver: %v", err)
+	}
+	status := resolver.Status()
+	if !status.OperatorEnabled {
+		t.Fatalf("expected operator capability to be enabled: %+v", status)
+	}
+	source := resolver.Resolve(&dns.Msg{}, &net.UDPAddr{IP: net.ParseIP("198.51.100.10"), Port: 53000})
+	if source.Operator != "cn-unicom" || source.Country != "CN" || source.ScopeKey != "operator:cn-unicom" {
+		t.Fatalf("expected China Unicom operator context, got %+v", source)
 	}
 }
