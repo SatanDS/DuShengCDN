@@ -3167,6 +3167,69 @@ func TestDNSWorkerHeartbeatPersistsSchedulingStates(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerHeartbeatPersistsLargeSchedulingStateBatch(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "large-edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+
+	changedAt := time.Now().UTC().Truncate(time.Second)
+	states := make([]AuthoritativeDNSSnapshotSchedulingState, 0, 101)
+	for index := 0; index < 101; index++ {
+		states = append(states, AuthoritativeDNSSnapshotSchedulingState{
+			RouteID:         route.ID,
+			RecordType:      "A",
+			ScopeKey:        fmt.Sprintf("country:HK|bucket:%02d", index),
+			SelectedTargets: []string{"8.8.8.8"},
+			DesiredTargets:  []string{"8.8.8.8"},
+			LastChangedAt:   &changedAt,
+		})
+	}
+
+	if _, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status:           "online",
+		SchedulingStates: states,
+	}); err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat with large scheduling state batch: %v", err)
+	}
+
+	var count int64
+	if err := model.DB.Model(&model.GSLBSchedulingState{}).Where("proxy_route_id = ?", route.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count scheduling states: %v", err)
+	}
+	if count != int64(len(states)) {
+		t.Fatalf("expected %d scheduling states, got %d", len(states), count)
+	}
+}
+
 func TestPersistDNSWorkerSchedulingStatesBatchesExistingStateLookup(t *testing.T) {
 	setupServiceTestDB(t)
 
