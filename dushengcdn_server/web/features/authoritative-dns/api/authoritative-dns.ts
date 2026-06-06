@@ -168,6 +168,7 @@ function normalizeDNSWorker(worker: DNSWorkerItem) {
     ...worker,
     last_probe_results: asArray(worker.last_probe_results),
     probe_status: worker.probe_status || 'unknown',
+    last_rollup_count: worker.last_rollup_count ?? 0,
   };
 }
 
@@ -284,7 +285,10 @@ function normalizeDNSWorkerSnapshotConsistency(
       ...version,
       workers: asArray(version.workers),
     })),
-    workers: asArray(consistency.workers),
+    workers: asArray(consistency.workers).map((worker) => ({
+      ...worker,
+      last_rollup_count: worker.last_rollup_count ?? 0,
+    })),
   };
 }
 
@@ -318,6 +322,7 @@ function normalizeDNSWorkerHealthSummary(
       ...worker,
       last_probe_results: asArray(worker.last_probe_results),
       probe_status: worker.probe_status || 'unknown',
+      last_rollup_count: worker.last_rollup_count ?? 0,
       node_probes: asArray(worker.node_probes).map((probe) => ({
         ...probe,
         probe_status: probe.probe_status || 'unknown',

@@ -2753,6 +2753,12 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	if !view.GeoIPEnabled || view.GeoIPDatabasePath == "" {
 		t.Fatalf("expected heartbeat view to include geoip status: %+v", view)
 	}
+	if view.LastHeartbeatAt == nil {
+		t.Fatalf("expected heartbeat timestamp in view: %+v", view)
+	}
+	if view.LastRollupAt == nil || view.LastRollupCount != 42 {
+		t.Fatalf("expected rollup metadata in view: %+v", view)
+	}
 	var count int64
 	if err := model.DB.Model(&model.DNSQueryRollup{}).Where("worker_id = ?", authenticated.WorkerID).Count(&count).Error; err != nil {
 		t.Fatalf("count rollups: %v", err)
@@ -3829,14 +3835,14 @@ func TestAuthoritativeDNSObservabilityLimitsHeavyCounterScans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
 	}
-	if summary.TotalQueries != 3 || summary.SuccessfulQueries != 3 {
-		t.Fatalf("expected totals to use the bounded recent rollup sample, got %+v", summary)
+	if summary.TotalQueries != 103 || summary.SuccessfulQueries != 103 {
+		t.Fatalf("expected totals to use full database aggregation, got %+v", summary)
 	}
+	assertCounter(t, summary.TopQNames, "old.example.com", "old.example.com", 100)
 	assertCounter(t, summary.TopQNames, "newest.example.com", "newest.example.com", 1)
 	assertCounter(t, summary.TopQNames, "newer.example.com", "newer.example.com", 2)
 	assertCounter(t, summary.TopTargets, "192.0.2.30", "192.0.2.30", 1)
 	assertCounter(t, summary.TopTargets, "192.0.2.20", "192.0.2.20", 2)
-	assertNoCounter(t, summary.TopQNames, "old.example.com")
 	assertNoCounter(t, summary.TopTargets, "192.0.2.10")
 }
 

@@ -47,6 +47,9 @@ type DNSWorker struct {
 	LastSnapshotVersion string     `json:"last_snapshot_version" gorm:"size:128"`
 	LastSnapshotAt      *time.Time `json:"last_snapshot_at"`
 	LastSeenAt          *time.Time `json:"last_seen_at"`
+	LastHeartbeatAt     *time.Time `json:"last_heartbeat_at" gorm:"index"`
+	LastRollupAt        *time.Time `json:"last_rollup_at"`
+	LastRollupCount     int64      `json:"last_rollup_count" gorm:"not null;default:0"`
 	LastError           string     `json:"last_error" gorm:"type:text"`
 	GeoIPEnabled        bool       `json:"geoip_enabled" gorm:"not null;default:false"`
 	GeoIPDatabasePath   string     `json:"geoip_database_path" gorm:"size:512;not null;default:''"`

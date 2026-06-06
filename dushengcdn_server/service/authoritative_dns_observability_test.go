@@ -23,9 +23,9 @@ func TestLoadDNSObservabilitySummaryQueryDataRunsQueriesConcurrently(t *testing.
 	}
 
 	queries := dnsObservabilitySummaryQueries{
-		queryRecentRows: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error) {
+		queryRollupData: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
 			markStartedAndWait()
-			return nil, nil
+			return newDNSObservabilitySummaryQueryData(dnsObservabilityWindow{}), nil
 		},
 		queryLastRollupAt: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*time.Time, error) {
 			markStartedAndWait()
@@ -62,7 +62,7 @@ func TestLoadDNSObservabilitySummaryQueryDataRunsQueriesConcurrently(t *testing.
 func TestLoadDNSObservabilitySummaryQueryDataReturnsQueryError(t *testing.T) {
 	wantErr := errors.New("dns observability query failed")
 	queries := successfulDNSObservabilitySummaryQueries()
-	queries.queryRecentRows = func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error) {
+	queries.queryRollupData = func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
 		return nil, wantErr
 	}
 
@@ -197,8 +197,8 @@ func TestDNSRouteLabelsLoadsRoutesByIDs(t *testing.T) {
 
 func successfulDNSObservabilitySummaryQueries() dnsObservabilitySummaryQueries {
 	return dnsObservabilitySummaryQueries{
-		queryRecentRows: func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error) {
-			return nil, nil
+		queryRollupData: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
+			return newDNSObservabilitySummaryQueryData(dnsObservabilityWindow{}), nil
 		},
 		queryLastRollupAt: func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*time.Time, error) {
 			return nil, nil

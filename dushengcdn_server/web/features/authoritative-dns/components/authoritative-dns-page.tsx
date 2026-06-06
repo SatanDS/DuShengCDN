@@ -698,6 +698,35 @@ function getSnapshotConsistencyMessage(
   return '';
 }
 
+function getDNSObservabilityRollupHint(summary: DNSObservabilitySummary) {
+  if (summary.total_queries > 0) {
+    return '';
+  }
+  const healthWorkers = summary.worker_health?.workers ?? [];
+  const consistencyWorkers = summary.snapshot_consistency?.workers ?? [];
+  const workers = healthWorkers.length > 0 ? healthWorkers : consistencyWorkers;
+  if (workers.length === 0) {
+    return '当前还没有 DNS 响应端。创建并部署响应端后，页面才会收到 DNS 查询观测数据。';
+  }
+  const onlineWorkers = workers.filter((worker) => worker.status === 'online');
+  if (onlineWorkers.length === 0) {
+    return '当前没有在线 DNS 响应端，查询观测不会产生数据。请先确认响应端进程、53 端口和面板连接。';
+  }
+  const heartbeatWorkers = onlineWorkers.filter((worker) =>
+    isMeaningfulTime(worker.last_heartbeat_at),
+  );
+  if (heartbeatWorkers.length === 0) {
+    return '响应端能拉取解析配置，但还没有成功发送心跳。请检查响应端到面板的 /api/dns-worker-heartbeat 请求、响应端密钥和反代限制。';
+  }
+  const rollupWorkers = onlineWorkers.filter((worker) =>
+    isMeaningfulTime(worker.last_rollup_at),
+  );
+  if (rollupWorkers.length === 0) {
+    return '响应端心跳正常，但还没有上报 DNS 查询 rollup。请确认公网 NS 流量是否真正打到这些响应端，以及响应端版本是否包含查询观测上报。';
+  }
+  return '最近窗口内没有 DNS 查询 rollup。若业务确实有查询，请检查客户端使用的 NS、域名委派、响应端时间和面板时间是否一致。';
+}
+
 function shouldShowNoAuthoritativeRoutesNotice({
   zones,
   workers,
@@ -2101,7 +2130,7 @@ function WorkersPanel({
                       variant={worker.geoip_enabled ? 'success' : 'warning'}
                     />
                   </div>
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                     <InfoTile label="响应端 ID" value={worker.worker_id} />
                     <InfoTile
                       label="公网地址"
@@ -2110,6 +2139,20 @@ function WorkersPanel({
                     <InfoTile
                       label="最近心跳"
                       value={formatRelativeTime(worker.last_seen_at)}
+                      helper={
+                        isMeaningfulTime(worker.last_heartbeat_at)
+                          ? `统计心跳 ${formatRelativeTime(worker.last_heartbeat_at)}`
+                          : '尚未收到统计心跳'
+                      }
+                    />
+                    <InfoTile
+                      label="最近查询统计"
+                      value={formatRelativeTime(worker.last_rollup_at)}
+                      helper={
+                        worker.last_rollup_count > 0
+                          ? `上次上报 ${formatCount(worker.last_rollup_count)} 次查询`
+                          : '尚未上报 DNS 查询 rollup'
+                      }
                     />
                     <InfoTile
                       label="最近配置"
@@ -3255,6 +3298,8 @@ function DNSObservabilityPanel({
     );
   }
 
+  const rollupHint = getDNSObservabilityRollupHint(summary);
+
   return (
     <AppCard
       title="DNS 查询观测"
@@ -3275,6 +3320,13 @@ function DNSObservabilityPanel({
         />
         <InfoTile label="错误查询" value={formatCount(summary.error_queries)} />
       </div>
+      {rollupHint ? (
+        <InlineMessage
+          className="mt-4"
+          tone="warning"
+          message={rollupHint}
+        />
+      ) : null}
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
         <DNSQueryTrendPanel summary={summary} />
@@ -3481,6 +3533,20 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
         <InfoTile
           label="最近心跳"
           value={formatRelativeTime(worker.last_seen_at)}
+          helper={
+            isMeaningfulTime(worker.last_heartbeat_at)
+              ? `统计心跳 ${formatRelativeTime(worker.last_heartbeat_at)}`
+              : '尚未收到统计心跳'
+          }
+        />
+        <InfoTile
+          label="最近查询统计"
+          value={formatRelativeTime(worker.last_rollup_at)}
+          helper={
+            worker.last_rollup_count > 0
+              ? `上次上报 ${formatCount(worker.last_rollup_count)} 次查询`
+              : '尚未上报 DNS 查询 rollup'
+          }
         />
         <InfoTile
           label="多节点探测"

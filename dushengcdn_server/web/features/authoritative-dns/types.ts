@@ -46,6 +46,9 @@ export interface DNSWorkerItem {
   last_snapshot_version: string;
   last_snapshot_at?: string | null;
   last_seen_at?: string | null;
+  last_heartbeat_at?: string | null;
+  last_rollup_at?: string | null;
+  last_rollup_count: number;
   last_error: string;
   geoip_enabled: boolean;
   geoip_database_path: string;
@@ -283,6 +286,9 @@ export interface DNSWorkerSnapshotWorker {
   snapshot_version: string;
   last_snapshot_at?: string | null;
   last_seen_at?: string | null;
+  last_heartbeat_at?: string | null;
+  last_rollup_at?: string | null;
+  last_rollup_count: number;
   stale: boolean;
   geoip_enabled: boolean;
   geoip_last_error: string;
@@ -333,6 +339,9 @@ export interface DNSWorkerHealthItem {
   average_latency_ms: number;
   max_latency_ms: number;
   last_seen_at?: string | null;
+  last_heartbeat_at?: string | null;
+  last_rollup_at?: string | null;
+  last_rollup_count: number;
   last_snapshot_at?: string | null;
   snapshot_age_seconds: number;
   snapshot_stale: boolean;

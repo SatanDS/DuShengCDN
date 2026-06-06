@@ -147,6 +147,9 @@ type DNSWorkerView struct {
 	LastSnapshotVersion string                     `json:"last_snapshot_version"`
 	LastSnapshotAt      *time.Time                 `json:"last_snapshot_at"`
 	LastSeenAt          *time.Time                 `json:"last_seen_at"`
+	LastHeartbeatAt     *time.Time                 `json:"last_heartbeat_at"`
+	LastRollupAt        *time.Time                 `json:"last_rollup_at"`
+	LastRollupCount     int64                      `json:"last_rollup_count"`
 	LastError           string                     `json:"last_error"`
 	GeoIPEnabled        bool                       `json:"geoip_enabled"`
 	GeoIPDatabasePath   string                     `json:"geoip_database_path"`
@@ -432,7 +435,7 @@ type dnsObservabilitySummaryQueryData struct {
 }
 
 type dnsObservabilitySummaryQueries struct {
-	queryRecentRows   func(DNSObservabilitySummaryInput, dnsObservabilityWindow, int) ([]dnsObservabilityRollupSampleRow, error)
+	queryRollupData   func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error)
 	queryLastRollupAt func(DNSObservabilitySummaryInput, dnsObservabilityWindow) (*time.Time, error)
 }
 
@@ -449,7 +452,7 @@ type dnsObservabilitySummaryLabelQueries struct {
 }
 
 var defaultDNSObservabilitySummaryQueries = dnsObservabilitySummaryQueries{
-	queryRecentRows:   queryDNSObservabilityRecentRows,
+	queryRollupData:   queryDNSObservabilityAggregatedData,
 	queryLastRollupAt: queryDNSObservabilityLastRollupAt,
 }
 
@@ -487,6 +490,9 @@ type DNSWorkerSnapshotWorkerView struct {
 	SnapshotVersion string     `json:"snapshot_version"`
 	LastSnapshotAt  *time.Time `json:"last_snapshot_at"`
 	LastSeenAt      *time.Time `json:"last_seen_at"`
+	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
+	LastRollupAt    *time.Time `json:"last_rollup_at"`
+	LastRollupCount int64      `json:"last_rollup_count"`
 	Stale           bool       `json:"stale"`
 	GeoIPEnabled    bool       `json:"geoip_enabled"`
 	GeoIPLastError  string     `json:"geoip_last_error"`
@@ -523,6 +529,9 @@ type DNSWorkerHealthItemView struct {
 	AverageLatencyMs        float64                    `json:"average_latency_ms"`
 	MaxLatencyMs            int64                      `json:"max_latency_ms"`
 	LastSeenAt              *time.Time                 `json:"last_seen_at"`
+	LastHeartbeatAt         *time.Time                 `json:"last_heartbeat_at"`
+	LastRollupAt            *time.Time                 `json:"last_rollup_at"`
+	LastRollupCount         int64                      `json:"last_rollup_count"`
 	LastSnapshotAt          *time.Time                 `json:"last_snapshot_at"`
 	SnapshotAgeSeconds      int64                      `json:"snapshot_age_seconds"`
 	SnapshotStale           bool                       `json:"snapshot_stale"`
@@ -1105,12 +1114,12 @@ func GetAuthoritativeDNSObservabilitySummary(input DNSObservabilitySummaryInput)
 }
 
 func loadDNSObservabilitySummaryQueryData(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, queries dnsObservabilitySummaryQueries) (*dnsObservabilitySummaryQueryData, error) {
-	var recentRows []dnsObservabilityRollupSampleRow
+	var data *dnsObservabilitySummaryQueryData
 	var lastRollupAt *time.Time
 	if err := runConcurrentQueries(
 		func() error {
-			rows, err := queries.queryRecentRows(input, window, normalizeDNSObservabilityHeavyCounterScanLimit())
-			recentRows = rows
+			value, err := queries.queryRollupData(input, window)
+			data = value
 			return err
 		},
 		func() error {
@@ -1121,7 +1130,9 @@ func loadDNSObservabilitySummaryQueryData(input DNSObservabilitySummaryInput, wi
 	); err != nil {
 		return nil, err
 	}
-	data := buildDNSObservabilitySummaryDataFromRows(window, recentRows)
+	if data == nil {
+		data = newDNSObservabilitySummaryQueryData(window)
+	}
 	data.lastRollupAt = lastRollupAt
 	return data, nil
 }
@@ -1294,10 +1305,16 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	worker.LastSnapshotVersion = strings.TrimSpace(input.LastSnapshotVersion)
 	worker.LastSnapshotAt = normalizeDNSWorkerSnapshotAt(input.LastSnapshotAt, now)
 	worker.LastSeenAt = &now
+	worker.LastHeartbeatAt = &now
 	worker.LastError = truncateForDatabase(strings.TrimSpace(input.LastError), 16000)
 	worker.GeoIPEnabled = input.GeoIPEnabled
 	worker.GeoIPDatabasePath = truncateForDatabase(strings.TrimSpace(input.GeoIPDatabasePath), 512)
 	worker.GeoIPLastError = truncateForDatabase(strings.TrimSpace(input.GeoIPLastError), 16000)
+	rollupMeta := summarizeDNSQueryRollupInputs(input.Rollups)
+	if rollupMeta.count > 0 {
+		worker.LastRollupAt = &rollupMeta.lastRollupAt
+		worker.LastRollupCount = rollupMeta.count
+	}
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(worker).Error; err != nil {
 			return err
@@ -2540,6 +2557,9 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		LastSnapshotVersion: worker.LastSnapshotVersion,
 		LastSnapshotAt:      worker.LastSnapshotAt,
 		LastSeenAt:          worker.LastSeenAt,
+		LastHeartbeatAt:     worker.LastHeartbeatAt,
+		LastRollupAt:        worker.LastRollupAt,
+		LastRollupCount:     worker.LastRollupCount,
 		LastError:           worker.LastError,
 		GeoIPEnabled:        worker.GeoIPEnabled,
 		GeoIPDatabasePath:   worker.GeoIPDatabasePath,
@@ -3246,6 +3266,31 @@ func persistDNSWorkerProbeResult(worker *model.DNSWorker, view *DNSWorkerProbeVi
 
 func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error {
 	return persistDNSQueryRollupsWithDB(model.DB, workerID, inputs)
+}
+
+type dnsQueryRollupInputSummary struct {
+	count        int64
+	lastRollupAt time.Time
+}
+
+func summarizeDNSQueryRollupInputs(inputs []DNSQueryRollupInput) dnsQueryRollupInputSummary {
+	summary := dnsQueryRollupInputSummary{}
+	fallbackWindowStart := time.Now().UTC().Truncate(time.Minute)
+	for _, input := range inputs {
+		if input.QueryCount <= 0 {
+			continue
+		}
+		windowStart := input.WindowStart
+		if windowStart.IsZero() {
+			windowStart = fallbackWindowStart
+		}
+		rollupEnd := windowStart.UTC().Add(time.Duration(normalizeDNSRollupWindow(input.WindowMinutes)) * time.Minute)
+		summary.count += input.QueryCount
+		if summary.lastRollupAt.IsZero() || rollupEnd.After(summary.lastRollupAt) {
+			summary.lastRollupAt = rollupEnd
+		}
+	}
+	return summary
 }
 
 func persistDNSQueryRollupsWithDB(db *gorm.DB, workerID string, inputs []DNSQueryRollupInput) error {
@@ -4079,6 +4124,94 @@ func buildDNSObservabilitySummaryDataFromRows(window dnsObservabilityWindow, row
 	return data
 }
 
+func queryDNSObservabilityAggregatedData(input DNSObservabilitySummaryInput, window dnsObservabilityWindow) (*dnsObservabilitySummaryQueryData, error) {
+	var rcodeCounts map[string]int64
+	var qtypeCounts map[string]int64
+	var qnameCounts map[string]int64
+	var workerCounts map[string]int64
+	var sourceScopeCounts map[string]int64
+	var zoneCounts map[uint]int64
+	var routeCounts map[uint]int64
+	var targetCounts map[string]int64
+	var dynamicQueries int64
+	var trendPoints []DNSObservabilityTrendPointView
+	var workerHealthRollups []dnsWorkerHealthRollupRow
+	if err := runConcurrentQueries(
+		func() error {
+			values, err := queryDNSObservabilityStringCounts(input, window, "rcode", 0)
+			rcodeCounts = values
+			return err
+		},
+		func() error {
+			values, err := queryDNSObservabilityStringCounts(input, window, "qtype", 10)
+			qtypeCounts = values
+			return err
+		},
+		func() error {
+			values, err := queryDNSObservabilityStringCounts(input, window, "qname", 8)
+			qnameCounts = values
+			return err
+		},
+		func() error {
+			values, err := queryDNSObservabilityStringCounts(input, window, "worker_id", 8)
+			workerCounts = values
+			return err
+		},
+		func() error {
+			values, err := queryDNSObservabilityStringCounts(input, window, "source_scope", 8)
+			sourceScopeCounts = values
+			return err
+		},
+		func() error {
+			values, err := queryDNSObservabilityUintCounts(input, window, "zone_id", 8, "zone_id > 0")
+			zoneCounts = values
+			return err
+		},
+		func() error {
+			values, err := queryDNSObservabilityUintCounts(input, window, "proxy_route_id", 8, "proxy_route_id > 0")
+			routeCounts = values
+			return err
+		},
+		func() error {
+			values, err := queryDNSObservabilityTopTargets(input, window, 8)
+			targetCounts = values
+			return err
+		},
+		func() error {
+			value, err := queryDNSObservabilityDynamicQueries(input, window)
+			dynamicQueries = value
+			return err
+		},
+		func() error {
+			values, err := queryDNSObservabilityTrendPoints(input, window)
+			trendPoints = values
+			return err
+		},
+		func() error {
+			values, err := queryDNSWorkerHealthRollups(input, window)
+			workerHealthRollups = values
+			return err
+		},
+	); err != nil {
+		return nil, err
+	}
+	data := newDNSObservabilitySummaryQueryData(window)
+	data.rcodeCounts = rcodeCounts
+	data.qtypeCounts = qtypeCounts
+	data.qnameCounts = qnameCounts
+	data.workerCounts = workerCounts
+	data.sourceScopeCounts = sourceScopeCounts
+	data.zoneCounts = zoneCounts
+	data.routeCounts = routeCounts
+	data.targetCounts = targetCounts
+	data.dynamicQueries = dynamicQueries
+	if trendPoints != nil {
+		data.trendPoints = trendPoints
+	}
+	data.workerHealthRollups = workerHealthRollups
+	return data, nil
+}
+
 func dnsObservabilityErrorQueries(rcode string, count int64) int64 {
 	switch normalizeDNSRCode(rcode) {
 	case "SERVFAIL", "REFUSED":
@@ -4092,9 +4225,6 @@ func queryDNSObservabilityStringCounts(input DNSObservabilitySummaryInput, windo
 	expression := dnsObservabilityStringCountExpression(field)
 	if expression == "" {
 		return map[string]int64{}, nil
-	}
-	if field == "qname" && limit > 0 {
-		return queryDNSObservabilityStringCountsFromRecentRows(input, window, field, expression, limit)
 	}
 	var rows []dnsObservabilityStringCountRow
 	query := dnsObservabilityBaseQuery(input, window).
@@ -4119,28 +4249,6 @@ func queryDNSObservabilityStringCounts(input DNSObservabilitySummaryInput, windo
 	return result, nil
 }
 
-func queryDNSObservabilityStringCountsFromRecentRows(input DNSObservabilitySummaryInput, window dnsObservabilityWindow, field string, expression string, limit int) (map[string]int64, error) {
-	scanLimit := normalizeDNSObservabilityHeavyCounterScanLimit()
-	var rows []dnsObservabilityStringCountRow
-	if err := dnsObservabilityBaseQuery(input, window).
-		Select(expression + " AS key, query_count AS count").
-		Order("window_start DESC").
-		Order("id DESC").
-		Limit(scanLimit).
-		Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	result := make(map[string]int64, len(rows))
-	for _, row := range rows {
-		key := normalizeDNSObservabilityStringCountKey(field, row.Key)
-		if key == "" || row.Count <= 0 {
-			continue
-		}
-		result[key] += row.Count
-	}
-	return limitDNSObservabilityCounterMap(result, limit), nil
-}
-
 func dnsObservabilityStringCountExpression(field string) string {
 	switch field {
 	case "rcode":
@@ -4156,6 +4264,17 @@ func dnsObservabilityStringCountExpression(field string) string {
 	default:
 		return ""
 	}
+}
+
+func queryDNSObservabilityDynamicQueries(input DNSObservabilitySummaryInput, window dnsObservabilityWindow) (int64, error) {
+	var total int64
+	if err := dnsObservabilityBaseQuery(input, window).
+		Select("COALESCE(SUM(query_count), 0)").
+		Where("proxy_route_id > 0").
+		Scan(&total).Error; err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 func normalizeDNSObservabilityStringCountKey(field string, value string) string {
@@ -4480,6 +4599,9 @@ func buildDNSWorkerSnapshotConsistency(now time.Time) DNSWorkerSnapshotConsisten
 			SnapshotVersion: snapshotVersion,
 			LastSnapshotAt:  snapshotAt,
 			LastSeenAt:      worker.LastSeenAt,
+			LastHeartbeatAt: worker.LastHeartbeatAt,
+			LastRollupAt:    worker.LastRollupAt,
+			LastRollupCount: worker.LastRollupCount,
 			Stale:           stale,
 			GeoIPEnabled:    worker.GeoIPEnabled,
 			GeoIPLastError:  worker.GeoIPLastError,
@@ -4706,6 +4828,9 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			AverageLatencyMs:        averageMilliseconds(stats.totalDurationMs, stats.queryCount),
 			MaxLatencyMs:            stats.maxDurationMs,
 			LastSeenAt:              worker.LastSeenAt,
+			LastHeartbeatAt:         worker.LastHeartbeatAt,
+			LastRollupAt:            worker.LastRollupAt,
+			LastRollupCount:         worker.LastRollupCount,
 			LastSnapshotAt:          snapshotAt,
 			SnapshotAgeSeconds:      snapshotAgeSeconds,
 			SnapshotStale:           snapshotStale,
