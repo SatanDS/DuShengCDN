@@ -82,13 +82,13 @@ var CommercialLicenseAllowUnsigned = false
 var CommercialLicenseIssuerPrivateKey = ""
 var CommercialLicenseIssuerPrivateKeyFile = ""
 var ServerAutoUpgradeEnabled = false
-var ServerUpdateRepo = "SatanDS/DuShengCDN-releases"
+var ServerUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"
 var GitHubReleaseToken = ""
 
 // V3 operational settings (hot-reloadable via Option table)
 var AgentHeartbeatInterval = 10000 // milliseconds
 var AgentWebsocketUpgradeEnabled = true
-var AgentUpdateRepo = "SatanDS/DuShengCDN-releases"
+var AgentUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"
 var GeoIPProvider = "ipinfo"
 var DatabaseAutoCleanupEnabled = false
 var DatabaseAutoCleanupRetentionDays = 30

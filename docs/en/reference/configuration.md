@@ -35,7 +35,7 @@
 | `DUSHENGCDN_LICENSE_PUBLIC_KEYS` | Ed25519 public keys for commercial license verification; base64url, standard base64, or hex; separated by comma, semicolon, whitespace, or newline | empty |
 | `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` | Allow unsigned development licenses; not recommended for production | `false` |
 | `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED` | Allow the management console to download and replace the Server binary from GitHub Releases | `false` |
-| `DUSHENGCDN_SERVER_UPDATE_REPO` | GitHub Release repository used by the top-bar version checker, in `owner/repo` format; commercial private builds should point to a binary-only release repository | `SatanDS/DuShengCDN-releases` |
+| `DUSHENGCDN_SERVER_UPDATE_REPO` | GitHub Release repository used by the top-bar version checker, in `owner/repo` format; commercial private builds should point to a binary-only release repository | `SatanDS/SatanDS-DuShengCDN-releases` |
 | `DUSHENGCDN_GITHUB_RELEASE_TOKEN` | Read-only GitHub token for private Release access; grant only the binary release repository, never the source repository | empty |
 
 When `DSN` and `SQL_DSN` both exist, `DSN` wins. PostgreSQL is preferred when configured. If PostgreSQL is empty and a local SQLite file exists, Server migrates SQLite data at startup.
@@ -46,7 +46,7 @@ When `REDIS_CONN_STRING` is empty, Redis-backed helpers fall back to in-process 
 
 Commercial license tokens use the `dscdn_license_v1.<payload>.<signature>` format with Ed25519 signatures. For enforced private deployments, set `DUSHENGCDN_LICENSE_REQUIRED=true`, configure `DUSHENGCDN_LICENSE_PUBLIC_KEYS`, then install the license from **Settings -> Commercial License**.
 
-Server automatic upgrades are disabled by default. Production deployments should usually check the version in the console, upload a reviewed Server binary, and confirm the manual upgrade. If `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` is enabled, the Release must include the matching Server binary, a same-name `.sha256` file, and a same-name `.sig` signature file, such as `dushengcdn-server-linux-amd64.sha256`; the downloaded binary is verified before it replaces the executable. For commercial-only deployments, keep the source repository private and publish assets to a binary-only repository such as `SatanDS/DuShengCDN-releases`; set `DUSHENGCDN_SERVER_UPDATE_REPO` and `AgentUpdateRepo` to that repository. The binary repository can be public because it contains no source code and runtime access is controlled by license tokens. If binary downloads must also be private, the Server top bar can use a fine-scoped `DUSHENGCDN_GITHUB_RELEASE_TOKEN`, but Agent self-update should be disabled or moved to a Server proxy/short-lived signed URL flow; do not distribute a GitHub token to Agents.
+Server automatic upgrades are disabled by default. Production deployments should usually check the version in the console, upload a reviewed Server binary, and confirm the manual upgrade. If `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` is enabled, the Release must include the matching Server binary, a same-name `.sha256` file, and a same-name `.sig` signature file, such as `dushengcdn-server-linux-amd64.sha256`; the downloaded binary is verified before it replaces the executable. For commercial-only deployments, keep the source repository private and publish assets to a binary-only repository such as `SatanDS/SatanDS-DuShengCDN-releases`; set `DUSHENGCDN_SERVER_UPDATE_REPO` and `AgentUpdateRepo` to that repository. The binary repository can be public because it contains no source code and runtime access is controlled by license tokens. If binary downloads must also be private, the Server top bar can use a fine-scoped `DUSHENGCDN_GITHUB_RELEASE_TOKEN`, but Agent self-update should be disabled or moved to a Server proxy/short-lived signed URL flow; do not distribute a GitHub token to Agents.
 
 Production Compose files require `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `DSN` to be set explicitly. The installer can generate them, but Compose templates no longer fall back to public placeholder database credentials.
 
@@ -134,7 +134,7 @@ The settings page maintains these hot-updatable options:
 | `AgentWebsocketUpgradeEnabled` | Allow Agent to upgrade from HTTP heartbeat to WebSocket | `true` |
 | `AgentDiscoveryToken` | First-registration Discovery Token for Agents; registered nodes receive node-specific `agent_token` values | generated on first read |
 | `NodeOfflineThreshold` | Node offline threshold in milliseconds | `120000` |
-| `AgentUpdateRepo` | Agent update repository; commercial private builds should point to the binary-only release repository | `SatanDS/DuShengCDN-releases` |
+| `AgentUpdateRepo` | Agent update repository; commercial private builds should point to the binary-only release repository | `SatanDS/SatanDS-DuShengCDN-releases` |
 | `GeoIPProvider` | Node/IP region provider | `ipinfo` |
 | `DatabaseAutoCleanupEnabled` | Enable daily observability cleanup | `false` |
 | `DatabaseAutoCleanupRetentionDays` | Retention days | `30` |

@@ -108,7 +108,7 @@ const defaultOperationFields = {
   AgentHeartbeatInterval: '10000',
   AgentWebsocketUpgradeEnabled: true,
   NodeOfflineThreshold: '120000',
-  AgentUpdateRepo: 'SatanDS/DuShengCDN-releases',
+  AgentUpdateRepo: 'SatanDS/SatanDS-DuShengCDN-releases',
   GeoIPProvider: 'ipinfo',
   OpenRestyWorkerProcesses: 'auto',
   OpenRestyWorkerConnections: '4096',
@@ -592,7 +592,7 @@ export function SettingsPage() {
         true,
       ),
       NodeOfflineThreshold: optionMap.NodeOfflineThreshold ?? '120000',
-      AgentUpdateRepo: optionMap.AgentUpdateRepo ?? 'SatanDS/DuShengCDN-releases',
+      AgentUpdateRepo: optionMap.AgentUpdateRepo ?? 'SatanDS/SatanDS-DuShengCDN-releases',
       GeoIPProvider: optionMap.GeoIPProvider ?? 'ipinfo',
       OpenRestyWorkerProcesses: optionMap.OpenRestyWorkerProcesses ?? 'auto',
       OpenRestyWorkerConnections:
@@ -1565,7 +1565,7 @@ export function SettingsPage() {
                             AgentUpdateRepo: event.target.value,
                           }))
                         }
-                        placeholder="SatanDS/DuShengCDN-releases"
+                        placeholder="SatanDS/SatanDS-DuShengCDN-releases"
                       />
                     </ResourceField>
                   </div>

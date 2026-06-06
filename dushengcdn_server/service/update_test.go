@@ -536,8 +536,8 @@ func TestReleaseAssetDownloadURLUsesAPIURLForPrivateRepo(t *testing.T) {
 	})
 
 	asset := githubAsset{
-		URL:                "https://api.github.com/repos/SatanDS/DuShengCDN-releases/releases/assets/123",
-		BrowserDownloadURL: "https://github.com/SatanDS/DuShengCDN-releases/releases/download/v0.5.0/server",
+		URL:                "https://api.github.com/repos/SatanDS/SatanDS-DuShengCDN-releases/releases/assets/123",
+		BrowserDownloadURL: "https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/download/v0.5.0/server",
 	}
 	if got := releaseAssetDownloadURL(asset); got != asset.URL {
 		t.Fatalf("expected asset API URL, got %s", got)
@@ -556,7 +556,7 @@ func TestServerUpdateDownloadRequestAuthScope(t *testing.T) {
 		common.GitHubReleaseToken = originalToken
 	})
 
-	apiReq, err := newServerUpdateDownloadRequest(context.Background(), "https://api.github.com/repos/SatanDS/DuShengCDN-releases/releases/assets/123", "text/plain")
+	apiReq, err := newServerUpdateDownloadRequest(context.Background(), "https://api.github.com/repos/SatanDS/SatanDS-DuShengCDN-releases/releases/assets/123", "text/plain")
 	if err != nil {
 		t.Fatalf("build api request: %v", err)
 	}

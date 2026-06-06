@@ -2,7 +2,7 @@ name: Cleanup prerelease tags
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  DUSHENGCDN_RELEASE_REPOSITORY: SatanDS/DuShengCDN-releases
+  DUSHENGCDN_RELEASE_REPOSITORY: SatanDS/SatanDS-DuShengCDN-releases
 
 on:
   workflow_dispatch:

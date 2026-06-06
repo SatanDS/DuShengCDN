@@ -124,11 +124,11 @@ func TestLatestReleaseProxyUsesPrivateRepoToken(t *testing.T) {
 	originalClient := service.UpdateHTTPClientForTest()
 	originalServerUpdateRepo := common.ServerUpdateRepo
 	originalGitHubReleaseToken := common.GitHubReleaseToken
-	common.ServerUpdateRepo = "SatanDS/DuShengCDN-releases"
+	common.ServerUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"
 	common.GitHubReleaseToken = "github_pat_test"
 	service.SetUpdateHTTPClientForTest(&http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.String() != "https://api.github.com/repos/SatanDS/DuShengCDN-releases/releases/latest" {
+			if req.URL.String() != "https://api.github.com/repos/SatanDS/SatanDS-DuShengCDN-releases/releases/latest" {
 				t.Fatalf("unexpected request url: %s", req.URL.String())
 			}
 			if req.Header.Get("Authorization") != "Bearer github_pat_test" {
@@ -140,7 +140,7 @@ func TestLatestReleaseProxyUsesPrivateRepoToken(t *testing.T) {
 				Body: io.NopCloser(strings.NewReader(`{
 					"tag_name":"v1.2.4",
 					"body":"release notes",
-					"html_url":"https://github.com/SatanDS/DuShengCDN-releases/releases/tag/v1.2.4",
+					"html_url":"https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/tag/v1.2.4",
 					"published_at":"2026-03-11T00:00:00Z"
 				}`)),
 			}, nil

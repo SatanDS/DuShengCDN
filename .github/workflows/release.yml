@@ -4,7 +4,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  DUSHENGCDN_RELEASE_REPOSITORY: SatanDS/DuShengCDN-releases
+  DUSHENGCDN_RELEASE_REPOSITORY: SatanDS/SatanDS-DuShengCDN-releases
 
 on:
   workflow_dispatch:
@@ -349,8 +349,8 @@ jobs:
           prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
           make_latest: ${{ needs.prepare.outputs.is_prerelease == 'true' && 'false' || 'true' }}
           body: |
-            Source repository: ${{ github.repository }}
-            Source commit: ${{ github.sha }}
+            DuShengCDN commercial binary release.
+            Assets include detached SHA-256 checksums and release signatures.
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
