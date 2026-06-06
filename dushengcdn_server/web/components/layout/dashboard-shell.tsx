@@ -9,7 +9,7 @@ interface DashboardShellProps {
 
 export function DashboardShell({ children }: DashboardShellProps) {
   return (
-    <div className="relative flex min-h-screen overflow-hidden bg-transparent text-[var(--foreground-primary)]">
+    <div className="dashboard-portal relative flex min-h-screen overflow-hidden bg-transparent text-[var(--foreground-primary)]">
       <div
         className="dashboard-maple-haze pointer-events-none fixed inset-0 z-0"
         aria-hidden="true"

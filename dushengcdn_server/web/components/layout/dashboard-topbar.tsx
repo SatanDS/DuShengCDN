@@ -343,7 +343,7 @@ export function DashboardTopbar() {
 
   return (
     <>
-      <header className="sticky top-0 z-20 border-b border-[var(--border-default)] bg-[var(--surface-panel)]/88 px-4 py-4 backdrop-blur md:px-8">
+      <header className="dashboard-topbar-glass sticky top-0 z-20 border-b border-[var(--border-default)] px-4 py-4 backdrop-blur md:px-8">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <button
@@ -398,7 +398,7 @@ export function DashboardTopbar() {
               </button>
 
               {isUserMenuOpen ? (
-                <div className="absolute top-[calc(100%+0.5rem)] right-0 w-52 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] p-2 shadow-[var(--shadow-lg)]">
+                <div className="dashboard-popover-glass absolute top-[calc(100%+0.5rem)] right-0 w-52 rounded-2xl border border-[var(--border-default)] p-2 shadow-[var(--shadow-lg)]">
                   <div className="rounded-xl px-3 py-2">
                     <p className="text-sm font-semibold text-[var(--foreground-primary)]">
                       {user?.display_name || user?.username || '用户'}

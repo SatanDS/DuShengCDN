@@ -19,7 +19,7 @@ export function AppCard({
   return (
     <section
       className={cn(
-        'rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--surface-card)]/90 shadow-[var(--shadow-soft)] backdrop-blur',
+        'dashboard-liquid-card rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--surface-card)]/90 shadow-[var(--shadow-soft)] backdrop-blur',
         className,
       )}
       {...props}

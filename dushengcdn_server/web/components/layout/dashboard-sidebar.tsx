@@ -401,7 +401,7 @@ export function DashboardSidebar() {
 
       <aside
         className={cn(
-          'fixed top-0 left-0 z-40 h-screen w-[200px] overflow-hidden border-r border-[var(--border-default)] bg-[var(--surface-panel)]/95 px-3 py-5 backdrop-blur transition-transform duration-200 min-[1000px]:hidden',
+          'dashboard-glass-panel fixed top-0 left-0 z-40 h-screen w-[200px] overflow-hidden border-r border-[var(--border-default)] px-3 py-5 backdrop-blur transition-transform duration-200 min-[1000px]:hidden',
           isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -416,7 +416,7 @@ export function DashboardSidebar() {
 
       <aside
         className={cn(
-          'sticky top-0 z-10 hidden h-screen shrink-0 overflow-hidden border-r border-[var(--border-default)] bg-[var(--surface-panel)]/95 py-5 backdrop-blur min-[1000px]:block',
+          'dashboard-glass-panel sticky top-0 z-10 hidden h-screen shrink-0 overflow-hidden border-r border-[var(--border-default)] py-5 backdrop-blur min-[1000px]:block',
           isSidebarCollapsed ? 'w-[72px] px-2' : 'w-[200px] px-3',
         )}
       >
