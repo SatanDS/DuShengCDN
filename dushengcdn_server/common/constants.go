@@ -90,6 +90,11 @@ var CommercialBuildWatermark = ""
 var ServerAutoUpgradeEnabled = false
 var ServerUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"
 var GitHubReleaseToken = ""
+var DNSSourceDatabaseMirrorPath = ""
+var DNSSourceDatabaseCountryURL = "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb"
+var DNSSourceDatabaseASNURL = "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb"
+var DNSSourceDatabaseOperatorCIDRBaseURL = "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists"
+var DNSSourceDatabaseOperatorCIDRFiles = "chinanet.txt chinanet6.txt cmcc.txt cmcc6.txt unicom.txt unicom6.txt cernet.txt cernet6.txt cstnet.txt cstnet6.txt drpeng.txt drpeng6.txt googlecn.txt googlecn6.txt"
 
 // V3 operational settings (hot-reloadable via Option table)
 var AgentHeartbeatInterval = 10000 // milliseconds

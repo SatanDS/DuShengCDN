@@ -102,6 +102,7 @@ func main() {
 
 	job.InitCronJobs()
 	defer job.StopCronJobs()
+	job.WarmupDNSSourceDatabaseMirror()
 
 	if err := validateRuntimeSecurityConfig(gin.Mode()); err != nil {
 		slog.Error("runtime security validation failed", "error", err)

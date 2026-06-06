@@ -25,6 +25,13 @@ func InitCronJobs() {
 		slog.Info("registered Cloudflare DNS reconcile cron job")
 	}
 
+	_, err = cronRunner.AddJob("@every 168h", &DNSSourceDatabaseMirrorJob{})
+	if err != nil {
+		slog.Error("failed to register DNS source database mirror cron job", "error", err)
+	} else {
+		slog.Info("registered DNS source database mirror cron job")
+	}
+
 	cronRunner.Start()
 }
 

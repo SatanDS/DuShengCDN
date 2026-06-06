@@ -196,6 +196,8 @@ func SetApiRouter(router *gin.Engine) {
 		}
 		apiRouter.GET("/dns-snapshot", controller.GetDNSSnapshot)
 		apiRouter.POST("/dns-worker-heartbeat", controller.DNSWorkerHeartbeat)
+		apiRouter.GET("/dns-source-databases/manifest", controller.GetDNSSourceDatabaseManifest)
+		apiRouter.GET("/dns-source-databases/files/:kind/:name", controller.DownloadDNSSourceDatabaseFile)
 		configVersionRoute := apiRouter.Group("/config-versions")
 		configVersionRoute.Use(middleware.AdminAuth())
 		{

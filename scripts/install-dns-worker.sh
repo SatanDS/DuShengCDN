@@ -32,6 +32,8 @@ OPERATOR_CIDR_DATABASE_EXPLICIT="false"
 OPERATOR_CIDR_BASE_URL="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL:-https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists}"
 OPERATOR_CIDR_FILES="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES:-chinanet.txt chinanet6.txt cmcc.txt cmcc6.txt unicom.txt unicom6.txt cernet.txt cernet6.txt cstnet.txt cstnet6.txt drpeng.txt drpeng6.txt googlecn.txt googlecn6.txt}"
 AUTO_OPERATOR_CIDR_DOWNLOAD="true"
+SOURCE_DATABASE_METADATA_DIR=""
+SOURCE_DATABASE_UPDATE_TIMER="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER:-true}"
 HEARTBEAT_INTERVAL="10s"
 REQUEST_TIMEOUT="10s"
 SNAPSHOT_MAX_AGE="5m"
@@ -71,6 +73,8 @@ Options:
                              Do not download China operator CIDR lists automatically
   --no-source-database-download
                              Do not download any source database automatically
+  --no-source-database-update-timer
+                             Do not create the 7-day source database update timer
   --heartbeat-interval DUR   Heartbeat and snapshot pull interval (default: 10s)
   --request-timeout DUR      Server request timeout (default: 10s)
   --snapshot-max-age DUR     Maximum dynamic-answer snapshot age (default: 5m)
@@ -94,7 +98,9 @@ Examples:
 Notes:
   The full preset downloads Country + ASN MMDBs and gaoyifan/china-operator-ip operator CIDR lists.
   Reinstall keeps the data directory and snapshot cache, then replaces the binary
-  and environment file. Use uninstall-dns-worker.sh to remove local data.
+  and environment file. Source databases are updated in place and old managed
+  database directories are removed after a successful replacement.
+  Use uninstall-dns-worker.sh to remove local data.
 EOF
   exit 0
 }
@@ -118,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --no-asn-download) AUTO_ASN_DOWNLOAD="false"; shift ;;
     --no-operator-cidr-download) AUTO_OPERATOR_CIDR_DOWNLOAD="false"; shift ;;
     --no-source-database-download) AUTO_GEOIP_DOWNLOAD="false"; AUTO_ASN_DOWNLOAD="false"; AUTO_OPERATOR_CIDR_DOWNLOAD="false"; shift ;;
+    --no-source-database-update-timer) SOURCE_DATABASE_UPDATE_TIMER="false"; shift ;;
     --heartbeat-interval) HEARTBEAT_INTERVAL="$2"; shift 2 ;;
     --request-timeout) REQUEST_TIMEOUT="$2"; shift 2 ;;
     --snapshot-max-age) SNAPSHOT_MAX_AGE="$2"; shift 2 ;;
@@ -474,6 +481,258 @@ sha256_file() {
   fi
 }
 
+now_utc() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+date_to_epoch() {
+  local value="$1"
+  value="${value%%.*}Z"
+  value="${value%ZZ}Z"
+  if date -u -d "$value" '+%s' >/dev/null 2>&1; then
+    date -u -d "$value" '+%s'
+    return 0
+  fi
+  if date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$value" '+%s' >/dev/null 2>&1; then
+    date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$value" '+%s'
+    return 0
+  fi
+  return 1
+}
+
+file_mtime_epoch() {
+  local file="$1"
+  if stat -c '%Y' "$file" >/dev/null 2>&1; then
+    stat -c '%Y' "$file"
+    return 0
+  fi
+  if stat -f '%m' "$file" >/dev/null 2>&1; then
+    stat -f '%m' "$file"
+    return 0
+  fi
+  return 1
+}
+
+source_database_meta_path() {
+  local kind="$1"
+  local name="$2"
+  name="$(basename "$name")"
+  echo "${SOURCE_DATABASE_METADATA_DIR}/${kind}.${name}.env"
+}
+
+read_source_database_meta_value() {
+  local kind="$1"
+  local name="$2"
+  local key="$3"
+  local meta
+
+  meta="$(source_database_meta_path "$kind" "$name")"
+  if [[ ! -f "$meta" ]]; then
+    return 1
+  fi
+  awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); exit }' "$meta"
+}
+
+write_source_database_metadata() {
+  local kind="$1"
+  local name="$2"
+  local path="$3"
+  local source="$4"
+  local updated_at="$5"
+  local checksum="$6"
+
+  if [[ -z "$SOURCE_DATABASE_METADATA_DIR" ]]; then
+    return
+  fi
+  if [[ -z "$checksum" && -f "$path" ]]; then
+    checksum="$(sha256_file "$path" 2>/dev/null || true)"
+  fi
+  if [[ -z "$updated_at" ]]; then
+    updated_at="$(now_utc)"
+  fi
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root mkdir -p "$SOURCE_DATABASE_METADATA_DIR"
+    write_file_as_root "$(source_database_meta_path "$kind" "$name")" "0644" <<METAE0F
+kind=$kind
+name=$name
+path=$path
+source=$source
+updated_at=$updated_at
+sha256=$checksum
+METAE0F
+  else
+    mkdir -p "$SOURCE_DATABASE_METADATA_DIR"
+    cat > "$(source_database_meta_path "$kind" "$name")" <<METAE0F
+kind=$kind
+name=$name
+path=$path
+source=$source
+updated_at=$updated_at
+sha256=$checksum
+METAE0F
+    chmod 0644 "$(source_database_meta_path "$kind" "$name")"
+  fi
+}
+
+metadata_updated_epoch_or_file_mtime() {
+  local kind="$1"
+  local name="$2"
+  local path="$3"
+  local updated epoch
+
+  updated="$(read_source_database_meta_value "$kind" "$name" "updated_at" 2>/dev/null || true)"
+  if [[ -n "$updated" ]] && epoch="$(date_to_epoch "$updated" 2>/dev/null)"; then
+    echo "$epoch"
+    return 0
+  fi
+  if [[ -f "$path" ]] && epoch="$(file_mtime_epoch "$path" 2>/dev/null)"; then
+    echo "$epoch"
+    return 0
+  fi
+  return 1
+}
+
+fetch_server_source_database_manifest() {
+  local output="$1"
+  local url="${SERVER_URL%/}/api/dns-source-databases/manifest"
+
+  if [[ -z "$SERVER_URL" || -z "$TOKEN" ]]; then
+    return 1
+  fi
+  curl -fsSL -H "X-DNS-Worker-Token: ${TOKEN}" -o "$output" "$url"
+}
+
+manifest_source_updated_at() {
+  local manifest="$1"
+  local kind="$2"
+  awk -v kind="$kind" '
+    $0 ~ "\"" kind "\"[[:space:]]*:" { in_entry = 1; next }
+    in_entry && $0 ~ /"updated_at"[[:space:]]*:/ { print; exit }
+    in_entry && $0 ~ /^    }/ { in_entry = 0 }
+  ' "$manifest" | sed -n 's/.*"updated_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+manifest_file_field() {
+  local manifest="$1"
+  local kind="$2"
+  local name="$3"
+  local field="$4"
+  awk -v kind="$kind" -v name="$name" -v field="$field" '
+    $0 ~ "\"" kind "\"[[:space:]]*:" { in_entry = 1; next }
+    in_entry && $0 ~ "\"name\"[[:space:]]*:[[:space:]]*\"" name "\"" { in_file = 1 }
+    in_file && $0 ~ "\"" field "\"[[:space:]]*:" { print; exit }
+    in_entry && $0 ~ /^    }/ { in_entry = 0; in_file = 0 }
+  ' "$manifest" | sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+server_source_database_is_newer() {
+  local manifest="$1"
+  local kind="$2"
+  local name="$3"
+  local target="$4"
+  local server_updated local_epoch server_epoch local_sha server_sha
+
+  if [[ ! -f "$target" ]]; then
+    return 0
+  fi
+
+  server_sha="$(manifest_file_field "$manifest" "$kind" "$name" "sha256" || true)"
+  local_sha="$(read_source_database_meta_value "$kind" "$name" "sha256" 2>/dev/null || true)"
+  if [[ -n "$server_sha" && -n "$local_sha" && "$server_sha" == "$local_sha" ]]; then
+    return 1
+  fi
+
+  server_updated="$(manifest_file_field "$manifest" "$kind" "$name" "updated_at" || true)"
+  if [[ -z "$server_updated" ]]; then
+    server_updated="$(manifest_source_updated_at "$manifest" "$kind" || true)"
+  fi
+  if [[ -z "$server_updated" ]]; then
+    return 1
+  fi
+  if ! server_epoch="$(date_to_epoch "$server_updated" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! local_epoch="$(metadata_updated_epoch_or_file_mtime "$kind" "$name" "$target" 2>/dev/null)"; then
+    return 0
+  fi
+  [[ "$server_epoch" -gt "$local_epoch" ]]
+}
+
+download_source_database_file_from_server() {
+  local target="$1"
+  local kind="$2"
+  local name="$3"
+  local label="$4"
+  local manifest="${5:-}"
+  local parent tmp headers bytes url expected actual updated local_epoch server_epoch local_sha
+
+  if [[ -z "$target" || -z "$kind" || -z "$name" ]]; then
+    return 1
+  fi
+  parent="$(dirname "$target")"
+  url="${SERVER_URL%/}/api/dns-source-databases/files/${kind}/${name}"
+
+  log "Downloading ${label} from panel mirror..."
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root mkdir -p "$parent"
+    tmp="$(mktemp "/tmp/dushengcdn-dns-worker-${name}.XXXXXX")"
+  else
+    mkdir -p "$parent"
+    tmp="$(mktemp "${parent}/.${name}.XXXXXX")"
+  fi
+  headers="$(mktemp "/tmp/dushengcdn-dns-worker-source-headers.XXXXXX")"
+  if ! curl -fsSL -D "$headers" -H "X-DNS-Worker-Token: ${TOKEN}" -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    rm -f "$headers"
+    return 1
+  fi
+  expected="$(awk -F': ' 'tolower($1) == "x-dushengcdn-source-database-sha256" { gsub(/\r/, "", $2); print $2; exit }' "$headers")"
+  updated="$(awk -F': ' 'tolower($1) == "x-dushengcdn-source-database-updated-at" { gsub(/\r/, "", $2); print $2; exit }' "$headers")"
+  rm -f "$headers"
+  bytes="$(wc -c < "$tmp" | tr -d '[:space:]')"
+  if [[ "$name" == *.mmdb && "${bytes:-0}" -lt 1024 ]]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [[ "$name" != *.mmdb && "${bytes:-0}" -le 16 ]]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  actual="$(sha256_file "$tmp" 2>/dev/null || true)"
+  if [[ -n "$expected" && "$actual" != "$expected" ]]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [[ -f "$target" ]]; then
+    local_sha="$(read_source_database_meta_value "$kind" "$name" "sha256" 2>/dev/null || true)"
+    if [[ -z "$local_sha" ]]; then
+      local_sha="$(sha256_file "$target" 2>/dev/null || true)"
+    fi
+    if [[ -n "$expected" && -n "$local_sha" && "$expected" == "$local_sha" ]]; then
+      rm -f "$tmp"
+      log "Panel mirror ${label} is unchanged; keeping ${target}."
+      return 0
+    fi
+    if [[ -n "$updated" ]] && server_epoch="$(date_to_epoch "$updated" 2>/dev/null)" && local_epoch="$(metadata_updated_epoch_or_file_mtime "$kind" "$name" "$target" 2>/dev/null)"; then
+      if [[ "$server_epoch" -le "$local_epoch" ]]; then
+        rm -f "$tmp"
+        log "Panel mirror ${label} is not newer than local database; keeping ${target}."
+        return 0
+      fi
+    fi
+  fi
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root install -m 0644 "$tmp" "$target"
+    rm -f "$tmp"
+  else
+    mv -f "$tmp" "$target"
+    chmod 0644 "$target"
+  fi
+  write_source_database_metadata "$kind" "$name" "$target" "panel" "$updated" "$actual"
+  log "${label} ready from panel mirror: ${target}"
+  return 0
+}
+
 normalize_source_database_profile() {
   SOURCE_DATABASE_PROFILE="$(printf '%s' "$SOURCE_DATABASE_PROFILE" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
   case "$SOURCE_DATABASE_PROFILE" in
@@ -509,6 +768,8 @@ download_source_database_file() {
   local url="$2"
   local label="$3"
   local tmp_prefix="$4"
+  local kind="${5:-}"
+  local name="${6:-$tmp_prefix}"
   local parent tmp bytes
 
   if [[ -z "$target" || -z "$url" ]]; then
@@ -548,6 +809,9 @@ download_source_database_file() {
   fi
 
   log "${label} ready: ${target}"
+  if [[ -n "$kind" ]]; then
+    write_source_database_metadata "$kind" "$name" "$target" "github" "$(now_utc)" ""
+  fi
   return 0
 }
 
@@ -571,11 +835,15 @@ prepare_geoip_database() {
     return
   fi
 
-  if download_source_database_file "$GEOIP_DATABASE" "$GEOIP_DATABASE_URL" "GeoIP Country database" "GeoLite2-Country"; then
+  if download_source_database_file "$GEOIP_DATABASE" "$GEOIP_DATABASE_URL" "GeoIP Country database" "GeoLite2-Country" "country" "GeoLite2-Country.mmdb"; then
     return
   fi
 
-  log "GeoIP Country database download failed; country-code pool matching will fall back to global unless a valid database already exists."
+  if download_source_database_file_from_server "$GEOIP_DATABASE" "country" "GeoLite2-Country.mmdb" "GeoIP Country database" ""; then
+    return
+  fi
+
+  log "GeoIP Country database download failed from GitHub and panel mirror; country-code pool matching will fall back to global unless a valid database already exists."
   if [[ -f "$GEOIP_DATABASE" ]]; then
     log "Using existing GeoIP Country database: ${GEOIP_DATABASE}"
     return
@@ -605,11 +873,15 @@ prepare_asn_database() {
     return
   fi
 
-  if download_source_database_file "$ASN_DATABASE" "$ASN_DATABASE_URL" "GeoIP ASN database" "GeoLite2-ASN"; then
+  if download_source_database_file "$ASN_DATABASE" "$ASN_DATABASE_URL" "GeoIP ASN database" "GeoLite2-ASN" "asn" "GeoLite2-ASN.mmdb"; then
     return
   fi
 
-  log "GeoIP ASN database download failed; ASN pool matching will fall back unless a valid database already exists."
+  if download_source_database_file_from_server "$ASN_DATABASE" "asn" "GeoLite2-ASN.mmdb" "GeoIP ASN database" ""; then
+    return
+  fi
+
+  log "GeoIP ASN database download failed from GitHub and panel mirror; ASN pool matching will fall back unless a valid database already exists."
   if [[ -f "$ASN_DATABASE" ]]; then
     log "Using existing GeoIP ASN database: ${ASN_DATABASE}"
     return
@@ -670,7 +942,113 @@ download_operator_cidr_database() {
   done
 
   if [[ "$any_success" == "true" ]]; then
+    prune_operator_cidr_directory "$parent"
+    write_source_database_metadata "operator" "operator-cidr" "$OPERATOR_CIDR_DATABASE" "github" "$(now_utc)" ""
     log "China operator CIDR database ready: ${OPERATOR_CIDR_DATABASE}"
+    return 0
+  fi
+  return 1
+}
+
+prune_operator_cidr_directory() {
+  local parent="$1"
+  local file base keep
+
+  if [[ -z "$parent" || ! -d "$parent" ]]; then
+    return
+  fi
+  for file in "$parent"/*.txt; do
+    [[ -e "$file" ]] || continue
+    base="$(basename "$file")"
+    keep="false"
+    for expected in $OPERATOR_CIDR_FILES; do
+      if [[ "$base" == "$expected" ]]; then
+        keep="true"
+        break
+      fi
+    done
+    if [[ "$keep" != "true" ]]; then
+      if [[ "$NEEDS_ROOT" == "true" ]]; then
+        run_as_root rm -f "$file"
+      else
+        rm -f "$file"
+      fi
+    fi
+  done
+}
+
+source_database_metadata_should_keep() {
+  local base="$1"
+  local expected
+
+  if source_profile_wants_country && [[ -n "$GEOIP_DATABASE" && "$base" == "country.GeoLite2-Country.mmdb.env" ]]; then
+    return 0
+  fi
+  if source_profile_wants_asn && [[ -n "$ASN_DATABASE" && "$base" == "asn.GeoLite2-ASN.mmdb.env" ]]; then
+    return 0
+  fi
+  if source_profile_wants_operator && [[ -n "$OPERATOR_CIDR_DATABASE" ]]; then
+    if [[ "$base" == "operator.operator-cidr.env" ]]; then
+      return 0
+    fi
+    for expected in $OPERATOR_CIDR_FILES; do
+      if [[ "$base" == "operator.${expected}.env" ]]; then
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
+prune_source_database_metadata() {
+  local file base
+
+  if [[ -z "$SOURCE_DATABASE_METADATA_DIR" || ! -d "$SOURCE_DATABASE_METADATA_DIR" ]]; then
+    return
+  fi
+  for file in "$SOURCE_DATABASE_METADATA_DIR"/*.env; do
+    [[ -e "$file" ]] || continue
+    base="$(basename "$file")"
+    if source_database_metadata_should_keep "$base"; then
+      continue
+    fi
+    if [[ "$NEEDS_ROOT" == "true" ]]; then
+      run_as_root rm -f "$file"
+    else
+      rm -f "$file"
+    fi
+  done
+}
+
+download_operator_cidr_database_from_server() {
+  local manifest parent downloaded target any_success
+
+  if [[ -z "$OPERATOR_CIDR_DATABASE" ]]; then
+    return 1
+  fi
+  if [[ -e "$OPERATOR_CIDR_DATABASE" && ! -d "$OPERATOR_CIDR_DATABASE" ]]; then
+    log "Using existing operator CIDR file: ${OPERATOR_CIDR_DATABASE}"
+    return 0
+  fi
+
+  manifest="$(mktemp "/tmp/dushengcdn-dns-worker-source-manifest.XXXXXX")"
+  if ! fetch_server_source_database_manifest "$manifest"; then
+    rm -f "$manifest"
+    return 1
+  fi
+  parent="$OPERATOR_CIDR_DATABASE"
+  any_success="false"
+  for downloaded in $OPERATOR_CIDR_FILES; do
+    target="${parent}/${downloaded}"
+    if download_source_database_file_from_server "$target" "operator" "$downloaded" "China operator CIDR ${downloaded}" "$manifest"; then
+      any_success="true"
+    fi
+  done
+  rm -f "$manifest"
+  if [[ "$any_success" == "true" ]]; then
+    prune_operator_cidr_directory "$parent"
+    write_source_database_metadata "operator" "operator-cidr" "$OPERATOR_CIDR_DATABASE" "panel" "$(now_utc)" ""
+    log "China operator CIDR database ready from panel mirror: ${OPERATOR_CIDR_DATABASE}"
     return 0
   fi
   return 1
@@ -700,7 +1078,11 @@ prepare_operator_cidr_database() {
     return
   fi
 
-  log "China operator CIDR download failed; operator pool matching will fall back unless a valid database already exists."
+  if download_operator_cidr_database_from_server; then
+    return
+  fi
+
+  log "China operator CIDR download failed from GitHub and panel mirror; operator pool matching will fall back unless a valid database already exists."
   if [[ -e "$OPERATOR_CIDR_DATABASE" ]]; then
     log "Using existing China operator CIDR database: ${OPERATOR_CIDR_DATABASE}"
     return
@@ -789,6 +1171,413 @@ build_binary_from_source() {
   chmod +x "$TMP_BINARY"
 }
 
+write_source_database_updater() {
+  local updater="${INSTALL_DIR}/update-source-databases.sh"
+  local updater_tmp
+
+  log "Writing DNS Worker source database updater..."
+  updater_tmp="$(mktemp)"
+  cat > "$updater_tmp" <<'UPDATEREOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${INSTALL_DIR}/dns-worker.env"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  . "$ENV_FILE"
+  set +a
+fi
+
+SERVER_URL="${DUSHENGCDN_DNS_WORKER_SERVER_URL:-}"
+TOKEN="${DUSHENGCDN_DNS_WORKER_TOKEN:-}"
+PROFILE="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}"
+GEOIP_DATABASE="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH:-}"
+ASN_DATABASE="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH:-}"
+OPERATOR_CIDR_DATABASE="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH:-}"
+GEOIP_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb}"
+ASN_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb}"
+OPERATOR_CIDR_BASE_URL="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL:-https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists}"
+OPERATOR_CIDR_FILES="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES:-chinanet.txt chinanet6.txt cmcc.txt cmcc6.txt unicom.txt unicom6.txt cernet.txt cernet6.txt cstnet.txt cstnet6.txt drpeng.txt drpeng6.txt googlecn.txt googlecn6.txt}"
+METADATA_DIR="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_METADATA_DIR:-${INSTALL_DIR}/data/source-database-metadata}"
+SERVICE_NAME="${DUSHENGCDN_DNS_WORKER_SERVICE_NAME:-dushengcdn-dns-worker}"
+WORK_DIR="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_TMP_DIR:-${INSTALL_DIR}/data/source-database-tmp}"
+LOCK_FILE="${INSTALL_DIR}/data/source-database-update.lock"
+CHANGED="false"
+
+log() { echo "==> $*"; }
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
+now_utc() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+date_to_epoch() {
+  local value="$1"
+  value="${value%%.*}Z"
+  value="${value%ZZ}Z"
+  if date -u -d "$value" '+%s' >/dev/null 2>&1; then
+    date -u -d "$value" '+%s'
+    return 0
+  fi
+  if date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$value" '+%s' >/dev/null 2>&1; then
+    date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$value" '+%s'
+    return 0
+  fi
+  return 1
+}
+
+file_mtime_epoch() {
+  if stat -c '%Y' "$1" >/dev/null 2>&1; then
+    stat -c '%Y' "$1"
+    return 0
+  fi
+  if stat -f '%m' "$1" >/dev/null 2>&1; then
+    stat -f '%m' "$1"
+    return 0
+  fi
+  return 1
+}
+
+wants_country() { [[ "$PROFILE" == "full" || "$PROFILE" == "country" ]]; }
+wants_asn() { [[ "$PROFILE" == "full" || "$PROFILE" == "asn" ]]; }
+wants_operator() { [[ "$PROFILE" == "full" || "$PROFILE" == "operator" ]]; }
+
+meta_path() {
+  echo "${METADATA_DIR}/$1.$(basename "$2").env"
+}
+
+read_meta_value() {
+  local meta
+  meta="$(meta_path "$1" "$2")"
+  [[ -f "$meta" ]] || return 1
+  awk -F= -v key="$3" '$1 == key { print substr($0, length(key) + 2); exit }' "$meta"
+}
+
+write_meta() {
+  local kind="$1"
+  local name="$2"
+  local path="$3"
+  local source="$4"
+  local updated_at="$5"
+  local checksum="${6:-}"
+  mkdir -p "$METADATA_DIR"
+  [[ -n "$checksum" ]] || checksum="$(sha256_file "$path" 2>/dev/null || true)"
+  [[ -n "$updated_at" ]] || updated_at="$(now_utc)"
+  cat > "$(meta_path "$kind" "$name")" <<METADATAEOF
+kind=$kind
+name=$name
+path=$path
+source=$source
+updated_at=$updated_at
+sha256=$checksum
+METADATAEOF
+  chmod 0644 "$(meta_path "$kind" "$name")"
+}
+
+local_epoch() {
+  local updated epoch
+  updated="$(read_meta_value "$1" "$2" updated_at 2>/dev/null || true)"
+  if [[ -n "$updated" ]] && epoch="$(date_to_epoch "$updated" 2>/dev/null)"; then
+    echo "$epoch"
+    return 0
+  fi
+  if [[ -f "$3" ]] && epoch="$(file_mtime_epoch "$3" 2>/dev/null)"; then
+    echo "$epoch"
+    return 0
+  fi
+  return 1
+}
+
+cleanup_target_temps() {
+  local target="$1"
+  local name="${2:-}"
+  local parent base file
+  [[ -n "$target" ]] || return 0
+  parent="$(dirname "$target")"
+  base="$(basename "${name:-$target}")"
+  [[ -d "$parent" ]] || return 0
+  for file in "$parent/.${base}."*; do
+    [[ -e "$file" ]] || continue
+    rm -f "$file"
+  done
+}
+
+cleanup_source_database_artifacts() {
+  local name
+  rm -f "${WORK_DIR}"/headers.* "${WORK_DIR}"/manifest.* 2>/dev/null || true
+  cleanup_target_temps "$GEOIP_DATABASE" "GeoLite2-Country.mmdb"
+  cleanup_target_temps "$ASN_DATABASE" "GeoLite2-ASN.mmdb"
+  if [[ -n "$OPERATOR_CIDR_DATABASE" && -d "$OPERATOR_CIDR_DATABASE" ]]; then
+    for name in $OPERATOR_CIDR_FILES; do
+      cleanup_target_temps "${OPERATOR_CIDR_DATABASE}/${name}" "$name"
+    done
+  fi
+  rmdir "$WORK_DIR" 2>/dev/null || true
+}
+
+mkdir -p "$(dirname "$LOCK_FILE")" "$WORK_DIR"
+exec 9>"$LOCK_FILE"
+if command -v flock >/dev/null 2>&1; then
+  if ! flock -n 9; then
+    log "Source database update is already running; skipping this cycle."
+    exit 0
+  fi
+fi
+cleanup_source_database_artifacts
+mkdir -p "$WORK_DIR"
+trap cleanup_source_database_artifacts EXIT
+
+download_file() {
+  local target="$1"
+  local url="$2"
+  local kind="$3"
+  local name="$4"
+  local source="$5"
+  local updated_at="${6:-}"
+  local expected="${7:-}"
+  local auth="${8:-false}"
+  local parent tmp headers bytes checksum header_sha header_updated local_checksum current_epoch server_epoch
+  parent="$(dirname "$target")"
+  mkdir -p "$parent"
+  tmp="$(mktemp "${parent}/.${name}.XXXXXX")"
+  headers="$(mktemp "${WORK_DIR}/headers.XXXXXX")"
+  if [[ "$auth" == "true" ]]; then
+    if ! curl -fsSL -D "$headers" -H "X-DNS-Worker-Token: ${TOKEN}" -o "$tmp" "$url"; then
+      rm -f "$tmp" "$headers"
+      return 1
+    fi
+  elif ! curl -fsSL -D "$headers" -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    rm -f "$headers"
+    return 1
+  fi
+  header_sha="$(awk -F': ' 'tolower($1) == "x-dushengcdn-source-database-sha256" { gsub(/\r/, "", $2); print $2; exit }' "$headers")"
+  header_updated="$(awk -F': ' 'tolower($1) == "x-dushengcdn-source-database-updated-at" { gsub(/\r/, "", $2); print $2; exit }' "$headers")"
+  rm -f "$headers"
+  [[ -n "$expected" ]] || expected="$header_sha"
+  [[ -n "$updated_at" ]] || updated_at="$header_updated"
+  bytes="$(wc -c < "$tmp" | tr -d '[:space:]')"
+  if [[ "$name" == *.mmdb && "${bytes:-0}" -lt 1024 ]]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [[ "$name" != *.mmdb && "${bytes:-0}" -le 16 ]]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  checksum="$(sha256_file "$tmp" 2>/dev/null || true)"
+  if [[ -n "$expected" && "$checksum" != "$expected" ]]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [[ "$source" == "panel" && -f "$target" ]]; then
+    local_checksum="$(read_meta_value "$kind" "$name" sha256 2>/dev/null || true)"
+    [[ -n "$local_checksum" ]] || local_checksum="$(sha256_file "$target" 2>/dev/null || true)"
+    if [[ -n "$checksum" && -n "$local_checksum" && "$checksum" == "$local_checksum" ]]; then
+      rm -f "$tmp"
+      write_meta "$kind" "$name" "$target" "$source" "$updated_at" "$checksum"
+      log "Panel mirror ${kind}/${name} is unchanged; keeping local file."
+      return 0
+    fi
+    if [[ -n "$updated_at" ]] && server_epoch="$(date_to_epoch "$updated_at" 2>/dev/null)" && current_epoch="$(local_epoch "$kind" "$name" "$target" 2>/dev/null)"; then
+      if [[ "$server_epoch" -le "$current_epoch" ]]; then
+        rm -f "$tmp"
+        log "Panel mirror ${kind}/${name} is not newer; keeping local file."
+        return 0
+      fi
+    fi
+  fi
+  if [[ -f "$target" && -n "$checksum" && "$checksum" == "$(sha256_file "$target" 2>/dev/null || true)" ]]; then
+    rm -f "$tmp"
+    write_meta "$kind" "$name" "$target" "$source" "$updated_at" "$checksum"
+    return 0
+  fi
+  mv -f "$tmp" "$target"
+  chmod 0644 "$target"
+  write_meta "$kind" "$name" "$target" "$source" "$updated_at" "$checksum"
+  CHANGED="true"
+  return 0
+}
+
+fetch_manifest() {
+  local output="$1"
+  [[ -n "$SERVER_URL" && -n "$TOKEN" ]] || return 1
+  curl -fsSL -H "X-DNS-Worker-Token: ${TOKEN}" -o "$output" "${SERVER_URL%/}/api/dns-source-databases/manifest"
+}
+
+manifest_source_updated_at() {
+  awk -v kind="$2" '
+    $0 ~ "\"" kind "\"[[:space:]]*:" { in_entry = 1; next }
+    in_entry && $0 ~ /"updated_at"[[:space:]]*:/ { print; exit }
+    in_entry && $0 ~ /^    }/ { in_entry = 0 }
+  ' "$1" | sed -n 's/.*"updated_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+manifest_file_field() {
+  local manifest="$1"
+  local kind="$2"
+  local name="$3"
+  local field="$4"
+  awk -v kind="$kind" -v name="$name" -v field="$field" '
+    $0 ~ "\"" kind "\"[[:space:]]*:" { in_entry = 1; next }
+    in_entry && $0 ~ "\"name\"[[:space:]]*:[[:space:]]*\"" name "\"" { in_file = 1 }
+    in_file && $0 ~ "\"" field "\"[[:space:]]*:" { print; exit }
+    in_entry && $0 ~ /^    }/ { in_entry = 0; in_file = 0 }
+  ' "$manifest" | sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+server_mirror_newer() {
+  local manifest="$1"
+  local kind="$2"
+  local name="$3"
+  local target="$4"
+  local server_sha local_sha updated server_epoch current_epoch
+
+  [[ ! -f "$target" ]] && return 0
+  server_sha="$(manifest_file_field "$manifest" "$kind" "$name" sha256 || true)"
+  local_sha="$(read_meta_value "$kind" "$name" sha256 2>/dev/null || true)"
+  if [[ -n "$server_sha" && -n "$local_sha" && "$server_sha" == "$local_sha" ]]; then
+    return 1
+  fi
+  updated="$(manifest_file_field "$manifest" "$kind" "$name" updated_at || true)"
+  [[ -n "$updated" ]] || updated="$(manifest_source_updated_at "$manifest" "$kind" || true)"
+  [[ -n "$updated" ]] || return 1
+  server_epoch="$(date_to_epoch "$updated" 2>/dev/null || true)"
+  [[ -n "$server_epoch" ]] || return 1
+  current_epoch="$(local_epoch "$kind" "$name" "$target" 2>/dev/null || true)"
+  [[ -z "$current_epoch" || "$server_epoch" -gt "$current_epoch" ]]
+}
+
+download_from_panel() {
+  local manifest="$1"
+  local target="$2"
+  local kind="$3"
+  local name="$4"
+  local expected updated
+
+  if ! server_mirror_newer "$manifest" "$kind" "$name" "$target"; then
+    [[ -f "$target" ]] && log "Panel mirror ${kind}/${name} is not newer; keeping local file."
+    return 0
+  fi
+  expected="$(manifest_file_field "$manifest" "$kind" "$name" sha256 || true)"
+  updated="$(manifest_file_field "$manifest" "$kind" "$name" updated_at || true)"
+  [[ -n "$updated" ]] || updated="$(manifest_source_updated_at "$manifest" "$kind" || true)"
+  download_file "$target" "${SERVER_URL%/}/api/dns-source-databases/files/${kind}/${name}" "$kind" "$name" panel "$updated" "$expected" true
+}
+
+prune_operator_dir() {
+  local parent="$1"
+  local file base keep expected
+  [[ -d "$parent" ]] || return 0
+  for file in "$parent"/*.txt; do
+    [[ -e "$file" ]] || continue
+    base="$(basename "$file")"
+    keep=false
+    for expected in $OPERATOR_CIDR_FILES; do
+      [[ "$base" == "$expected" ]] && keep=true && break
+    done
+    [[ "$keep" == true ]] || rm -f "$file"
+  done
+}
+
+metadata_should_keep() {
+  local base="$1"
+  local expected
+
+  if wants_country && [[ -n "$GEOIP_DATABASE" && "$base" == "country.GeoLite2-Country.mmdb.env" ]]; then
+    return 0
+  fi
+  if wants_asn && [[ -n "$ASN_DATABASE" && "$base" == "asn.GeoLite2-ASN.mmdb.env" ]]; then
+    return 0
+  fi
+  if wants_operator && [[ -n "$OPERATOR_CIDR_DATABASE" ]]; then
+    if [[ "$base" == "operator.operator-cidr.env" ]]; then
+      return 0
+    fi
+    for expected in $OPERATOR_CIDR_FILES; do
+      if [[ "$base" == "operator.${expected}.env" ]]; then
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
+prune_metadata() {
+  local file base
+  [[ -d "$METADATA_DIR" ]] || return 0
+  for file in "$METADATA_DIR"/*.env; do
+    [[ -e "$file" ]] || continue
+    base="$(basename "$file")"
+    metadata_should_keep "$base" || rm -f "$file"
+  done
+}
+
+update_one() {
+  local target="$1"
+  local kind="$2"
+  local name="$3"
+  local github_url="$4"
+  local manifest="$5"
+  [[ -n "$target" ]] || return 0
+  if download_file "$target" "$github_url" "$kind" "$name" github "$(now_utc)" ""; then
+    log "${kind}/${name} updated from GitHub."
+    return 0
+  fi
+  if [[ -n "$manifest" && -f "$manifest" ]] && download_from_panel "$manifest" "$target" "$kind" "$name"; then
+    log "${kind}/${name} checked against panel mirror."
+    return 0
+  fi
+  [[ -f "$target" ]] && log "${kind}/${name} update failed; keeping existing local file." && return 0
+  return 1
+}
+
+PROFILE="$(printf '%s' "$PROFILE" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+MANIFEST="$(mktemp "${WORK_DIR}/manifest.XXXXXX")"
+if ! fetch_manifest "$MANIFEST"; then
+  rm -f "$MANIFEST"
+  MANIFEST=""
+fi
+
+if wants_country; then
+  update_one "$GEOIP_DATABASE" country GeoLite2-Country.mmdb "$GEOIP_DATABASE_URL" "$MANIFEST" || true
+fi
+if wants_asn; then
+  update_one "$ASN_DATABASE" asn GeoLite2-ASN.mmdb "$ASN_DATABASE_URL" "$MANIFEST" || true
+fi
+if wants_operator && [[ -n "$OPERATOR_CIDR_DATABASE" ]]; then
+  mkdir -p "$OPERATOR_CIDR_DATABASE"
+  for name in $OPERATOR_CIDR_FILES; do
+    update_one "${OPERATOR_CIDR_DATABASE}/${name}" operator "$name" "${OPERATOR_CIDR_BASE_URL%/}/${name}" "$MANIFEST" || true
+  done
+  prune_operator_dir "$OPERATOR_CIDR_DATABASE"
+fi
+prune_metadata
+[[ -z "$MANIFEST" ]] || rm -f "$MANIFEST"
+
+if [[ "$CHANGED" == "true" ]] && command -v systemctl >/dev/null 2>&1; then
+  systemctl restart "$SERVICE_NAME" || true
+fi
+UPDATEREOF
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root install -m 0755 "$updater_tmp" "$updater"
+    rm -f "$updater_tmp"
+  else
+    mv -f "$updater_tmp" "$updater"
+    chmod 0755 "$updater"
+  fi
+}
+
 if [[ -z "$SERVER_URL" ]]; then
   die "--server-url is required"
 fi
@@ -813,6 +1602,7 @@ normalize_source_database_profile
 if [[ -z "$SNAPSHOT_PATH" ]]; then
   SNAPSHOT_PATH="${INSTALL_DIR}/data/dns-worker-snapshot.json"
 fi
+SOURCE_DATABASE_METADATA_DIR="${INSTALL_DIR}/data/source-database-metadata"
 if [[ -z "$GEOIP_DATABASE" && "$AUTO_GEOIP_DOWNLOAD" == "true" ]] && source_profile_wants_country; then
   GEOIP_DATABASE="${INSTALL_DIR}/data/geoip/GeoLite2-Country.mmdb"
 fi
@@ -924,6 +1714,7 @@ trap - EXIT
 prepare_geoip_database
 prepare_asn_database
 prepare_operator_cidr_database
+prune_source_database_metadata
 
 ENV_FILE="${INSTALL_DIR}/dns-worker.env"
 ENV_MODE="0600"
@@ -937,6 +1728,13 @@ DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=$(env_quote "$SNAPSHOT_PATH")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=$(env_quote "$GEOIP_DATABASE")
 DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=$(env_quote "$ASN_DATABASE")
 DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=$(env_quote "$OPERATOR_CIDR_DATABASE")
+DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE=$(env_quote "$SOURCE_DATABASE_PROFILE")
+DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_METADATA_DIR=$(env_quote "$SOURCE_DATABASE_METADATA_DIR")
+DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL=$(env_quote "$GEOIP_DATABASE_URL")
+DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL=$(env_quote "$ASN_DATABASE_URL")
+DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL=$(env_quote "$OPERATOR_CIDR_BASE_URL")
+DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES=$(env_quote "$OPERATOR_CIDR_FILES")
+DUSHENGCDN_DNS_WORKER_SERVICE_NAME=$(env_quote "$SERVICE_NAME")
 DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL=$(env_quote "$HEARTBEAT_INTERVAL")
 DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT=$(env_quote "$REQUEST_TIMEOUT")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE=$(env_quote "$SNAPSHOT_MAX_AGE")
@@ -953,6 +1751,13 @@ DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=$(env_quote "$SNAPSHOT_PATH")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=$(env_quote "$GEOIP_DATABASE")
 DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=$(env_quote "$ASN_DATABASE")
 DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=$(env_quote "$OPERATOR_CIDR_DATABASE")
+DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE=$(env_quote "$SOURCE_DATABASE_PROFILE")
+DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_METADATA_DIR=$(env_quote "$SOURCE_DATABASE_METADATA_DIR")
+DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL=$(env_quote "$GEOIP_DATABASE_URL")
+DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL=$(env_quote "$ASN_DATABASE_URL")
+DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL=$(env_quote "$OPERATOR_CIDR_BASE_URL")
+DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES=$(env_quote "$OPERATOR_CIDR_FILES")
+DUSHENGCDN_DNS_WORKER_SERVICE_NAME=$(env_quote "$SERVICE_NAME")
 DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL=$(env_quote "$HEARTBEAT_INTERVAL")
 DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT=$(env_quote "$REQUEST_TIMEOUT")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE=$(env_quote "$SNAPSHOT_MAX_AGE")
@@ -962,6 +1767,8 @@ LOG_LEVEL=$(env_quote "$LOG_LEVEL_VALUE")
 ENVEOF
   chmod "$ENV_MODE" "$ENV_FILE"
 fi
+
+write_source_database_updater
 
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   log "Creating systemd service..."
@@ -989,6 +1796,34 @@ SVCEOF
   run_as_root systemctl daemon-reload
   run_as_root systemctl enable "$SERVICE_NAME"
   run_as_root systemctl start "$SERVICE_NAME"
+  if [[ "$SOURCE_DATABASE_UPDATE_TIMER" == "true" ]]; then
+    log "Creating source database update timer..."
+    write_file_as_root "/etc/systemd/system/${SERVICE_NAME}-source-database-update.service" "0644" <<UPDSVCEOF
+[Unit]
+Description=Update DuShengCDN DNS Worker source databases
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${INSTALL_DIR}/update-source-databases.sh
+UPDSVCEOF
+    write_file_as_root "/etc/systemd/system/${SERVICE_NAME}-source-database-update.timer" "0644" <<UPDTIMEREOF
+[Unit]
+Description=Run DuShengCDN DNS Worker source database update every 7 days
+
+[Timer]
+OnBootSec=15m
+OnUnitActiveSec=7d
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UPDTIMEREOF
+    run_as_root systemctl daemon-reload
+    run_as_root systemctl enable --now "${SERVICE_NAME}-source-database-update.timer"
+    echo "Source database update timer created: ${SERVICE_NAME}-source-database-update.timer"
+  fi
   echo "Service created and started: ${SERVICE_NAME}"
 else
   echo ""

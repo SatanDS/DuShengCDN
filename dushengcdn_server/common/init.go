@@ -127,6 +127,21 @@ func init() {
 	} else if os.Getenv("GITHUB_TOKEN") != "" {
 		GitHubReleaseToken = os.Getenv("GITHUB_TOKEN")
 	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_MIRROR_PATH")) != "" {
+		DNSSourceDatabaseMirrorPath = strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_MIRROR_PATH"))
+	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_COUNTRY_URL")) != "" {
+		DNSSourceDatabaseCountryURL = strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_COUNTRY_URL"))
+	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_ASN_URL")) != "" {
+		DNSSourceDatabaseASNURL = strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_ASN_URL"))
+	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_OPERATOR_CIDR_BASE_URL")) != "" {
+		DNSSourceDatabaseOperatorCIDRBaseURL = strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_OPERATOR_CIDR_BASE_URL"))
+	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_OPERATOR_CIDR_FILES")) != "" {
+		DNSSourceDatabaseOperatorCIDRFiles = strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_OPERATOR_CIDR_FILES"))
+	}
 	SetLogLevel(os.Getenv("LOG_LEVEL"))
 	if *LogDir != "" {
 		var err error

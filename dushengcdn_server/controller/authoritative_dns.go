@@ -3,9 +3,11 @@ package controller
 import (
 	"dushengcdn/model"
 	"dushengcdn/service"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -277,6 +279,45 @@ func DNSWorkerHeartbeat(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, view)
+}
+
+func GetDNSSourceDatabaseManifest(c *gin.Context) {
+	if _, ok := authenticateDNSWorker(c); !ok {
+		return
+	}
+	manifest, err := service.GetDNSSourceDatabaseMirrorManifest()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": "DNS source database mirror is not ready",
+		})
+		return
+	}
+	c.IndentedJSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    manifest,
+	})
+}
+
+func DownloadDNSSourceDatabaseFile(c *gin.Context) {
+	if _, ok := authenticateDNSWorker(c); !ok {
+		return
+	}
+	file, meta, err := service.OpenDNSSourceDatabaseMirrorFile(c.Param("kind"), c.Param("name"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	defer file.Close()
+
+	c.Header("X-DuShengCDN-Source-Database-SHA256", meta.SHA256)
+	c.Header("X-DuShengCDN-Source-Database-Updated-At", meta.UpdatedAt.Format(time.RFC3339))
+	c.Header("Content-Length", fmt.Sprintf("%d", meta.Size))
+	c.FileAttachment(file.Name(), meta.Name)
 }
 
 func authenticateDNSWorker(c *gin.Context) (*model.DNSWorker, bool) {
