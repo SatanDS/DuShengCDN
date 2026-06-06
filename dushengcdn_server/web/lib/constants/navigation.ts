@@ -93,42 +93,5 @@ export const dashboardNavigation: NavigationItem[] = [
     href: '/setting',
     label: '系统治理',
     icon: 'setting',
-    children: [
-      {
-        href: '/setting',
-        label: '个人设置',
-        icon: 'user',
-      },
-      {
-        href: '/setting?tab=operation',
-        label: '运维参数',
-        icon: 'performance',
-        minRole: 100,
-      },
-      {
-        href: '/setting?tab=license',
-        label: '商业授权',
-        icon: 'certificate',
-        minRole: 100,
-      },
-      {
-        href: '/setting?tab=system',
-        label: '认证与安全',
-        icon: 'shield',
-        minRole: 100,
-      },
-      {
-        href: '/setting?tab=database',
-        label: '数据保留',
-        icon: 'log',
-        minRole: 100,
-      },
-      {
-        href: '/setting?tab=other',
-        label: '品牌公告',
-        icon: 'setting',
-        minRole: 100,
-      },
-    ],
   },
 ];

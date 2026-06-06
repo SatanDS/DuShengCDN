@@ -26,12 +26,12 @@ describe('navigation utils', () => {
     ).toBe('站点接入');
     expect(getCurrentNavigationItem('/access-log')?.label).toBe('访问观测');
     expect(getCurrentNavigationItem('/performance')?.label).toBe('代理性能');
-    expect(getCurrentNavigationItem('/setting')?.label).toBe('个人设置');
+    expect(getCurrentNavigationItem('/setting')?.label).toBe('系统治理');
     expect(getCurrentNavigationItem('/setting?tab=system')?.label).toBe(
-      '认证与安全',
+      '系统治理',
     );
     expect(getCurrentNavigationItem('/setting?tab=license')?.label).toBe(
-      '商业授权',
+      '系统治理',
     );
   });
 
@@ -43,32 +43,26 @@ describe('navigation utils', () => {
     expect(getCurrentNavigationItem('/dns-account')?.label).toBe('DNS 账号');
   });
 
-  it('filters system governance entries for non-root users', () => {
+  it('keeps system governance as a single sidebar entry', () => {
     const userNavigation = filterNavigationItemsByRole(dashboardNavigation, 0);
     const labels = flattenNavigationItems(userNavigation).map(
       (item) => item.label,
     );
 
-    expect(labels).toContain('个人设置');
+    expect(labels).toContain('系统治理');
+    expect(labels).not.toContain('个人设置');
     expect(labels).not.toContain('商业授权');
     expect(labels).not.toContain('认证与安全');
   });
 
-  it('marks only the best matching navigation branch as active', () => {
+  it('keeps system governance active for settings tabs', () => {
     const systemGovernance = dashboardNavigation.find(
       (item) => item.label === '系统治理',
     );
-    const personalSettings = systemGovernance?.children?.find(
-      (item) => item.label === '个人设置',
-    );
-    const securitySettings = systemGovernance?.children?.find(
-      (item) => item.label === '认证与安全',
-    );
 
     expect(systemGovernance).toBeDefined();
-    expect(personalSettings).toBeDefined();
-    expect(securitySettings).toBeDefined();
-    if (!systemGovernance || !personalSettings || !securitySettings) {
+    expect(systemGovernance?.children).toBeUndefined();
+    if (!systemGovernance) {
       return;
     }
 
@@ -76,10 +70,7 @@ describe('navigation utils', () => {
       isNavigationItemActive('/setting?tab=system', systemGovernance),
     ).toBe(true);
     expect(
-      isNavigationItemActive('/setting?tab=system', personalSettings),
-    ).toBe(false);
-    expect(
-      isNavigationItemActive('/setting?tab=system', securitySettings),
+      isNavigationItemActive('/setting?tab=license', systemGovernance),
     ).toBe(true);
   });
 });
