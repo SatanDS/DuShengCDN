@@ -122,6 +122,7 @@ export function VersionUpgradeModal({
     const showConfirmManualUpgradeAction = canConfirmManualUpgrade;
     const upgradeLogs = release?.upgrade_logs ?? [];
     const automaticUpgradeEnabled = release?.automatic_upgrade_enabled ?? false;
+    const hasRelease = Boolean(release?.available && release.tag_name);
     const safeReleaseBodyHtml = useMemo(
         () =>
             sanitizeHtml(
@@ -196,13 +197,17 @@ export function VersionUpgradeModal({
                 {!isLoading && releaseErrorMessage ? (
                     <ErrorState title="版本检查失败" description={releaseErrorMessage}/>
                 ) : null}
-                {!isLoading && !releaseErrorMessage && !release ? (
+                {!isLoading && !releaseErrorMessage && (!release || !hasRelease) ? (
                     <EmptyState
-                        title={`尚未检查${selectedChannelLabel}`}
-                        description={`点击“检查${selectedChannelLabel}”后会在这里展示对应 GitHub Release 信息。`}
+                        title={release ? `当前没有可用的${selectedChannelLabel}` : `尚未检查${selectedChannelLabel}`}
+                        description={
+                            release
+                                ? `GitHub Release 仓库当前没有可用的${selectedChannelLabel}，可以切换通道检查 preview 发布。`
+                                : `点击“检查${selectedChannelLabel}”后会在这里展示对应 GitHub Release 信息。`
+                        }
                     />
                 ) : null}
-                {!isLoading && !releaseErrorMessage && release ? (
+                {!isLoading && !releaseErrorMessage && release && hasRelease ? (
                     <AppCard
                         title={`GitHub ${selectedChannelLabel} · ${release.tag_name}`}
                         description={
@@ -282,7 +287,7 @@ export function VersionUpgradeModal({
                     </AppCard>
                 ) : null}
 
-                {release ? (
+                {release && hasRelease ? (
                     <AppCard
                         title="升级日志"
                     >

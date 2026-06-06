@@ -234,6 +234,79 @@ func TestBuildLatestServerReleaseViewPreviewBypassVersionCheck(t *testing.T) {
 	}
 }
 
+func TestGetLatestServerReleaseStableNotFoundReturnsUnavailable(t *testing.T) {
+	originalClient := UpdateHTTPClientForTest()
+	originalRepo := common.ServerUpdateRepo
+	common.ServerUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() != "https://api.github.com/repos/SatanDS/SatanDS-DuShengCDN-releases/releases/latest" {
+				t.Fatalf("unexpected request url: %s", req.URL.String())
+			}
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Status:     "404 Not Found",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"message":"Not Found"}`)),
+			}, nil
+		}),
+	})
+	t.Cleanup(func() {
+		SetUpdateHTTPClientForTest(originalClient)
+		common.ServerUpdateRepo = originalRepo
+		resetServerUpgradeTestState(t)
+	})
+
+	release, err := GetLatestServerRelease(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("expected unavailable stable release instead of error: %v", err)
+	}
+	if release.Available {
+		t.Fatal("expected stable release to be unavailable")
+	}
+	if release.HasUpdate {
+		t.Fatal("expected unavailable release not to report an update")
+	}
+	if release.Channel != ReleaseChannelStable.String() {
+		t.Fatalf("unexpected channel: %s", release.Channel)
+	}
+}
+
+func TestGetLatestServerReleasePreviewWithoutPrereleaseReturnsUnavailable(t *testing.T) {
+	originalClient := UpdateHTTPClientForTest()
+	originalRepo := common.ServerUpdateRepo
+	common.ServerUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() != "https://api.github.com/repos/SatanDS/SatanDS-DuShengCDN-releases/releases?per_page=20" {
+				t.Fatalf("unexpected request url: %s", req.URL.String())
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`[{"tag_name":"v1.0.0","prerelease":false}]`)),
+			}, nil
+		}),
+	})
+	t.Cleanup(func() {
+		SetUpdateHTTPClientForTest(originalClient)
+		common.ServerUpdateRepo = originalRepo
+		resetServerUpgradeTestState(t)
+	})
+
+	release, err := GetLatestServerRelease(context.Background(), "preview")
+	if err != nil {
+		t.Fatalf("expected unavailable preview release instead of error: %v", err)
+	}
+	if release.Available {
+		t.Fatal("expected preview release to be unavailable")
+	}
+	if release.Channel != ReleaseChannelPreview.String() {
+		t.Fatalf("unexpected channel: %s", release.Channel)
+	}
+}
+
 func TestUploadManualServerBinary(t *testing.T) {
 	originalVersion := common.Version
 	common.Version = "v0.4.0"

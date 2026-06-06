@@ -79,6 +79,7 @@ type LatestServerRelease struct {
 	PublishedAt             string                   `json:"published_at"`
 	Channel                 string                   `json:"channel"`
 	Prerelease              bool                     `json:"prerelease"`
+	Available               bool                     `json:"available"`
 	CurrentVersion          string                   `json:"current_version"`
 	HasUpdate               bool                     `json:"has_update"`
 	UpgradeSupported        bool                     `json:"upgrade_supported"`
@@ -360,6 +361,9 @@ func fetchLatestStableGitHubRelease(ctx context.Context, repo string) (*githubRe
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub 返回异常状态: %s", resp.Status)
 	}
@@ -399,7 +403,7 @@ func fetchLatestPreviewGitHubRelease(ctx context.Context, repo string) (*githubR
 		releaseCopy := release
 		return &releaseCopy, nil
 	}
-	return nil, fmt.Errorf("当前没有可用的 preview 发布")
+	return nil, nil
 }
 
 func fetchGitHubReleaseByTag(ctx context.Context, repo string, tag string) (*githubReleaseResponse, error) {
@@ -472,6 +476,7 @@ func buildLatestServerReleaseView(release *githubReleaseResponse, channel Releas
 
 	view := &LatestServerRelease{
 		Channel:                 channel.String(),
+		Available:               release != nil,
 		CurrentVersion:          currentVersion,
 		HasUpdate:               hasUpdate,
 		UpgradeSupported:        platformUpgradeSupported && common.ServerAutoUpgradeEnabled,

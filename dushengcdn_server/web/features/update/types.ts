@@ -13,6 +13,7 @@ export interface LatestReleaseInfo {
   published_at: string;
   channel: ReleaseChannel;
   prerelease: boolean;
+  available: boolean;
   current_version: string;
   has_update: boolean;
   upgrade_supported: boolean;
