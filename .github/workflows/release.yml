@@ -51,7 +51,9 @@ jobs:
           elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
             BASE_VERSION="$(tr -d '[:space:]' < VERSION)"
             BASE_VERSION="${BASE_VERSION#v}"
-            if [[ ! "$BASE_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+            if [[ "$BASE_VERSION" =~ ^([0-9]+)\.([0-9]+)\.x$ ]]; then
+              BASE_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${GITHUB_RUN_NUMBER}"
+            elif [[ ! "$BASE_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
               echo "VERSION file must contain a numeric base version for automatic main releases" >&2
               exit 1
             fi
