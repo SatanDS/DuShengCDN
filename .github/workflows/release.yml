@@ -337,9 +337,19 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Validate Release Token
+        env:
+          RELEASE_REPO_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
+        run: |
+          if [[ -z "$RELEASE_REPO_TOKEN" ]]; then
+            echo "DUSHENGCDN_RELEASE_REPO_TOKEN secret is required to publish to $DUSHENGCDN_RELEASE_REPOSITORY" >&2
+            exit 1
+          fi
+
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
+          token: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
           repository: ${{ env.DUSHENGCDN_RELEASE_REPOSITORY }}
           tag_name: ${{ needs.prepare.outputs.version }}
           name: ${{ needs.prepare.outputs.version }}
@@ -354,3 +364,4 @@ jobs:
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
