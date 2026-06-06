@@ -157,6 +157,7 @@ jobs:
           ASSET_NAME: ${{ matrix.asset_name }}
           VERSION: ${{ needs.prepare.outputs.version }}
           BUILD_WATERMARK: ${{ github.repository }}:${{ needs.prepare.outputs.version }}:${{ github.run_id }}:${{ github.sha }}
+          COMMERCIAL_LICENSE_PUBLIC_KEYS: ${{ secrets.DUSHENGCDN_LICENSE_PUBLIC_KEYS }}
           RELEASE_SIGNATURE_PUBLIC_KEY: ${{ secrets.DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY }}
           RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY }}
         run: |
@@ -167,8 +168,12 @@ jobs:
             echo "release signing secrets are required" >&2
             exit 1
           fi
+          if [[ -z "$COMMERCIAL_LICENSE_PUBLIC_KEYS" ]]; then
+            echo "DUSHENGCDN_LICENSE_PUBLIC_KEYS secret is required for commercial server builds" >&2
+            exit 1
+          fi
           mkdir -p ../dist
-          "$GARBLE" -literals build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY' -X 'dushengcdn/common.CommercialBuildWatermark=$BUILD_WATERMARK'" -o "../dist/$ASSET_NAME" .
+          "$GARBLE" -literals build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY' -X 'dushengcdn/common.CommercialBuildWatermark=$BUILD_WATERMARK' -X 'dushengcdn/common.CommercialLicensePublicKeys=$COMMERCIAL_LICENSE_PUBLIC_KEYS'" -o "../dist/$ASSET_NAME" .
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
           GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 

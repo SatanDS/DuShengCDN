@@ -503,6 +503,24 @@ func TestCommercialLicenseOnlineActivationIssuesAndStores72HourLease(t *testing.
 	}
 }
 
+func TestCommercialLicenseActivationEndpointNormalizesSatanduDefault(t *testing.T) {
+	cases := map[string]string{
+		"https://www.satandu.com":                                 "https://www.satandu.com/api/license/activation/activate",
+		"https://www.satandu.com/":                                "https://www.satandu.com/api/license/activation/activate",
+		"https://www.satandu.com/api/license/activation":          "https://www.satandu.com/api/license/activation/activate",
+		"https://www.satandu.com/api/license/activation/activate": "https://www.satandu.com/api/license/activation/activate",
+	}
+	for input, expected := range cases {
+		endpoint, err := commercialLicenseActivationEndpoint(input)
+		if err != nil {
+			t.Fatalf("commercialLicenseActivationEndpoint(%q) failed: %v", input, err)
+		}
+		if endpoint != expected {
+			t.Fatalf("commercialLicenseActivationEndpoint(%q) = %q, want %q", input, endpoint, expected)
+		}
+	}
+}
+
 func TestCommercialLicenseLeaseExpiresAndRenewerRefreshesBeforeDeadline(t *testing.T) {
 	setupServiceTestDB(t)
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)

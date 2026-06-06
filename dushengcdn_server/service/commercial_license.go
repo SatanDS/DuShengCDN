@@ -1197,10 +1197,15 @@ func commercialLicenseActivationEndpoint(rawURL string) (string, error) {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return "", errors.New("commercial license activation URL is invalid")
 	}
-	if strings.HasSuffix(parsed.Path, "/activation/activate") {
-		return parsed.String(), nil
+	path := strings.TrimRight(parsed.Path, "/")
+	switch {
+	case strings.HasSuffix(path, "/api/license/activation/activate"):
+		parsed.Path = path
+	case strings.HasSuffix(path, "/api/license/activation"):
+		parsed.Path = path + "/activate"
+	default:
+		parsed.Path = path + "/api/license/activation/activate"
 	}
-	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/api/license/activation/activate"
 	parsed.RawQuery = ""
 	return parsed.String(), nil
 }
