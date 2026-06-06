@@ -46,10 +46,10 @@ function HeroMetric({
   return (
     <div
       className={cn(
-        'rounded-[24px] border px-5 py-5 backdrop-blur',
+        'dashboard-glass-surface rounded-[24px] border px-5 py-5',
         isDark
-          ? 'border-white/10 bg-white/6'
-          : 'border-sky-100/90 bg-white/80 shadow-[0_18px_40px_rgba(148,163,184,0.12)]',
+          ? 'border-white/12'
+          : 'border-white/45 shadow-[0_18px_40px_rgba(148,163,184,0.12)]',
       )}
     >
       <p
@@ -202,10 +202,10 @@ export function WorldStage({
   return (
     <section
       className={cn(
-        'overflow-hidden rounded-[32px] border transition-colors',
+        'dashboard-liquid-card overflow-hidden rounded-[32px] border transition-colors',
         isDark
-          ? 'border-slate-800/70 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.18),transparent_28%),radial-gradient(circle_at_82%_18%,rgba(56,189,248,0.10),transparent_18%),linear-gradient(135deg,#08111f,#0f172a_45%,#111827)] shadow-[0_32px_80px_rgba(2,6,23,0.35)]'
-          : 'border-sky-100/90 bg-[radial-gradient(circle_at_top_left,rgba(14,165,233,0.18),transparent_28%),radial-gradient(circle_at_82%_18%,rgba(59,130,246,0.12),transparent_20%),linear-gradient(135deg,#f8fbff,#edf5ff_45%,#ffffff)] shadow-[0_32px_80px_rgba(148,163,184,0.18)]',
+          ? 'border-white/12 shadow-[0_32px_80px_rgba(2,6,23,0.28)]'
+          : 'border-white/45 shadow-[0_32px_80px_rgba(148,163,184,0.16)]',
       )}
     >
       <div
@@ -240,10 +240,8 @@ export function WorldStage({
         <div className="space-y-5">
           <div
             className={cn(
-              'relative min-h-[540px] overflow-hidden rounded-[28px] border py-6 lg:min-h-[600px]',
-              isDark
-                ? 'border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.16),rgba(15,23,42,0.42))]'
-                : 'border-slate-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(239,246,255,0.92))]',
+              'dashboard-glass-surface relative min-h-[540px] overflow-hidden rounded-[28px] border py-6 lg:min-h-[600px]',
+              isDark ? 'border-white/10' : 'border-white/45',
             )}
           >
             <div
