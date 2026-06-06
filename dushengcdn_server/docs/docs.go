@@ -3280,6 +3280,18 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "operators": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "asns": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "source_cidrs": {
                     "type": "array",
                     "items": {

@@ -13,8 +13,10 @@ import (
 )
 
 type GSLBSourceContext struct {
-	IP      string
-	Country string
+	IP       string
+	Country  string
+	Operator string
+	ASN      uint32
 }
 
 type GSLBSourceResolver interface {

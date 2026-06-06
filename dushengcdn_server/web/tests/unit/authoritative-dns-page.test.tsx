@@ -58,6 +58,8 @@ describe('Authoritative DNS page', () => {
   });
 
   it('renders zones, records and worker token creation', async () => {
+    const simulateRequests: Array<Record<string, unknown>> = [];
+
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -439,8 +441,11 @@ describe('Authoritative DNS page', () => {
         if (url.includes('/dns-workers/simulate') && method === 'POST') {
           const payload = JSON.parse(String(init?.body ?? '{}')) as {
             country?: string;
+            operator?: string;
+            asn?: number;
             source_ip?: string;
           };
+          simulateRequests.push(payload as Record<string, unknown>);
           if (payload.source_ip === '203.0.113.23') {
             return Promise.resolve(
               new Response(
@@ -1161,10 +1166,16 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('智能解析模拟')).toBeInTheDocument();
     expect(
       screen.getByText(
-        '按站点、记录类型、来源国家和来源 IP，预演当前解析配置会返回哪些边缘 IP。',
+        '按站点、记录类型、来源国家、运营商、ASN 和来源 IP，预演当前解析配置会返回哪些边缘 IP。',
       ),
     ).toBeInTheDocument();
     expect(screen.getByText('例如 HK、DE；留空使用全局。')).toBeInTheDocument();
+    expect(
+      screen.getByText('可选；本地 DNS 响应端配置离线 ISP/ASN 库后生效。'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('可选；优先级高于运营商，例如 AS4134。'),
+    ).toBeInTheDocument();
     expect(
       screen.getByText('可选；填写后会优先按来源网段规则预演。'),
     ).toBeInTheDocument();
@@ -1176,9 +1187,16 @@ describe('Authoritative DNS page', () => {
     await user.selectOptions(screen.getByLabelText('网站配置'), '92');
     expect(screen.getByDisplayValue('api.example.com')).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText('HK'), 'HK');
+    await user.selectOptions(screen.getByLabelText('访问运营商'), 'cn-telecom');
+    await user.type(screen.getByPlaceholderText('AS4134'), 'AS4134');
     await user.click(screen.getByRole('button', { name: '开始模拟' }));
     await waitFor(() => {
       expect(screen.getAllByText('8.8.4.4').length).toBeGreaterThan(0);
+    });
+    expect(simulateRequests[0]).toMatchObject({
+      country: 'HK',
+      operator: 'cn-telecom',
+      asn: 4134,
     });
     expect(screen.getAllByText('香港').length).toBeGreaterThan(0);
     expect(screen.getByText(/snapshot-c/)).toBeInTheDocument();
@@ -1198,6 +1216,8 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('21 ms')).toBeInTheDocument();
     expect(screen.getAllByText('最大 24 ms').length).toBeGreaterThan(0);
     await user.clear(screen.getByPlaceholderText('HK'));
+    await user.selectOptions(screen.getByLabelText('访问运营商'), '');
+    await user.clear(screen.getByPlaceholderText('AS4134'));
     await user.type(screen.getByPlaceholderText('HK'), 'DE');
     await user.click(screen.getByRole('button', { name: '开始模拟' }));
     await waitFor(() => {
@@ -1295,7 +1315,7 @@ describe('Authoritative DNS page', () => {
     expect(
       screen.getAllByText(/当前来源没有可用于 A 记录的边缘节点/).length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText('全局')).toBeInTheDocument();
+    expect(screen.getAllByText('全局').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: /^DNS 响应端/ }));
     await waitFor(() => {

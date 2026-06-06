@@ -248,19 +248,30 @@ func normalizeSourceScopeBase(raw string) string {
 	if value == "" {
 		return "global"
 	}
-	prefix, country, ok := strings.Cut(value, ":")
+	prefix, scopeValue, ok := strings.Cut(value, ":")
 	if ok && strings.EqualFold(strings.TrimSpace(prefix), "country") {
-		country = strings.ToUpper(strings.TrimSpace(country))
+		country := strings.ToUpper(strings.TrimSpace(scopeValue))
 		if len(country) == 2 {
 			return "country:" + country
 		}
 	}
 	if ok && strings.EqualFold(strings.TrimSpace(prefix), "cidr") {
-		if cidr, valid := normalizeCIDR(country); valid {
+		if cidr, valid := normalizeCIDR(scopeValue); valid {
 			return "cidr:" + cidr
 		}
-		if _, network, err := net.ParseCIDR(strings.TrimSpace(country)); err == nil {
+		if _, network, err := net.ParseCIDR(strings.TrimSpace(scopeValue)); err == nil {
 			return "cidr:" + network.String()
+		}
+	}
+	if ok && strings.EqualFold(strings.TrimSpace(prefix), "operator") {
+		if operator := normalizeOperator(scopeValue); operator != "" {
+			return "operator:" + operator
+		}
+	}
+	if ok && strings.EqualFold(strings.TrimSpace(prefix), "asn") {
+		asn, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(scopeValue)), "AS"), 10, 32)
+		if err == nil && asn > 0 {
+			return "asn:" + strconv.FormatUint(asn, 10)
 		}
 	}
 	return value

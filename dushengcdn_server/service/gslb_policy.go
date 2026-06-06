@@ -23,6 +23,8 @@ type ProxyRouteGSLBPoolPolicy struct {
 	Weight      int      `json:"weight"`
 	Countries   []string `json:"countries"`
 	SourceCIDRs []string `json:"source_cidrs"`
+	Operators   []string `json:"operators,omitempty"`
+	ASNs        []uint32 `json:"asns,omitempty"`
 	NodeIDs     []string `json:"node_ids,omitempty"`
 	Enabled     bool     `json:"enabled"`
 }
@@ -68,6 +70,8 @@ func defaultGSLBPolicy(nodePool string, targetCount int, scheduleMode string, tt
 				Weight:      100,
 				Countries:   []string{},
 				SourceCIDRs: []string{},
+				Operators:   []string{},
+				ASNs:        []uint32{},
 				Enabled:     true,
 			},
 		},
@@ -177,11 +181,15 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 		if err != nil {
 			return nil, err
 		}
+		operators := normalizeGSLBOperatorList(pool.Operators)
+		asns := normalizeGSLBASNList(pool.ASNs)
 		nodeIDs := normalizeGSLBNodeIDList(pool.NodeIDs)
 		if existingIndex, ok := seen[name]; ok {
 			result[existingIndex].Weight = weight
 			result[existingIndex].Countries = mergeGSLBStringLists(result[existingIndex].Countries, countries)
 			result[existingIndex].SourceCIDRs = mergeGSLBStringLists(result[existingIndex].SourceCIDRs, sourceCIDRs)
+			result[existingIndex].Operators = mergeGSLBStringLists(result[existingIndex].Operators, operators)
+			result[existingIndex].ASNs = mergeGSLBASNLists(result[existingIndex].ASNs, asns)
 			if len(result[existingIndex].NodeIDs) == 0 || len(nodeIDs) == 0 {
 				result[existingIndex].NodeIDs = nil
 			} else {
@@ -195,6 +203,8 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 			Weight:      weight,
 			Countries:   countries,
 			SourceCIDRs: sourceCIDRs,
+			Operators:   operators,
+			ASNs:        asns,
 			NodeIDs:     nodeIDs,
 			Enabled:     true,
 		})
@@ -326,6 +336,62 @@ func normalizeGSLBCountryList(values []string) []string {
 	return result
 }
 
+func normalizeGSLBOperatorList(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		operator := normalizeGSLBOperator(value)
+		if operator == "" {
+			continue
+		}
+		if _, ok := seen[operator]; ok {
+			continue
+		}
+		seen[operator] = struct{}{}
+		result = append(result, operator)
+	}
+	return result
+}
+
+func normalizeGSLBOperator(value string) string {
+	operator := strings.ToLower(strings.TrimSpace(value))
+	operator = strings.ReplaceAll(operator, "_", "-")
+	operator = strings.ReplaceAll(operator, " ", "-")
+	switch operator {
+	case "telecom", "china-telecom", "ct", "cn-telecom", "chinatelecom", "中国电信", "电信":
+		return "cn-telecom"
+	case "unicom", "china-unicom", "cu", "cn-unicom", "chinaunicom", "中国联通", "联通":
+		return "cn-unicom"
+	case "mobile", "china-mobile", "cmcc", "cn-mobile", "chinamobile", "中国移动", "移动":
+		return "cn-mobile"
+	case "broadcast", "cbn", "china-broadcast", "cn-broadcast", "广电", "中国广电":
+		return "cn-broadcast"
+	case "cernet", "edu", "education", "教育网", "中国教育网":
+		return "cernet"
+	default:
+		if len(operator) > 64 {
+			operator = operator[:64]
+		}
+		return operator
+	}
+}
+
+func normalizeGSLBASNList(values []uint32) []uint32 {
+	result := make([]uint32, 0, len(values))
+	seen := make(map[uint32]struct{}, len(values))
+	for _, value := range values {
+		if value == 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
 func normalizeGSLBCIDRList(values []string) ([]string, error) {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -405,6 +471,25 @@ func mergeGSLBStringLists(left []string, right []string) []string {
 		seen[value] = struct{}{}
 	}
 	for _, value := range right {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func mergeGSLBASNLists(left []uint32, right []uint32) []uint32 {
+	result := append([]uint32(nil), left...)
+	seen := make(map[uint32]struct{}, len(left)+len(right))
+	for _, value := range result {
+		seen[value] = struct{}{}
+	}
+	for _, value := range right {
+		if value == 0 {
+			continue
+		}
 		if _, ok := seen[value]; ok {
 			continue
 		}

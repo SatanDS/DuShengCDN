@@ -165,6 +165,12 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 		if len(policy.Pools[i].SourceCIDRs) > 0 {
 			policy.Pools[i].SourceCIDRs = normalizeCIDRList(policy.Pools[i].SourceCIDRs)
 		}
+		if len(policy.Pools[i].Operators) > 0 {
+			policy.Pools[i].Operators = normalizeOperatorList(policy.Pools[i].Operators)
+		}
+		if len(policy.Pools[i].ASNs) > 0 {
+			policy.Pools[i].ASNs = normalizeASNList(policy.Pools[i].ASNs)
+		}
 		if len(policy.Pools[i].NodeIDs) > 0 {
 			policy.Pools[i].NodeIDs = normalizeNodeIDList(policy.Pools[i].NodeIDs)
 		}
@@ -240,6 +246,62 @@ func normalizeCountryList(values []string) []string {
 		}
 		seen[country] = struct{}{}
 		result = append(result, country)
+	}
+	return result
+}
+
+func normalizeOperatorList(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		operator := normalizeOperator(value)
+		if operator == "" {
+			continue
+		}
+		if _, ok := seen[operator]; ok {
+			continue
+		}
+		seen[operator] = struct{}{}
+		result = append(result, operator)
+	}
+	return result
+}
+
+func normalizeOperator(value string) string {
+	operator := strings.ToLower(strings.TrimSpace(value))
+	operator = strings.ReplaceAll(operator, "_", "-")
+	operator = strings.ReplaceAll(operator, " ", "-")
+	switch operator {
+	case "telecom", "china-telecom", "ct", "cn-telecom", "chinatelecom", "中国电信", "电信":
+		return "cn-telecom"
+	case "unicom", "china-unicom", "cu", "cn-unicom", "chinaunicom", "中国联通", "联通":
+		return "cn-unicom"
+	case "mobile", "china-mobile", "cmcc", "cn-mobile", "chinamobile", "中国移动", "移动":
+		return "cn-mobile"
+	case "broadcast", "cbn", "china-broadcast", "cn-broadcast", "广电", "中国广电":
+		return "cn-broadcast"
+	case "cernet", "edu", "education", "教育网", "中国教育网":
+		return "cernet"
+	default:
+		if len(operator) > 64 {
+			operator = operator[:64]
+		}
+		return operator
+	}
+}
+
+func normalizeASNList(values []uint32) []uint32 {
+	result := make([]uint32, 0, len(values))
+	seen := map[uint32]struct{}{}
+	for _, value := range values {
+		if value == 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
 	return result
 }

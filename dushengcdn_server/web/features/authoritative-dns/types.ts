@@ -100,6 +100,8 @@ export interface DNSGSLBSimulationPayload {
   record_type: 'A' | 'AAAA';
   country?: string;
   source_ip?: string;
+  operator?: string;
+  asn?: number;
   fresh?: boolean;
 }
 
@@ -110,6 +112,8 @@ export interface DNSGSLBSimulationResult {
   record_type: 'A' | 'AAAA';
   country: string;
   source_ip: string;
+  operator: string;
+  asn: number;
   source_scope: string;
   ttl: number;
   targets: string[];
@@ -128,6 +132,8 @@ export interface DNSGSLBSimulationPool {
   weight: number;
   countries: string[];
   source_cidrs: string[];
+  operators: string[];
+  asns: number[];
   matched: boolean;
   reason: string;
 }

@@ -220,11 +220,18 @@ function normalizeDNSZoneDelegationCheck(check: DNSZoneDelegationCheck) {
 function normalizeDNSGSLBSimulationResult(result: DNSGSLBSimulationResult) {
   return {
     ...result,
+    country: result.country ?? '',
+    source_ip: result.source_ip ?? '',
+    operator: result.operator ?? '',
+    asn: result.asn ?? 0,
+    source_scope: result.source_scope ?? '',
     targets: asArray(result.targets),
     matched_pools: asArray(result.matched_pools).map((pool) => ({
       ...pool,
       countries: asArray(pool.countries),
       source_cidrs: asArray(pool.source_cidrs),
+      operators: asArray(pool.operators),
+      asns: asArray(pool.asns),
     })),
     nodes: asArray(result.nodes).map((node) => ({
       ...node,

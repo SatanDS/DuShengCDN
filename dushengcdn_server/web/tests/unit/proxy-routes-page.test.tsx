@@ -1796,6 +1796,15 @@ describe('Proxy route website pages', () => {
     await user.clear(screen.getByLabelText('节点池权重 1'));
     await user.type(screen.getByLabelText('节点池权重 1'), '80');
     await user.type(screen.getByLabelText('节点池国家或地区 1'), 'HK,TW');
+    await user.click(
+      within(
+        screen.getByRole('group', { name: '节点池访问运营商 1' }),
+      ).getByRole('checkbox', { name: '电信' }),
+    );
+    await user.type(
+      screen.getByLabelText('节点池 ASN 1'),
+      'AS4134 as4837 asn:4134 4294967296 0 bad',
+    );
 
     await user.click(screen.getByLabelText('新增节点池'));
     await user.selectOptions(screen.getByLabelText('节点池选择 2'), 'eu');
@@ -1828,6 +1837,8 @@ describe('Proxy route website pages', () => {
             name: 'hk',
             weight: 80,
             countries: ['HK', 'TW'],
+            operators: ['cn-telecom'],
+            asns: [4134, 4837],
             node_ids: ['node-hk'],
             enabled: true,
           },

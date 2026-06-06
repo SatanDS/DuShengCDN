@@ -371,8 +371,11 @@ func hasCandidatesWithoutDNSProbe(snapshot *Snapshot, recordType string, policy 
 func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[string]GSLBPoolPolicy {
 	all := map[string]GSLBPoolPolicy{}
 	cidrMatched := map[string]GSLBPoolPolicy{}
-	matched := map[string]GSLBPoolPolicy{}
+	asnMatched := map[string]GSLBPoolPolicy{}
+	operatorMatched := map[string]GSLBPoolPolicy{}
+	countryMatched := map[string]GSLBPoolPolicy{}
 	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	operator := normalizeOperator(source.Operator)
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
 		if name == "" || !pool.Enabled {
@@ -383,12 +386,34 @@ func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[strin
 			cidrMatched[name] = pool
 			continue
 		}
+		if source.ASN > 0 {
+			for _, asn := range pool.ASNs {
+				if source.ASN == asn {
+					asnMatched[name] = pool
+					break
+				}
+			}
+			if _, ok := asnMatched[name]; ok {
+				continue
+			}
+		}
+		if operator != "" {
+			for _, item := range pool.Operators {
+				if operator == normalizeOperator(item) {
+					operatorMatched[name] = pool
+					break
+				}
+			}
+			if _, ok := operatorMatched[name]; ok {
+				continue
+			}
+		}
 		if country == "" {
 			continue
 		}
 		for _, item := range pool.Countries {
 			if country == strings.ToUpper(strings.TrimSpace(item)) {
-				matched[name] = pool
+				countryMatched[name] = pool
 				break
 			}
 		}
@@ -396,8 +421,14 @@ func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[strin
 	if len(cidrMatched) > 0 {
 		return cidrMatched
 	}
-	if len(matched) > 0 {
-		return matched
+	if len(asnMatched) > 0 {
+		return asnMatched
+	}
+	if len(operatorMatched) > 0 {
+		return operatorMatched
+	}
+	if len(countryMatched) > 0 {
+		return countryMatched
 	}
 	return all
 }
@@ -411,7 +442,36 @@ func sourceScopeKeyForPolicy(policy GSLBPolicy, source SourceContext) string {
 			return "cidr:" + cidr
 		}
 	}
-	return sourceScopeKey(source)
+	if source.ASN > 0 {
+		for _, pool := range policy.Pools {
+			if !pool.Enabled {
+				continue
+			}
+			for _, asn := range pool.ASNs {
+				if source.ASN == asn {
+					return "asn:" + strconv.FormatUint(uint64(source.ASN), 10)
+				}
+			}
+		}
+	}
+	operator := normalizeOperator(source.Operator)
+	if operator != "" {
+		for _, pool := range policy.Pools {
+			if !pool.Enabled {
+				continue
+			}
+			for _, poolOperator := range pool.Operators {
+				if operator == normalizeOperator(poolOperator) {
+					return "operator:" + operator
+				}
+			}
+		}
+	}
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	if country != "" {
+		return "country:" + country
+	}
+	return "global"
 }
 
 func sourceSpreadForPolicy(policy GSLBPolicy, routeID uint, recordType string, source SourceContext, baseScopeKey string) *sourceSpread {

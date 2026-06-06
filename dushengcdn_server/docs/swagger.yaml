@@ -376,6 +376,14 @@ definitions:
         type: boolean
       name:
         type: string
+      operators:
+        items:
+          type: string
+        type: array
+      asns:
+        items:
+          type: integer
+        type: array
       source_cidrs:
         items:
           type: string

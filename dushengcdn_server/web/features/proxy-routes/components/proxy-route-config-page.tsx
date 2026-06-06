@@ -282,6 +282,8 @@ type GSLBPoolRow = {
   nodeIds: string[];
   weight: string;
   countries: string;
+  operators: string[];
+  asns: string;
   sourceCidrs: string;
 };
 
@@ -309,6 +311,13 @@ const gslbPoolRemoveButtonClassName =
   'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] hover:border-[var(--status-danger-border)] hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger-foreground)] disabled:border-[var(--border-default)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--foreground-muted)]';
 const gslbPoolAddButtonClassName =
   'border-dashed border-[var(--border-default)] bg-[var(--surface-muted)] text-[var(--foreground-secondary)] hover:border-[var(--brand-primary)] hover:bg-[var(--brand-primary-soft)] hover:text-[var(--brand-primary)]';
+const gslbOperatorOptions = [
+  { value: 'cn-telecom', label: '电信' },
+  { value: 'cn-unicom', label: '联通' },
+  { value: 'cn-mobile', label: '移动' },
+  { value: 'cn-broadcast', label: '广电' },
+  { value: 'cernet', label: '教育网' },
+] as const;
 
 let gslbPoolRowSequence = 0;
 
@@ -344,6 +353,8 @@ function createGSLBPoolRow(
     nodeIds: [],
     weight: '100',
     countries: '',
+    operators: [],
+    asns: '',
     sourceCidrs: '',
     ...values,
   };
@@ -375,6 +386,8 @@ function syncGSLBPoolRowsWithOptions(
         nodeIds: existingRow?.nodeIds ?? [],
         weight: existingRow?.weight || '100',
         countries: existingRow?.countries || '',
+        operators: existingRow?.operators ?? [],
+        asns: existingRow?.asns || '',
         sourceCidrs: existingRow?.sourceCidrs || '',
       });
     });
@@ -404,6 +417,35 @@ function parseRegionCountriesText(value: string) {
     .filter(Boolean);
 }
 
+function normalizeGSLBOperatorList(values: string[] | null | undefined) {
+  const operators = new Set<string>();
+  for (const value of values ?? []) {
+    const operator = value.trim().toLowerCase();
+    if (operator) {
+      operators.add(operator);
+    }
+  }
+  return Array.from(operators);
+}
+
+function parseGSLBASNList(value: string) {
+  const asns = new Set<number>();
+  for (const item of value.split(/[\s,，;；]+/)) {
+    const normalized = item
+      .trim()
+      .replace(/^asn:\s*/i, '')
+      .replace(/^as/i, '');
+    if (!normalized) {
+      continue;
+    }
+    const asn = Number(normalized);
+    if (Number.isInteger(asn) && asn > 0 && asn <= 4294967295) {
+      asns.add(asn);
+    }
+  }
+  return Array.from(asns);
+}
+
 function buildGSLBPoolRows(route: ProxyRouteItem) {
   const pools =
     route.gslb_policy?.pools?.length > 0
@@ -418,6 +460,8 @@ function buildGSLBPoolRows(route: ProxyRouteItem) {
           nodeIds: pool.node_ids ?? [],
           weight: String(pool.weight || 100),
           countries: pool.countries?.join(',') || '',
+          operators: normalizeGSLBOperatorList(pool.operators),
+          asns: pool.asns?.join(',') || '',
           sourceCidrs: pool.source_cidrs?.join('\n') || '',
         }),
       ),
@@ -434,6 +478,8 @@ function parseGSLBPoolRows(rows: GSLBPoolRow[]) {
         .split(/[\s,，;；]+/)
         .map((item) => item.trim().toUpperCase())
         .filter((item) => /^[A-Z0-9]{2}$/.test(item)),
+      operators: normalizeGSLBOperatorList(row.operators),
+      asns: parseGSLBASNList(row.asns),
       source_cidrs: row.sourceCidrs
         .split(/[\s,，;；]+/)
         .map((item) => item.trim())
@@ -1418,8 +1464,8 @@ export function DNSAutomationSection({
                       </SecondaryButton>
                     </span>
                   }
-                  hint="请选择节点详情里真实存在的节点池；不要填写节点名称。国家或地区填写两位代码，留空表示全局兜底。"
-                  tooltip="来源网段用于把某些用户 IP 段固定到指定节点池，适合有明确区域或线路规划的场景。节点池名要和节点详情里的节点池完全一致。"
+                  hint="请选择节点详情里真实存在的节点池；不要填写节点名称。来源网段、ASN、运营商、国家或地区都留空时作为全局兜底。"
+                  tooltip="来源匹配优先级为：网段、ASN、运营商、国家或地区、全局兜底。运营商/ASN 需要 DNS 响应端配置离线 ISP/ASN 库。"
                   error={form.formState.errors.gslb_pool_rows?.message}
                   container="div"
                 >
@@ -1434,10 +1480,12 @@ export function DNSAutomationSection({
 
                       return (
                         <div className="space-y-3">
-                          <div className="hidden gap-3 pl-[56px] text-xs font-medium text-[var(--foreground-secondary)] md:grid md:grid-cols-[minmax(0,1fr)_110px_minmax(0,0.9fr)_minmax(0,1.2fr)]">
+                          <div className="hidden gap-3 pl-[56px] text-xs font-medium text-[var(--foreground-secondary)] md:grid md:grid-cols-[minmax(220px,1.35fr)_96px_minmax(0,0.75fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,1fr)]">
                             <span>池名 / 池内节点</span>
                             <span>权重</span>
                             <span>国家或地区</span>
+                            <span>访问运营商</span>
+                            <span>ASN</span>
                             <span>来源网段</span>
                           </div>
 
@@ -1494,7 +1542,7 @@ export function DNSAutomationSection({
                             return (
                               <div
                                 key={row.id}
-                                className="grid gap-3 md:grid-cols-[44px_minmax(0,1fr)_110px_minmax(0,0.9fr)_minmax(0,1.2fr)] md:items-start"
+                                className="grid gap-3 md:grid-cols-[44px_minmax(220px,1.35fr)_96px_minmax(0,0.75fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,1fr)] md:items-start"
                               >
                                 <SecondaryButton
                                   type="button"
@@ -1666,6 +1714,66 @@ export function DNSAutomationSection({
                                     nextRows[index] = {
                                       ...row,
                                       countries: event.target.value,
+                                    };
+                                    updateRows(nextRows);
+                                  }}
+                                  className="h-11"
+                                />
+
+                                <div
+                                  aria-label={`节点池访问运营商 ${index + 1}`}
+                                  role="group"
+                                  className="grid min-h-11 gap-2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
+                                >
+                                  {gslbOperatorOptions.map((option) => (
+                                    <label
+                                      key={option.value}
+                                      className="flex min-w-0 items-center gap-2 text-xs text-[var(--foreground-primary)]"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={row.operators.includes(
+                                          option.value,
+                                        )}
+                                        disabled={!autoSyncEnabled}
+                                        onChange={(event) => {
+                                          const nextOperators = event.target
+                                            .checked
+                                            ? [
+                                                ...row.operators,
+                                                option.value,
+                                              ]
+                                            : row.operators.filter(
+                                                (item) => item !== option.value,
+                                              );
+                                          const nextRows = rows.slice();
+                                          nextRows[index] = {
+                                            ...row,
+                                            operators: Array.from(
+                                              new Set(nextOperators),
+                                            ),
+                                          };
+                                          updateRows(nextRows);
+                                        }}
+                                        className="h-4 w-4 shrink-0 accent-[var(--brand-primary)]"
+                                      />
+                                      <span className="truncate">
+                                        {option.label}
+                                      </span>
+                                    </label>
+                                  ))}
+                                </div>
+
+                                <ResourceInput
+                                  value={row.asns}
+                                  aria-label={`节点池 ASN ${index + 1}`}
+                                  placeholder="AS4134"
+                                  disabled={!autoSyncEnabled}
+                                  onChange={(event) => {
+                                    const nextRows = rows.slice();
+                                    nextRows[index] = {
+                                      ...row,
+                                      asns: event.target.value,
                                     };
                                     updateRows(nextRows);
                                   }}

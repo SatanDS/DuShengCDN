@@ -227,6 +227,13 @@ func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string,
 const defaultGSLBScopeKey = "global"
 
 func gslbScopeKeyFromSource(source GSLBSourceContext) string {
+	if source.ASN > 0 {
+		return fmt.Sprintf("asn:%d", source.ASN)
+	}
+	operator := normalizeGSLBOperator(source.Operator)
+	if operator != "" {
+		return "operator:" + operator
+	}
 	country := strings.ToUpper(strings.TrimSpace(source.Country))
 	if country != "" {
 		return "country:" + country
@@ -243,7 +250,36 @@ func gslbScopeKeyForPolicy(policy ProxyRouteGSLBPolicy, source GSLBSourceContext
 			return "cidr:" + cidr
 		}
 	}
-	return gslbScopeKeyFromSource(source)
+	if source.ASN > 0 {
+		for _, pool := range policy.Pools {
+			if !pool.Enabled {
+				continue
+			}
+			for _, asn := range pool.ASNs {
+				if source.ASN == asn {
+					return fmt.Sprintf("asn:%d", source.ASN)
+				}
+			}
+		}
+	}
+	operator := normalizeGSLBOperator(source.Operator)
+	if operator != "" {
+		for _, pool := range policy.Pools {
+			if !pool.Enabled {
+				continue
+			}
+			for _, poolOperator := range pool.Operators {
+				if operator == normalizeGSLBOperator(poolOperator) {
+					return "operator:" + operator
+				}
+			}
+		}
+	}
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	if country != "" {
+		return "country:" + country
+	}
+	return defaultGSLBScopeKey
 }
 
 func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext) ([]gslbDNSTargetCandidate, error) {
@@ -363,7 +399,10 @@ func latestNodeMetricSnapshots() map[string]*model.NodeMetricSnapshot {
 func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) map[string]ProxyRouteGSLBPoolPolicy {
 	result := make(map[string]ProxyRouteGSLBPoolPolicy, len(pools))
 	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	operator := normalizeGSLBOperator(source.Operator)
 	matchedByCIDR := make(map[string]ProxyRouteGSLBPoolPolicy)
+	matchedByASN := make(map[string]ProxyRouteGSLBPoolPolicy)
+	matchedByOperator := make(map[string]ProxyRouteGSLBPoolPolicy)
 	matchedByCountry := make(map[string]ProxyRouteGSLBPoolPolicy)
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
@@ -374,6 +413,28 @@ func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSource
 		if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
 			matchedByCIDR[name] = pool
 			continue
+		}
+		if source.ASN > 0 {
+			for _, asn := range pool.ASNs {
+				if source.ASN == asn {
+					matchedByASN[name] = pool
+					break
+				}
+			}
+			if _, ok := matchedByASN[name]; ok {
+				continue
+			}
+		}
+		if operator != "" {
+			for _, poolOperator := range pool.Operators {
+				if operator == normalizeGSLBOperator(poolOperator) {
+					matchedByOperator[name] = pool
+					break
+				}
+			}
+			if _, ok := matchedByOperator[name]; ok {
+				continue
+			}
 		}
 		if country == "" {
 			continue
@@ -387,6 +448,12 @@ func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSource
 	}
 	if len(matchedByCIDR) > 0 {
 		return matchedByCIDR
+	}
+	if len(matchedByASN) > 0 {
+		return matchedByASN
+	}
+	if len(matchedByOperator) > 0 {
+		return matchedByOperator
 	}
 	if len(matchedByCountry) > 0 {
 		return matchedByCountry

@@ -4532,6 +4532,79 @@ func TestAgentDNSProbeResultsStaleExcludedFromWorkerHealth(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDNSGSLBSourceMatchPriorityIncludesASNAndOperator(t *testing.T) {
+	policy, err := normalizeGSLBPolicy(ProxyRouteGSLBPolicy{
+		Pools: []ProxyRouteGSLBPoolPolicy{
+			{Name: "global", Weight: 100, Enabled: true},
+			{Name: "country-cn", Weight: 100, Countries: []string{"CN"}, Enabled: true},
+			{Name: "operator-telecom", Weight: 100, Operators: []string{"Telecom"}, Enabled: true},
+			{Name: "asn-4134", Weight: 100, ASNs: []uint32{4134}, Enabled: true},
+			{Name: "cidr-edge", Weight: 100, SourceCIDRs: []string{"203.0.113.0/24"}, Enabled: true},
+		},
+	}, "global", 1, "weighted", 30)
+	if err != nil {
+		t.Fatalf("normalize GSLB policy: %v", err)
+	}
+
+	matchedPoolNames := func(matched map[string]ProxyRouteGSLBPoolPolicy) []string {
+		names := make([]string, 0, len(matched))
+		for name := range matched {
+			names = append(names, name)
+		}
+		return names
+	}
+
+	tests := []struct {
+		name      string
+		source    GSLBSourceContext
+		wantPools []string
+		wantScope string
+	}{
+		{
+			name:      "CIDR overrides ASN operator and country",
+			source:    GSLBSourceContext{IP: "203.0.113.10", ASN: 4134, Operator: "cn-telecom", Country: "CN"},
+			wantPools: []string{"cidr-edge"},
+			wantScope: "cidr:203.0.113.0/24",
+		},
+		{
+			name:      "ASN overrides operator and country",
+			source:    GSLBSourceContext{IP: "198.51.100.10", ASN: 4134, Operator: "cn-telecom", Country: "CN"},
+			wantPools: []string{"asn-4134"},
+			wantScope: "asn:4134",
+		},
+		{
+			name:      "operator overrides country",
+			source:    GSLBSourceContext{IP: "198.51.100.10", ASN: 9808, Operator: "China Telecom", Country: "CN"},
+			wantPools: []string{"operator-telecom"},
+			wantScope: "operator:cn-telecom",
+		},
+		{
+			name:      "country overrides global fallback",
+			source:    GSLBSourceContext{IP: "198.51.100.10", Country: "cn"},
+			wantPools: []string{"country-cn"},
+			wantScope: "country:CN",
+		},
+		{
+			name:      "global fallback keeps every enabled pool",
+			source:    GSLBSourceContext{},
+			wantPools: []string{"global", "country-cn", "operator-telecom", "asn-4134", "cidr-edge"},
+			wantScope: defaultGSLBScopeKey,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matched := matchGSLBPoolsForSource(policy.Pools, tt.source)
+			if got := matchedPoolNames(matched); !sameStringSet(got, tt.wantPools) {
+				t.Fatalf("expected matched pools %v, got %v", tt.wantPools, got)
+			}
+			if got := gslbScopeKeyForPolicy(policy, tt.source); got != tt.wantScope {
+				t.Fatalf("expected source scope %q, got %q", tt.wantScope, got)
+			}
+		})
+	}
+}
+
 func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -4693,7 +4766,7 @@ func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SimulateAuthoritativeDNSGSLB global: %v", err)
 	}
-	if global.SourceScope != defaultGSLBScopeKey || !strings.Contains(global.Message, "未指定国家代码时使用全局作用域") {
+	if global.SourceScope != defaultGSLBScopeKey || !strings.Contains(global.Message, "未指定来源条件时使用全局作用域") {
 		t.Fatalf("expected global simulation message to explain fallback scope, got %+v", global)
 	}
 

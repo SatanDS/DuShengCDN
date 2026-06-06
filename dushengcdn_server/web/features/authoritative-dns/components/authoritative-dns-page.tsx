@@ -122,6 +122,8 @@ type GSLBSimulationFormValues = {
   qname: string;
   record_type: 'A' | 'AAAA';
   country: string;
+  operator: string;
+  asn: string;
   source_ip: string;
 };
 
@@ -180,6 +182,14 @@ const dnsRecordTypes: DNSRecordType[] = [
   'MX',
   'NS',
   'SOA',
+];
+
+const gslbSimulationOperatorOptions = [
+  { value: 'cn-telecom', label: '电信' },
+  { value: 'cn-unicom', label: '联通' },
+  { value: 'cn-mobile', label: '移动' },
+  { value: 'cn-broadcast', label: '广电' },
+  { value: 'cernet', label: '教育网' },
 ];
 
 const proxyRouteDetailPath = '/proxy-route/detail';
@@ -514,7 +524,38 @@ function formatSourceScopeBaseLabel(value: string) {
     const cidr = text.slice(text.indexOf(':') + 1).trim();
     return cidr ? `网段 ${cidr}` : text;
   }
+  if (lower.startsWith('operator:')) {
+    const operator = text.slice(text.indexOf(':') + 1).trim();
+    return operator ? `运营商 ${formatGSLBOperatorLabel(operator)}` : text;
+  }
+  if (lower.startsWith('asn:')) {
+    const asn = text.slice(text.indexOf(':') + 1).trim().replace(/^AS/i, '');
+    return asn ? `ASN AS${asn}` : text;
+  }
   return text;
+}
+
+function formatGSLBOperatorLabel(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return (
+    gslbSimulationOperatorOptions.find((option) => option.value === normalized)
+      ?.label ?? value
+  );
+}
+
+function parseSimulationASN(value: string) {
+  const normalized = value
+    .trim()
+    .replace(/^asn:\s*/i, '')
+    .replace(/^as/i, '');
+  if (!normalized) {
+    return undefined;
+  }
+  const asn = Number(normalized);
+  if (!Number.isInteger(asn) || asn <= 0 || asn > 4294967295) {
+    return undefined;
+  }
+  return asn;
 }
 
 function formatDNSRCodeLabel(item: DNSObservabilityCounterItem) {
@@ -2450,6 +2491,8 @@ function GSLBSimulationPanel({
       qname: getDefaultSimulationQName(defaultRoute),
       record_type: getRouteRecordType(defaultRoute),
       country: '',
+      operator: '',
+      asn: '',
       source_ip: '',
     },
   });
@@ -2464,6 +2507,8 @@ function GSLBSimulationPanel({
         qname: '',
         record_type: 'A',
         country: '',
+        operator: '',
+        asn: '',
         source_ip: '',
       });
       return;
@@ -2477,6 +2522,8 @@ function GSLBSimulationPanel({
       qname: getDefaultSimulationQName(selectedRoute),
       record_type: getRouteRecordType(selectedRoute),
       country: '',
+      operator: '',
+      asn: '',
       source_ip: '',
     });
   }, [form, selectedRoute]);
@@ -2497,7 +2544,7 @@ function GSLBSimulationPanel({
   return (
     <AppCard
       title="智能解析模拟"
-      description="按站点、记录类型、来源国家和来源 IP，预演当前解析配置会返回哪些边缘 IP。"
+      description="按站点、记录类型、来源国家、运营商、ASN 和来源 IP，预演当前解析配置会返回哪些边缘 IP。"
     >
       {routesLoading ? (
         <LoadingState />
@@ -2513,11 +2560,14 @@ function GSLBSimulationPanel({
           <form
             className="space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] p-4"
             onSubmit={form.handleSubmit((values) => {
+              const asn = parseSimulationASN(values.asn);
               onSimulate({
                 proxy_route_id: Number(values.proxy_route_id),
                 qname: values.qname.trim(),
                 record_type: values.record_type,
                 country: values.country.trim().toUpperCase(),
+                operator: values.operator.trim(),
+                asn,
                 source_ip: values.source_ip.trim(),
                 fresh: true,
               });
@@ -2556,6 +2606,34 @@ function GSLBSimulationPanel({
                   maxLength={2}
                   placeholder="HK"
                   {...form.register('country')}
+                />
+              </ResourceField>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <ResourceField
+                label="访问运营商"
+                hint="可选；本地 DNS 响应端配置离线 ISP/ASN 库后生效。"
+              >
+                <ResourceSelect
+                  aria-label="访问运营商"
+                  {...form.register('operator')}
+                >
+                  <option value="">全局</option>
+                  {gslbSimulationOperatorOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </ResourceSelect>
+              </ResourceField>
+              <ResourceField
+                label="来源 ASN"
+                hint="可选；优先级高于运营商，例如 AS4134。"
+              >
+                <ResourceInput
+                  aria-label="来源 ASN"
+                  placeholder="AS4134"
+                  {...form.register('asn')}
                 />
               </ResourceField>
             </div>
@@ -2814,6 +2892,8 @@ function GSLBSimulationPoolCard({
 }) {
   const countries = pool.countries ?? [];
   const sourceCIDRs = pool.source_cidrs ?? [];
+  const operators = pool.operators ?? [];
+  const asns = pool.asns ?? [];
 
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-3">
@@ -2829,6 +2909,10 @@ function GSLBSimulationPoolCard({
       <p className="mt-2 text-xs text-[var(--foreground-secondary)]">
         权重 {pool.weight}
         {countries.length > 0 ? ` · 国家 ${countries.join(', ')}` : ''}
+        {operators.length > 0
+          ? ` · 运营商 ${operators.map(formatGSLBOperatorLabel).join(', ')}`
+          : ''}
+        {asns.length > 0 ? ` · ASN ${asns.map((asn) => `AS${asn}`).join(', ')}` : ''}
         {sourceCIDRs.length > 0 ? ` · 来源网段 ${sourceCIDRs.join(', ')}` : ''}
       </p>
       <p className="mt-1 text-xs text-[var(--foreground-muted)]">

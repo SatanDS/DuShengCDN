@@ -175,6 +175,8 @@ type DNSGSLBSimulationInput struct {
 	RecordType   string `json:"record_type"`
 	Country      string `json:"country"`
 	SourceIP     string `json:"source_ip"`
+	Operator     string `json:"operator"`
+	ASN          uint32 `json:"asn"`
 	Fresh        *bool  `json:"fresh"`
 }
 
@@ -189,6 +191,8 @@ type DNSGSLBSimulationView struct {
 	RecordType      string                      `json:"record_type"`
 	Country         string                      `json:"country"`
 	SourceIP        string                      `json:"source_ip"`
+	Operator        string                      `json:"operator"`
+	ASN             uint32                      `json:"asn"`
 	SourceScope     string                      `json:"source_scope"`
 	TTL             int                         `json:"ttl"`
 	Targets         []string                    `json:"targets"`
@@ -207,6 +211,8 @@ type DNSGSLBSimulationPoolView struct {
 	Weight      int      `json:"weight"`
 	Countries   []string `json:"countries"`
 	SourceCIDRs []string `json:"source_cidrs"`
+	Operators   []string `json:"operators"`
+	ASNs        []uint32 `json:"asns"`
 	Matched     bool     `json:"matched"`
 	Reason      string   `json:"reason"`
 }
@@ -1395,6 +1401,8 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 	if country != "" && !proxyRouteRegionCountryPattern.MatchString(country) {
 		return nil, errors.New("country must be a two-letter country code")
 	}
+	operator := normalizeGSLBOperator(input.Operator)
+	asn := input.ASN
 
 	routeModel, err := model.GetProxyRouteByID(input.ProxyRouteID)
 	if err != nil {
@@ -1445,26 +1453,28 @@ func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulat
 		fresh = *input.Fresh
 	}
 	source := dnsworker.SourceContext{
-		IP:      sourceIP,
-		Country: country,
+		IP:       sourceIP,
+		Country:  country,
+		Operator: operator,
+		ASN:      asn,
 	}
 	scheduler := dnsworker.NewScheduler()
 	scheduler.LoadSnapshotStates(workerSnapshot)
 	targets, ttl, sourceScope, err := scheduler.Select(workerSnapshot, workerRoute, recordType, source, fresh)
 	if err != nil {
 		if errors.Is(err, dnsworker.ErrDNSProbeThresholdNotSatisfied) {
-			return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, nil, ttl, sourceScope, "Agent 探测未达到调度门槛，当前来源没有可用于 "+recordType+" 记录的边缘节点。请查看下方节点原因确认是未探测、探测过期还是 UDP/TCP 53 未同时可达。"), nil
+			return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, operator, asn, nil, ttl, sourceScope, "Agent 探测未达到调度门槛，当前来源没有可用于 "+recordType+" 记录的边缘节点。请查看下方节点原因确认是未探测、探测过期还是 UDP/TCP 53 未同时可达。"), nil
 		}
 		if errors.Is(err, dnsworker.ErrNoAvailableTarget) || errors.Is(err, dnsworker.ErrNoTargetSelected) {
-			return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, nil, ttl, sourceScope, "当前来源没有可用于 "+recordType+" 记录的边缘节点。请查看下方节点原因确认节点池、在线状态、OpenResty 健康、公网 IP 类型和负载阈值。"), nil
+			return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, operator, asn, nil, ttl, sourceScope, "当前来源没有可用于 "+recordType+" 记录的边缘节点。请查看下方节点原因确认节点池、在线状态、OpenResty 健康、公网 IP 类型和负载阈值。"), nil
 		}
 		return nil, err
 	}
 
-	return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, targets, ttl, sourceScope, ""), nil
+	return buildDNSGSLBSimulationView(snapshot, workerRoute, qname, recordType, sourceIP, country, operator, asn, targets, ttl, sourceScope, ""), nil
 }
 
-func buildDNSGSLBSimulationView(snapshot *AuthoritativeDNSSnapshot, workerRoute *dnsworker.SnapshotRoute, qname string, recordType string, sourceIP string, country string, targets []string, ttl int, sourceScope string, messagePrefix string) *DNSGSLBSimulationView {
+func buildDNSGSLBSimulationView(snapshot *AuthoritativeDNSSnapshot, workerRoute *dnsworker.SnapshotRoute, qname string, recordType string, sourceIP string, country string, operator string, asn uint32, targets []string, ttl int, sourceScope string, messagePrefix string) *DNSGSLBSimulationView {
 	if targets == nil {
 		targets = []string{}
 	}
@@ -1480,13 +1490,13 @@ func buildDNSGSLBSimulationView(snapshot *AuthoritativeDNSSnapshot, workerRoute 
 			},
 		}
 	}
-	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, policy, GSLBSourceContext{IP: sourceIP, Country: country}, targets, snapshot.GSLBProbeSchedulingEnabled)
+	diagnostics := buildDNSGSLBSimulationDiagnostics(recordType, policy, GSLBSourceContext{IP: sourceIP, Country: country, Operator: operator, ASN: asn}, targets, snapshot.GSLBProbeSchedulingEnabled)
 	message := "模拟结果来自当前面板生成的解析配置，不会写入真实切换状态。"
 	if strings.TrimSpace(messagePrefix) != "" {
 		message = strings.TrimSpace(messagePrefix) + " " + message
 	}
-	if sourceScope == defaultGSLBScopeKey && country == "" {
-		message += " 未指定国家代码时使用全局作用域。"
+	if sourceScope == defaultGSLBScopeKey && country == "" && operator == "" && asn == 0 {
+		message += " 未指定来源条件时使用全局作用域。"
 	}
 	return &DNSGSLBSimulationView{
 		ProxyRouteID:    workerRoute.ID,
@@ -1495,6 +1505,8 @@ func buildDNSGSLBSimulationView(snapshot *AuthoritativeDNSSnapshot, workerRoute 
 		RecordType:      recordType,
 		Country:         country,
 		SourceIP:        sourceIP,
+		Operator:        operator,
+		ASN:             asn,
 		SourceScope:     sourceScope,
 		TTL:             ttl,
 		Targets:         targets,
@@ -1607,11 +1619,30 @@ func buildDNSGSLBSimulationDiagnosticsWithOptions(recordType string, policy dnsw
 func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPools map[string]ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) []DNSGSLBSimulationPoolView {
 	result := make([]DNSGSLBSimulationPoolView, 0, len(pools))
 	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	operator := normalizeGSLBOperator(source.Operator)
 	cidrMatched := false
+	asnMatched := false
+	operatorMatched := false
 	for _, pool := range pools {
 		if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
 			cidrMatched = true
 			break
+		}
+	}
+	if !cidrMatched && source.ASN > 0 {
+		for _, pool := range pools {
+			if gslbPoolMatchesASN(pool, source.ASN) {
+				asnMatched = true
+				break
+			}
+		}
+	}
+	if !cidrMatched && !asnMatched && operator != "" {
+		for _, pool := range pools {
+			if gslbPoolMatchesOperator(pool, operator) {
+				operatorMatched = true
+				break
+			}
 		}
 	}
 	for _, pool := range pools {
@@ -1625,6 +1656,18 @@ func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPo
 			reason = "匹配来源网段 " + matchedCIDR
 		} else if cidrMatched {
 			reason = "未匹配来源网段"
+		} else if source.ASN > 0 && asnMatched {
+			if gslbPoolMatchesASN(pool, source.ASN) {
+				reason = fmt.Sprintf("匹配来源 ASN %d", source.ASN)
+			} else {
+				reason = "未匹配来源 ASN"
+			}
+		} else if operator != "" && operatorMatched {
+			if gslbPoolMatchesOperator(pool, operator) {
+				reason = "匹配来源运营商 " + operator
+			} else {
+				reason = "未匹配来源运营商"
+			}
 		} else if country != "" {
 			reason = "未匹配来源国家"
 			for _, poolCountry := range pool.Countries {
@@ -1642,11 +1685,38 @@ func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPo
 			Weight:      pool.Weight,
 			Countries:   append([]string(nil), pool.Countries...),
 			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
+			Operators:   append([]string(nil), pool.Operators...),
+			ASNs:        append([]uint32(nil), pool.ASNs...),
 			Matched:     matched,
 			Reason:      reason,
 		})
 	}
 	return result
+}
+
+func gslbPoolMatchesASN(pool ProxyRouteGSLBPoolPolicy, asn uint32) bool {
+	if asn == 0 {
+		return false
+	}
+	for _, poolASN := range pool.ASNs {
+		if asn == poolASN {
+			return true
+		}
+	}
+	return false
+}
+
+func gslbPoolMatchesOperator(pool ProxyRouteGSLBPoolPolicy, operator string) bool {
+	normalized := normalizeGSLBOperator(operator)
+	if normalized == "" {
+		return false
+	}
+	for _, poolOperator := range pool.Operators {
+		if normalized == normalizeGSLBOperator(poolOperator) {
+			return true
+		}
+	}
+	return false
 }
 
 func enabledGSLBPoolNames(pools []ProxyRouteGSLBPoolPolicy) map[string]struct{} {
@@ -1845,6 +1915,8 @@ func convertWorkerGSLBPolicyToAuthoritative(policy dnsworker.GSLBPolicy) ProxyRo
 			Weight:      pool.Weight,
 			Countries:   append([]string(nil), pool.Countries...),
 			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
+			Operators:   append([]string(nil), pool.Operators...),
+			ASNs:        append([]uint32(nil), pool.ASNs...),
 			NodeIDs:     append([]string(nil), pool.NodeIDs...),
 			Enabled:     pool.Enabled,
 		})
@@ -3167,6 +3239,8 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 			Weight:      pool.Weight,
 			Countries:   append([]string(nil), pool.Countries...),
 			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
+			Operators:   append([]string(nil), pool.Operators...),
+			ASNs:        append([]uint32(nil), pool.ASNs...),
 			NodeIDs:     append([]string(nil), pool.NodeIDs...),
 			Enabled:     pool.Enabled,
 		})
@@ -3634,6 +3708,17 @@ func normalizeDNSSourceScopeBase(raw string) string {
 	if ok && strings.EqualFold(strings.TrimSpace(prefix), "cidr") {
 		if cidr, valid := normalizeGSLBCIDR(scopeValue); valid {
 			return "cidr:" + cidr
+		}
+	}
+	if ok && strings.EqualFold(strings.TrimSpace(prefix), "operator") {
+		if operator := normalizeGSLBOperator(scopeValue); operator != "" {
+			return "operator:" + operator
+		}
+	}
+	if ok && strings.EqualFold(strings.TrimSpace(prefix), "asn") {
+		asn, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(scopeValue)), "AS"), 10, 32)
+		if err == nil && asn > 0 {
+			return "asn:" + strconv.FormatUint(asn, 10)
 		}
 	}
 	if len(value) > 64 {

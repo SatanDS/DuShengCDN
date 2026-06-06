@@ -103,6 +103,8 @@ type GSLBPoolPolicy struct {
 	Weight      int      `json:"weight"`
 	Countries   []string `json:"countries"`
 	SourceCIDRs []string `json:"source_cidrs"`
+	Operators   []string `json:"operators,omitempty"`
+	ASNs        []uint32 `json:"asns,omitempty"`
 	NodeIDs     []string `json:"node_ids,omitempty"`
 	Enabled     bool     `json:"enabled"`
 }
@@ -139,5 +141,7 @@ type GSLBPolicy struct {
 type SourceContext struct {
 	IP       string
 	Country  string
+	Operator string
+	ASN      uint32
 	ScopeKey string
 }
