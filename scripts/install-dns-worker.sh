@@ -3,13 +3,14 @@ set -euo pipefail
 
 # DuShengCDN DNS Worker Installer
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
+#   curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-dns-worker.sh | bash -s -- \
 #     --server-url https://cdn.example.com \
 #     --token your-dns-worker-token
 
 INSTALL_DIR="/opt/dushengcdn-dns-worker"
-REPO="SatanDS/DuShengCDN"
+REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
 SOURCE_REF="${SOURCE_REF:-main}"
+ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
 SERVER_URL=""
 TOKEN=""
 SERVICE_NAME="dushengcdn-dns-worker"
@@ -52,8 +53,9 @@ Options:
   --query-rate-limit NUM     Per-source-IP DNS queries per second; 0 disables (default: 200)
   --udp-response-size NUM    Maximum UDP DNS response payload size (default: 1232)
   --log-level LEVEL          debug, info, warn, or error (default: info)
-  --repo REPO                GitHub repository (default: SatanDS/DuShengCDN)
+  --repo REPO                GitHub release repository (default: ${REPO})
   --source-ref REF           Git branch, tag, or commit used when building from source (default: main)
+  --allow-source-build       Allow fallback source build when no release binary is available
   --install-deps             Install missing download/build dependencies automatically (default)
   --no-install-deps          Do not install missing dependencies automatically
   --no-service               Do not create systemd service
@@ -89,6 +91,7 @@ while [[ $# -gt 0 ]]; do
     --log-level) LOG_LEVEL_VALUE="$2"; shift 2 ;;
     --repo) REPO="$2"; shift 2 ;;
     --source-ref) SOURCE_REF="$2"; shift 2 ;;
+    --allow-source-build) ALLOW_SOURCE_BUILD="true"; shift ;;
     --install-deps) AUTO_INSTALL_DEPS="true"; shift ;;
     --no-install-deps) AUTO_INSTALL_DEPS="false"; shift ;;
     --no-service) CREATE_SERVICE="false"; shift ;;
@@ -658,7 +661,11 @@ TAG=""
 if resolve_release_binary; then
   download_release_binary
 else
-  build_binary_from_source
+  if [[ "$ALLOW_SOURCE_BUILD" == "true" ]]; then
+    build_binary_from_source
+  else
+    die "no verified release binary is available for ${ASSET_NAME} in ${REPO}. Publish the binary release asset, or rerun with --allow-source-build and a source repository."
+  fi
 fi
 
 SYSTEMCTL_AVAILABLE="false"

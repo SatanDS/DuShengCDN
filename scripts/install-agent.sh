@@ -3,12 +3,12 @@ set -euo pipefail
 
 # DuShengCDN Agent Installer
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
+#   curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh | bash -s -- \
 #     --server-url http://your-server:3000 \
 #     --discovery-token your-token
 
 INSTALL_DIR="/opt/dushengcdn-agent"
-REPO="SatanDS/DuShengCDN"
+REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
 SERVER_URL=""
 DISCOVERY_TOKEN=""
 AGENT_TOKEN=""
@@ -17,6 +17,7 @@ SERVICE_NAME="dushengcdn-agent"
 OPENRESTY_PATH=""
 AUTO_INSTALL_DEPS="true"
 SOURCE_REF="${SOURCE_REF:-main}"
+ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
 GEOIP_LOOKUP_API_URL=""
 GEOIP_LOOKUP_API_TOKEN=""
 DUSHENGCDN_BUILD_GO_DIR="${DUSHENGCDN_BUILD_GO_DIR:-/opt/dushengcdn-build/go}"
@@ -34,8 +35,9 @@ Options:
   --agent-token TOKEN       Node-specific agent token
   --install-dir DIR         Installation directory (default: /opt/dushengcdn-agent)
   --openresty-path PATH     OpenResty binary path (default: auto-detect from PATH)
-  --repo REPO               GitHub repository (default: SatanDS/DuShengCDN)
+  --repo REPO               GitHub release repository (default: ${REPO})
   --source-ref REF          Git branch, tag, or commit used when building from source (default: main)
+  --allow-source-build      Allow fallback source build when no release binary is available
   --geoip-api-url URL       Optional precise IP lookup API URL used when local GeoIP has no country
   --geoip-api-token TOKEN   Optional bearer token for --geoip-api-url
   --install-deps            Install missing runtime dependencies automatically (default)
@@ -66,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --openresty-path) OPENRESTY_PATH="$2"; shift 2 ;;
     --repo)         REPO="$2"; shift 2 ;;
     --source-ref)   SOURCE_REF="$2"; shift 2 ;;
+    --allow-source-build) ALLOW_SOURCE_BUILD="true"; shift ;;
     --geoip-api-url) GEOIP_LOOKUP_API_URL="$2"; shift 2 ;;
     --geoip-api-token) GEOIP_LOOKUP_API_TOKEN="$2"; shift 2 ;;
     --install-deps) AUTO_INSTALL_DEPS="true"; shift ;;
@@ -982,7 +985,13 @@ TAG=""
 if resolve_release_binary; then
   download_release_binary
 else
-  build_binary_from_source
+  if [[ "$ALLOW_SOURCE_BUILD" == "true" ]]; then
+    build_binary_from_source
+  else
+    echo "Error: no verified release binary is available for ${ASSET_NAME} in ${REPO}." >&2
+    echo "Publish the binary release asset, or rerun with --allow-source-build and a source repository." >&2
+    exit 1
+  fi
 fi
 
 SERVICE_WAS_ACTIVE="false"

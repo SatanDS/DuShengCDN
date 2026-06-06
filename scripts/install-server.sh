@@ -17,7 +17,7 @@ DNS_WORKER_INSTALL_DIR="/opt/dushengcdn-dns-worker"
 DNS_WORKER_LISTEN=""
 DNS_WORKER_QUERY_RATE_LIMIT="200"
 DNS_WORKER_UDP_RESPONSE_SIZE="1232"
-DNS_WORKER_REPO="SatanDS/DuShengCDN"
+DNS_WORKER_REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
 DNS_WORKER_SOURCE_REF="${SOURCE_REF:-main}"
 DNS_WORKER_GEOIP_DOWNLOAD="true"
 
@@ -42,7 +42,7 @@ Options:
   --dns-worker-query-rate-limit NUM Per-source-IP DNS queries per second (default: 200)
   --dns-worker-udp-response-size NUM
                                   Maximum UDP DNS response payload size (default: 1232)
-  --dns-worker-repo REPO            GitHub repository for Worker installer (default: SatanDS/DuShengCDN)
+  --dns-worker-repo REPO            GitHub release repository for Worker installer (default: ${DNS_WORKER_REPO})
   --dns-worker-source-ref REF       Git branch, tag, or commit for Worker source build (default: main)
   --dns-worker-no-geoip-download    Do not download Country MMDB automatically
   -h, --help                        Show this help message

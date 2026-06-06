@@ -365,6 +365,19 @@ jobs:
             exit 1
           fi
 
+      - name: Add Customer Installers
+        run: |
+          set -euo pipefail
+          install -m 0755 scripts/install-commercial.sh dist/install-commercial.sh
+          install -m 0755 scripts/install-agent.sh dist/install-agent.sh
+          install -m 0755 scripts/install-dns-worker.sh dist/install-dns-worker.sh
+          (
+            cd dist
+            sha256sum install-commercial.sh > install-commercial.sh.sha256
+            sha256sum install-agent.sh > install-agent.sh.sha256
+            sha256sum install-dns-worker.sh > install-dns-worker.sh.sha256
+          )
+
       - name: Generate Release Notes
         id: release_notes
         env:

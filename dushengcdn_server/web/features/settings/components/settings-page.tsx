@@ -90,7 +90,7 @@ const commercialLicenseActivationsQueryKey = [
   'commercial-license-activations',
 ] as const;
 const installerScriptUrl =
-  'https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh';
+  'https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh';
 
 const defaultSystemFields = {
   ServerAddress: '',

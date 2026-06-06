@@ -186,7 +186,7 @@ export function buildDeploymentServerUrl(
 }
 
 const installerScriptUrl =
-  'https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh';
+  'https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh';
 
 export function buildNodeInstallCommand(serverUrl: string, agentToken: string) {
   return [

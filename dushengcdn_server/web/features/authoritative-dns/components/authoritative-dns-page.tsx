@@ -4396,7 +4396,7 @@ function WorkerTokenModal({
     message: string;
   } | null>(null);
   const token = worker.token ?? '';
-  const installCommand = `curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \\
+  const installCommand = `curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-dns-worker.sh | bash -s -- \\
   --server-url ${serverUrl} \\
   --token ${token || 'YOUR_DNS_WORKER_TOKEN'} \\
   --query-rate-limit 200 \\
