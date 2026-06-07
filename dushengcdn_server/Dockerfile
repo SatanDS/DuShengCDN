@@ -11,7 +11,7 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY ./web ./
 RUN NEXT_PUBLIC_APP_VERSION="$VERSION" pnpm build
 
-FROM golang:1.25 AS builder2
+FROM golang:1.26.4 AS builder2
 
 ARG VERSION
 
@@ -24,7 +24,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=builder /build/build ./web/build
-RUN go build -trimpath -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION'" -o dushengcdn
+RUN go build -trimpath -buildvcs=false -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION'" -o dushengcdn
 
 FROM alpine
 

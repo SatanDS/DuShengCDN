@@ -8,7 +8,7 @@ DuShengCDN Server is a Gin + GORM monolithic control plane, responsible for the 
 
 | Project | Requirement |
 | --- | --- |
-| Go | `1.25+` |
+| Go | `1.26.4+` |
 | Node.js | `18+` |
 | pnpm | Recommended to use the pnpm declared by the project via `corepack enable` |
 | Database | SQLite file directory is writable, or an accessible PostgreSQL instance |

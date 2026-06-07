@@ -80,6 +80,9 @@ func init() {
 	if os.Getenv("AGENT_TOKEN") != "" {
 		AgentToken = os.Getenv("AGENT_TOKEN")
 	}
+	if os.Getenv("DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED") != "" {
+		AgentLegacyGlobalTokenEnabled = readBoolEnv("DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED")
+	}
 	if os.Getenv("REDIS_REQUIRED") != "" {
 		RedisRequired = readBoolEnv("REDIS_REQUIRED")
 	}

@@ -376,6 +376,41 @@ func TestPublishConfigVersionRendersRouteLevelCachePolicy(t *testing.T) {
 	}
 }
 
+func TestPublishConfigVersionEscapesOpenRestyCacheKeyTemplate(t *testing.T) {
+	setupServiceTestDB(t)
+	if err := model.UpdateOption("OpenRestyCacheEnabled", "true"); err != nil {
+		t.Fatalf("UpdateOption OpenRestyCacheEnabled failed: %v", err)
+	}
+	if err := model.UpdateOption("OpenRestyCachePath", "/var/cache/openresty/dushengcdn"); err != nil {
+		t.Fatalf("UpdateOption OpenRestyCachePath failed: %v", err)
+	}
+	if err := model.UpdateOption("OpenRestyCacheKeyTemplate", `$scheme$host"$request_uri\tail`); err != nil {
+		t.Fatalf("UpdateOption OpenRestyCacheKeyTemplate failed: %v", err)
+	}
+
+	_, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:       "cache-key.example.com",
+		OriginURL:    "https://origin.internal",
+		Enabled:      true,
+		CacheEnabled: true,
+		CachePolicy:  proxyRouteCachePolicyURL,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	result, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if !strings.Contains(result.Version.MainConfig, `proxy_cache_key "$scheme$host\"$request_uri\\tail";`) {
+		t.Fatalf("expected escaped cache key template, got %s", result.Version.MainConfig)
+	}
+	if strings.Contains(result.Version.MainConfig, `proxy_cache_key "$scheme$host"$request_uri\tail";`) {
+		t.Fatal("expected cache key template quotes and backslashes to be escaped")
+	}
+}
+
 func TestPublishConfigVersionRendersPathContainsCachePolicy(t *testing.T) {
 	setupServiceTestDB(t)
 	if err := model.UpdateOption("OpenRestyCacheEnabled", "true"); err != nil {

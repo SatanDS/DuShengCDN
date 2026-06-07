@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"io"
+	"log/slog"
 	"net/http"
 )
 
@@ -30,6 +31,11 @@ func AgentAuth() func(c *gin.Context) {
 
 		node, err := service.AuthenticateAgentToken(token)
 		if err != nil {
+			if service.IsConfiguredLegacyGlobalAgentToken(token) {
+				logLegacyAgentTokenDisabled(c)
+				abortAgentUnauthorized(c, "Legacy global Agent Token compatibility is disabled; migrate this Agent to a node-specific agent_token or enable DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true temporarily")
+				return
+			}
 			abortAgentUnauthorized(c, "无权进行此操作，Agent Token 无效")
 			return
 		}
@@ -58,6 +64,11 @@ func AgentRegisterAuth() func(c *gin.Context) {
 			return
 		}
 		if err := service.ValidateDiscoveryToken(token); err != nil {
+			if service.IsConfiguredLegacyGlobalAgentToken(token) {
+				logLegacyAgentTokenDisabled(c)
+				abortAgentUnauthorized(c, "Legacy global Agent Token compatibility is disabled; migrate this Agent to a node-specific agent_token or enable DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true temporarily")
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
 				"message": "无权进行此操作，注册 Token 无效",
@@ -107,4 +118,12 @@ func abortAgentUnauthorized(c *gin.Context, message string) {
 		"message": message,
 	})
 	c.Abort()
+}
+
+func logLegacyAgentTokenDisabled(c *gin.Context) {
+	slog.Warn("legacy global Agent Token rejected because compatibility is disabled",
+		"path", c.Request.URL.Path,
+		"method", c.Request.Method,
+		"remote", c.Request.RemoteAddr,
+	)
 }

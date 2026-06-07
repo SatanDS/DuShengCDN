@@ -1176,6 +1176,11 @@ func TestPhase2LegacyGlobalAgentTokenKeepsExistingNodeOnline(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	common.RedisEnabled = false
 	setupTestDB(t)
+	previousAgentLegacyGlobalTokenEnabled := common.AgentLegacyGlobalTokenEnabled
+	common.AgentLegacyGlobalTokenEnabled = true
+	t.Cleanup(func() {
+		common.AgentLegacyGlobalTokenEnabled = previousAgentLegacyGlobalTokenEnabled
+	})
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
@@ -1292,6 +1297,52 @@ func TestPhase2LegacyGlobalAgentTokenKeepsExistingNodeOnline(t *testing.T) {
 	engine.ServeHTTP(deniedRecorder, deniedReq)
 	if deniedRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected legacy global token to be rejected for dedicated node, got %d", deniedRecorder.Code)
+	}
+}
+
+func TestPhase2LegacyGlobalAgentTokenDisabledByDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	legacyNode := &model.Node{
+		NodeID:       "legacy-disabled-node",
+		Name:         "legacy-disabled-node",
+		IP:           "10.0.0.22",
+		AgentVersion: "0.1.0",
+		Status:       service.NodeStatusOffline,
+		LastSeenAt:   time.Now().Add(-common.NodeOfflineThreshold - time.Minute),
+	}
+	if err := legacyNode.Insert(); err != nil {
+		t.Fatalf("failed to seed legacy node: %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"node_id":       legacyNode.NodeID,
+		"ip":            "10.0.0.23",
+		"agent_version": "0.1.1",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal disabled legacy payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/nodes/heartbeat", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Token", common.AgentToken)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected legacy global token to be rejected by default, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var resp apiResponse
+	if err = json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode disabled legacy response: %v", err)
+	}
+	if resp.Success || !strings.Contains(resp.Message, "compatibility is disabled") {
+		t.Fatalf("expected legacy global token to be disabled by default, got %+v", resp)
 	}
 }
 

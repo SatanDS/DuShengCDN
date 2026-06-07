@@ -9,6 +9,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/dushengcdn-agent"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
+RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__}"
 SERVER_URL=""
 DISCOVERY_TOKEN=""
 AGENT_TOKEN=""
@@ -21,6 +22,7 @@ ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
 GEOIP_LOOKUP_API_URL=""
 GEOIP_LOOKUP_API_TOKEN=""
 DUSHENGCDN_BUILD_GO_DIR="${DUSHENGCDN_BUILD_GO_DIR:-/opt/dushengcdn-build/go}"
+OPENSSL_BIN=""
 
 usage() {
   cat <<EOF
@@ -421,17 +423,17 @@ version_major() {
 install_common_linux_dependencies() {
   if command -v apt-get >/dev/null 2>&1; then
     run_as_root apt-get update
-    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg libmaxminddb0 libmaxminddb-dev build-essential
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg openssl libmaxminddb0 libmaxminddb-dev build-essential
   elif command -v dnf >/dev/null 2>&1; then
-    run_as_root dnf install -y ca-certificates curl libmaxminddb libmaxminddb-devel gcc make
+    run_as_root dnf install -y ca-certificates curl openssl libmaxminddb libmaxminddb-devel gcc make
   elif command -v yum >/dev/null 2>&1; then
-    run_as_root yum install -y ca-certificates curl libmaxminddb libmaxminddb-devel gcc make
+    run_as_root yum install -y ca-certificates curl openssl libmaxminddb libmaxminddb-devel gcc make
   elif command -v apk >/dev/null 2>&1; then
-    run_as_root apk add --no-cache ca-certificates curl libmaxminddb libmaxminddb-dev gcc musl-dev make
+    run_as_root apk add --no-cache ca-certificates curl openssl libmaxminddb libmaxminddb-dev gcc musl-dev make
   elif command -v zypper >/dev/null 2>&1; then
-    run_as_root zypper --non-interactive install ca-certificates curl libmaxminddb0 libmaxminddb-devel gcc make
+    run_as_root zypper --non-interactive install ca-certificates curl openssl libmaxminddb0 libmaxminddb-devel gcc make
   elif command -v pacman >/dev/null 2>&1; then
-    run_as_root pacman -Sy --needed --noconfirm ca-certificates curl libmaxminddb gcc make
+    run_as_root pacman -Sy --needed --noconfirm ca-certificates curl openssl libmaxminddb gcc make
   else
     die "no supported package manager found. Install curl and OpenResty manually or pass --openresty-path."
   fi
@@ -484,7 +486,7 @@ ensure_curl() {
 }
 
 install_go_linux() {
-  local go_version="${DUSHENGCDN_GO_VERSION:-1.25.0}"
+  local go_version="${DUSHENGCDN_GO_VERSION:-1.26.4}"
   local go_arch="$ARCH"
   local archive
   archive="$(mktemp "/tmp/go${go_version}.linux-${go_arch}.XXXXXX.tar.gz")"
@@ -843,6 +845,198 @@ sha256_file() {
   fi
 }
 
+base64_with_padding() {
+  local value="$1"
+  local remainder
+  value="$(printf '%s' "$value" | tr -d '[:space:]')"
+  remainder=$((${#value} % 4))
+  case "$remainder" in
+    0) ;;
+    2) value="${value}==" ;;
+    3) value="${value}=" ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+parse_release_checksum() {
+  local file="$1"
+  local asset="$2"
+  awk -v asset="$asset" '
+    function issha(value) { return value ~ /^[0-9A-Fa-f]{64}$/ }
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line == "" || line ~ /^#/) next
+      n = split(line, fields, /[[:space:]]+/)
+      if (n == 1 && issha(fields[1])) {
+        print tolower(fields[1])
+        exit
+      }
+      if (n >= 2 && issha(fields[1])) {
+        name = fields[2]
+        sub(/^\*/, "", name)
+        base = name
+        sub(/^.*\//, "", base)
+        if (name == asset || base == asset) {
+          print tolower(fields[1])
+          exit
+        }
+      }
+      if (index(tolower(line), "sha256(") == 1) {
+        end = index(line, ")")
+        if (end > 8) {
+          name = substr(line, 8, end - 8)
+          value = substr(line, end + 1)
+          sub(/^[[:space:]]*=[[:space:]]*/, "", value)
+          sub(/^[[:space:]]+/, "", value)
+          sub(/[[:space:]]+$/, "", value)
+          base = name
+          sub(/^.*\//, "", base)
+          if (issha(value) && (name == asset || base == asset)) {
+            print tolower(value)
+            exit
+          }
+        }
+      }
+    }
+  ' "$file"
+}
+
+find_openssl() {
+  local candidate
+  if [[ -n "$OPENSSL_BIN" && -x "$OPENSSL_BIN" ]]; then
+    return 0
+  fi
+  if [[ "${OS:-}" == "darwin" ]]; then
+    for candidate in \
+      /opt/homebrew/opt/openssl@3/bin/openssl \
+      /usr/local/opt/openssl@3/bin/openssl \
+      /opt/homebrew/bin/openssl \
+      /usr/local/bin/openssl; do
+      if [[ -x "$candidate" ]]; then
+        OPENSSL_BIN="$candidate"
+        return 0
+      fi
+    done
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    OPENSSL_BIN="$(command -v openssl)"
+    return 0
+  fi
+  return 1
+}
+
+install_release_signature_dependencies_linux() {
+  if command -v apt-get >/dev/null 2>&1; then
+    run_as_root apt-get update
+    run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl openssl
+  elif command -v dnf >/dev/null 2>&1; then
+    run_as_root dnf install -y ca-certificates curl openssl
+  elif command -v yum >/dev/null 2>&1; then
+    run_as_root yum install -y ca-certificates curl openssl
+  elif command -v apk >/dev/null 2>&1; then
+    run_as_root apk add --no-cache ca-certificates curl openssl
+  elif command -v zypper >/dev/null 2>&1; then
+    run_as_root zypper --non-interactive install ca-certificates curl openssl
+  elif command -v pacman >/dev/null 2>&1; then
+    run_as_root pacman -Sy --needed --noconfirm ca-certificates curl openssl
+  else
+    die "no supported package manager found. Install openssl manually or rerun with --allow-source-build."
+  fi
+}
+
+ensure_release_signature_openssl() {
+  if find_openssl; then
+    return
+  fi
+  if [[ "$AUTO_INSTALL_DEPS" != "true" ]]; then
+    die "openssl was not found. Install openssl first or rerun with --allow-source-build."
+  fi
+  case "$OS" in
+    linux)
+      log "openssl was not found. Installing release signature verification dependency..."
+      install_release_signature_dependencies_linux
+      ;;
+    darwin)
+      if command -v brew >/dev/null 2>&1; then
+        log "openssl was not found. Installing openssl via Homebrew..."
+        brew install openssl@3 || brew install openssl
+      else
+        die "openssl was not found. Install OpenSSL 3, or rerun with --allow-source-build."
+      fi
+      ;;
+    *) die "unsupported OS for automatic openssl installation: $OS" ;;
+  esac
+  find_openssl || die "openssl installation completed, but openssl was still not found."
+}
+
+verify_release_signature() {
+  local tag="$1"
+  local asset="$2"
+  local checksum="$3"
+  local signature_file="$4"
+  local public_key key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len
+
+  public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-$RELEASE_SIGNATURE_PUBLIC_KEY}"
+  [[ -n "$tag" && -n "$asset" && -n "$checksum" ]] || return 1
+  [[ -n "$public_key" && "$public_key" != "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]] || return 1
+
+  key_b64="$(base64_with_padding "$public_key")" || return 1
+  sig_text="$(awk 'NF { print $1; exit }' "$signature_file")"
+  [[ -n "$sig_text" ]] || return 1
+  sig_b64="$(base64_with_padding "$sig_text")" || return 1
+
+  verify_dir="$(mktemp -d "/tmp/dushengcdn-release-verify.XXXXXX")"
+  pub_raw="${verify_dir}/public.raw"
+  sig_raw="${verify_dir}/signature.raw"
+  pub_der="${verify_dir}/public.der"
+  pub_pem="${verify_dir}/public.pem"
+  payload="${verify_dir}/payload.txt"
+
+  if ! printf '%s' "$key_b64" | "$OPENSSL_BIN" base64 -d -A > "$pub_raw" 2>/dev/null; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+  pub_len="$(wc -c < "$pub_raw" | tr -d '[:space:]')"
+  if [[ "$pub_len" != "32" ]]; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+
+  if ! printf '%s' "$sig_b64" | "$OPENSSL_BIN" base64 -d -A > "$sig_raw" 2>/dev/null; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+  sig_len="$(wc -c < "$sig_raw" | tr -d '[:space:]')"
+  if [[ "$sig_len" != "64" ]]; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+
+  printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00' > "$pub_der"
+  cat "$pub_raw" >> "$pub_der"
+  if ! "$OPENSSL_BIN" pkey -pubin -inform DER -in "$pub_der" -out "$pub_pem" >/dev/null 2>&1; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+
+  {
+    printf 'dushengcdn-release-v1\n'
+    printf '%s\n' "$tag"
+    printf '%s\n' "$asset"
+    printf '%s\n' "$checksum"
+  } > "$payload"
+
+  if ! "$OPENSSL_BIN" pkeyutl -verify -pubin -inkey "$pub_pem" -sigfile "$sig_raw" -rawin -in "$payload" >/dev/null 2>&1; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+
+  rm -rf -- "$verify_dir"
+}
+
 resolve_release_binary() {
   local release_info
 
@@ -852,8 +1046,9 @@ resolve_release_binary() {
     return 1
   fi
 
-  DOWNLOAD_URL="$(echo "$release_info" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET_NAME}\"" | grep -o 'https://[^"]*' | grep -v '\.sha256$' | head -n 1 || true)"
+  DOWNLOAD_URL="$(echo "$release_info" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET_NAME}\"" | grep -o 'https://[^"]*' | grep -v '\.sha256$' | grep -v '\.sig$' | head -n 1 || true)"
   SHA256_URL="$(echo "$release_info" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET_NAME}\.sha256\"" | grep -o 'https://[^"]*' | head -n 1 || true)"
+  SIG_URL="$(echo "$release_info" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET_NAME}\.sig\"" | grep -o 'https://[^"]*' | head -n 1 || true)"
   if [[ -z "$DOWNLOAD_URL" ]]; then
     log "No matching asset '${ASSET_NAME}' found in latest release. Falling back to source build."
     return 1
@@ -861,14 +1056,21 @@ resolve_release_binary() {
   if [[ -z "$SHA256_URL" ]]; then
     die "matching checksum asset '${ASSET_NAME}.sha256' was not found in latest release; refusing to install an unverified Agent binary."
   fi
+  if [[ -z "$SIG_URL" ]]; then
+    die "matching signature asset '${ASSET_NAME}.sig' was not found in latest release; refusing to install an unsigned Agent binary."
+  fi
 
   TAG="$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"')"
+  if [[ -z "$TAG" ]]; then
+    die "release tag was not found; refusing to verify an unsigned Agent binary."
+  fi
   return 0
 }
 
 download_release_binary() {
-  local actual expected sha_file
+  local actual expected sha_file sig_file
 
+  ensure_release_signature_openssl
   log "Latest release: ${TAG}"
   log "Downloading ${ASSET_NAME}..."
   curl -fsSL -o "$TMP_BINARY" "$DOWNLOAD_URL"
@@ -878,7 +1080,7 @@ download_release_binary() {
     rm -f "$sha_file"
     die "failed to download Agent checksum asset."
   fi
-  expected="$(awk '{print $1}' "$sha_file")"
+  expected="$(parse_release_checksum "$sha_file" "$ASSET_NAME")"
   rm -f "$sha_file"
   if [[ ! "$expected" =~ ^[A-Fa-f0-9]{64}$ ]]; then
     die "Agent checksum asset is invalid."
@@ -889,7 +1091,18 @@ download_release_binary() {
   if [[ "$actual" != "$expected" ]]; then
     die "downloaded Agent checksum mismatch."
   fi
-  log "Release asset checksum verified."
+
+  sig_file="$(mktemp "/tmp/dushengcdn-agent.sig.XXXXXX")"
+  if ! curl -fsSL -o "$sig_file" "$SIG_URL"; then
+    rm -f "$sig_file"
+    die "failed to download Agent signature asset."
+  fi
+  if ! verify_release_signature "$TAG" "$ASSET_NAME" "$expected" "$sig_file"; then
+    rm -f "$sig_file"
+    die "downloaded Agent signature verification failed."
+  fi
+  rm -f "$sig_file"
+  log "Release asset checksum and signature verified."
 
   chmod +x "$TMP_BINARY"
 }
@@ -916,7 +1129,7 @@ build_binary_from_source() {
   (
     cd "$source_dir/dushengcdn_agent"
     go mod download
-    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X=dushengcdn-agent/internal/config.AgentVersion=${source_version}" -o "$TMP_BINARY" ./cmd/agent
+    CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X=dushengcdn-agent/internal/config.AgentVersion=${source_version}" -o "$TMP_BINARY" ./cmd/agent
   )
 
   rm -rf -- "$source_dir"
@@ -981,6 +1194,7 @@ trap cleanup EXIT
 
 DOWNLOAD_URL=""
 SHA256_URL=""
+SIG_URL=""
 TAG=""
 if resolve_release_binary; then
   download_release_binary

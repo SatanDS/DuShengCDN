@@ -1450,7 +1450,7 @@ func renderOpenRestyCacheTemplateBlock(cfg openRestyConfigSnapshot) string {
 	}
 	lines = append(lines, strings.Join([]string{
 		fmt.Sprintf("    proxy_cache_path %s levels=%s keys_zone=dushengcdn_cache:10m inactive=%s max_size=%s;", cfg.CachePath, cfg.CacheLevels, cfg.CacheInactive, cfg.CacheMaxSize),
-		fmt.Sprintf("    proxy_cache_key \"%s\";", cfg.CacheKeyTemplate),
+		fmt.Sprintf("    proxy_cache_key %s;", quoteNginxStringLiteral(cfg.CacheKeyTemplate)),
 		fmt.Sprintf("    proxy_cache_lock %s;", onOff(cfg.CacheLockEnabled)),
 		fmt.Sprintf("    proxy_cache_lock_timeout %s;", cfg.CacheLockTimeout),
 		fmt.Sprintf("    proxy_cache_use_stale %s;", cfg.CacheUseStale),

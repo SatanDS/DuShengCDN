@@ -6,7 +6,7 @@
 
 ## Server 升级
 
-Root 用户可以在管理端顶栏检查 Server 正式版。Server 自动升级默认关闭，生产环境推荐上传已审阅的 Server 二进制后确认升级；如需允许一键自动升级，设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，并确保 Release 包含当前平台 Server 二进制和同名 `.sha256` 校验文件。
+Root 用户可以在管理端顶栏检查 Server 正式版。Server 自动升级默认关闭，生产环境推荐上传已审阅的 Server 二进制后确认升级；如需允许一键自动升级，设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，并确保 Release 包含当前平台 Server 二进制、同名 `.sha256` 校验文件和 `.sig` 签名文件。
 
 如需尝试 preview 版本，可手动检查对应发布。生产环境建议优先使用正式版。
 
@@ -22,7 +22,7 @@ DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --en
 docker compose ps
 ```
 
-首次使用源码 Compose 模板时，把真实配置写入 `dushengcdn_server/.env`，例如 `DUSHENGCDN_HTTP_PORT`、`POSTGRES_PASSWORD`、`SESSION_SECRET`、`DSN` 和升级兼容旧 Agent 时需要的 `AGENT_TOKEN`。后续升级只拉取仓库模板，`.env` 继续保留在服务器本地。
+首次使用源码 Compose 模板时，把真实配置写入 `dushengcdn_server/.env`，例如 `DUSHENGCDN_HTTP_PORT`、`POSTGRES_PASSWORD`、`SESSION_SECRET` 和 `DSN`。只有升级兼容旧 Agent 时才保留 `AGENT_TOKEN` 并临时设置 `DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true`。后续升级只拉取仓库模板，`.env` 继续保留在服务器本地。
 
 如果服务器上的 Compose 文件曾经手动改过端口、密码或 DSN，`git pull --ff-only` 可能被本地改动阻塞。确认没有需要保留的源码修改后，可以先把本地部署参数迁移到 `.env`，再执行：
 
@@ -59,7 +59,7 @@ bash scripts/diagnose-server.sh
 
 ## Agent 升级
 
-节点 Agent 默认只跟随正式版 GitHub Release 自动更新。只把代码推到 `main` 分支不会触发 Agent 自更新；仓库需要先发布新的正式 Release，并且 Release 中包含对应平台 Agent 二进制和同名 `.sha256` 校验文件。preview 升级需要手动触发。
+节点 Agent 默认只跟随正式版 GitHub Release 自动更新。只把代码推到 `main` 分支不会触发 Agent 自更新；仓库需要先发布新的正式 Release，并且 Release 中包含对应平台 Agent 二进制、同名 `.sha256` 校验文件和 `.sig` 签名文件。preview 升级需要手动触发。
 
 安装脚本可重复执行，用于重装或升级 Agent：
 

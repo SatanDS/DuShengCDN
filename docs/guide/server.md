@@ -8,7 +8,7 @@ DuShengCDN Server 是 Gin + GORM 单体控制面，负责管理端 UI、管理 A
 
 | 项目 | 要求 |
 | --- | --- |
-| Go | `1.25+` |
+| Go | `1.26.4+` |
 | Node.js | `18+` |
 | pnpm | 推荐通过 `corepack enable` 使用项目声明的 pnpm |
 | 数据库 | SQLite 文件目录可写，或可访问的 PostgreSQL 实例 |

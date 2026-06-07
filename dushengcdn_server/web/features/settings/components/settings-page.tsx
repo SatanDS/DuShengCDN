@@ -122,6 +122,7 @@ const defaultSystemFields = {
 const defaultOperationFields = {
   AgentHeartbeatInterval: '10000',
   AgentWebsocketUpgradeEnabled: true,
+  AgentLegacyGlobalTokenEnabled: false,
   NodeOfflineThreshold: '120000',
   AgentUpdateRepo: 'SatanDS/SatanDS-DuShengCDN-releases',
   GeoIPProvider: 'ipinfo',
@@ -635,6 +636,10 @@ export function SettingsPage() {
       AgentWebsocketUpgradeEnabled: toBoolean(
         optionMap.AgentWebsocketUpgradeEnabled,
         true,
+      ),
+      AgentLegacyGlobalTokenEnabled: toBoolean(
+        optionMap.AgentLegacyGlobalTokenEnabled,
+        false,
       ),
       NodeOfflineThreshold: optionMap.NodeOfflineThreshold ?? '120000',
       AgentUpdateRepo: optionMap.AgentUpdateRepo ?? 'SatanDS/SatanDS-DuShengCDN-releases',
@@ -1704,6 +1709,12 @@ export function SettingsPage() {
                                 operationFields.AgentWebsocketUpgradeEnabled,
                               ),
                             ],
+                            [
+                              'AgentLegacyGlobalTokenEnabled',
+                              String(
+                                operationFields.AgentLegacyGlobalTokenEnabled,
+                              ),
+                            ],
                             ['NodeOfflineThreshold', String(offline)],
                             [
                               'AgentUpdateRepo',
@@ -1770,6 +1781,17 @@ export function SettingsPage() {
                       setOperationFields((previous) => ({
                         ...previous,
                         AgentWebsocketUpgradeEnabled: checked,
+                      }))
+                    }
+                  />
+                  <ToggleField
+                    label="允许旧全局 Agent Token"
+                    description="仅用于迁移旧 Agent；开启后仍要求请求携带已存在的 node_id，迁移完成后应关闭。"
+                    checked={operationFields.AgentLegacyGlobalTokenEnabled}
+                    onChange={(checked) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AgentLegacyGlobalTokenEnabled: checked,
                       }))
                     }
                   />

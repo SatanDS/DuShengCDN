@@ -91,6 +91,17 @@ func readChecksum(path string, assetName string) (string, error) {
 				return strings.ToLower(fields[0]), nil
 			}
 		}
+		if strings.HasPrefix(strings.ToLower(line), "sha256(") {
+			closing := strings.Index(line, ")")
+			if closing > len("sha256(") {
+				fileName := strings.TrimSpace(line[len("sha256("):closing])
+				value := strings.TrimSpace(line[closing+1:])
+				value = strings.TrimSpace(strings.TrimPrefix(value, "="))
+				if isSHA256Hex(value) && (fileName == assetName || filepath.Base(fileName) == assetName) {
+					return strings.ToLower(value), nil
+				}
+			}
+		}
 	}
 	return "", fmt.Errorf("checksum file does not contain a sha256 digest for %q", assetName)
 }

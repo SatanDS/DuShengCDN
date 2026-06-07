@@ -302,7 +302,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --geoip-api-token YOUR_API_TOKEN
 ```
 
-安装脚本默认写入 `/opt/dushengcdn-agent`，创建 `dushengcdn-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制，并要求同名 `.sha256` 校验文件；如果找到二进制但缺少校验文件会中止安装，只有没有匹配二进制资产时才会自动安装 Go 并从源码构建。源码构建会把当前 Git 版本写入 Agent，避免节点版本显示为 `dev`，并优先复用本机已有 Go；确实需要下载 Go 时会按多个官方源重试，也可通过 `DUSHENGCDN_GO_DOWNLOAD_BASE_URLS` 或 `DUSHENGCDN_GO_DOWNLOAD_URL` 指定下载源。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
+安装脚本默认写入 `/opt/dushengcdn-agent`，创建 `dushengcdn-agent.service`，自动查找或安装 `openresty`，并可重复执行以重装或升级 Agent。脚本会优先下载 GitHub Release 中的 Agent 二进制，并要求同名 `.sha256` 校验文件和 `.sig` 签名文件；如果找到二进制但缺少校验或签名文件会中止安装，只有没有匹配二进制资产时才会自动安装 Go 并从源码构建。源码构建会把当前 Git 版本写入 Agent，避免节点版本显示为 `dev`，并优先复用本机已有 Go；确实需要下载 Go 时会按多个官方源重试，也可通过 `DUSHENGCDN_GO_DOWNLOAD_BASE_URLS` 或 `DUSHENGCDN_GO_DOWNLOAD_URL` 指定下载源。如需禁用依赖自动安装，可追加 `--no-install-deps`；OpenResty 使用自定义路径时可追加 `--openresty-path /path/to/openresty`。
 
 依赖安装兼容性：
 
@@ -478,7 +478,7 @@ docker compose ps
 docker compose logs -n 100 dushengcdn
 ```
 
-首次部署时先编辑 `dushengcdn_server/.env`，写入真实的 `DUSHENGCDN_HTTP_PORT`、`POSTGRES_PASSWORD`、`SESSION_SECRET`、`DSN` 和旧版 Agent 兼容需要的 `AGENT_TOKEN`。后续升级不要在命令里重新生成 `SESSION_SECRET` 或替换数据库密码，避免已经登录的会话失效或 PostgreSQL 连接失败。
+首次部署时先编辑 `dushengcdn_server/.env`，写入真实的 `DUSHENGCDN_HTTP_PORT`、`POSTGRES_PASSWORD`、`SESSION_SECRET` 和 `DSN`。只有迁移旧版 Agent 时才保留 `AGENT_TOKEN`，并临时设置 `DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true`；迁移完成后应关闭。后续升级不要在命令里重新生成 `SESSION_SECRET` 或替换数据库密码，避免已经登录的会话失效或 PostgreSQL 连接失败。
 
 如果服务器上直接改过仓库里的 `docker-compose.yaml`，例如改端口到 `3010:3000`，拉取时可能提示本地改动会被覆盖。请先记录本地端口、DSN、密码和 Token，迁移到 `dushengcdn_server/.env`；确认没有需要保留的源码修改后，再使用强制同步流程：
 
@@ -518,7 +518,7 @@ docker compose up -d
 
 恢复脚本会校验 `manifest.txt` 中的 SHA-256 信息，在覆盖前为当前数据库和 `dushengcdn-data` 再生成一份 `backups/pre-restore/<timestamp>/` 安全备份，并且默认拒绝在 `dushengcdn` 服务仍运行时恢复。
 
-后续端口、数据库密码、`SESSION_SECRET`、DSN、旧版 `AGENT_TOKEN` 等本地部署参数都改 `.env`，不要直接改仓库里的 `dushengcdn_server/docker-compose.yaml`。这样后续 `git pull --ff-only origin main` 不会因为本地 Compose 模板改动被阻塞。源码 Compose 构建时会通过 `DUSHENGCDN_VERSION` 把当前 Git 版本写入 Server 或 Agent；顶栏“版本”显示当前运行中的后端版本，节点列表显示 Agent 上报的版本。
+后续端口、数据库密码、`SESSION_SECRET`、DSN、旧版 `AGENT_TOKEN` 与临时兼容开关等本地部署参数都改 `.env`，不要直接改仓库里的 `dushengcdn_server/docker-compose.yaml`。这样后续 `git pull --ff-only origin main` 不会因为本地 Compose 模板改动被阻塞。源码 Compose 构建时会通过 `DUSHENGCDN_VERSION` 把当前 Git 版本写入 Server 或 Agent；顶栏“版本”显示当前运行中的后端版本，节点列表显示 Agent 上报的版本。
 
 如果升级后面板打不开，先运行只读诊断脚本：
 
@@ -539,16 +539,18 @@ DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f d
 docker compose -f docker-compose.agent.yaml ps
 ```
 
-Server 自动升级默认关闭，生产环境推荐在顶栏检查版本后上传已审阅的 Server 二进制确认升级；如需启用自动升级，设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，Release 必须同时包含当前平台 Server 二进制和同名 `.sha256` 校验文件。节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从当前仓库 Release 下载对应平台二进制并校验 `.sha256` 后替换本地可执行文件。DNS Worker 使用安装脚本部署时也可重复执行脚本升级，脚本会优先下载对应平台的 DNS Worker Release 资产并校验 `.sha256`。如果 Release 中有匹配二进制但缺少同名 `.sha256`，安装脚本会中止；只有没有匹配二进制资产时，安装脚本才会从源码构建并写入当前 Git 版本。源码构建会复用本机 Go，自动下载 Go 时会多源重试。
+Server 自动升级默认关闭，生产环境推荐在顶栏检查版本后上传已审阅的 Server 二进制确认升级；如需启用自动升级，设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，Release 必须同时包含当前平台 Server 二进制、同名 `.sha256` 校验文件和 `.sig` 签名文件。商业二进制、Agent 安装脚本和 DNS Worker 安装脚本默认从 `SatanDS/SatanDS-DuShengCDN-releases` 读取最新正式 Release；如使用自建发布仓库，可配置 `DUSHENGCDN_SERVER_UPDATE_REPO`、`AgentUpdateRepo` 或安装脚本的 `DUSHENGCDN_RELEASE_REPO` / `--repo`。节点使用安装脚本部署 Agent 时，可重复执行安装命令进行重装或升级；Agent 自动更新开启后，会从配置的 Release 仓库下载对应平台二进制并校验 `.sha256` 与 `.sig` 后替换本地可执行文件。DNS Worker 使用安装脚本部署时也可重复执行脚本升级，脚本会优先下载对应平台的 DNS Worker Release 资产并校验 `.sha256` 与 `.sig`。如果 Release 中有匹配二进制但缺少同名 `.sha256` 或 `.sig`，安装脚本会中止；只有没有匹配二进制资产时，安装脚本才会从源码构建并写入当前 Git 版本。源码构建会复用本机 Go，自动下载 Go 时会多源重试。
 
 ### 7. 发布 Release 与 latest
 
 仓库已提供 GitHub Actions 用于生成 GitHub Release 和 GHCR 镜像，方便后续直接部署：
 
-* 发布二进制：进入 GitHub 仓库 `Actions` -> `Release` -> `Run workflow`，填写版本号，例如 `v1.0.0` 或 `v1.0.0-beta`。工作流会构建 Server、Agent、DNS Worker 多平台二进制，并为每个资产上传同名 `.sha256` 校验文件。
-* `v1.0.0` 这类纯数字版本会作为正式 Release；`v1.0.0-beta` 这类带后缀版本会作为 prerelease。GitHub 的 `releases/latest` 会指向最新正式 Release。
+* 发布二进制：进入 GitHub 仓库 `Actions` -> `Release` -> `Run workflow`，填写版本号，例如 `v1.0.0` 或 `v1.0.0-beta`。工作流会构建 Server、Agent、DNS Worker 多平台二进制，并为每个资产上传同名 `.sha256` 校验文件和 `.sig` 签名文件；安装脚本发布前也会注入 Release 公钥并生成对应 `.sha256` / `.sig`。
+* `v1.0.0` 这类纯数字版本会作为正式 Release 并更新 GitHub `latest`；`v1.0.0-beta`、`v1.0.0-rc.1` 或自动 main 构建这类带后缀版本会作为 prerelease，且不会更新 `latest`。
 * 发布 Docker 镜像：进入 `Actions` -> `Docker image builds` -> `Run workflow`，填写同一个版本号。工作流会推送 `ghcr.io/satands/dushengcdn:<version>`、`ghcr.io/satands/dushengcdn:latest`、`ghcr.io/satands/dushengcdn-agent:<version>`、`ghcr.io/satands/dushengcdn-agent:latest`、`ghcr.io/satands/dushengcdn-dns-worker:<version>` 和 `ghcr.io/satands/dushengcdn-dns-worker:latest`。
-* Server 自动升级、Agent 自更新和 DNS Worker 安装脚本都会优先读取 `https://github.com/SatanDS/DuShengCDN/releases/latest` 中的对应资产；自动/脚本升级要求二进制通过同名 `.sha256` 校验。如果匹配二进制缺少校验文件会中止，只有没有匹配二进制资产时 Agent 或 DNS Worker 安装脚本才回退到源码构建。
+* 发布工作流会把二进制和安装脚本发布到 `SatanDS/SatanDS-DuShengCDN-releases`。`install-commercial.sh` 不传 `--version` 时读取该仓库的 `releases/latest`；如需安装 prerelease，必须显式传 `--version v1.0.0-beta` 或对应 tag。
+* Agent 自更新和 DNS Worker 安装脚本默认也读取 `SatanDS/SatanDS-DuShengCDN-releases` 的 `releases/latest`，因此默认只跟随最新正式版。安装脚本下载入口建议使用 `https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh` 和 `https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-dns-worker.sh`；如需覆盖仓库，使用 `DUSHENGCDN_RELEASE_REPO` 或 `--repo`，但 `latest` 入口仍不会选择 prerelease。
+* 自动/脚本升级要求二进制通过同名 `.sha256` 和 `.sig` 校验。如果匹配二进制缺少校验或签名文件会中止，只有没有匹配二进制资产时 Agent 或 DNS Worker 安装脚本才回退到源码构建。
 * GitHub Actions 已切换到支持 Node.js 24 的动作版本，并显式启用 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`，用于规避 Node.js 20 弃用警告。
 
 

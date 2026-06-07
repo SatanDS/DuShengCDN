@@ -29,7 +29,7 @@ Server:
 
 | Item | Requirement |
 | --- | --- |
-| Go | `1.25+`, source run only |
+| Go | `1.26.4+`, source run only |
 | Node.js | `18+`, frontend source build only |
 | Database | Writable SQLite directory or reachable PostgreSQL instance |
 | Redis | Optional; recommended for multi-instance deployments and consistent production rate limiting |
@@ -333,7 +333,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --listen 203.0.113.10:53
 ```
 
-The Agent and DNS Worker install scripts prefer GitHub Release binaries and require a matching same-name `.sha256` asset. If a matching binary exists but the checksum asset is missing or invalid, the script stops; only when no matching binary asset exists does it fall back to a source build.
+The Agent and DNS Worker install scripts prefer GitHub Release binaries and require matching same-name `.sha256` and `.sig` assets. If a matching binary exists but the checksum or signature asset is missing or invalid, the script stops; only when no matching binary asset exists does it fall back to a source build.
 
 After installation, run a read-only diagnosis on the Worker host:
 
@@ -396,7 +396,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 Server:
 
 * Root users can check stable Server releases from the top bar. Server automatic upgrades are disabled by default; production deployments should usually upload a reviewed Server binary and confirm the manual upgrade.
-* To allow one-click automatic upgrades, set `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` and ensure the Release includes the matching Server binary plus a same-name `.sha256` file.
+* To allow one-click automatic upgrades, set `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` and ensure the Release includes the matching Server binary plus same-name `.sha256` and `.sig` files.
 * Preview releases can be checked manually.
 * For source or Compose deployments, back up local `docker-compose.yaml` settings or move them into an override before pulling new code.
 
@@ -429,7 +429,7 @@ For source Compose builds, `DUSHENGCDN_VERSION` is passed into the Dockerfile an
 Agent:
 
 * Agents follow stable releases by default.
-* The install script can be rerun to reinstall or upgrade. Matching Release binaries must include same-name `.sha256` assets; when no matching binary asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
+* The install script can be rerun to reinstall or upgrade. Matching Release binaries must include same-name `.sha256` and `.sig` assets; when no matching binary asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
 * For Docker Compose Agent deployments, rebuild with `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose -f docker-compose.agent.yaml up -d --build`.
 * Preview upgrades require manual action.
 

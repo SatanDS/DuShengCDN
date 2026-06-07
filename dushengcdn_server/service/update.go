@@ -852,10 +852,11 @@ func parseServerChecksum(content string, assetName string) (string, error) {
 			}
 		}
 		if strings.HasPrefix(strings.ToLower(line), "sha256(") {
-			prefixEnd := strings.Index(line, ")=")
-			if prefixEnd > len("sha256(") {
-				fileName := line[len("sha256("):prefixEnd]
-				value := strings.TrimSpace(line[prefixEnd+2:])
+			closing := strings.Index(line, ")")
+			if closing > len("sha256(") {
+				fileName := strings.TrimSpace(line[len("sha256("):closing])
+				value := strings.TrimSpace(line[closing+1:])
+				value = strings.TrimSpace(strings.TrimPrefix(value, "="))
 				if isSHA256Hex(value) && (assetName == "" || fileName == assetName || filepath.Base(fileName) == assetName) {
 					return strings.ToLower(value), nil
 				}

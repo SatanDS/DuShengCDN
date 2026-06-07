@@ -46,7 +46,7 @@ The script prefers GitHub Release binaries. If no matching asset exists, it buil
 
 Without `openresty_path`, Agent runs `openresty` by default.
 
-Agent self-update and the install script require the GitHub Release to include both the target binary and a matching `.sha256` file. The downloaded binary is verified before it replaces or installs the local executable.
+Agent self-update and the install script require the GitHub Release to include the target binary plus matching `.sha256` and `.sig` files. The downloaded binary is verified before it replaces or installs the local executable.
 
 ## Docker
 

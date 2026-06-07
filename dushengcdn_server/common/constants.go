@@ -73,6 +73,7 @@ var WeChatAccountQRCodeImageURL = ""
 var TurnstileSiteKey = ""
 var TurnstileSecretKey = ""
 var AgentToken = ""
+var AgentLegacyGlobalTokenEnabled = false
 var AgentDiscoveryToken = ""
 var NodeOfflineThreshold = 2 * time.Minute
 var RedisRequired = false

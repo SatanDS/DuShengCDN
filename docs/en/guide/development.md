@@ -18,7 +18,7 @@ This page is for contributors. Product boundaries, data model constraints, API c
 
 | Tool | Requirement |
 | --- | --- |
-| Go | `1.25+` |
+| Go | `1.26.4+` |
 | Node.js | `18+` |
 | pnpm | Use `corepack enable` to follow the project-declared version |
 | Docker | Needed for Server containers, local integration, and the Agent Docker image |

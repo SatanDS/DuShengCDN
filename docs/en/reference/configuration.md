@@ -30,7 +30,8 @@
 | `REDIS_CONN_STRING` | Redis connection string | empty |
 | `REDIS_REQUIRED` | Require Redis initialization to succeed; startup fails when Redis is missing or unreachable | `false` |
 | `UPLOAD_PATH` | Upload directory | `upload` |
-| `AGENT_TOKEN` | Legacy global Agent token | empty |
+| `AGENT_TOKEN` | Legacy global Agent token, ignored unless `DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true` | empty |
+| `DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED` | Temporarily allow the legacy global Agent token during old Agent migration | `false` |
 | `DUSHENGCDN_LICENSE_REQUIRED` | Require a valid commercial license for gated commercial capabilities | `false` |
 | `DUSHENGCDN_LICENSE_PUBLIC_KEYS` | Ed25519 public keys for commercial license verification; base64url, standard base64, or hex; separated by comma, semicolon, whitespace, or newline | empty |
 | `DUSHENGCDN_LICENSE_ALLOW_UNSIGNED` | Allow unsigned development licenses; not recommended for production | `false` |
@@ -43,6 +44,8 @@ When `DSN` and `SQL_DSN` both exist, `DSN` wins. PostgreSQL is preferred when co
 `TRUSTED_PROXIES` defaults to empty, so client-supplied proxy headers are ignored to prevent spoofed `X-Forwarded-For` rate-limit bypasses. Set it only to controlled reverse proxy egress IPs or private CIDR ranges; global ranges such as `0.0.0.0/0` and `::/0` are rejected.
 
 When `REDIS_CONN_STRING` is empty, Redis-backed helpers fall back to in-process behavior. Multi-instance and commercial deployments should configure Redis; set `REDIS_REQUIRED=true` when startup must fail instead of degrading.
+
+Legacy global Agent token compatibility is disabled by default. If old Agents still use `AGENT_TOKEN`, set `DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true` or enable the `AgentLegacyGlobalTokenEnabled` runtime option only for the migration window, then move Agents to `discovery_token` or node-specific `agent_token`.
 
 Commercial license tokens use the `dscdn_license_v1.<payload>.<signature>` format with Ed25519 signatures. For enforced private deployments, set `DUSHENGCDN_LICENSE_REQUIRED=true`, configure `DUSHENGCDN_LICENSE_PUBLIC_KEYS`, then install the license from **Settings -> Commercial License**.
 
@@ -132,6 +135,7 @@ The settings page maintains these hot-updatable options:
 | --- | --- | --- |
 | `AgentHeartbeatInterval` | Agent heartbeat interval in milliseconds | `10000` |
 | `AgentWebsocketUpgradeEnabled` | Allow Agent to upgrade from HTTP heartbeat to WebSocket | `true` |
+| `AgentLegacyGlobalTokenEnabled` | Temporarily allow the legacy global `AGENT_TOKEN` during old Agent migration | `false` |
 | `AgentDiscoveryToken` | First-registration Discovery Token for Agents; registered nodes receive node-specific `agent_token` values | generated on first read |
 | `NodeOfflineThreshold` | Node offline threshold in milliseconds | `120000` |
 | `AgentUpdateRepo` | Agent update repository; commercial private builds should point to the binary-only release repository | `SatanDS/SatanDS-DuShengCDN-releases` |
@@ -145,7 +149,7 @@ The settings page maintains these hot-updatable options:
 
 OpenResty performance and cache options are also stored in the Option table, including `OpenRestyWorkerProcesses`, `OpenRestyWorkerConnections`, `OpenRestyProxyConnectTimeout`, `OpenRestyProxyReadTimeout`, `OpenRestyCacheEnabled`, `OpenRestyCachePath`, and `OpenRestyCacheMaxSize`.
 
-`AgentUpdateRepo` releases must publish a matching `.sha256` file for each Agent binary, such as `dushengcdn-agent-linux-amd64.sha256`. Agent self-update and the install script verify the SHA-256 digest before replacing or installing the executable.
+`AgentUpdateRepo` releases must publish matching `.sha256` and `.sig` files for each Agent binary, such as `dushengcdn-agent-linux-amd64.sha256` and `dushengcdn-agent-linux-amd64.sig`. Agent self-update and the install script verify the SHA-256 digest and Ed25519 signature before replacing or installing the executable.
 
 ## Agent Configuration
 

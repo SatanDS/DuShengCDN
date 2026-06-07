@@ -19,7 +19,7 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| Go | `1.25+` |
+| Go | `1.26.4+` |
 | Node.js | `18+` |
 | pnpm | 推荐通过 `corepack enable` 使用项目声明版本 |
 | Docker | Server 容器、本地联调和 Agent Docker 镜像需要 |

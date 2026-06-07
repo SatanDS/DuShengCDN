@@ -263,12 +263,24 @@ func AuthenticateAgentToken(token string) (*model.Node, error) {
 }
 
 func IsLegacyGlobalAgentToken(token string) bool {
+	if !common.AgentLegacyGlobalTokenEnabled {
+		return false
+	}
+	token = strings.TrimSpace(token)
+	legacyToken := strings.TrimSpace(common.AgentToken)
+	return constantTimeTokenEqual(token, legacyToken)
+}
+
+func IsConfiguredLegacyGlobalAgentToken(token string) bool {
 	token = strings.TrimSpace(token)
 	legacyToken := strings.TrimSpace(common.AgentToken)
 	return constantTimeTokenEqual(token, legacyToken)
 }
 
 func AuthenticateLegacyAgentTokenForNode(token string, nodeID string) (*model.Node, error) {
+	if !common.AgentLegacyGlobalTokenEnabled {
+		return nil, errors.New("legacy global Agent Token compatibility is disabled; set DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true temporarily and migrate Agents to node-specific agent_token or discovery_token")
+	}
 	if !IsLegacyGlobalAgentToken(token) {
 		return nil, errors.New("旧版全局 Agent Token 无效")
 	}
@@ -284,6 +296,10 @@ func AuthenticateLegacyAgentTokenForNode(token string, nodeID string) (*model.No
 	if nodeAgentToken != "" && nodeAgentToken != strings.TrimSpace(common.AgentToken) {
 		return nil, errors.New("节点已切换为专属 Agent Token")
 	}
+	slog.Warn("legacy global Agent Token accepted; migrate this Agent to its node-specific agent_token",
+		"node_id", node.NodeID,
+		"name", node.Name,
+	)
 	return node, nil
 }
 

@@ -68,6 +68,27 @@ func TestValidateAgentOption(t *testing.T) {
 	if err := validateAgentOption("AgentWebsocketUpgradeEnabled", "on"); err == nil {
 		t.Fatal("expected websocket upgrade option to reject non-boolean value")
 	}
+	if err := validateAgentOption("AgentLegacyGlobalTokenEnabled", "true"); err != nil {
+		t.Fatalf("expected legacy global token option to accept true: %v", err)
+	}
+	if err := validateAgentOption("AgentLegacyGlobalTokenEnabled", "yes"); err == nil {
+		t.Fatal("expected legacy global token option to reject non-boolean value")
+	}
+	if err := validateAgentOption("AgentLegacyGlobalAuthEnabled", "true"); err != nil {
+		t.Fatalf("expected legacy alias option to accept true: %v", err)
+	}
+}
+
+func TestSensitiveOptionKeyKeepsLegacyAuthSwitchVisible(t *testing.T) {
+	if isSensitiveOptionKey("AgentLegacyGlobalTokenEnabled") {
+		t.Fatal("expected legacy global auth switch to stay visible")
+	}
+	if !isSensitiveOptionKey("AgentDiscoveryToken") {
+		t.Fatal("expected discovery token option to stay hidden")
+	}
+	if !isSensitiveOptionKey("TurnstileSecretKey") {
+		t.Fatal("expected secret option to stay hidden")
+	}
 }
 
 func TestValidateAuthoritativeDNSOption(t *testing.T) {

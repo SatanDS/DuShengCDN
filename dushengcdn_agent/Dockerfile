@@ -1,6 +1,6 @@
 ARG VERSION=dev
 
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 ARG VERSION
 ARG TARGETOS=linux
@@ -15,7 +15,7 @@ COPY dushengcdn_server ./dushengcdn_server
 COPY dushengcdn_agent ./dushengcdn_agent
 WORKDIR /build/dushengcdn_agent
 RUN go mod download
-RUN go build -trimpath -ldflags "-s -w -X 'dushengcdn-agent/internal/config.AgentVersion=$VERSION'" -o /build/dushengcdn-agent ./cmd/agent
+RUN go build -trimpath -buildvcs=false -ldflags "-s -w -X 'dushengcdn-agent/internal/config.AgentVersion=$VERSION'" -o /build/dushengcdn-agent ./cmd/agent
 
 FROM openresty/openresty:alpine
 

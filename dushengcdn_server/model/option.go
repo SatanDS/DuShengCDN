@@ -52,6 +52,8 @@ func InitOptionMap() {
 	common.OptionMap["WeChatAccountQRCodeImageURL"] = ""
 	common.OptionMap["TurnstileSiteKey"] = ""
 	common.OptionMap["TurnstileSecretKey"] = ""
+	common.OptionMap["AgentLegacyGlobalTokenEnabled"] = strconv.FormatBool(common.AgentLegacyGlobalTokenEnabled)
+	common.OptionMap["AgentLegacyGlobalAuthEnabled"] = strconv.FormatBool(common.AgentLegacyGlobalTokenEnabled)
 	common.OptionMap["AgentDiscoveryToken"] = ""
 	common.OptionMap["AgentHeartbeatInterval"] = strconv.Itoa(common.AgentHeartbeatInterval)
 	common.OptionMap["AgentWebsocketUpgradeEnabled"] = strconv.FormatBool(common.AgentWebsocketUpgradeEnabled)
@@ -162,6 +164,11 @@ func updateOptionMap(key string, value string) {
 		common.OptionMap = make(map[string]string)
 	}
 	common.OptionMap[key] = value
+	if key == "AgentLegacyGlobalAuthEnabled" {
+		common.OptionMap["AgentLegacyGlobalTokenEnabled"] = value
+	} else if key == "AgentLegacyGlobalTokenEnabled" {
+		common.OptionMap["AgentLegacyGlobalAuthEnabled"] = value
+	}
 	if strings.HasSuffix(key, "Permission") {
 		intValue, _ := strconv.Atoi(value)
 		switch key {
@@ -224,6 +231,8 @@ func updateOptionMap(key string, value string) {
 		common.TurnstileSiteKey = value
 	case "TurnstileSecretKey":
 		common.TurnstileSecretKey = value
+	case "AgentLegacyGlobalTokenEnabled", "AgentLegacyGlobalAuthEnabled":
+		common.AgentLegacyGlobalTokenEnabled = value == "true"
 	case "AgentDiscoveryToken":
 		common.AgentDiscoveryToken = value
 	case "AgentHeartbeatInterval":

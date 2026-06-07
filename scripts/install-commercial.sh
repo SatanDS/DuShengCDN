@@ -10,6 +10,7 @@ DB_MODE="${DUSHENGCDN_DB_MODE:-sqlite}"
 LICENSE_TOKEN="${DUSHENGCDN_LICENSE_TOKEN:-}"
 LICENSE_REQUIRED="${DUSHENGCDN_LICENSE_REQUIRED:-true}"
 ACTIVATION_URL="${DUSHENGCDN_LICENSE_ACTIVATION_URL:-https://www.satandu.com}"
+RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__}"
 AUTO_START="true"
 
 usage() {
@@ -89,6 +90,7 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
   die "sha256sum or shasum is required"
 fi
+command -v openssl >/dev/null 2>&1 || die "openssl is required for release signature verification"
 
 run_as_root() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -116,6 +118,131 @@ sha256_file() {
   else
     shasum -a 256 "$file" | awk '{print $1}'
   fi
+}
+
+base64_with_padding() {
+  local value="$1"
+  local remainder
+  value="$(printf '%s' "$value" | tr -d '[:space:]')"
+  remainder=$((${#value} % 4))
+  case "$remainder" in
+    0) ;;
+    2) value="${value}==" ;;
+    3) value="${value}=" ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+parse_release_checksum() {
+  local file="$1"
+  local asset="$2"
+  awk -v asset="$asset" '
+    function issha(value) { return value ~ /^[0-9A-Fa-f]{64}$/ }
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line == "" || line ~ /^#/) next
+      n = split(line, fields, /[[:space:]]+/)
+      if (n == 1 && issha(fields[1])) {
+        print tolower(fields[1])
+        exit
+      }
+      if (n >= 2 && issha(fields[1])) {
+        name = fields[2]
+        sub(/^\*/, "", name)
+        base = name
+        sub(/^.*\//, "", base)
+        if (name == asset || base == asset) {
+          print tolower(fields[1])
+          exit
+        }
+      }
+      if (index(tolower(line), "sha256(") == 1) {
+        end = index(line, ")")
+        if (end > 8) {
+          name = substr(line, 8, end - 8)
+          value = substr(line, end + 1)
+          sub(/^[[:space:]]*=[[:space:]]*/, "", value)
+          sub(/^[[:space:]]+/, "", value)
+          sub(/[[:space:]]+$/, "", value)
+          base = name
+          sub(/^.*\//, "", base)
+          if (issha(value) && (name == asset || base == asset)) {
+            print tolower(value)
+            exit
+          }
+        }
+      }
+    }
+  ' "$file"
+}
+
+verify_release_signature() {
+  local tag="$1"
+  local asset="$2"
+  local checksum="$3"
+  local signature_file="$4"
+  local public_key key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len
+
+  public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-$RELEASE_SIGNATURE_PUBLIC_KEY}"
+  [[ -n "$tag" && -n "$asset" && -n "$checksum" ]] || return 1
+  [[ -n "$public_key" && "$public_key" != "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]] || return 1
+  command -v openssl >/dev/null 2>&1 || return 1
+
+  key_b64="$(base64_with_padding "$public_key")" || return 1
+  sig_text="$(awk 'NF { print $1; exit }' "$signature_file")"
+  [[ -n "$sig_text" ]] || return 1
+  sig_b64="$(base64_with_padding "$sig_text")" || return 1
+
+  verify_dir="$(mktemp -d "/tmp/dushengcdn-release-verify.XXXXXX")"
+  pub_raw="${verify_dir}/public.raw"
+  sig_raw="${verify_dir}/signature.raw"
+  pub_der="${verify_dir}/public.der"
+  pub_pem="${verify_dir}/public.pem"
+  payload="${verify_dir}/payload.txt"
+
+  if ! printf '%s' "$key_b64" | openssl base64 -d -A > "$pub_raw" 2>/dev/null; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+  pub_len="$(wc -c < "$pub_raw" | tr -d '[:space:]')"
+  if [[ "$pub_len" != "32" ]]; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+
+  if ! printf '%s' "$sig_b64" | openssl base64 -d -A > "$sig_raw" 2>/dev/null; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+  sig_len="$(wc -c < "$sig_raw" | tr -d '[:space:]')"
+  if [[ "$sig_len" != "64" ]]; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+
+  printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00' > "$pub_der"
+  cat "$pub_raw" >> "$pub_der"
+  if ! openssl pkey -pubin -inform DER -in "$pub_der" -out "$pub_pem" >/dev/null 2>&1; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+
+  {
+    printf 'dushengcdn-release-v1\n'
+    printf '%s\n' "$tag"
+    printf '%s\n' "$asset"
+    printf '%s\n' "$checksum"
+  } > "$payload"
+
+  if ! openssl pkeyutl -verify -pubin -inkey "$pub_pem" -sigfile "$sig_raw" -rawin -in "$payload" >/dev/null 2>&1; then
+    rm -rf -- "$verify_dir"
+    return 1
+  fi
+
+  rm -rf -- "$verify_dir"
 }
 
 json_escape() {
@@ -171,25 +298,32 @@ else
   release_json="$(curl -fsSL "https://api.github.com/repos/${RELEASE_REPO}/releases/latest")"
 fi
 asset_name="dushengcdn-server-linux-${ARCH}"
-download_url="$(echo "$release_json" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${asset_name}\"" | grep -o 'https://[^"]*' | grep -v '\.sha256$' | head -n 1 || true)"
+download_url="$(echo "$release_json" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${asset_name}\"" | grep -o 'https://[^"]*' | grep -v '\.sha256$' | grep -v '\.sig$' | head -n 1 || true)"
 sha256_url="$(echo "$release_json" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${asset_name}\.sha256\"" | grep -o 'https://[^"]*' | head -n 1 || true)"
+sig_url="$(echo "$release_json" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${asset_name}\.sig\"" | grep -o 'https://[^"]*' | head -n 1 || true)"
 tag_name="$(echo "$release_json" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || true)"
 
 [[ -n "$download_url" ]] || die "release asset not found: ${asset_name}"
 [[ -n "$sha256_url" ]] || die "checksum asset not found: ${asset_name}.sha256"
+[[ -n "$sig_url" ]] || die "signature asset not found: ${asset_name}.sig"
+[[ -n "$tag_name" ]] || die "release tag not found"
 
 tmp_binary="$(mktemp "/tmp/dushengcdn-server.XXXXXX")"
 tmp_sha="$(mktemp "/tmp/dushengcdn-server.sha256.XXXXXX")"
-trap 'rm -f "$tmp_binary" "$tmp_sha"' EXIT
+tmp_sig="$(mktemp "/tmp/dushengcdn-server.sig.XXXXXX")"
+trap 'rm -f "$tmp_binary" "$tmp_sha" "$tmp_sig"' EXIT
 
 log "Downloading ${asset_name} from ${RELEASE_REPO} ${tag_name:-latest}"
 curl -fsSL -o "$tmp_binary" "$download_url"
 curl -fsSL -o "$tmp_sha" "$sha256_url"
+curl -fsSL -o "$tmp_sig" "$sig_url"
 
-expected="$(awk '{print $1}' "$tmp_sha")"
+expected="$(parse_release_checksum "$tmp_sha" "$asset_name")"
 actual="$(sha256_file "$tmp_binary")"
 [[ "$expected" =~ ^[A-Fa-f0-9]{64}$ ]] || die "checksum asset is invalid"
 [[ "$actual" == "$expected" ]] || die "downloaded binary checksum mismatch"
+verify_release_signature "$tag_name" "$asset_name" "$expected" "$tmp_sig" || die "release signature verification failed"
+log "Release asset checksum and signature verified."
 chmod +x "$tmp_binary"
 
 log "Installing to ${INSTALL_DIR}"

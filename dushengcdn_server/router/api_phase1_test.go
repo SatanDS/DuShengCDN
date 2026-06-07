@@ -366,7 +366,7 @@ func TestPhase1HTTPSAndCertificateImportLifecycle(t *testing.T) {
 		NodeID:       "phase1-node",
 		Name:         "phase1-node",
 		IP:           "10.0.0.8",
-		AgentToken:   common.AgentToken,
+		AgentToken:   "phase1-node-token",
 		AgentVersion: "0.1.0",
 		NginxVersion: "1.25.5",
 		Status:       service.NodeStatusOnline,
@@ -375,7 +375,7 @@ func TestPhase1HTTPSAndCertificateImportLifecycle(t *testing.T) {
 		t.Fatalf("failed to seed phase1 node: %v", err)
 	}
 
-	agentResp := performAgentJSONRequestWithToken(t, engine, common.AgentToken, http.MethodGet, "/api/agent/config-versions/active", nil)
+	agentResp := performAgentJSONRequestWithToken(t, engine, "phase1-node-token", http.MethodGet, "/api/agent/config-versions/active", nil)
 	var activeConfig map[string]any
 	decodeResponseData(t, agentResp, &activeConfig)
 	mainConfig, ok := activeConfig["main_config"].(string)
@@ -511,12 +511,15 @@ func setupTestDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "phase1.db")
 	common.SQLitePath = dbPath
 	common.AgentToken = "phase1-agent-token"
+	previousAgentLegacyGlobalTokenEnabled := common.AgentLegacyGlobalTokenEnabled
+	common.AgentLegacyGlobalTokenEnabled = false
 	previousInitialRootPassword := common.InitialRootPassword
 	common.InitialRootPassword = "123456"
 	if err := model.InitDB(); err != nil {
 		t.Fatalf("failed to init db: %v", err)
 	}
 	t.Cleanup(func() {
+		common.AgentLegacyGlobalTokenEnabled = previousAgentLegacyGlobalTokenEnabled
 		common.InitialRootPassword = previousInitialRootPassword
 		if err := model.CloseDB(); err != nil {
 			t.Fatalf("failed to close db: %v", err)

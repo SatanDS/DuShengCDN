@@ -6,7 +6,7 @@ Before upgrading, it is recommended to confirm the current activated version, th
 
 ## Server Upgrade
 
-Root users can check the Server stable version from the top bar of the management console. Server automatic upgrades are disabled by default; production deployments should usually upload a reviewed Server binary and confirm the manual upgrade. To allow one-click automatic upgrades, set `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` and ensure the Release includes the matching Server binary plus a same-name `.sha256` file.
+Root users can check the Server stable version from the top bar of the management console. Server automatic upgrades are disabled by default; production deployments should usually upload a reviewed Server binary and confirm the manual upgrade. To allow one-click automatic upgrades, set `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true` and ensure the Release includes the matching Server binary plus same-name `.sha256` and `.sig` files.
 
 To try a preview version, you can manually check the corresponding release. It is recommended to prioritize the stable version in production environments.
 
@@ -22,7 +22,7 @@ DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --en
 docker compose ps
 ```
 
-Store `DUSHENGCDN_HTTP_PORT`, `POSTGRES_PASSWORD`, `SESSION_SECRET`, `DSN`, and any legacy `AGENT_TOKEN` in `dushengcdn_server/.env`. Do not keep editing the tracked `docker-compose.yaml`; otherwise future `git pull --ff-only` can be blocked by local changes.
+Store `DUSHENGCDN_HTTP_PORT`, `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `DSN` in `dushengcdn_server/.env`. Keep legacy `AGENT_TOKEN` only during old Agent migration and pair it with `DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true` temporarily. Do not keep editing the tracked `docker-compose.yaml`; otherwise future `git pull --ff-only` can be blocked by local changes.
 
 If old local Compose edits block the pull, first record host ports, passwords, DSN, `SESSION_SECRET`, and tokens. After confirming there are no source changes to keep:
 
@@ -65,7 +65,7 @@ If it is a source deployment, confirm that there are no database migration or st
 
 ## DNS Worker Upgrade
 
-DNS Worker installations created by the script can be reinstalled or upgraded by rerunning the install command with the same Server URL and Worker Token. The script prefers GitHub Release binaries and requires matching `.sha256` files; if a matching binary exists without its checksum, the script stops. If no matching binary asset exists, it builds from source and embeds the current Git version.
+DNS Worker installations created by the script can be reinstalled or upgraded by rerunning the install command with the same Server URL and Worker Token. The script prefers GitHub Release binaries and requires matching `.sha256` and `.sig` files; if a matching binary exists without its checksum or signature, the script stops. If no matching binary asset exists, it builds from source and embeds the current Git version.
 
 Uninstall DNS Worker:
 
@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --agent-token YOUR_AGENT_TOKEN
 ```
 
-The script prefers GitHub Release binaries and requires same-name `.sha256` files. If no matching binary asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
+The script prefers GitHub Release binaries and requires same-name `.sha256` and `.sig` files. If no matching binary asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
 
 For Docker Compose Agent deployments:
 

@@ -42,7 +42,7 @@ Any changes merged into the official baseline must at least meet:
 
 Server:
 
-* Go 1.25+
+* Go 1.26.4+
 * Gin
 * GORM
 * SQLite / PostgreSQL

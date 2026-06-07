@@ -1,6 +1,6 @@
 ARG VERSION=dev
 
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 ARG VERSION
 ARG TARGETOS=linux
@@ -13,7 +13,7 @@ ENV CGO_ENABLED=0 \
 WORKDIR /build
 COPY . .
 RUN go mod download
-RUN go build -trimpath -ldflags "-s -w -X 'main.version=$VERSION'" -o /build/dushengcdn-dns-worker ./cmd/dns-worker
+RUN go build -trimpath -buildvcs=false -ldflags "-s -w -X 'main.version=$VERSION'" -o /build/dushengcdn-dns-worker ./cmd/dns-worker
 
 FROM alpine
 

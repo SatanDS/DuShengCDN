@@ -92,11 +92,22 @@ func TestAgentBootstrapTokensUseTrimmedExactMatch(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldAgentToken := common.AgentToken
+	oldLegacyEnabled := common.AgentLegacyGlobalTokenEnabled
 	t.Cleanup(func() {
 		common.AgentToken = oldAgentToken
+		common.AgentLegacyGlobalTokenEnabled = oldLegacyEnabled
 	})
 	common.AgentToken = "legacy-agent-token"
 
+	common.AgentLegacyGlobalTokenEnabled = false
+	if IsLegacyGlobalAgentToken(" legacy-agent-token ") {
+		t.Fatal("expected legacy agent token to be rejected when compatibility is disabled")
+	}
+	if !IsConfiguredLegacyGlobalAgentToken(" legacy-agent-token ") {
+		t.Fatal("expected configured legacy agent token helper to match independently of compatibility")
+	}
+
+	common.AgentLegacyGlobalTokenEnabled = true
 	if !IsLegacyGlobalAgentToken(" legacy-agent-token ") {
 		t.Fatal("expected trimmed legacy agent token to match")
 	}

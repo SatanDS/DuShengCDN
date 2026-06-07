@@ -42,7 +42,7 @@
 
 Server：
 
-* Go 1.25+
+* Go 1.26.4+
 * Gin
 * GORM
 * SQLite / PostgreSQL

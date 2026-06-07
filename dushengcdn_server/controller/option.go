@@ -119,7 +119,7 @@ func validateAgentOption(key string, value string) error {
 			return fmt.Errorf("%s 必须为 owner/repo 格式", key)
 		}
 		return nil
-	case "AgentWebsocketUpgradeEnabled":
+	case "AgentWebsocketUpgradeEnabled", "AgentLegacyGlobalTokenEnabled", "AgentLegacyGlobalAuthEnabled":
 		return validateBooleanOption(key, strings.TrimSpace(value))
 	default:
 		return nil
@@ -353,7 +353,7 @@ func updateOptions(options []model.Option) error {
 func GetOptions(c *gin.Context) {
 	var options []*model.Option
 	for k, v := range common.OptionMapSnapshot() {
-		if strings.Contains(k, "Token") || strings.Contains(k, "Secret") {
+		if isSensitiveOptionKey(k) {
 			continue
 		}
 		options = append(options, &model.Option{
@@ -367,6 +367,13 @@ func GetOptions(c *gin.Context) {
 		"data":    options,
 	})
 	return
+}
+
+func isSensitiveOptionKey(key string) bool {
+	if key == "AgentLegacyGlobalTokenEnabled" {
+		return false
+	}
+	return strings.Contains(key, "Token") || strings.Contains(key, "Secret")
 }
 
 // UpdateOption godoc
