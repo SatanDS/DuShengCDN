@@ -543,11 +543,8 @@ function formatSourceScopeLabel(value: string) {
   if (!text) {
     return '全局';
   }
-  const parts = text
-    .split('|')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const base = parts[0] ?? 'global';
+  const parts = splitSourceScopeParts(text);
+  const base = getSourceScopeBase(text);
   const bucket = parts.find((item) => item.toLowerCase().startsWith('bucket:'));
   const baseLabel = formatSourceScopeBaseLabel(base);
   if (!bucket) {
@@ -583,6 +580,27 @@ function formatSourceScopeBaseLabel(value: string) {
     return asn ? `ASN AS${asn}` : text;
   }
   return text;
+}
+
+function splitSourceScopeParts(value: string) {
+  return value
+    .split('|')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getSourceScopeBase(value: string) {
+  return splitSourceScopeParts(value)[0] ?? 'global';
+}
+
+function getSourceScopeCounterKey(item: DNSObservabilityCounterItem) {
+  return item.key || item.label || '';
+}
+
+function isSourceScopeASNItem(item: DNSObservabilityCounterItem) {
+  return getSourceScopeBase(getSourceScopeCounterKey(item))
+    .toLowerCase()
+    .startsWith('asn:');
 }
 
 function formatGSLBOperatorLabel(value: string) {
@@ -3618,6 +3636,12 @@ function DNSObservabilityPanel({
   }
 
   const rollupHint = getDNSObservabilityRollupHint(summary);
+  const sourceASNBreakdown = summary.source_scope_breakdown.filter(
+    isSourceScopeASNItem,
+  );
+  const sourceRegionBreakdown = summary.source_scope_breakdown.filter(
+    (item) => !isSourceScopeASNItem(item),
+  );
 
   return (
     <AppCard
@@ -3686,12 +3710,20 @@ function DNSObservabilityPanel({
           color="#f59e0b"
         />
         <CounterChart
-          title="来源作用域"
-          items={summary.source_scope_breakdown}
+          title="来源地区"
+          items={sourceRegionBreakdown}
           total={summary.total_queries}
-          emptyText="暂无来源作用域分布。"
+          emptyText="暂无来源地区分布。"
           formatLabel={(item) => formatSourceScopeLabel(item.key || item.label)}
           color="#14b8a6"
+        />
+        <CounterChart
+          title="来源 ASN"
+          items={sourceASNBreakdown}
+          total={summary.total_queries}
+          emptyText="暂无来源 ASN 分布。"
+          formatLabel={(item) => formatSourceScopeLabel(item.key || item.label)}
+          color="#8b5cf6"
         />
       </div>
     </AppCard>
