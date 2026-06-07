@@ -308,7 +308,7 @@ function SidebarContent({
   };
 
   return (
-    <div className="flex h-full flex-col gap-5">
+    <div className="flex max-h-[calc(100vh-2.5rem)] min-h-0 flex-col gap-5">
       <div
         className={cn(
           'sidebar-brand-panel flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] px-3 py-3 shadow-[var(--shadow-soft)] backdrop-blur',
@@ -337,7 +337,7 @@ function SidebarContent({
         ) : null}
       </div>
 
-      <nav className="flex-1 space-y-2">
+      <nav className="min-h-0 space-y-2 overflow-hidden">
         <div
           className={cn(
             'flex max-h-full min-h-0 flex-col gap-2 overflow-y-auto',
@@ -401,7 +401,7 @@ export function DashboardSidebar() {
 
       <aside
         className={cn(
-          'dashboard-glass-panel fixed top-0 left-0 z-40 h-screen w-[200px] overflow-hidden border-r border-[var(--border-default)] px-3 py-5 backdrop-blur transition-transform duration-200 min-[1000px]:hidden',
+          'dashboard-glass-panel dashboard-sidebar-panel fixed top-0 left-0 z-40 h-screen w-[200px] overflow-hidden border-r border-[var(--border-default)] px-3 py-5 backdrop-blur transition-transform duration-200 min-[1000px]:hidden',
           isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -416,7 +416,7 @@ export function DashboardSidebar() {
 
       <aside
         className={cn(
-          'dashboard-glass-panel sticky top-0 z-10 hidden h-screen shrink-0 overflow-hidden border-r border-[var(--border-default)] py-5 backdrop-blur min-[1000px]:block',
+          'dashboard-glass-panel dashboard-sidebar-panel sticky top-0 z-10 hidden h-fit max-h-screen shrink-0 self-start overflow-hidden border-r border-[var(--border-default)] py-5 backdrop-blur min-[1000px]:block',
           isSidebarCollapsed ? 'w-[72px] px-2' : 'w-[200px] px-3',
         )}
       >

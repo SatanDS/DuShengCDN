@@ -1168,6 +1168,11 @@ button {
     0 20px 62px rgba(0, 0, 0, 0.32);
 }
 
+.dashboard-sidebar-panel {
+  border-bottom: 1px solid var(--border-default);
+  border-radius: 0 48px 80px 0;
+}
+
 .dashboard-modal-overlay {
   background:
     radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.1), transparent 30%),
