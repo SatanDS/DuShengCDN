@@ -62,7 +62,21 @@ validate_install_dir() {
   esac
 }
 
+validate_service_name() {
+  if [[ -z "$SERVICE_NAME" ]]; then
+    echo "Refusing to use empty systemd service name" >&2
+    exit 1
+  fi
+  case "$SERVICE_NAME" in
+    *[!A-Za-z0-9_.@-]*|.*|*-|*@|*..*|*/*)
+      echo "Refusing to use unsafe systemd service name: '${SERVICE_NAME}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
 validate_install_dir
+validate_service_name
 
 AGENT_BINARY="${INSTALL_DIR}/dushengcdn-agent"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"

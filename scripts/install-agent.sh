@@ -14,7 +14,7 @@ SERVER_URL=""
 DISCOVERY_TOKEN=""
 AGENT_TOKEN=""
 CREATE_SERVICE="true"
-SERVICE_NAME="dushengcdn-agent"
+SERVICE_NAME="${DUSHENGCDN_AGENT_SERVICE_NAME:-dushengcdn-agent}"
 OPENRESTY_PATH=""
 AUTO_INSTALL_DEPS="true"
 REINSTALL="false"
@@ -39,6 +39,7 @@ Options:
   --agent-token TOKEN       Node-specific agent token
   --install-dir DIR         Installation directory (default: /opt/dushengcdn-agent)
   --openresty-path PATH     OpenResty binary path (default: auto-detect from PATH)
+  --service-name NAME       systemd service name (default: ${SERVICE_NAME})
   --repo REPO               GitHub release repository (default: ${REPO})
   --source-ref REF          Git branch, tag, or commit used when building from source (default: main)
   --allow-source-build      Allow fallback source build when no release binary is available
@@ -73,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --agent-token)  AGENT_TOKEN="$2"; shift 2 ;;
     --install-dir)  INSTALL_DIR="$2"; shift 2 ;;
     --openresty-path) OPENRESTY_PATH="$2"; shift 2 ;;
+    --service-name) SERVICE_NAME="$2"; shift 2 ;;
     --repo)         REPO="$2"; shift 2 ;;
     --source-ref)   SOURCE_REF="$2"; shift 2 ;;
     --allow-source-build) ALLOW_SOURCE_BUILD="true"; shift ;;
@@ -88,31 +90,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-validate_install_dir() {
-  while [[ "$INSTALL_DIR" != "/" && "$INSTALL_DIR" == */ ]]; do
-    INSTALL_DIR="${INSTALL_DIR%/}"
-  done
-
-  case "$INSTALL_DIR" in
-    /*) ;;
-    *) echo "Error: refusing to use non-absolute install directory: '${INSTALL_DIR}'" >&2; exit 1 ;;
-  esac
-
-  case "$INSTALL_DIR" in
-    *"/../"*|*/..|*"/./"*|*/.)
-      echo "Error: refusing to use non-normalized install directory: '${INSTALL_DIR}'" >&2
-      exit 1
-      ;;
-  esac
-
-  case "$INSTALL_DIR" in
-    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/Applications)
-      echo "Error: refusing to use unsafe install directory: '${INSTALL_DIR}'" >&2
-      exit 1
-      ;;
-  esac
-}
-
 if [[ -z "$SERVER_URL" ]]; then
   echo "Error: --server-url is required"
   exit 1
@@ -127,8 +104,6 @@ if [[ "$WIPE_DATA" == "true" && "$REINSTALL" != "true" ]]; then
   echo "Error: --wipe-data requires --reinstall" >&2
   exit 1
 fi
-
-validate_install_dir
 
 geoip_api_config_json() {
   if [[ -z "$GEOIP_LOOKUP_API_URL" ]]; then
@@ -233,6 +208,20 @@ validate_install_dir() {
   case "$INSTALL_DIR" in
     /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/Applications)
       die "refusing to use unsafe install directory: ${INSTALL_DIR}"
+      ;;
+  esac
+}
+
+validate_service_name() {
+  if [[ "$CREATE_SERVICE" != "true" ]]; then
+    return
+  fi
+  if [[ -z "$SERVICE_NAME" ]]; then
+    die "--service-name must not be empty."
+  fi
+  case "$SERVICE_NAME" in
+    *[!A-Za-z0-9_.@-]*|.*|*-|*@|*..*|*/*)
+      die "refusing to use unsafe systemd service name: ${SERVICE_NAME}"
       ;;
   esac
 }
@@ -1050,6 +1039,15 @@ verify_release_signature() {
   rm -rf -- "$verify_dir"
 }
 
+effective_release_signature_public_key() {
+  local placeholder public_key
+  placeholder="__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC""_KEY__"
+  public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-$RELEASE_SIGNATURE_PUBLIC_KEY}"
+  if [[ -n "$public_key" && "$public_key" != "$placeholder" ]]; then
+    printf '%s' "$public_key"
+  fi
+}
+
 resolve_release_binary() {
   local release_info
 
@@ -1138,11 +1136,19 @@ build_binary_from_source() {
   local source_version
   source_version="$(git -C "$source_dir" describe --tags --always --dirty 2>/dev/null || git -C "$source_dir" rev-parse --short HEAD 2>/dev/null || echo dev)"
   log "Building Agent version ${source_version}."
+  local release_public_key ldflags
+  release_public_key="$(effective_release_signature_public_key || true)"
+  ldflags="-s -w -X=dushengcdn-agent/internal/config.AgentVersion=${source_version}"
+  if [[ -n "$release_public_key" ]]; then
+    ldflags="${ldflags} -X=dushengcdn-agent/internal/config.ReleaseSignaturePublicKey=${release_public_key}"
+  else
+    log "Release signature public key is not configured; source-built Agent self-upgrade will be unavailable."
+  fi
 
   (
     cd "$source_dir/dushengcdn_agent"
     go mod download
-    CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X=dushengcdn-agent/internal/config.AgentVersion=${source_version}" -o "$TMP_BINARY" ./cmd/agent
+    CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$TMP_BINARY" ./cmd/agent
   )
 
   rm -rf -- "$source_dir"
@@ -1164,6 +1170,7 @@ if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
 fi
 
 validate_install_dir
+validate_service_name
 validate_build_go_dir
 
 if [[ "$OS" == "linux" && "$CREATE_SERVICE" == "true" && ! -d /etc/systemd/system ]]; then
@@ -1222,9 +1229,9 @@ else
 fi
 
 SERVICE_WAS_ACTIVE="false"
-if [[ "$OS" == "linux" && "$SYSTEMCTL_AVAILABLE" == "true" ]] && systemctl is-active --quiet "$SERVICE_NAME"; then
+if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && "$SYSTEMCTL_AVAILABLE" == "true" ]] && systemctl is-active --quiet "$SERVICE_NAME"; then
   SERVICE_WAS_ACTIVE="true"
-  echo "Stopping running service before reinstall..."
+  echo "Stopping running service before reinstall: ${SERVICE_NAME}"
   run_as_root systemctl stop "$SERVICE_NAME"
 fi
 
@@ -1318,7 +1325,7 @@ fi
 # Create systemd service
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   echo "Creating systemd service..."
-  write_file_as_root /etc/systemd/system/dushengcdn-agent.service <<SVCEOF
+  write_file_as_root "/etc/systemd/system/${SERVICE_NAME}.service" <<SVCEOF
 [Unit]
 Description=DuShengCDN Agent
 After=network.target

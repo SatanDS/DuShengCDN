@@ -86,6 +86,19 @@ case "$INSTALL_DIR" in
     ;;
 esac
 
+validate_service_name() {
+  if [[ -z "$SERVICE_NAME" ]]; then
+    die "--service-name must not be empty"
+  fi
+  case "$SERVICE_NAME" in
+    *[!A-Za-z0-9_.@-]*|.*|*-|*@|*..*|*/*)
+      die "refusing to use unsafe systemd service name: ${SERVICE_NAME}"
+      ;;
+  esac
+}
+
+validate_service_name
+
 command -v curl >/dev/null 2>&1 || die "curl is required"
 if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
   die "sha256sum or shasum is required"

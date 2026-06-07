@@ -144,7 +144,7 @@ go run ./cmd/license sign \
   -expires-at 2027-12-31
 ```
 
-不要把 issuer 私钥写入客户部署、README、Compose 文件、日志或 release 资产。
+不要把 issuer 私钥写入客户部署、README、Compose 文件、日志或 release 资产。`DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY` 只用于中央授权服务签发许可证，不能用于 release 资产签名；安装器和二进制 `.sig` 使用的是独立的 `DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY`。
 
 ## Agent 部署
 
@@ -171,6 +171,18 @@ bash install-agent.sh --server-url https://cdn.example.com --agent-token YOUR_AG
 ```
 
 `--wipe-data` 不能单独使用。Agent 托管目录清理带 `.dushengcdn-managed` marker/manifest 保护；目录未标记为 DuShengCDN 专用时，清理未知文件会被拒绝。边缘节点建议独占 80/443，避免和系统自带 Nginx/OpenResty 混跑同一配置目录。
+
+同一台机器做灰度、验收或多实例测试时，必须同时隔离安装目录和 systemd 服务名：
+
+```bash
+curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh | bash -s -- \
+  --server-url https://cdn.example.com \
+  --agent-token YOUR_AGENT_TOKEN \
+  --install-dir /opt/dushengcdn-agent-test \
+  --service-name dushengcdn-agent-test
+```
+
+只下载和写入文件、不创建或重启 systemd 服务时使用 `--no-service`。
 
 Docker Agent 也可使用：
 
@@ -299,3 +311,102 @@ corepack pnpm build
 8. 在干净 VPS 上部署 Server、Agent、DNS Worker，验证 root 首登、授权安装、在线激活/续租、创建站点/节点、发布配置、Agent 心跳/同步、DNS 快照与 UDP/TCP 53。
 
 凭据只在执行阶段通过安全方式传入，不写入 README、提交、issue、日志或 release notes。
+
+本地只读校验 release 资产矩阵：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-release-assets.ps1 `
+  -Repo SatanDS/SatanDS-DuShengCDN-releases `
+  -Tag v1.0.0
+```
+
+### 不触发 Actions 的安装器资产补签
+
+如果 GitHub Actions 配额紧张，但只需要替换 release 中的安装脚本资产，可以在持有 release 仓库 token 和 release signing private key 的受控机器上执行本地补签工具。该流程只会处理指定安装脚本及其 `.sha256`、`.sig`，不会重新构建 Server、Agent 或 DNS Worker 二进制。
+
+这里需要的是 release 签名私钥 `DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY`，不是授权签发私钥 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY`。二者职责不同，不能混用。
+
+```powershell
+$env:DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY = "base64-public-key"
+$env:DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY = "base64-private-key"
+$env:GH_TOKEN = "fine-scoped-release-token"
+
+powershell -ExecutionPolicy Bypass -File scripts/publish-signed-installer-assets.ps1 `
+  -Asset install-agent.sh `
+  -Tag v1.0.0 `
+  -Upload `
+  -Force
+```
+
+也可以把 secret 临时放在仓库外的 JSON 文件里，避免出现在 shell 历史中。工具会拒绝读取仓库内的 `-SecretsFile`：
+
+```json
+{
+  "release_signature_public_key": "base64-public-key",
+  "release_signing_private_key": "base64-private-key",
+  "license_public_keys": "license-public-key-list",
+  "github_token": "fine-scoped-release-token"
+}
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/publish-signed-installer-assets.ps1 `
+  -Asset install-agent.sh `
+  -Tag v1.0.0 `
+  -SecretsFile C:\secure\dushengcdn-release-secrets.json `
+  -Upload `
+  -Force
+```
+
+正式执行前可去掉 `-Upload -Force`，只生成本地 `dist/manual-installer-assets` 并人工检查 `install-agent.sh`、`install-agent.sh.sha256`、`install-agent.sh.sig`。私钥和 token 只允许通过临时环境变量、安全密钥管理或仓库外临时 secret 文件注入，不写入日志、提交或 shell 历史；临时 secret 文件执行后应立即删除。
+
+如果 release 签名私钥丢失并重新生成了密钥对，应重新构建整套资产，让 Server、Agent、DNS Worker 和安装器都嵌入同一把新的 release 公钥：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-local-release.ps1 `
+  -Version v1.0.0 `
+  -SecretsFile C:\secure\dushengcdn-release-secrets.json
+```
+
+如果本机有多套 Go SDK，或 garble 不能使用 `GOTOOLCHAIN=auto` 下载的 toolchain，可显式指定 Go 与 garble：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-local-release.ps1 `
+  -Version v1.0.0 `
+  -SecretsFile C:\secure\dushengcdn-release-secrets.json `
+  -GoBin C:\Users\Administrator\sdk\go1.26.4\bin\go.exe `
+  -GarbleBin C:\Users\Administrator\go\bin\garble.exe
+```
+
+构建完成后先本地验证 51 个资产的矩阵、SHA-256 和 Ed25519 签名：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-release-assets.ps1 `
+  -LocalDistDir dist\local-release-v1.0.0 `
+  -SecretsFile C:\secure\dushengcdn-release-secrets.json `
+  -VerifySignatures
+```
+
+确认无误后再替换 release 仓库现有 `v1.0.0` 资产。该脚本只使用 GitHub REST API 删除/上传资产，不触发 GitHub Actions、不新建 tag：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/publish-local-release-assets.ps1 `
+  -DistDir dist\local-release-v1.0.0 `
+  -Repo SatanDS/SatanDS-DuShengCDN-releases `
+  -Tag v1.0.0 `
+  -SecretsFile C:\secure\dushengcdn-release-secrets.json `
+  -Force `
+  -PruneReleaseAssets
+```
+
+上传后再做远端验签：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-release-assets.ps1 `
+  -Repo SatanDS/SatanDS-DuShengCDN-releases `
+  -Tag v1.0.0 `
+  -SecretsFile C:\secure\dushengcdn-release-secrets.json `
+  -VerifySignatures
+```
+
+`build-local-release.ps1` 只接受 `license_public_keys`，不会读取或推导 `DUSHENGCDN_LICENSE_ISSUER_PRIVATE_KEY`。授权 issuer 私钥只属于中央授权服务，不进入 release 构建流程；如果 secrets JSON 里出现 `license_issuer_private_key`，release 构建、验签和上传脚本都会直接拒绝。

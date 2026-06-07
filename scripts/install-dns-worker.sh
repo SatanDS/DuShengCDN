@@ -364,6 +364,20 @@ validate_install_dir() {
   esac
 }
 
+validate_service_name() {
+  if [[ "$CREATE_SERVICE" != "true" ]]; then
+    return
+  fi
+  if [[ -z "$SERVICE_NAME" ]]; then
+    die "--service-name must not be empty."
+  fi
+  case "$SERVICE_NAME" in
+    *[!A-Za-z0-9_.@-]*|.*|*-|*@|*..*|*/*)
+      die "refusing to use unsafe systemd service name: ${SERVICE_NAME}"
+      ;;
+  esac
+}
+
 validate_build_go_dir() {
   while [[ "$DUSHENGCDN_BUILD_GO_DIR" != "/" && "$DUSHENGCDN_BUILD_GO_DIR" == */ ]]; do
     DUSHENGCDN_BUILD_GO_DIR="${DUSHENGCDN_BUILD_GO_DIR%/}"
@@ -2255,6 +2269,7 @@ if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
 fi
 
 validate_install_dir
+validate_service_name
 validate_build_go_dir
 normalize_source_database_profile
 if [[ -z "$SNAPSHOT_PATH" ]]; then

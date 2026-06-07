@@ -145,6 +145,18 @@ curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/lates
 
 Agent 托管目录带 `.dushengcdn-managed` marker/manifest 保护。没有标记为 DuShengCDN 专用目录时，清理未知文件会被拒绝。
 
+灰度、验收或同机多实例测试时，请同时换安装目录和服务名：
+
+```bash
+curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh | bash -s -- \
+  --server-url https://cdn.example.com \
+  --agent-token YOUR_AGENT_TOKEN \
+  --install-dir /opt/dushengcdn-agent-test \
+  --service-name dushengcdn-agent-test
+```
+
+如只想安装文件、不创建或重启 systemd 服务，追加 `--no-service`。
+
 ## 安装 DNS Worker
 
 DNS Worker 用于自建权威 DNS 和 GSLB 响应。先在面板中创建 DNS 响应端并复制 token，然后执行：

@@ -55,3 +55,10 @@ go.work.sum
 
 *-source
 *-source.*
+
+# Manual release signing outputs and local secrets
+/dist/manual-installer-assets/
+/dist/manual-installer-assets-*/
+/dist/local-release-*/
+*release-secrets*.json
+*signing-private-key*
