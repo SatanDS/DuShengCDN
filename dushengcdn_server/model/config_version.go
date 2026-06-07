@@ -12,16 +12,16 @@ type ConfigVersionSummary struct {
 }
 
 type ConfigVersion struct {
-	ID               uint      `json:"id" gorm:"primaryKey"`
-	Version          string    `json:"version" gorm:"uniqueIndex;size:32;not null"`
-	SnapshotJSON     string    `json:"snapshot_json" gorm:"type:text;not null"`
-	MainConfig       string    `json:"main_config" gorm:"type:text;not null;default:''"`
-	RenderedConfig   string    `json:"rendered_config" gorm:"type:text;not null"`
-	SupportFilesJSON string    `json:"support_files_json" gorm:"type:text;not null;default:'[]'"`
-	Checksum         string    `json:"checksum" gorm:"size:64;not null"`
-	IsActive         bool      `json:"is_active" gorm:"not null;default:false;index"`
-	CreatedBy        string    `json:"created_by" gorm:"size:64;not null"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID               uint      `json:"id" gorm:"column:id;primaryKey"`
+	Version          string    `json:"version" gorm:"column:version;uniqueIndex;size:32;not null"`
+	SnapshotJSON     string    `json:"snapshot_json" gorm:"column:snapshot_json;type:text;not null"`
+	MainConfig       string    `json:"main_config" gorm:"column:main_config;type:text;not null;default:''"`
+	RenderedConfig   string    `json:"rendered_config" gorm:"column:rendered_config;type:text;not null"`
+	SupportFilesJSON string    `json:"support_files_json" gorm:"column:support_files_json;type:text;not null;default:'[]'"`
+	Checksum         string    `json:"checksum" gorm:"column:checksum;size:64;not null"`
+	IsActive         bool      `json:"is_active" gorm:"column:is_active;not null;default:false;index"`
+	CreatedBy        string    `json:"created_by" gorm:"column:created_by;size:64;not null"`
+	CreatedAt        time.Time `json:"created_at" gorm:"column:created_at"`
 }
 
 func ListConfigVersionSummaries() (versions []*ConfigVersionSummary, err error) {

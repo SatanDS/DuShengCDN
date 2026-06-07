@@ -88,22 +88,22 @@ type DNSWorker struct {
 }
 
 type DNSQueryRollup struct {
-	ID              uint      `json:"id" gorm:"primaryKey"`
-	WindowStart     time.Time `json:"window_start" gorm:"index;index:idx_dns_rollups_observability,priority:1;not null"`
-	WindowMinutes   int       `json:"window_minutes" gorm:"not null;default:1"`
-	WorkerID        string    `json:"worker_id" gorm:"index;index:idx_dns_rollups_observability,priority:2;size:64;not null"`
-	ZoneID          uint      `json:"zone_id" gorm:"index;index:idx_dns_rollups_observability,priority:3"`
-	ProxyRouteID    uint      `json:"proxy_route_id" gorm:"index"`
-	SourceScope     string    `json:"source_scope" gorm:"index;size:64;not null;default:'global'"`
-	QName           string    `json:"qname" gorm:"index;size:255"`
-	QType           string    `json:"qtype" gorm:"size:16"`
-	RCode           string    `json:"rcode" gorm:"size:32"`
-	QueryCount      int64     `json:"query_count" gorm:"not null;default:0"`
-	TotalDurationMs int64     `json:"total_duration_ms" gorm:"not null;default:0"`
-	MaxDurationMs   int64     `json:"max_duration_ms" gorm:"not null;default:0"`
-	TargetSummary   string    `json:"target_summary" gorm:"type:text;not null;default:'{}'"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              uint      `json:"id" gorm:"column:id;primaryKey"`
+	WindowStart     time.Time `json:"window_start" gorm:"column:window_start;index;index:idx_dns_rollups_observability,priority:1;not null"`
+	WindowMinutes   int       `json:"window_minutes" gorm:"column:window_minutes;not null;default:1"`
+	WorkerID        string    `json:"worker_id" gorm:"column:worker_id;index;index:idx_dns_rollups_observability,priority:2;size:64;not null"`
+	ZoneID          uint      `json:"zone_id" gorm:"column:zone_id;index;index:idx_dns_rollups_observability,priority:3"`
+	ProxyRouteID    uint      `json:"proxy_route_id" gorm:"column:proxy_route_id;index"`
+	SourceScope     string    `json:"source_scope" gorm:"column:source_scope;index;size:64;not null;default:'global'"`
+	QName           string    `json:"qname" gorm:"column:q_name;index;size:255"`
+	QType           string    `json:"qtype" gorm:"column:q_type;size:16"`
+	RCode           string    `json:"rcode" gorm:"column:r_code;size:32"`
+	QueryCount      int64     `json:"query_count" gorm:"column:query_count;not null;default:0"`
+	TotalDurationMs int64     `json:"total_duration_ms" gorm:"column:total_duration_ms;not null;default:0"`
+	MaxDurationMs   int64     `json:"max_duration_ms" gorm:"column:max_duration_ms;not null;default:0"`
+	TargetSummary   string    `json:"target_summary" gorm:"column:target_summary;type:text;not null;default:'{}'"`
+	CreatedAt       time.Time `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt       time.Time `json:"updated_at" gorm:"column:updated_at"`
 }
 
 func ListDNSZones() (zones []*DNSZone, err error) {

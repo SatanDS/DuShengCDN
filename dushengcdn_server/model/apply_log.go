@@ -13,16 +13,16 @@ type ApplyLogQuery struct {
 }
 
 type ApplyLog struct {
-	ID                  uint      `json:"id" gorm:"primaryKey"`
-	NodeID              string    `json:"node_id" gorm:"index;size:64;not null"`
-	Version             string    `json:"version" gorm:"size:32;not null"`
-	Result              string    `json:"result" gorm:"size:32;not null"`
-	Message             string    `json:"message" gorm:"type:text"`
-	Checksum            string    `json:"checksum" gorm:"size:64;not null;default:''"`
-	MainConfigChecksum  string    `json:"main_config_checksum" gorm:"size:64;not null;default:''"`
-	RouteConfigChecksum string    `json:"route_config_checksum" gorm:"size:64;not null;default:''"`
-	SupportFileCount    int       `json:"support_file_count" gorm:"not null;default:0"`
-	CreatedAt           time.Time `json:"created_at"`
+	ID                  uint      `json:"id" gorm:"column:id;primaryKey"`
+	NodeID              string    `json:"node_id" gorm:"column:node_id;index;size:64;not null"`
+	Version             string    `json:"version" gorm:"column:version;size:32;not null"`
+	Result              string    `json:"result" gorm:"column:result;size:32;not null"`
+	Message             string    `json:"message" gorm:"column:message;type:text"`
+	Checksum            string    `json:"checksum" gorm:"column:checksum;size:64;not null;default:''"`
+	MainConfigChecksum  string    `json:"main_config_checksum" gorm:"column:main_config_checksum;size:64;not null;default:''"`
+	RouteConfigChecksum string    `json:"route_config_checksum" gorm:"column:route_config_checksum;size:64;not null;default:''"`
+	SupportFileCount    int       `json:"support_file_count" gorm:"column:support_file_count;not null;default:0"`
+	CreatedAt           time.Time `json:"created_at" gorm:"column:created_at"`
 }
 
 func ListApplyLogs(query ApplyLogQuery) (logs []*ApplyLog, err error) {

@@ -776,29 +776,115 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 	}
 }
 
-func TestNodeHealthEventColumnNamesAreStable(t *testing.T) {
-	db := openBareTestSQLiteDB(t, "node-health-event-columns.db")
-	if err := db.AutoMigrate(&NodeHealthEvent{}); err != nil {
-		t.Fatalf("AutoMigrate NodeHealthEvent: %v", err)
+func TestObfuscatedBuildSensitiveColumnNamesAreStable(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "stable-model-columns.db")
+	modelColumns := map[any][]string{
+		&ApplyLog{}: {
+			"id",
+			"node_id",
+			"version",
+			"result",
+			"message",
+			"checksum",
+			"main_config_checksum",
+			"route_config_checksum",
+			"support_file_count",
+			"created_at",
+		},
+		&ConfigVersion{}: {
+			"id",
+			"version",
+			"snapshot_json",
+			"main_config",
+			"rendered_config",
+			"support_files_json",
+			"checksum",
+			"is_active",
+			"created_by",
+			"created_at",
+		},
+		&GSLBSchedulingState{}: {
+			"id",
+			"proxy_route_id",
+			"dns_record_type",
+			"scope_key",
+			"selected_targets",
+			"desired_targets",
+			"last_reason",
+			"last_changed_at",
+			"last_evaluated_at",
+			"created_at",
+			"updated_at",
+		},
+		&NodeHealthEvent{}: {
+			"id",
+			"node_id",
+			"event_type",
+			"severity",
+			"status",
+			"message",
+			"first_triggered_at",
+			"last_triggered_at",
+			"reported_at",
+			"resolved_at",
+			"metadata_json",
+			"created_at",
+			"updated_at",
+		},
+		&DNSQueryRollup{}: {
+			"id",
+			"window_start",
+			"window_minutes",
+			"worker_id",
+			"zone_id",
+			"proxy_route_id",
+			"source_scope",
+			"q_name",
+			"q_type",
+			"r_code",
+			"query_count",
+			"total_duration_ms",
+			"max_duration_ms",
+			"target_summary",
+			"created_at",
+			"updated_at",
+		},
+		&CommercialLicenseActivation{}: {
+			"id",
+			"activation_id",
+			"license_id",
+			"customer_id",
+			"machine_fingerprint",
+			"server_version",
+			"build_watermark",
+			"instance_hostname",
+			"revoked_at",
+			"last_lease_issued_at",
+			"last_lease_expires_at",
+			"created_at",
+			"updated_at",
+		},
+		&CommercialLicenseRevocation{}: {
+			"id",
+			"license_id",
+			"customer_id",
+			"reason",
+			"revoked_at",
+			"created_at",
+			"updated_at",
+		},
 	}
-	want := []string{
-		"id",
-		"node_id",
-		"event_type",
-		"severity",
-		"status",
-		"message",
-		"first_triggered_at",
-		"last_triggered_at",
-		"reported_at",
-		"resolved_at",
-		"metadata_json",
-		"created_at",
-		"updated_at",
+	for modelValue := range modelColumns {
+		if err := db.AutoMigrate(modelValue); err != nil {
+			t.Fatalf("AutoMigrate %T: %v", modelValue, err)
+		}
 	}
-	for _, column := range want {
-		if !db.Migrator().HasColumn(&NodeHealthEvent{}, column) {
-			t.Fatalf("expected node_health_events.%s column", column)
+
+	for modelValue, columns := range modelColumns {
+		for _, column := range columns {
+			if !db.Migrator().HasColumn(modelValue, column) {
+				t.Fatalf("expected %T column %s", modelValue, column)
+			}
 		}
 	}
 }
