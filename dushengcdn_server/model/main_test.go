@@ -730,6 +730,52 @@ func TestListDNSZonesByIDsReturnsMatchingZones(t *testing.T) {
 	}
 }
 
+func TestRegisteredModelTableNamesAreStable(t *testing.T) {
+	models, err := buildDBModels()
+	if err != nil {
+		t.Fatalf("buildDBModels: %v", err)
+	}
+	got := make([]string, 0, len(models))
+	for _, item := range models {
+		got = append(got, item.tableName)
+	}
+	sort.Strings(got)
+	want := []string{
+		"acme_accounts",
+		"apply_logs",
+		"auth_sources",
+		"commercial_license_activations",
+		"commercial_license_revocations",
+		"commercial_licenses",
+		"config_versions",
+		"dns_accounts",
+		"dns_query_rollups",
+		"dns_records",
+		"dns_worker_node_probes",
+		"dns_workers",
+		"dns_zones",
+		"external_accounts",
+		"files",
+		"gslb_scheduling_states",
+		"managed_domains",
+		"node_access_logs",
+		"node_health_events",
+		"node_metric_snapshots",
+		"node_request_reports",
+		"node_system_profiles",
+		"nodes",
+		"options",
+		"origins",
+		"proxy_routes",
+		"tls_certificates",
+		"users",
+	}
+	sort.Strings(want)
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("unexpected registered model table names:\n got: %v\nwant: %v", got, want)
+	}
+}
+
 func findDBModelByTableName(t *testing.T, tableName string) dbModel {
 	t.Helper()
 
