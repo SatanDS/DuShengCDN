@@ -183,6 +183,8 @@ type DNSWorkerView struct {
 	UpdateRequested          bool                       `json:"update_requested"`
 	UpdateChannel            string                     `json:"update_channel"`
 	UpdateTag                string                     `json:"update_tag"`
+	UpdateSupported          bool                       `json:"update_supported"`
+	LastUpdateSupportedAt    *time.Time                 `json:"last_update_supported_at"`
 	LastProbeAt              *time.Time                 `json:"last_probe_at"`
 	LastProbeQuery           string                     `json:"last_probe_query"`
 	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -601,6 +603,8 @@ type DNSWorkerHealthItemView struct {
 	UpdateRequested          bool                       `json:"update_requested"`
 	UpdateChannel            string                     `json:"update_channel"`
 	UpdateTag                string                     `json:"update_tag"`
+	UpdateSupported          bool                       `json:"update_supported"`
+	LastUpdateSupportedAt    *time.Time                 `json:"last_update_supported_at"`
 	LastError                string                     `json:"last_error"`
 	LastProbeAt              *time.Time                 `json:"last_probe_at"`
 	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -1416,6 +1420,10 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	worker.GeoIPOperatorEnabled = input.GeoIPOperatorEnabled
 	worker.OperatorCIDRDatabasePath = truncateForDatabase(strings.TrimSpace(input.OperatorCIDRDatabasePath), 512)
 	worker.OperatorCIDRLastError = truncateForDatabase(strings.TrimSpace(input.OperatorCIDRLastError), 16000)
+	worker.UpdateSupported = input.UpdateSupported
+	if input.UpdateSupported {
+		worker.LastUpdateSupportedAt = &now
+	}
 	rollupMeta := summarizeDNSQueryRollupInputs(input.Rollups)
 	if rollupMeta.count > 0 {
 		worker.LastRollupAt = &rollupMeta.lastRollupAt
@@ -2762,6 +2770,8 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		UpdateRequested:          worker.UpdateRequested,
 		UpdateChannel:            normalizeReleaseChannel(worker.UpdateChannel).String(),
 		UpdateTag:                worker.UpdateTag,
+		UpdateSupported:          worker.UpdateSupported,
+		LastUpdateSupportedAt:    worker.LastUpdateSupportedAt,
 		LastProbeAt:              probeAt,
 		LastProbeQuery:           worker.LastProbeQuery,
 		LastProbeResults:         probeResults,
@@ -5066,6 +5076,8 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			UpdateRequested:          worker.UpdateRequested,
 			UpdateChannel:            normalizeReleaseChannel(worker.UpdateChannel).String(),
 			UpdateTag:                worker.UpdateTag,
+			UpdateSupported:          worker.UpdateSupported,
+			LastUpdateSupportedAt:    worker.LastUpdateSupportedAt,
 			LastError:                worker.LastError,
 			LastProbeAt:              probeAt,
 			LastProbeResults:         probeResults,

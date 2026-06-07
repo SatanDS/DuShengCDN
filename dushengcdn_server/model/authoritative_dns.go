@@ -68,6 +68,8 @@ type DNSWorker struct {
 	UpdateRequested          bool       `json:"update_requested" gorm:"not null;default:false"`
 	UpdateChannel            string     `json:"update_channel" gorm:"size:32;not null;default:'stable'"`
 	UpdateTag                string     `json:"update_tag" gorm:"size:128;not null;default:''"`
+	UpdateSupported          bool       `json:"update_supported" gorm:"not null;default:false"`
+	LastUpdateSupportedAt    *time.Time `json:"last_update_supported_at"`
 	LastProbeAt              *time.Time `json:"last_probe_at"`
 	LastProbeQuery           string     `json:"last_probe_query" gorm:"size:255"`
 	LastProbeResult          string     `json:"last_probe_result" gorm:"type:text;not null;default:'[]'"`

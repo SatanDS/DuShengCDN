@@ -191,6 +191,8 @@ function normalizeDNSWorker(worker: DNSWorkerItem) {
         ? ('preview' as const)
         : ('stable' as const),
     update_tag: worker.update_tag ?? '',
+    update_supported: Boolean(worker.update_supported),
+    last_update_supported_at: worker.last_update_supported_at ?? null,
   };
 }
 
@@ -373,6 +375,8 @@ function normalizeDNSWorkerHealthSummary(
           ? ('preview' as const)
           : ('stable' as const),
       update_tag: worker.update_tag ?? '',
+      update_supported: Boolean(worker.update_supported),
+      last_update_supported_at: worker.last_update_supported_at ?? null,
       node_probes: asArray(worker.node_probes).map((probe) => ({
         ...probe,
         probe_status: probe.probe_status || 'unknown',

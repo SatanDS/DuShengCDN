@@ -2206,6 +2206,42 @@ func validateDatabaseSchemaV36(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV37 adds DNS Worker self-update capability state.
+func migrateV37(db *gorm.DB, backend string) error {
+	if backend == "postgres" {
+		for _, column := range []struct {
+			name       string
+			definition string
+		}{
+			{name: "update_supported", definition: "boolean NOT NULL DEFAULT false"},
+			{name: "last_update_supported_at", definition: "timestamptz"},
+		} {
+			sql := fmt.Sprintf(`ALTER TABLE "dns_workers" ADD COLUMN IF NOT EXISTS "%s" %s`, column.name, column.definition)
+			if err := db.Exec(sql).Error; err != nil {
+				return fmt.Errorf("add dns_workers.%s column failed: %w", column.name, err)
+			}
+		}
+		return nil
+	}
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV37(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV36(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{
+		"update_supported",
+		"last_update_supported_at",
+	} {
+		if !db.Migrator().HasColumn(&DNSWorker{}, column) {
+			return fmt.Errorf("column dns_workers.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -2243,6 +2279,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 33, toVersion: 34, migrate: migrateV34, validate: validateDatabaseSchemaV34},
 		{fromVersion: 34, toVersion: 35, migrate: migrateV35, validate: validateDatabaseSchemaV35},
 		{fromVersion: 35, toVersion: 36, migrate: migrateV36, validate: validateDatabaseSchemaV36},
+		{fromVersion: 36, toVersion: 37, migrate: migrateV37, validate: validateDatabaseSchemaV37},
 	}
 }
 
@@ -2290,7 +2327,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV36(db, backend)
+		return validateDatabaseSchemaV37(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {

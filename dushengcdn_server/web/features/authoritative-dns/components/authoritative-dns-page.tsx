@@ -3673,6 +3673,15 @@ function DNSWorkerHealthCard({
     probe.node_name?.trim(),
   );
   const updateDisabled = isRequestingUpdate || worker.update_requested;
+  const isWaitingForUnsupportedUpdate =
+    worker.update_requested && !worker.update_supported;
+  const updateButtonLabel = isRequestingUpdate
+    ? '下发中...'
+    : isWaitingForUnsupportedUpdate
+      ? '需先手动升级'
+      : worker.update_requested
+        ? '等待心跳执行'
+        : '下发更新';
 
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
@@ -3698,7 +3707,10 @@ function DNSWorkerHealthCard({
             <StatusBadge label="解析配置过期" variant="danger" />
           ) : null}
           {worker.update_requested ? (
-            <StatusBadge label="等待更新" variant="warning" />
+            <StatusBadge
+              label={isWaitingForUnsupportedUpdate ? '需手动升级' : '等待更新'}
+              variant="warning"
+            />
           ) : null}
           <StatusBadge
             label={worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'}
@@ -3719,11 +3731,7 @@ function DNSWorkerHealthCard({
               disabled={updateDisabled}
               onClick={() => onRequestUpdate(worker.id)}
             >
-              {isRequestingUpdate
-                ? '下发中...'
-                : worker.update_requested
-                  ? '等待心跳执行'
-                  : '下发更新'}
+              {updateButtonLabel}
             </SecondaryButton>
           ) : null}
         </div>
@@ -3790,6 +3798,13 @@ function DNSWorkerHealthCard({
           className="mt-3"
           tone="danger"
           message={worker.last_error}
+        />
+      ) : null}
+      {isWaitingForUnsupportedUpdate ? (
+        <InlineMessage
+          className="mt-3"
+          tone="warning"
+          message="该 DNS 响应端正在心跳，但当前版本未声明支持远程自更新；请先在这台响应端手动执行一次新版 install-dns-worker.sh，之后面板下发更新才会被心跳消费。"
         />
       ) : null}
       {worker.geoip_last_error ? (

@@ -65,6 +65,8 @@ export interface DNSWorkerItem {
   update_requested: boolean;
   update_channel: 'stable' | 'preview';
   update_tag: string;
+  update_supported: boolean;
+  last_update_supported_at?: string | null;
   last_probe_at?: string | null;
   last_probe_query: string;
   last_probe_results: DNSWorkerProbeResult[];
@@ -384,6 +386,8 @@ export interface DNSWorkerHealthItem {
   update_requested: boolean;
   update_channel: 'stable' | 'preview';
   update_tag: string;
+  update_supported: boolean;
+  last_update_supported_at?: string | null;
   last_error: string;
   last_probe_at?: string | null;
   last_probe_results: DNSWorkerProbeResult[];
