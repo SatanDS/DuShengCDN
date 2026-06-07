@@ -15,12 +15,14 @@ const (
 	DatabaseCleanupTargetAccessLogs      = "node_access_logs"
 	DatabaseCleanupTargetMetricSnapshots = "node_metric_snapshots"
 	DatabaseCleanupTargetRequestReports  = "node_request_reports"
+	DatabaseCleanupTargetDNSQueryRollups = "dns_query_rollups"
 )
 
 var databaseCleanupTargets = map[string]string{
 	DatabaseCleanupTargetAccessLogs:      "访问日志",
 	DatabaseCleanupTargetMetricSnapshots: "性能快照",
 	DatabaseCleanupTargetRequestReports:  "请求聚合",
+	DatabaseCleanupTargetDNSQueryRollups: "DNS 查询聚合",
 }
 
 type DatabaseCleanupInput struct {
@@ -94,6 +96,7 @@ func RunDatabaseAutoCleanupOnce(now time.Time) (*DatabaseAutoCleanupSummary, err
 		DatabaseCleanupTargetAccessLogs,
 		DatabaseCleanupTargetMetricSnapshots,
 		DatabaseCleanupTargetRequestReports,
+		DatabaseCleanupTargetDNSQueryRollups,
 	} {
 		result, err := CleanupDatabaseObservability(DatabaseCleanupInput{
 			Target:        target,
@@ -163,6 +166,8 @@ func deleteAllObservabilityRows(target string) (int64, error) {
 		return model.DeleteAllNodeMetricSnapshots(nil)
 	case DatabaseCleanupTargetRequestReports:
 		return model.DeleteAllNodeRequestReports(nil)
+	case DatabaseCleanupTargetDNSQueryRollups:
+		return model.DeleteAllDNSQueryRollups()
 	default:
 		return 0, errors.New("unsupported cleanup target")
 	}
@@ -176,6 +181,8 @@ func deleteObservabilityRowsBefore(target string, cutoff time.Time) (int64, erro
 		return model.DeleteNodeMetricSnapshotsBefore(nil, cutoff)
 	case DatabaseCleanupTargetRequestReports:
 		return model.DeleteNodeRequestReportsBefore(nil, cutoff)
+	case DatabaseCleanupTargetDNSQueryRollups:
+		return model.DeleteDNSQueryRollupsBefore(cutoff)
 	default:
 		return 0, errors.New("unsupported cleanup target")
 	}

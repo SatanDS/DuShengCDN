@@ -194,6 +194,11 @@ func SetApiRouter(router *gin.Engine) {
 			dnsWorkerAdminRoute.POST("/:id/probe", controller.ProbeDNSWorker)
 			dnsWorkerAdminRoute.POST("/:id/delete", controller.DeleteDNSWorker)
 		}
+		dnsSourceDatabaseAdminRoute := apiRouter.Group("/dns-source-databases")
+		dnsSourceDatabaseAdminRoute.Use(middleware.RootAuth(), middleware.NoTokenAuth())
+		{
+			dnsSourceDatabaseAdminRoute.POST("/refresh", controller.RefreshDNSSourceDatabaseMirror)
+		}
 		apiRouter.GET("/dns-snapshot", controller.GetDNSSnapshot)
 		apiRouter.POST("/dns-worker-heartbeat", controller.DNSWorkerHeartbeat)
 		apiRouter.GET("/dns-source-databases/manifest", controller.GetDNSSourceDatabaseManifest)

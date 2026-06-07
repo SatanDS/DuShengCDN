@@ -123,6 +123,8 @@ export function VersionUpgradeModal({
     const upgradeLogs = release?.upgrade_logs ?? [];
     const automaticUpgradeEnabled = release?.automatic_upgrade_enabled ?? false;
     const hasRelease = Boolean(release?.available && release.tag_name);
+    const onlineUpgradeLabel =
+        selectedChannel === 'preview' ? '手动升级预览版' : '手动升级正式版';
     const safeReleaseBodyHtml = useMemo(
         () =>
             sanitizeHtml(
@@ -142,7 +144,7 @@ export function VersionUpgradeModal({
             isOpen={isOpen}
             onClose={onClose}
             title="版本"
-            description="默认检查正式版更新；你也可以手动检查 preview 发布。Server 自动升级默认关闭，生产环境建议上传已审阅的 Server 二进制确认升级。"
+            description="默认检查正式版更新；你也可以手动检查 preview 发布。自动升级关闭只表示后台不会自行升级，Root 仍可手动检查、在线触发升级，或上传已审阅的 Server 二进制确认升级。"
             size="lg"
         >
             <div className="space-y-6">
@@ -237,7 +239,7 @@ export function VersionUpgradeModal({
                                     <StatusBadge label="升级任务执行中" variant="warning"/>
                                 ) : null}
                                 {!automaticUpgradeEnabled ? (
-                                    <StatusBadge label="自动升级关闭" variant="info"/>
+                                    <StatusBadge label="自动升级关闭，可手动升级" variant="info"/>
                                 ) : null}
                             </div>
                             <div
@@ -275,11 +277,7 @@ export function VersionUpgradeModal({
                                                 ? '升级中...'
                                                 : !release.has_update
                                                     ? '无需升级'
-                                                    : !automaticUpgradeEnabled
-                                                        ? '自动升级关闭'
-                                                        : selectedChannel === 'preview'
-                                                            ? '升级预览版'
-                                                            : '升级正式版'}
+                                                    : onlineUpgradeLabel}
                                     </PrimaryButton>
                                 </div>
                             ) : null}

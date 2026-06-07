@@ -3,6 +3,8 @@ package model
 import (
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type DNSZone struct {
@@ -261,4 +263,20 @@ func (worker *DNSWorker) Delete() error {
 
 func (rollup *DNSQueryRollup) Insert() error {
 	return DB.Create(rollup).Error
+}
+
+func DeleteAllDNSQueryRollups() (int64, error) {
+	if DB == nil {
+		return 0, gorm.ErrInvalidDB
+	}
+	result := DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&DNSQueryRollup{})
+	return result.RowsAffected, result.Error
+}
+
+func DeleteDNSQueryRollupsBefore(cutoff time.Time) (int64, error) {
+	if DB == nil {
+		return 0, gorm.ErrInvalidDB
+	}
+	result := DB.Where("window_start < ?", cutoff).Delete(&DNSQueryRollup{})
+	return result.RowsAffected, result.Error
 }

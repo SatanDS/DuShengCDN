@@ -160,9 +160,6 @@ func GetLatestServerRelease(ctx context.Context, channel string) (*LatestServerR
 }
 
 func ScheduleServerUpgrade(channel string) (*LatestServerRelease, error) {
-	if !common.ServerAutoUpgradeEnabled {
-		return nil, fmt.Errorf("服务端自动升级默认关闭；如需启用，请设置 DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true，并确认 Release 同时包含 Server 二进制、同名 .sha256 校验文件和 .sig 签名文件。也可以上传已审阅的 Server 二进制进行手动升级")
-	}
 	return scheduleServerUpgradeFromRelease(channel)
 }
 
@@ -176,7 +173,7 @@ func scheduleServerUpgradeFromRelease(channel string) (*LatestServerRelease, err
 
 	resetServerUpgradeLogsLocked()
 	serverUpgradeState.status = "running"
-	appendServerUpgradeLogLocked("info", fmt.Sprintf("Automatic upgrade scheduled for channel: %s.", normalizedChannel.String()))
+	appendServerUpgradeLogLocked("info", fmt.Sprintf("Server upgrade scheduled for channel: %s.", normalizedChannel.String()))
 	serverUpgradeState.Unlock()
 	broadcastServerUpgradeSnapshot()
 
@@ -479,7 +476,7 @@ func buildLatestServerReleaseView(release *githubReleaseResponse, channel Releas
 		Available:               release != nil,
 		CurrentVersion:          currentVersion,
 		HasUpdate:               hasUpdate,
-		UpgradeSupported:        platformUpgradeSupported && common.ServerAutoUpgradeEnabled,
+		UpgradeSupported:        platformUpgradeSupported,
 		AutomaticUpgradeEnabled: common.ServerAutoUpgradeEnabled,
 		InProgress:              inProgress,
 		UpgradeStatus:           upgradeStatus,
@@ -506,7 +503,7 @@ func prepareServerUpgrade(ctx context.Context, channel ReleaseChannel) (*prepare
 		return nil, fmt.Errorf("当前已经是最新版本")
 	}
 	if !view.UpgradeSupported {
-		return nil, fmt.Errorf("当前平台暂不支持自动升级")
+		return nil, fmt.Errorf("当前平台暂不支持在线升级")
 	}
 
 	assetName := serverAssetName(runtime.GOOS, runtime.GOARCH)
@@ -710,7 +707,7 @@ func doServerUpdateDownload(req *http.Request) (*http.Response, error) {
 }
 
 func executeServerUpgrade(task *preparedServerUpgrade) error {
-	recordServerUpgradeLog("info", fmt.Sprintf("Downloading automatic upgrade package for version: %s.", strings.TrimSpace(task.release.TagName)))
+	recordServerUpgradeLog("info", fmt.Sprintf("Downloading server upgrade package for version: %s.", strings.TrimSpace(task.release.TagName)))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

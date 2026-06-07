@@ -19,6 +19,18 @@ func (j *DNSSourceDatabaseMirrorJob) Run() {
 		slog.Info("skip DNS source database mirror refresh because previous run is still active")
 		return
 	}
+	runDNSSourceDatabaseMirrorJob()
+}
+
+func StartDNSSourceDatabaseMirrorRefresh() bool {
+	if !dnsSourceDatabaseMirrorJobRunning.CompareAndSwap(false, true) {
+		return false
+	}
+	go runDNSSourceDatabaseMirrorJob()
+	return true
+}
+
+func runDNSSourceDatabaseMirrorJob() {
 	defer dnsSourceDatabaseMirrorJobRunning.Store(false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -35,5 +47,5 @@ func WarmupDNSSourceDatabaseMirror() {
 	if _, err := os.Stat(path); err == nil {
 		return
 	}
-	go (&DNSSourceDatabaseMirrorJob{}).Run()
+	StartDNSSourceDatabaseMirrorRefresh()
 }

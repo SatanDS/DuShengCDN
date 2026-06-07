@@ -12,6 +12,7 @@ import type {
   CommercialLicenseStatusPayload,
   DatabaseCleanupPayload,
   DatabaseCleanupResult,
+  DNSSourceDatabaseMirrorRefreshResult,
   ExternalAccountBinding,
   GeoIPLookupResult,
   OptionBatchPayload,
@@ -50,6 +51,15 @@ export function cleanupDatabaseObservability(payload: DatabaseCleanupPayload) {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function refreshDNSSourceDatabaseMirror() {
+  return apiRequest<DNSSourceDatabaseMirrorRefreshResult>(
+    '/dns-source-databases/refresh',
+    {
+      method: 'POST',
+    },
+  );
 }
 
 export function getCommercialLicenseStatus() {

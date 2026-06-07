@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"dushengcdn/job"
 	"dushengcdn/model"
 	"dushengcdn/service"
 	"fmt"
@@ -246,6 +247,20 @@ func SimulateDNSGSLB(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, view)
+}
+
+func RefreshDNSSourceDatabaseMirror(c *gin.Context) {
+	if !job.StartDNSSourceDatabaseMirrorRefresh() {
+		respondSuccess(c, gin.H{
+			"started": false,
+			"message": "DNS 源库镜像刷新正在进行中。",
+		})
+		return
+	}
+	respondSuccess(c, gin.H{
+		"started": true,
+		"message": "DNS 源库镜像刷新已在后台开始。",
+	})
 }
 
 func GetDNSSnapshot(c *gin.Context) {

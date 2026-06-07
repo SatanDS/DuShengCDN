@@ -300,7 +300,7 @@ func minimumDNSSourceDatabaseFileSize(name string) int64 {
 	if strings.HasSuffix(strings.ToLower(name), ".mmdb") {
 		return 1024
 	}
-	return 16
+	return 0
 }
 
 func writeDNSSourceDatabaseManifest(root string, manifest DNSSourceDatabaseMirrorManifest) error {

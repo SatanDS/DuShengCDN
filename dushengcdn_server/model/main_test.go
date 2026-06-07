@@ -3156,6 +3156,68 @@ func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerObservabilityFields(t *testing
 	}
 }
 
+func TestEnsureDatabaseSchemaUpToDateCompletesPartialDNSWorkerSourceDatabaseMigration(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "dns-worker-source-database-fields.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateAll(db); err != nil {
+		t.Fatalf("auto migrate current schema: %v", err)
+	}
+	for _, column := range []string{
+		"asn_last_error",
+		"geo_ip_database_type",
+		"asn_database_type",
+		"geo_ip_country_enabled",
+		"geo_ip_asn_enabled",
+		"geo_ip_operator_enabled",
+		"operator_cidr_database_path",
+		"operator_cidr_last_error",
+	} {
+		if db.Migrator().HasColumn(&DNSWorker{}, column) {
+			if err := db.Migrator().DropColumn(&DNSWorker{}, column); err != nil {
+				t.Fatalf("drop dns_workers.%s: %v", column, err)
+			}
+		}
+	}
+	if !db.Migrator().HasColumn(&DNSWorker{}, "asn_database_path") {
+		t.Fatal("expected partial migration column dns_workers.asn_database_path to exist")
+	}
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 34); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	for _, column := range []string{
+		"asn_database_path",
+		"asn_last_error",
+		"geo_ip_database_type",
+		"asn_database_type",
+		"geo_ip_country_enabled",
+		"geo_ip_asn_enabled",
+		"geo_ip_operator_enabled",
+		"operator_cidr_database_path",
+		"operator_cidr_last_error",
+	} {
+		if !db.Migrator().HasColumn(&DNSWorker{}, column) {
+			t.Fatalf("expected dns_workers.%s column to exist", column)
+		}
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
 func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerNodeProbes(t *testing.T) {
 	db := openBareTestSQLiteDB(t, "dns-worker-node-probes.db")
 	if err := registerSharding(db, "sqlite"); err != nil {

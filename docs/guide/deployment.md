@@ -256,7 +256,11 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --token YOUR_DNS_WORKER_TOKEN
 ```
 
-脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。源码构建会优先复用当前 `PATH` 或 `/usr/local/go/bin/go` 里的 Go；确实需要自动安装 Go 时，会按 `go.dev`、`dl.google.com`、`golang.google.cn` 多源重试。脚本还会默认下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb`，让国家代码节点池匹配开箱可用；下载失败不会阻断安装，Worker 会继续按来源 CIDR 或 `global` 作用域运行。
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。源码构建会优先复用当前 `PATH` 或 `/usr/local/go/bin/go` 里的 Go；确实需要自动安装 Go 时，会按 `go.dev`、`dl.google.com`、`golang.google.cn` 多源重试。
+
+DNS 来源识别库安装在 DNS 响应端机器本地，查询路径只读本地文件，不会每次请求都访问面板或外部 GeoIP API。默认 `--source-database-profile full` 会下载 `GeoLite2-Country.mmdb`、`GeoLite2-ASN.mmdb` 和 gaoyifan/china-operator-ip 运营商 CIDR 列表，用于国家、ASN 和中国运营商节点池匹配。下载会先走 GitHub；GitHub 不可用时会回退到面板服务器端镜像。安装脚本还会创建 `dushengcdn-dns-worker-source-database-update.timer`，每 7 天更新一次；更新成功后原地替换并清理旧临时文件和不再需要的托管文件，避免长期堆积。
+
+面板服务器端也会维护一份 gaoyifan/china-operator-ip、GeoLite2-ASN、GeoLite2-Country 镜像，用于响应端回退下载。面板启动时如果没有镜像会预热一次，之后每 7 天自动刷新；也可以在「设置」里的「DNS 源库镜像」点击手动刷新。刷新完成后只保留 `current` 版本，旧的 `previous` 会被删除。
 
 如果安装时遇到 `curl: (56) ... unexpected eof while reading` 这类 Go 下载中断，可直接重跑安装命令；也可先指定下载源再执行：
 
@@ -286,9 +290,15 @@ bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.co
 | `--install-dir` | 安装目录，默认 `/opt/dushengcdn-dns-worker` |
 | `--listen` | UDP/TCP 监听地址，默认 `:53` |
 | `--snapshot-path` | 快照缓存路径，默认安装目录下的 `data/dns-worker-snapshot.json` |
-| `--geoip-database` | 可选本地 MaxMind Country MMDB 路径 |
+| `--source-database-profile` | 来源库预设：`full`、`country`、`asn`、`operator`、`none`，默认 `full` |
+| `--geoip-database` | 可选本地 MaxMind Country/City/Enterprise MMDB 路径 |
 | `--geoip-database-url` | Country MMDB 下载地址，默认使用 Loyalsoldier GeoLite2-Country |
-| `--no-geoip-download` | 不自动下载 Country MMDB |
+| `--asn-database` | 可选本地 MaxMind ASN MMDB 路径 |
+| `--asn-database-url` | ASN MMDB 下载地址，默认使用 Loyalsoldier GeoLite2-ASN |
+| `--operator-cidr-database` | 可选本地 gaoyifan/china-operator-ip CIDR 目录或文件 |
+| `--operator-cidr-files` | 只下载指定运营商 CIDR 文件，空格分隔 |
+| `--no-source-database-download` | 不自动下载 Country/ASN/运营商来源库 |
+| `--no-source-database-update-timer` | 不创建 7 天来源库更新定时器 |
 | `--query-rate-limit` | 按来源 IP 每秒查询上限，默认 `200` |
 | `--udp-response-size` | UDP 响应最大字节数，默认 `1232` |
 | `--no-service` | 不创建 systemd 服务 |
@@ -305,14 +315,17 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
-需要按国家代码匹配节点池时，再额外挂载本地 Country MMDB 并设置路径：
+需要按国家代码、ASN 或运营商匹配节点池时，再额外挂载本地来源库并设置路径：
 
 ```bash
-  -v /path/to/GeoLite2-Country.mmdb:/geoip/GeoLite2-Country.mmdb:ro \
+  -v /path/to/geoip:/geoip:ro \
+  -v /path/to/operator-cidr:/operator-cidr:ro \
   -e DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=/geoip/GeoLite2-Country.mmdb \
+  -e DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=/geoip/GeoLite2-ASN.mmdb \
+  -e DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=/operator-cidr \
 ```
 
-只使用来源 CIDR 或全局调度时可以省略 GeoIP。
+只使用来源 CIDR 或全局调度时可以省略这些来源库。需要瘦身时优先把安装参数改为 `--source-database-profile operator` 只下载 gaoyifan 运营商 CIDR，或 `country`/`asn` 只保留单类 MMDB；完全不需要来源库时用 `--source-database-profile none` 或 `--no-source-database-download`。运营商 CIDR 列表最小，Country/ASN MMDB 体积较大，`full` 会同时占用两份 MMDB 加运营商列表。
 
 源码运行示例：
 
@@ -327,13 +340,16 @@ go run ./cmd/dns-worker \
   --udp-response-size 1232
 ```
 
-本地 Compose 示例见仓库根目录 `docker-compose.dns-worker.yaml`。如果需要按国家代码匹配 GSLB 节点池，可给 Worker 配置本地 MaxMind Country MMDB；如果在网站 GSLB 节点池里配置来源 CIDR，Worker 会直接按来源 IP/ECS 优先匹配，不依赖 GeoIP：
+本地 Compose 示例见仓库根目录 `docker-compose.dns-worker.yaml`。如果需要按国家代码、ASN 或中国运营商匹配 GSLB 节点池，可给 Worker 配置本地 MMDB 和 gaoyifan/china-operator-ip CIDR 目录；如果在网站 GSLB 节点池里配置来源 CIDR，Worker 会直接按来源 IP/ECS 优先匹配，不依赖来源库：
 
 ```bash
---geoip-database /var/lib/dushengcdn-dns-worker/GeoLite2-Country.mmdb
+--source-database-profile full
+--geoip-database /var/lib/dushengcdn-dns-worker/geoip/GeoLite2-Country.mmdb
+--asn-database /var/lib/dushengcdn-dns-worker/geoip/GeoLite2-ASN.mmdb
+--operator-cidr-database /var/lib/dushengcdn-dns-worker/operator-cidr
 ```
 
-未配置本地 GeoIP 库或安装脚本下载 Country MMDB 失败时，Worker 仍会优先读取 EDNS Client Subnet 的来源 IP；来源 CIDR 命中时作用域为 `cidr:...`，未命中时国家代码为空并回退为 `global`。启用 `weighted` 或 `load_aware` 后，Worker 会在来源作用域后追加 `|bucket:xx` 分流桶，用于让 80/20 这类权重在逐查询答案中稳定生效。Worker 会在心跳里上报 GeoIP 是否加载、数据库路径和最近加载错误；如果面板显示「GeoIP 未加载」，国家代码节点池不会命中，但来源 CIDR 与 global 调度仍可继续工作。
+未配置本地来源库或安装脚本下载失败时，Worker 仍会优先读取 EDNS Client Subnet 的来源 IP；来源 CIDR 命中时作用域为 `cidr:...`，未命中时国家、ASN、运营商为空并回退为 `global`。启用 `weighted` 或 `load_aware` 后，Worker 会在来源作用域后追加 `|bucket:xx` 分流桶，用于让 80/20 这类权重在逐查询答案中稳定生效。Worker 会在心跳里上报国家/ASN/运营商库是否加载、数据库路径和最近加载错误；面板显示某类来源库未加载时，对应节点池不会命中，但来源 CIDR 与 global 调度仍可继续工作。
 
 生产部署原则：
 

@@ -60,7 +60,8 @@ export interface GeoIPLookupResult {
 export type DatabaseCleanupTarget =
   | 'node_access_logs'
   | 'node_metric_snapshots'
-  | 'node_request_reports';
+  | 'node_request_reports'
+  | 'dns_query_rollups';
 
 export interface DatabaseCleanupPayload {
   target: DatabaseCleanupTarget;
@@ -74,6 +75,11 @@ export interface DatabaseCleanupResult {
   delete_all: boolean;
   retention_days?: number;
   cutoff?: string;
+}
+
+export interface DNSSourceDatabaseMirrorRefreshResult {
+  started: boolean;
+  message: string;
 }
 
 export type CommercialLicenseStatus =

@@ -31,6 +31,7 @@ func TestRefreshDNSSourceDatabaseMirrorPublishesCurrentAndRemovesPrevious(t *tes
 		"/asn.mmdb":     bytesOfSize('a', 2048),
 		"/chinanet.txt": []byte("1.0.1.0/24\n1.0.1.1/32\n"),
 		"/cmcc.txt":     []byte("1.0.2.0/24\n1.0.2.1/32\n"),
+		"/drpeng6.txt":  []byte{},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		payload, ok := payloads[r.URL.Path]
@@ -46,7 +47,7 @@ func TestRefreshDNSSourceDatabaseMirrorPublishesCurrentAndRemovesPrevious(t *tes
 	common.DNSSourceDatabaseCountryURL = server.URL + "/country.mmdb"
 	common.DNSSourceDatabaseASNURL = server.URL + "/asn.mmdb"
 	common.DNSSourceDatabaseOperatorCIDRBaseURL = server.URL
-	common.DNSSourceDatabaseOperatorCIDRFiles = "chinanet.txt cmcc.txt"
+	common.DNSSourceDatabaseOperatorCIDRFiles = "chinanet.txt cmcc.txt drpeng6.txt"
 
 	if err := RefreshDNSSourceDatabaseMirror(context.Background()); err != nil {
 		t.Fatalf("RefreshDNSSourceDatabaseMirror first run: %v", err)
@@ -90,6 +91,14 @@ func TestRefreshDNSSourceDatabaseMirrorPublishesCurrentAndRemovesPrevious(t *tes
 	defer file.Close()
 	if meta.Name != "chinanet.txt" || meta.SHA256 == "" || meta.Size == 0 {
 		t.Fatalf("unexpected operator mirror file metadata: %+v", meta)
+	}
+	emptyFile, emptyMeta, err := OpenDNSSourceDatabaseMirrorFile("operator", "drpeng6.txt")
+	if err != nil {
+		t.Fatalf("OpenDNSSourceDatabaseMirrorFile empty operator file: %v", err)
+	}
+	defer emptyFile.Close()
+	if emptyMeta.Name != "drpeng6.txt" || emptyMeta.SHA256 == "" || emptyMeta.Size != 0 {
+		t.Fatalf("unexpected empty operator mirror file metadata: %+v", emptyMeta)
 	}
 }
 

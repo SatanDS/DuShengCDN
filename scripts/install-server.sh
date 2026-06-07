@@ -19,7 +19,9 @@ DNS_WORKER_QUERY_RATE_LIMIT="200"
 DNS_WORKER_UDP_RESPONSE_SIZE="1232"
 DNS_WORKER_REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
 DNS_WORKER_SOURCE_REF="${SOURCE_REF:-main}"
-DNS_WORKER_GEOIP_DOWNLOAD="true"
+DNS_WORKER_SOURCE_DATABASE_PROFILE="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}"
+DNS_WORKER_SOURCE_DATABASE_DOWNLOAD="true"
+DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER:-true}"
 
 usage() {
   cat <<EOF
@@ -44,7 +46,13 @@ Options:
                                   Maximum UDP DNS response payload size (default: 1232)
   --dns-worker-repo REPO            GitHub release repository for Worker installer (default: ${DNS_WORKER_REPO})
   --dns-worker-source-ref REF       Git branch, tag, or commit for Worker source build (default: main)
-  --dns-worker-no-geoip-download    Do not download Country MMDB automatically
+  --dns-worker-source-database-profile PROFILE
+                                  Source database preset: full, country, asn, operator, none (default: full)
+  --dns-worker-no-source-database-download
+                                  Do not download Country/ASN/operator source databases automatically
+  --dns-worker-no-source-database-update-timer
+                                  Do not create the 7-day source database update timer
+  --dns-worker-no-geoip-download    Deprecated alias of --dns-worker-no-source-database-download
   -h, --help                        Show this help message
 
 Behavior:
@@ -425,9 +433,13 @@ install_dns_worker() {
     --udp-response-size "$DNS_WORKER_UDP_RESPONSE_SIZE"
     --repo "$DNS_WORKER_REPO"
     --source-ref "$DNS_WORKER_SOURCE_REF"
+    --source-database-profile "$DNS_WORKER_SOURCE_DATABASE_PROFILE"
   )
-  if [[ "$DNS_WORKER_GEOIP_DOWNLOAD" != "true" ]]; then
-    install_args+=(--no-geoip-download)
+  if [[ "$DNS_WORKER_SOURCE_DATABASE_DOWNLOAD" != "true" ]]; then
+    install_args+=(--no-source-database-download)
+  fi
+  if [[ "$DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER" != "true" ]]; then
+    install_args+=(--no-source-database-update-timer)
   fi
 
   log "Installing DNS Worker on ${listen_addr}..."
@@ -450,7 +462,10 @@ while [[ $# -gt 0 ]]; do
     --dns-worker-udp-response-size) DNS_WORKER_UDP_RESPONSE_SIZE="$2"; shift 2 ;;
     --dns-worker-repo) DNS_WORKER_REPO="$2"; shift 2 ;;
     --dns-worker-source-ref) DNS_WORKER_SOURCE_REF="$2"; shift 2 ;;
-    --dns-worker-no-geoip-download) DNS_WORKER_GEOIP_DOWNLOAD="false"; shift ;;
+    --dns-worker-source-database-profile) DNS_WORKER_SOURCE_DATABASE_PROFILE="$2"; shift 2 ;;
+    --dns-worker-no-source-database-download) DNS_WORKER_SOURCE_DATABASE_DOWNLOAD="false"; shift ;;
+    --dns-worker-no-source-database-update-timer) DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER="false"; shift ;;
+    --dns-worker-no-geoip-download) DNS_WORKER_SOURCE_DATABASE_DOWNLOAD="false"; shift ;;
     -h|--help) usage ;;
     *) die "unknown option: $1" ;;
   esac

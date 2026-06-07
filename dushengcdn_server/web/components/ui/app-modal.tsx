@@ -56,15 +56,15 @@ export function AppModal({
   }
 
   return (
-    <div className='fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6' role='dialog' aria-modal='true' aria-label={title}>
+    <div className='dashboard-modal-overlay fixed inset-0 z-50 flex items-center justify-center px-4 py-6' role='dialog' aria-modal='true' aria-label={title}>
       <button type='button' className='absolute inset-0 cursor-default' onClick={onClose} aria-label='关闭弹窗' />
       <div
         className={cn(
-          'relative flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-[28px] border border-[var(--border-default)] bg-[var(--surface-panel)] shadow-2xl',
+          'dashboard-modal-glass relative flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-[28px] border border-[var(--border-default)] shadow-2xl',
           sizeClassNameMap[size],
         )}
       >
-        <div className='flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-6 py-5'>
+        <div className='dashboard-modal-header flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-6 py-5'>
           <div className='space-y-2'>
             <h2 className='text-xl font-semibold text-[var(--foreground-primary)]'>{title}</h2>
             {description ? (
@@ -80,8 +80,8 @@ export function AppModal({
             ×
           </button>
         </div>
-        <div className='min-h-0 flex-1 overflow-y-auto px-6 py-6'>{children}</div>
-        {footer ? <div className='border-t border-[var(--border-default)] px-6 py-5'>{footer}</div> : null}
+        <div className='dashboard-modal-body min-h-0 flex-1 overflow-y-auto px-6 py-6'>{children}</div>
+        {footer ? <div className='dashboard-modal-footer border-t border-[var(--border-default)] px-6 py-5'>{footer}</div> : null}
       </div>
     </div>
   );

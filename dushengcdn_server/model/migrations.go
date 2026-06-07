@@ -2120,6 +2120,28 @@ func validateDatabaseSchemaV34(db *gorm.DB, backend string) error {
 
 // migrateV35 adds DNS Worker source database capability fields.
 func migrateV35(db *gorm.DB, backend string) error {
+	if backend == "postgres" {
+		for _, column := range []struct {
+			name       string
+			definition string
+		}{
+			{name: "asn_database_path", definition: "varchar(512) NOT NULL DEFAULT ''"},
+			{name: "asn_last_error", definition: "text NOT NULL DEFAULT ''"},
+			{name: "geo_ip_database_type", definition: "varchar(128) NOT NULL DEFAULT ''"},
+			{name: "asn_database_type", definition: "varchar(128) NOT NULL DEFAULT ''"},
+			{name: "geo_ip_country_enabled", definition: "boolean NOT NULL DEFAULT false"},
+			{name: "geo_ip_asn_enabled", definition: "boolean NOT NULL DEFAULT false"},
+			{name: "geo_ip_operator_enabled", definition: "boolean NOT NULL DEFAULT false"},
+			{name: "operator_cidr_database_path", definition: "varchar(512) NOT NULL DEFAULT ''"},
+			{name: "operator_cidr_last_error", definition: "text NOT NULL DEFAULT ''"},
+		} {
+			sql := fmt.Sprintf(`ALTER TABLE "dns_workers" ADD COLUMN IF NOT EXISTS "%s" %s`, column.name, column.definition)
+			if err := db.Exec(sql).Error; err != nil {
+				return fmt.Errorf("add dns_workers.%s column failed: %w", column.name, err)
+			}
+		}
+		return nil
+	}
 	return applyCurrentSchema(db, backend)
 }
 

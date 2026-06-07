@@ -201,7 +201,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
   --token YOUR_DNS_WORKER_TOKEN
 ```
 
-脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，保存本地快照缓存，并下载 Country MMDB 到 `data/geoip/GeoLite2-Country.mmdb` 供国家代码调度使用。也可以使用 Docker 方式：
+脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，保存本地快照缓存，并按 `--source-database-profile full` 下载 Country MMDB、ASN MMDB 和 gaoyifan/china-operator-ip 运营商 CIDR 到响应端本地。DNS 查询路径只读响应端本地文件；GitHub 下载失败时会回退到面板服务器端的来源库镜像。也可以使用 Docker 方式：
 
 ```bash
 DUSHENGCDN_VERSION=v1.0.0
@@ -215,16 +215,19 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
-如果需要按国家代码匹配节点池，再额外挂载本地 Country MMDB：
+如果需要按国家代码、ASN 或中国运营商匹配节点池，再额外挂载本地来源库：
 
 ```bash
-  -v /path/to/GeoLite2-Country.mmdb:/geoip/GeoLite2-Country.mmdb:ro \
+  -v /path/to/geoip:/geoip:ro \
+  -v /path/to/operator-cidr:/operator-cidr:ro \
   -e DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=/geoip/GeoLite2-Country.mmdb \
+  -e DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=/geoip/GeoLite2-ASN.mmdb \
+  -e DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=/operator-cidr \
 ```
 
-暂时只使用来源 CIDR 或全局调度时可以先省略 GeoIP。
+暂时只使用来源 CIDR 或全局调度时可以先省略来源库。要减小体积可安装时加 `--source-database-profile operator` 只保留 gaoyifan 运营商 CIDR，或用 `country`/`asn` 只保留单类 MMDB；完全不用来源库时用 `--source-database-profile none`。
 
-然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「负载均衡」里把 `解析模式` 切换为 `本地自建解析`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。Worker 默认按来源 IP 限制查询速率，并对超大 UDP 响应设置 TC 位回退 TCP；多节点智能解析节点池可按来源 CIDR 或国家代码匹配不同池。Worker 上报心跳后，左侧「本地自建解析」会展示查询趋势、SERVFAIL/NXDOMAIN 趋势和快照一致性告警，便于确认实时 GSLB 与多 Worker 快照状态。
+然后在注册商处把需要托管的域名 NS 委派到 DNS Worker，并在网站详情「负载均衡」里把 `解析模式` 切换为 `本地自建解析`、选择对应 Zone。生产环境建议至少部署两个 Worker，并同时放行 UDP/TCP `53`。Worker 默认按来源 IP 限制查询速率，并对超大 UDP 响应设置 TC 位回退 TCP；多节点智能解析节点池可按来源 CIDR、国家代码、ASN 或运营商匹配不同池。Worker 上报心跳后，左侧「本地自建解析」会展示查询趋势、SERVFAIL/NXDOMAIN 趋势、快照一致性告警和来源库能力。面板「设置」里的「DNS 源库镜像」可以手动刷新 gaoyifan/GeoLite2 镜像；面板和响应端也都会每 7 天自动更新并清理旧文件。
 
 ## 6. 验证是否成功
 

@@ -139,6 +139,29 @@ func TestBuildLatestServerReleaseView(t *testing.T) {
 	}
 }
 
+func TestBuildLatestServerReleaseViewAutoDisabledStillReportsOnlineSupport(t *testing.T) {
+	originalVersion := common.Version
+	originalAutoUpgrade := common.ServerAutoUpgradeEnabled
+	common.Version = "v0.4.0"
+	common.ServerAutoUpgradeEnabled = false
+	t.Cleanup(func() {
+		common.Version = originalVersion
+		common.ServerAutoUpgradeEnabled = originalAutoUpgrade
+		resetServerUpgradeTestState(t)
+	})
+
+	view := buildLatestServerReleaseView(&githubReleaseResponse{
+		TagName: "v0.5.0",
+	}, ReleaseChannelStable)
+
+	if view.AutomaticUpgradeEnabled {
+		t.Fatal("expected automatic upgrade flag to remain disabled")
+	}
+	if view.UpgradeSupported != (runtime.GOOS != "windows") {
+		t.Fatalf("expected online upgrade support to depend on platform, got %v", view.UpgradeSupported)
+	}
+}
+
 func TestBuildLatestServerReleaseViewDevBuild(t *testing.T) {
 	originalVersion := common.Version
 	common.Version = "dev"
@@ -541,19 +564,44 @@ func TestBuildLatestServerReleaseViewIncludesUpgradeLogs(t *testing.T) {
 	}
 }
 
-func TestScheduleServerUpgradeUsesDownloadedBinaryValidation(t *testing.T) {
+func TestScheduleServerUpgradeFetchesReleaseWhenAutoDisabled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online server self-upgrade is not supported on Windows")
+	}
+
 	originalAutoUpgrade := common.ServerAutoUpgradeEnabled
+	originalVersion := common.Version
+	originalClient := UpdateHTTPClientForTest()
+	common.Version = "v0.4.0"
 	common.ServerAutoUpgradeEnabled = false
+	requests := 0
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"tag_name":"v0.5.0","assets":[]}`)),
+			}, nil
+		}),
+	})
 	t.Cleanup(func() {
+		common.Version = originalVersion
 		common.ServerAutoUpgradeEnabled = originalAutoUpgrade
+		SetUpdateHTTPClientForTest(originalClient)
+		resetServerUpgradeTestState(t)
 	})
 
 	_, err := ScheduleServerUpgrade("stable")
 	if err == nil {
-		t.Fatal("expected automatic release upgrade to be disabled")
+		t.Fatal("expected release validation to reject the incomplete test package")
 	}
-	if !strings.Contains(err.Error(), "自动升级默认关闭") {
-		t.Fatalf("unexpected error: %v", err)
+	if strings.Contains(err.Error(), "自动升级默认关闭") {
+		t.Fatalf("manual upgrade request was blocked by automatic upgrade flag: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("expected manual upgrade request to fetch release metadata once, got %d", requests)
 	}
 }
 

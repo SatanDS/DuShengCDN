@@ -123,6 +123,17 @@ func TestRunDatabaseAutoCleanupOnceDeletesAllObservabilityTargets(t *testing.T) 
 	}).Error; err != nil {
 		t.Fatalf("seed request report: %v", err)
 	}
+	if err := model.DB.Create(&model.DNSQueryRollup{
+		WindowStart:   now.Add(-48 * time.Hour),
+		WindowMinutes: 1,
+		WorkerID:      "worker-a",
+		QName:         "example.com.",
+		QType:         "A",
+		RCode:         "NOERROR",
+		QueryCount:    42,
+	}).Error; err != nil {
+		t.Fatalf("seed dns query rollup: %v", err)
+	}
 
 	previousEnabled := common.DatabaseAutoCleanupEnabled
 	previousRetentionDays := common.DatabaseAutoCleanupRetentionDays
@@ -137,7 +148,7 @@ func TestRunDatabaseAutoCleanupOnceDeletesAllObservabilityTargets(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunDatabaseAutoCleanupOnce failed: %v", err)
 	}
-	if summary == nil || len(summary.Results) != 3 {
+	if summary == nil || len(summary.Results) != 4 {
 		t.Fatalf("unexpected auto cleanup summary: %+v", summary)
 	}
 
@@ -161,5 +172,12 @@ func TestRunDatabaseAutoCleanupOnceDeletesAllObservabilityTargets(t *testing.T) 
 	}
 	if len(requestReports) != 0 {
 		t.Fatalf("expected auto cleanup to delete request reports, got %+v", requestReports)
+	}
+	var rollupCount int64
+	if err := model.DB.Model(&model.DNSQueryRollup{}).Count(&rollupCount).Error; err != nil {
+		t.Fatalf("count dns query rollups: %v", err)
+	}
+	if rollupCount != 0 {
+		t.Fatalf("expected auto cleanup to delete dns query rollups, got %d", rollupCount)
 	}
 }

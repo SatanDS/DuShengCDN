@@ -39,6 +39,7 @@ import {
   installCommercialLicense,
   issueCommercialLicense,
   lookupGeoIP,
+  refreshDNSSourceDatabaseMirror,
   restoreCommercialLicense,
   revokeCommercialLicense,
   rotateBootstrapToken,
@@ -1179,6 +1180,67 @@ export function SettingsPage() {
     );
   };
 
+  const renderDNSSourceDatabaseMirrorCard = () => (
+    <AppCard
+      title="DNS 源库镜像"
+      description="在面板服务器端刷新 gaoyifan/china-operator-ip、GeoLite2-ASN 与 GeoLite2-Country 的本地镜像，供 DNS 响应端 GitHub 下载失败时回退使用。"
+      action={
+        <SecondaryButton
+          type="button"
+          onClick={() =>
+            void runBusyAction(
+              'dns-source-database-refresh',
+              async () => {
+                const result = await refreshDNSSourceDatabaseMirror();
+                setFeedback({
+                  tone: result.started ? 'success' : 'info',
+                  message: result.message,
+                });
+              },
+              '刷新 DNS 源库镜像',
+            )
+          }
+          disabled={busyKey === 'dns-source-database-refresh'}
+        >
+          {busyKey === 'dns-source-database-refresh'
+            ? '触发中...'
+            : '刷新源库镜像'}
+        </SecondaryButton>
+      }
+    >
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+          <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+            运营商库
+          </p>
+          <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
+            gaoyifan/china-operator-ip
+          </p>
+        </div>
+        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+          <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+            ASN 库
+          </p>
+          <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
+            GeoLite2-ASN
+          </p>
+        </div>
+        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+          <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+            Country 库
+          </p>
+          <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
+            GeoLite2-Country
+          </p>
+        </div>
+      </div>
+      <p className="mt-4 text-sm leading-6 text-[var(--foreground-secondary)]">
+        面板启动时如果没有镜像会自动预热一次，之后每 7 天自动刷新；DNS
+        响应端安装脚本也会创建 7 天更新定时器。
+      </p>
+    </AppCard>
+  );
+
   const renderTabContent = () => {
     if (profileQuery.isLoading || publicStatusQuery.isLoading) {
       return <LoadingState />;
@@ -2196,6 +2258,12 @@ export function SettingsPage() {
                   description:
                     '清理 node_request_reports，影响请求量、错误量与来源聚合展示。',
                 },
+                {
+                  target: 'dns_query_rollups' as const,
+                  label: 'DNS 查询聚合',
+                  description:
+                    '清理 dns_query_rollups，影响本地自建解析查询量、响应码和来源作用域趋势。',
+                },
               ].map((item) => (
                 <div
                   key={item.target}
@@ -2227,6 +2295,8 @@ export function SettingsPage() {
               ))}
             </div>
           </AppCard>
+
+          {renderDNSSourceDatabaseMirrorCard()}
         </div>
       );
     }
