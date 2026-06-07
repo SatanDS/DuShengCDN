@@ -9,7 +9,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/dushengcdn-dns-worker"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
-RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__}"
+RELEASE_SIGNATURE_PUBLIC_KEY="__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__"
 SOURCE_REF="${SOURCE_REF:-main}"
 ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
 RELEASE_CHANNEL="${DUSHENGCDN_DNS_WORKER_RELEASE_CHANNEL:-stable}"
@@ -628,7 +628,10 @@ verify_release_signature() {
   local signature_file="$4"
   local public_key key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len verify_log
 
-  public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-$RELEASE_SIGNATURE_PUBLIC_KEY}"
+  public_key="$RELEASE_SIGNATURE_PUBLIC_KEY"
+  if [[ "$public_key" == "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]]; then
+    public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-}"
+  fi
   [[ -n "$tag" && -n "$asset" && -n "$checksum" ]] || return 1
   [[ -n "$public_key" && "$public_key" != "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]] || return 1
 
