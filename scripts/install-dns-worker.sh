@@ -626,14 +626,18 @@ verify_release_signature() {
   local asset="$2"
   local checksum="$3"
   local signature_file="$4"
-  local public_key key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len verify_log
+  local public_key placeholder key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len verify_log
 
+  placeholder="__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC""_KEY__"
   public_key="$RELEASE_SIGNATURE_PUBLIC_KEY"
-  if [[ "$public_key" == "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]]; then
+  if [[ "$public_key" == "$placeholder" ]]; then
     public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-}"
   fi
   [[ -n "$tag" && -n "$asset" && -n "$checksum" ]] || return 1
-  [[ -n "$public_key" && "$public_key" != "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]] || return 1
+  if [[ -z "$public_key" || "$public_key" == "$placeholder" ]]; then
+    log "Release signature public key is not configured."
+    return 1
+  fi
 
   key_b64="$(base64_with_padding "$public_key")" || return 1
   sig_text="$(awk 'NF { print $1; exit }' "$signature_file")"
