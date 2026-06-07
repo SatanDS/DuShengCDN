@@ -236,7 +236,7 @@ export function DrawerContent({
         aria-labelledby={ariaLabel ? undefined : titleId}
         aria-describedby={descriptionId}
         className={cn(
-          'absolute flex w-full flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-panel)] shadow-2xl',
+          'dashboard-drawer-glass absolute flex w-full flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-panel)] shadow-2xl',
           positionClassName,
           className,
         )}

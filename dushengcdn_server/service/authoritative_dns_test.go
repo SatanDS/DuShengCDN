@@ -2796,6 +2796,45 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 }
 
+func TestUpdateDNSWorkerRemarkIsReturnedInHealthSummary(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:   "ns1",
+		Remark: "initial remark",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if worker.Remark != "initial remark" {
+		t.Fatalf("expected initial remark in create view, got %+v", worker)
+	}
+	updated, err := UpdateAuthoritativeDNSWorker(worker.ID, DNSWorkerMutationInput{
+		Remark: "  hk dns response  ",
+	})
+	if err != nil {
+		t.Fatalf("UpdateAuthoritativeDNSWorker: %v", err)
+	}
+	if updated.Remark != "hk dns response" {
+		t.Fatalf("expected trimmed remark in update view, got %+v", updated)
+	}
+	if _, err := UpdateAuthoritativeDNSWorker(worker.ID, DNSWorkerMutationInput{
+		Remark: strings.Repeat("x", 256),
+	}); err == nil {
+		t.Fatal("expected overlong remark to fail")
+	}
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 24})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 {
+		t.Fatalf("expected one worker in health summary, got %+v", summary.WorkerHealth.Workers)
+	}
+	if summary.WorkerHealth.Workers[0].Remark != "hk dns response" {
+		t.Fatalf("expected remark in health summary, got %+v", summary.WorkerHealth.Workers[0])
+	}
+}
+
 func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -2846,6 +2885,124 @@ func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerManualUpdateRequestDispatchesViaMatchingAgentWS(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:          "node-dns-worker-host",
+		Name:            "edge-dns-host",
+		IP:              "8.8.4.4",
+		PublicIPs:       `["8.8.4.4"]`,
+		AgentToken:      "agent-token",
+		AgentVersion:    "v1.0.0",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+	wsClient := RegisterAgentWSClient(node.NodeID)
+	defer UnregisterAgentWSClient(wsClient)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-agent", PublicAddress: "8.8.4.4:53"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	requested, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{})
+	if err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	if requested.UpdateDispatchMode != "agent_ws" {
+		t.Fatalf("expected agent ws dispatch mode, got %+v", requested)
+	}
+	if requested.UpdateDispatchedNodeID != node.NodeID {
+		t.Fatalf("expected dispatch node id %s, got %+v", node.NodeID, requested)
+	}
+
+	select {
+	case message := <-wsClient.Messages():
+		if message.Type != AgentWSMessageTypeDNSWorkerUpdate {
+			t.Fatalf("expected dns worker update ws message, got %s", message.Type)
+		}
+		payload, ok := message.Payload.(*AgentDNSWorkerUpdateRequest)
+		if !ok {
+			t.Fatalf("expected AgentDNSWorkerUpdateRequest payload, got %T", message.Payload)
+		}
+		if payload.WorkerID != worker.WorkerID || payload.Channel != "stable" || payload.Repo == "" {
+			t.Fatalf("unexpected dns worker update payload: %+v", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected dns worker update websocket message")
+	}
+}
+
+func TestDNSWorkerManualUpdateRequestFallsBackWhenNoMatchingAgent(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-no-agent", PublicAddress: "9.9.9.9:53"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	requested, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{})
+	if err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	if requested.UpdateDispatchMode != "worker_heartbeat" {
+		t.Fatalf("expected worker heartbeat fallback, got %+v", requested)
+	}
+}
+
+func TestDNSWorkerManualUpdateRequestMatchesAgentByHeartbeatRemoteIP(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:          "node-dns-worker-remote-ip",
+		Name:            "edge-remote-ip",
+		IP:              "1.1.1.1",
+		PublicIPs:       `["1.1.1.1"]`,
+		AgentToken:      "agent-token",
+		AgentVersion:    "v1.0.0",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+	wsClient := RegisterAgentWSClient(node.NodeID)
+	defer UnregisterAgentWSClient(wsClient)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-remote-ip", PublicAddress: ":53"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	if _, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status:   dnsWorkerStatusOnline,
+		RemoteIP: "1.1.1.1",
+	}); err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+
+	requested, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{})
+	if err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	if requested.UpdateDispatchMode != "agent_ws" || requested.UpdateDispatchedNodeID != node.NodeID {
+		t.Fatalf("expected agent ws dispatch via heartbeat remote ip, got %+v", requested)
+	}
+	select {
+	case message := <-wsClient.Messages():
+		if message.Type != AgentWSMessageTypeDNSWorkerUpdate {
+			t.Fatalf("expected dns worker update ws message, got %s", message.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected dns worker update websocket message")
+	}
+}
+
 func TestDNSWorkerManualUpdateRequestWaitsForSupportedHeartbeat(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -2884,6 +3041,89 @@ func TestDNSWorkerManualUpdateRequestWaitsForSupportedHeartbeat(t *testing.T) {
 	}
 	if reloaded.UpdateSupported || reloaded.LastUpdateSupportedAt != nil {
 		t.Fatalf("expected update support to remain false in database, got %+v", reloaded)
+	}
+}
+
+func TestDeleteDNSWorkerDeliversUninstallOnHeartbeatAndRemovesRecord(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	supportHeartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:            "v1.0.0",
+		Status:             dnsWorkerStatusOnline,
+		UninstallSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat support: %v", err)
+	}
+	if !supportHeartbeat.Worker.UninstallSupported || supportHeartbeat.Worker.LastUninstallSupportedAt == nil {
+		t.Fatalf("expected heartbeat view to record uninstall support, got %+v", supportHeartbeat.Worker)
+	}
+	if err := DeleteAuthoritativeDNSWorker(worker.ID); err != nil {
+		t.Fatalf("DeleteAuthoritativeDNSWorker: %v", err)
+	}
+	workers, err := ListAuthoritativeDNSWorkers()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSWorkers: %v", err)
+	}
+	if len(workers) != 0 {
+		t.Fatalf("expected uninstall-requested worker to be hidden, got %+v", workers)
+	}
+	marked, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if !marked.UninstallRequested || marked.UninstallRequestedAt == nil {
+		t.Fatalf("expected uninstall request to be persisted, got %+v", marked)
+	}
+	authenticated, err = AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:            "v1.0.0",
+		Status:             dnsWorkerStatusOnline,
+		UpdateSupported:    true,
+		UninstallSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if !heartbeat.Settings.UninstallNow {
+		t.Fatalf("expected heartbeat to deliver uninstall command, got %+v", heartbeat.Settings)
+	}
+	if _, err := model.GetDNSWorkerByID(worker.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected DNS worker record to be removed after uninstall heartbeat, got err=%v", err)
+	}
+	if _, err := AuthenticateDNSWorkerToken(worker.Token); err == nil {
+		t.Fatal("expected token to be invalid after uninstall heartbeat")
+	}
+}
+
+func TestDeleteDNSWorkerRequiresUninstallSupport(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	err = DeleteAuthoritativeDNSWorker(worker.ID)
+	if err == nil || !strings.Contains(err.Error(), "不支持远程卸载") {
+		t.Fatalf("expected unsupported uninstall error, got %v", err)
+	}
+	workers, err := ListAuthoritativeDNSWorkers()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSWorkers: %v", err)
+	}
+	if len(workers) != 1 || workers[0].ID != worker.ID {
+		t.Fatalf("expected unsupported worker to remain visible, got %+v", workers)
 	}
 }
 

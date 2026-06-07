@@ -52,13 +52,24 @@ type DNSSourceDatabaseMirrorFile struct {
 }
 
 type DNSSourceDatabaseMirrorStatus struct {
-	Available    bool       `json:"available"`
-	UpdatedAt    *time.Time `json:"updated_at"`
-	SourceCount  int        `json:"source_count"`
-	FileCount    int        `json:"file_count"`
-	TotalSize    int64      `json:"total_size"`
-	MissingKinds []string   `json:"missing_kinds"`
-	Message      string     `json:"message"`
+	Available    bool                                  `json:"available"`
+	UpdatedAt    *time.Time                            `json:"updated_at"`
+	SourceCount  int                                   `json:"source_count"`
+	FileCount    int                                   `json:"file_count"`
+	TotalSize    int64                                 `json:"total_size"`
+	MissingKinds []string                              `json:"missing_kinds"`
+	Sources      []DNSSourceDatabaseMirrorSourceStatus `json:"sources"`
+	Message      string                                `json:"message"`
+}
+
+type DNSSourceDatabaseMirrorSourceStatus struct {
+	Kind      string     `json:"kind"`
+	Label     string     `json:"label"`
+	Name      string     `json:"name"`
+	Available bool       `json:"available"`
+	UpdatedAt *time.Time `json:"updated_at"`
+	FileCount int        `json:"file_count"`
+	TotalSize int64      `json:"total_size"`
 }
 
 type dnsSourceDatabaseSource struct {
@@ -143,20 +154,22 @@ func GetDNSSourceDatabaseMirrorManifest() (*DNSSourceDatabaseMirrorManifest, err
 }
 
 func GetDNSSourceDatabaseMirrorStatus() DNSSourceDatabaseMirrorStatus {
-	manifest, err := GetDNSSourceDatabaseMirrorManifest()
-	if err != nil {
-		return DNSSourceDatabaseMirrorStatus{
-			Available:    false,
-			MissingKinds: []string{dnsSourceDatabaseKindOperator, dnsSourceDatabaseKindASN, dnsSourceDatabaseKindCountry},
-			Message:      "面板端暂未完成源库备份。",
-		}
-	}
-
 	expectedKinds := []string{
 		dnsSourceDatabaseKindOperator,
 		dnsSourceDatabaseKindASN,
 		dnsSourceDatabaseKindCountry,
 	}
+
+	manifest, err := GetDNSSourceDatabaseMirrorManifest()
+	if err != nil {
+		return DNSSourceDatabaseMirrorStatus{
+			Available:    false,
+			MissingKinds: append([]string{}, expectedKinds...),
+			Sources:      buildDNSSourceDatabaseMirrorSourceStatuses(nil, expectedKinds),
+			Message:      "面板端暂未完成源库备份。",
+		}
+	}
+
 	status := DNSSourceDatabaseMirrorStatus{
 		Available:    true,
 		UpdatedAt:    &manifest.UpdatedAt,
@@ -176,10 +189,60 @@ func GetDNSSourceDatabaseMirrorStatus() DNSSourceDatabaseMirrorStatus {
 			status.TotalSize += file.Size
 		}
 	}
+	status.Sources = buildDNSSourceDatabaseMirrorSourceStatuses(manifest, expectedKinds)
 	if !status.Available {
 		status.Message = "面板端源库备份不完整。"
 	}
 	return status
+}
+
+func buildDNSSourceDatabaseMirrorSourceStatuses(manifest *DNSSourceDatabaseMirrorManifest, expectedKinds []string) []DNSSourceDatabaseMirrorSourceStatus {
+	statuses := make([]DNSSourceDatabaseMirrorSourceStatus, 0, len(expectedKinds))
+	for _, kind := range expectedKinds {
+		item := DNSSourceDatabaseMirrorSourceStatus{
+			Kind:  kind,
+			Label: dnsSourceDatabaseKindLabel(kind),
+			Name:  dnsSourceDatabaseKindDisplayName(kind),
+		}
+		if manifest != nil {
+			if entry, ok := manifest.Sources[kind]; ok && len(entry.Files) > 0 {
+				item.Available = true
+				item.UpdatedAt = &entry.UpdatedAt
+				item.FileCount = len(entry.Files)
+				for _, file := range entry.Files {
+					item.TotalSize += file.Size
+				}
+			}
+		}
+		statuses = append(statuses, item)
+	}
+	return statuses
+}
+
+func dnsSourceDatabaseKindLabel(kind string) string {
+	switch kind {
+	case dnsSourceDatabaseKindOperator:
+		return "运营商库"
+	case dnsSourceDatabaseKindASN:
+		return "ASN 库"
+	case dnsSourceDatabaseKindCountry:
+		return "Country 库"
+	default:
+		return kind
+	}
+}
+
+func dnsSourceDatabaseKindDisplayName(kind string) string {
+	switch kind {
+	case dnsSourceDatabaseKindOperator:
+		return "gaoyifan/china-operator-ip"
+	case dnsSourceDatabaseKindASN:
+		return "GeoLite2-ASN"
+	case dnsSourceDatabaseKindCountry:
+		return "GeoLite2-Country"
+	default:
+		return kind
+	}
 }
 
 func OpenDNSSourceDatabaseMirrorFile(kind string, name string) (*os.File, DNSSourceDatabaseMirrorFile, error) {

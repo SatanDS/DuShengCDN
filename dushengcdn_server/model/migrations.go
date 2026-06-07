@@ -2242,6 +2242,111 @@ func validateDatabaseSchemaV37(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV38 adds DNS Worker operator-facing remarks.
+func migrateV38(db *gorm.DB, backend string) error {
+	if backend == "postgres" {
+		sql := `ALTER TABLE "dns_workers" ADD COLUMN IF NOT EXISTS "remark" varchar(255) NOT NULL DEFAULT ''`
+		if err := db.Exec(sql).Error; err != nil {
+			return fmt.Errorf("add dns_workers.remark column failed: %w", err)
+		}
+		return nil
+	}
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV38(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV37(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasColumn(&DNSWorker{}, "remark") {
+		return fmt.Errorf("column dns_workers.remark is missing")
+	}
+	_ = backend
+	return nil
+}
+
+// migrateV39 adds DNS Worker remote uninstall request state.
+func migrateV39(db *gorm.DB, backend string) error {
+	if backend == "postgres" {
+		for _, column := range []struct {
+			name       string
+			definition string
+		}{
+			{name: "uninstall_supported", definition: "boolean NOT NULL DEFAULT false"},
+			{name: "last_uninstall_supported_at", definition: "timestamptz"},
+			{name: "uninstall_requested", definition: "boolean NOT NULL DEFAULT false"},
+			{name: "uninstall_requested_at", definition: "timestamptz"},
+		} {
+			sql := fmt.Sprintf(`ALTER TABLE "dns_workers" ADD COLUMN IF NOT EXISTS "%s" %s`, column.name, column.definition)
+			if err := db.Exec(sql).Error; err != nil {
+				return fmt.Errorf("add dns_workers.%s column failed: %w", column.name, err)
+			}
+		}
+		return nil
+	}
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV39(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV38(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{
+		"uninstall_supported",
+		"last_uninstall_supported_at",
+		"uninstall_requested",
+		"uninstall_requested_at",
+	} {
+		if !db.Migrator().HasColumn(&DNSWorker{}, column) {
+			return fmt.Errorf("column dns_workers.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
+// migrateV40 adds DNS Worker update dispatch diagnostics.
+func migrateV40(db *gorm.DB, backend string) error {
+	if backend == "postgres" {
+		for _, column := range []struct {
+			name       string
+			definition string
+		}{
+			{name: "update_dispatch_mode", definition: "varchar(32) NOT NULL DEFAULT ''"},
+			{name: "update_dispatch_message", definition: "text NOT NULL DEFAULT ''"},
+			{name: "update_dispatched_at", definition: "timestamptz"},
+			{name: "update_dispatched_node_id", definition: "varchar(64) NOT NULL DEFAULT ''"},
+			{name: "last_remote_ip", definition: "varchar(64) NOT NULL DEFAULT ''"},
+		} {
+			sql := fmt.Sprintf(`ALTER TABLE "dns_workers" ADD COLUMN IF NOT EXISTS "%s" %s`, column.name, column.definition)
+			if err := db.Exec(sql).Error; err != nil {
+				return fmt.Errorf("add dns_workers.%s column failed: %w", column.name, err)
+			}
+		}
+		return nil
+	}
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV40(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV39(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{
+		"update_dispatch_mode",
+		"update_dispatch_message",
+		"update_dispatched_at",
+		"update_dispatched_node_id",
+		"last_remote_ip",
+	} {
+		if !db.Migrator().HasColumn(&DNSWorker{}, column) {
+			return fmt.Errorf("column dns_workers.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -2280,6 +2385,9 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 34, toVersion: 35, migrate: migrateV35, validate: validateDatabaseSchemaV35},
 		{fromVersion: 35, toVersion: 36, migrate: migrateV36, validate: validateDatabaseSchemaV36},
 		{fromVersion: 36, toVersion: 37, migrate: migrateV37, validate: validateDatabaseSchemaV37},
+		{fromVersion: 37, toVersion: 38, migrate: migrateV38, validate: validateDatabaseSchemaV38},
+		{fromVersion: 38, toVersion: 39, migrate: migrateV39, validate: validateDatabaseSchemaV39},
+		{fromVersion: 39, toVersion: 40, migrate: migrateV40, validate: validateDatabaseSchemaV40},
 	}
 }
 
@@ -2327,7 +2435,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV37(db, backend)
+		return validateDatabaseSchemaV40(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2343,7 +2451,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV35(db, backend)
+	return validateDatabaseSchemaV40(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2374,7 +2482,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV35(db, backend); err != nil {
+	if err := validateDatabaseSchemaV40(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

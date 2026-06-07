@@ -3,6 +3,9 @@ package dnsworker
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -142,6 +145,7 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		OperatorCIDRDatabasePath: sourceStatus.OperatorCIDRDatabasePath,
 		OperatorCIDRLastError:    sourceStatus.OperatorCIDRLastError,
 		UpdateSupported:          r.Config.UpdateEnabled,
+		UninstallSupported:       r.uninstallSupported(),
 		Rollups:                  rollups,
 		SchedulingStates:         schedulingStates,
 	})
@@ -157,6 +161,7 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 	}
 	if response != nil {
 		r.maybeStartUpdate(response.Settings)
+		r.maybeStartUninstall(response.Settings)
 	}
 	slog.Info(
 		"dns worker heartbeat sent",
@@ -165,4 +170,17 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		"rollups", len(rollups),
 	)
 	return nil
+}
+
+func (r *Runner) uninstallSupported() bool {
+	if r == nil || r.Config == nil {
+		return false
+	}
+	installDir := strings.TrimSpace(r.Config.InstallDir)
+	if installDir == "" {
+		return false
+	}
+	script := filepath.Join(filepath.Clean(installDir), "uninstall-dns-worker.sh")
+	info, err := os.Stat(script)
+	return err == nil && !info.IsDir()
 }

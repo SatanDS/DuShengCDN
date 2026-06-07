@@ -12,6 +12,7 @@ import type {
   DNSWorkerMutationPayload,
   DNSWorkerProbe,
   DNSWorkerProbePayload,
+  DNSWorkerUpdatePayload,
   DNSZoneDelegationCheck,
   DNSZoneItem,
   DNSZoneMutationPayload,
@@ -112,6 +113,13 @@ export function createDNSWorker(payload: DNSWorkerMutationPayload) {
   }).then(normalizeDNSWorker);
 }
 
+export function updateDNSWorker(id: number, payload: DNSWorkerUpdatePayload) {
+  return apiRequest<DNSWorkerItem>(`/dns-workers/${id}/update-info`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then(normalizeDNSWorker);
+}
+
 export function deleteDNSWorker(id: number) {
   return apiRequest<void>(`/dns-workers/${id}/delete`, {
     method: 'POST',
@@ -121,7 +129,7 @@ export function deleteDNSWorker(id: number) {
 export function requestDNSWorkerUpdate(id: number) {
   return apiRequest<DNSWorkerItem>(`/dns-workers/${id}/update`, {
     method: 'POST',
-    body: JSON.stringify({ channel: 'preview' }),
+    body: JSON.stringify({ channel: 'stable' }),
   }).then(normalizeDNSWorker);
 }
 
@@ -173,8 +181,10 @@ function normalizeDNSWorkers(value: DNSWorkerItem[] | null | undefined) {
 function normalizeDNSWorker(worker: DNSWorkerItem) {
   return {
     ...worker,
+    remark: worker.remark ?? '',
     last_probe_results: asArray(worker.last_probe_results),
     probe_status: worker.probe_status || 'unknown',
+    last_remote_ip: worker.last_remote_ip ?? '',
     last_rollup_count: worker.last_rollup_count ?? 0,
     asn_database_path: worker.asn_database_path ?? '',
     asn_last_error: worker.asn_last_error ?? '',
@@ -193,6 +203,14 @@ function normalizeDNSWorker(worker: DNSWorkerItem) {
     update_tag: worker.update_tag ?? '',
     update_supported: Boolean(worker.update_supported),
     last_update_supported_at: worker.last_update_supported_at ?? null,
+    update_dispatch_mode: worker.update_dispatch_mode ?? '',
+    update_dispatch_message: worker.update_dispatch_message ?? '',
+    update_dispatched_at: worker.update_dispatched_at ?? null,
+    update_dispatched_node_id: worker.update_dispatched_node_id ?? '',
+    uninstall_supported: Boolean(worker.uninstall_supported),
+    last_uninstall_supported_at: worker.last_uninstall_supported_at ?? null,
+    uninstall_requested: Boolean(worker.uninstall_requested),
+    uninstall_requested_at: worker.uninstall_requested_at ?? null,
   };
 }
 
@@ -356,6 +374,7 @@ function normalizeDNSWorkerHealthSummary(
     ...health,
     workers: asArray(health.workers).map((worker) => ({
       ...worker,
+      remark: worker.remark ?? '',
       last_probe_results: asArray(worker.last_probe_results),
       probe_status: worker.probe_status || 'unknown',
       last_rollup_count: worker.last_rollup_count ?? 0,
@@ -368,6 +387,7 @@ function normalizeDNSWorkerHealthSummary(
       geoip_operator_enabled: Boolean(worker.geoip_operator_enabled),
       operator_cidr_database_path: worker.operator_cidr_database_path ?? '',
       operator_cidr_last_error: worker.operator_cidr_last_error ?? '',
+      last_remote_ip: worker.last_remote_ip ?? '',
       update_requested: Boolean(worker.update_requested),
       id: worker.id ?? 0,
       update_channel:
@@ -377,6 +397,14 @@ function normalizeDNSWorkerHealthSummary(
       update_tag: worker.update_tag ?? '',
       update_supported: Boolean(worker.update_supported),
       last_update_supported_at: worker.last_update_supported_at ?? null,
+      update_dispatch_mode: worker.update_dispatch_mode ?? '',
+      update_dispatch_message: worker.update_dispatch_message ?? '',
+      update_dispatched_at: worker.update_dispatched_at ?? null,
+      update_dispatched_node_id: worker.update_dispatched_node_id ?? '',
+      uninstall_supported: Boolean(worker.uninstall_supported),
+      last_uninstall_supported_at: worker.last_uninstall_supported_at ?? null,
+      uninstall_requested: Boolean(worker.uninstall_requested),
+      uninstall_requested_at: worker.uninstall_requested_at ?? null,
       node_probes: asArray(worker.node_probes).map((probe) => ({
         ...probe,
         probe_status: probe.probe_status || 'unknown',

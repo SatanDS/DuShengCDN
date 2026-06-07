@@ -1118,7 +1118,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText('响应端故障')).toBeInTheDocument();
     expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
     expect(screen.getByText('edge-site')).toBeInTheDocument();
-    expect(screen.getByText('来源作用域')).toBeInTheDocument();
+    expect(screen.getByText('来源地区')).toBeInTheDocument();
     expect(screen.getByText('香港')).toBeInTheDocument();
     expect(await screen.findByText('查询趋势')).toBeInTheDocument();
     const trendPanel = screen.getByText('查询趋势').parentElement;

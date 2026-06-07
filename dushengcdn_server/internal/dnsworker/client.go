@@ -43,6 +43,7 @@ type HeartbeatInput struct {
 	OperatorCIDRDatabasePath string                    `json:"operator_cidr_database_path"`
 	OperatorCIDRLastError    string                    `json:"operator_cidr_last_error"`
 	UpdateSupported          bool                      `json:"update_supported"`
+	UninstallSupported       bool                      `json:"uninstall_supported"`
 	Rollups                  []QueryRollupPayload      `json:"rollups"`
 	SchedulingStates         []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
@@ -60,6 +61,7 @@ type HeartbeatWorkerInfo struct {
 
 type WorkerSettings struct {
 	UpdateNow     bool   `json:"update_now"`
+	UninstallNow  bool   `json:"uninstall_now"`
 	UpdateRepo    string `json:"update_repo"`
 	UpdateChannel string `json:"update_channel"`
 	UpdateTag     string `json:"update_tag"`

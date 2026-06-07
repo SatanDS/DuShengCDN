@@ -110,15 +110,25 @@ type AgentDNSProbeTarget struct {
 	QueryType     string `json:"query_type"`
 }
 
+type AgentDNSWorkerUpdateRequest struct {
+	WorkerID   string `json:"worker_id"`
+	WorkerName string `json:"worker_name"`
+	Repo       string `json:"repo"`
+	Channel    string `json:"channel"`
+	TagName    string `json:"tag_name,omitempty"`
+	InstallDir string `json:"install_dir,omitempty"`
+}
+
 type ActiveConfigMeta struct {
 	Version  string `json:"version"`
 	Checksum string `json:"checksum"`
 }
 
 type HeartbeatResponse struct {
-	Node          *model.Node       `json:"node"`
-	AgentSettings *AgentSettings    `json:"agent_settings"`
-	ActiveConfig  *ActiveConfigMeta `json:"active_config"`
+	Node             *model.Node                   `json:"node"`
+	AgentSettings    *AgentSettings                `json:"agent_settings"`
+	ActiveConfig     *ActiveConfigMeta             `json:"active_config"`
+	DNSWorkerUpdates []AgentDNSWorkerUpdateRequest `json:"dns_worker_updates,omitempty"`
 }
 
 type NodeView struct {
@@ -195,9 +205,10 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 		return nil, err
 	}
 	return &HeartbeatResponse{
-		Node:          node,
-		AgentSettings: buildAgentSettings(node, updateNow, updateChannel.String(), updateTag, restartOpenrestyNow),
-		ActiveConfig:  activeConfig,
+		Node:             node,
+		AgentSettings:    buildAgentSettings(node, updateNow, updateChannel.String(), updateTag, restartOpenrestyNow),
+		ActiveConfig:     activeConfig,
+		DNSWorkerUpdates: pendingAgentDNSWorkerUpdatesForNode(node),
 	}, nil
 }
 

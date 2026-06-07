@@ -191,6 +191,7 @@ func SetApiRouter(router *gin.Engine) {
 			dnsWorkerAdminRoute.GET("/scheduling-states", controller.GetDNSGSLBSchedulingStates)
 			dnsWorkerAdminRoute.POST("/simulate", controller.SimulateDNSGSLB)
 			dnsWorkerAdminRoute.POST("/", controller.CreateDNSWorker)
+			dnsWorkerAdminRoute.POST("/:id/update-info", controller.UpdateDNSWorker)
 			dnsWorkerAdminRoute.POST("/:id/probe", controller.ProbeDNSWorker)
 			dnsWorkerAdminRoute.POST("/:id/update", controller.RequestDNSWorkerUpdate)
 			dnsWorkerAdminRoute.POST("/:id/delete", controller.DeleteDNSWorker)

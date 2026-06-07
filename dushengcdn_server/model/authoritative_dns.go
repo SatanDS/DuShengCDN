@@ -42,6 +42,7 @@ type DNSWorker struct {
 	ID                       uint       `json:"id" gorm:"primaryKey"`
 	WorkerID                 string     `json:"worker_id" gorm:"uniqueIndex;size:64;not null"`
 	Name                     string     `json:"name" gorm:"size:128;not null"`
+	Remark                   string     `json:"remark" gorm:"size:255;not null;default:''"`
 	Token                    string     `json:"-" gorm:"size:128;index;not null"`
 	PublicAddress            string     `json:"public_address" gorm:"size:255"`
 	Version                  string     `json:"version" gorm:"size:64"`
@@ -50,6 +51,7 @@ type DNSWorker struct {
 	LastSnapshotAt           *time.Time `json:"last_snapshot_at"`
 	LastSeenAt               *time.Time `json:"last_seen_at"`
 	LastHeartbeatAt          *time.Time `json:"last_heartbeat_at" gorm:"index"`
+	LastRemoteIP             string     `json:"last_remote_ip" gorm:"column:last_remote_ip;size:64;not null;default:''"`
 	LastRollupAt             *time.Time `json:"last_rollup_at"`
 	LastRollupCount          int64      `json:"last_rollup_count" gorm:"not null;default:0"`
 	LastError                string     `json:"last_error" gorm:"type:text"`
@@ -70,6 +72,14 @@ type DNSWorker struct {
 	UpdateTag                string     `json:"update_tag" gorm:"size:128;not null;default:''"`
 	UpdateSupported          bool       `json:"update_supported" gorm:"not null;default:false"`
 	LastUpdateSupportedAt    *time.Time `json:"last_update_supported_at"`
+	UpdateDispatchMode       string     `json:"update_dispatch_mode" gorm:"column:update_dispatch_mode;size:32;not null;default:''"`
+	UpdateDispatchMessage    string     `json:"update_dispatch_message" gorm:"column:update_dispatch_message;type:text;not null;default:''"`
+	UpdateDispatchedAt       *time.Time `json:"update_dispatched_at" gorm:"column:update_dispatched_at"`
+	UpdateDispatchedNodeID   string     `json:"update_dispatched_node_id" gorm:"column:update_dispatched_node_id;size:64;not null;default:''"`
+	UninstallSupported       bool       `json:"uninstall_supported" gorm:"not null;default:false"`
+	LastUninstallSupportedAt *time.Time `json:"last_uninstall_supported_at"`
+	UninstallRequested       bool       `json:"uninstall_requested" gorm:"not null;default:false"`
+	UninstallRequestedAt     *time.Time `json:"uninstall_requested_at"`
 	LastProbeAt              *time.Time `json:"last_probe_at"`
 	LastProbeQuery           string     `json:"last_probe_query" gorm:"size:255"`
 	LastProbeResult          string     `json:"last_probe_result" gorm:"type:text;not null;default:'[]'"`

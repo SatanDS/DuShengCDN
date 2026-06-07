@@ -9,7 +9,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/dushengcdn-dns-worker"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
-RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__}"
+RELEASE_SIGNATURE_PUBLIC_KEY="__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__"
 SOURCE_REF="${SOURCE_REF:-main}"
 ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
 RELEASE_CHANNEL="${DUSHENGCDN_DNS_WORKER_RELEASE_CHANNEL:-stable}"
@@ -676,11 +676,18 @@ verify_release_signature() {
   local asset="$2"
   local checksum="$3"
   local signature_file="$4"
-  local public_key key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len
+  local public_key placeholder key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len verify_log
 
-  public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-$RELEASE_SIGNATURE_PUBLIC_KEY}"
+  placeholder="__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC""_KEY__"
+  public_key="$RELEASE_SIGNATURE_PUBLIC_KEY"
+  if [[ "$public_key" == "$placeholder" ]]; then
+    public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-}"
+  fi
   [[ -n "$tag" && -n "$asset" && -n "$checksum" ]] || return 1
-  [[ -n "$public_key" && "$public_key" != "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]] || return 1
+  if [[ -z "$public_key" || "$public_key" == "$placeholder" ]]; then
+    log "Release signature public key is not configured."
+    return 1
+  fi
 
   key_b64="$(base64_with_padding "$public_key")" || return 1
   sig_text="$(awk 'NF { print $1; exit }' "$signature_file")"
@@ -693,30 +700,36 @@ verify_release_signature() {
   pub_der="${verify_dir}/public.der"
   pub_pem="${verify_dir}/public.pem"
   payload="${verify_dir}/payload.txt"
+  verify_log="${verify_dir}/openssl-verify.log"
 
   if ! printf '%s' "$key_b64" | "$OPENSSL_BIN" base64 -d -A > "$pub_raw" 2>/dev/null; then
+    log "Release signature public key is not valid base64."
     rm -rf -- "$verify_dir"
     return 1
   fi
   pub_len="$(wc -c < "$pub_raw" | tr -d '[:space:]')"
   if [[ "$pub_len" != "32" ]]; then
+    log "Release signature public key length is invalid: ${pub_len} bytes."
     rm -rf -- "$verify_dir"
     return 1
   fi
 
   if ! printf '%s' "$sig_b64" | "$OPENSSL_BIN" base64 -d -A > "$sig_raw" 2>/dev/null; then
+    log "Release signature asset is not valid base64."
     rm -rf -- "$verify_dir"
     return 1
   fi
   sig_len="$(wc -c < "$sig_raw" | tr -d '[:space:]')"
   if [[ "$sig_len" != "64" ]]; then
+    log "Release signature asset length is invalid: ${sig_len} bytes."
     rm -rf -- "$verify_dir"
     return 1
   fi
 
   printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00' > "$pub_der"
   cat "$pub_raw" >> "$pub_der"
-  if ! "$OPENSSL_BIN" pkey -pubin -inform DER -in "$pub_der" -out "$pub_pem" >/dev/null 2>&1; then
+  if ! "$OPENSSL_BIN" pkey -pubin -inform DER -in "$pub_der" -out "$pub_pem" >/dev/null 2>"$verify_log"; then
+    log "OpenSSL cannot import the Ed25519 release public key: $(tr '\n' ' ' < "$verify_log" | sed 's/[[:space:]]\+/ /g')"
     rm -rf -- "$verify_dir"
     return 1
   fi
@@ -728,7 +741,11 @@ verify_release_signature() {
     printf '%s\n' "$checksum"
   } > "$payload"
 
-  if ! "$OPENSSL_BIN" pkeyutl -verify -pubin -inkey "$pub_pem" -sigfile "$sig_raw" -rawin -in "$payload" >/dev/null 2>&1; then
+  if ! "$OPENSSL_BIN" pkeyutl -verify -pubin -inkey "$pub_pem" -sigfile "$sig_raw" -rawin -in "$payload" >/dev/null 2>"$verify_log"; then
+    log "OpenSSL release signature verification failed: $(tr '\n' ' ' < "$verify_log" | sed 's/[[:space:]]\+/ /g')"
+    if "$OPENSSL_BIN" version >/dev/null 2>&1; then
+      log "OpenSSL version: $("$OPENSSL_BIN" version 2>/dev/null)"
+    fi
     rm -rf -- "$verify_dir"
     return 1
   fi
@@ -1923,7 +1940,10 @@ UDP_RESPONSE_SIZE="${DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE:-1232}"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
 CHANNEL="${DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL:-stable}"
 TAG="${DUSHENGCDN_DNS_WORKER_UPDATE_TAG:-}"
-RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__}"
+RELEASE_SIGNATURE_PUBLIC_KEY="__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__"
+if [[ "$RELEASE_SIGNATURE_PUBLIC_KEY" == "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]]; then
+  RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-$RELEASE_SIGNATURE_PUBLIC_KEY}"
+fi
 
 if [[ -z "$SERVER_URL" || -z "$TOKEN" ]]; then
   echo "DNS Worker update requires SERVER_URL and TOKEN in ${ENV_FILE}" >&2
@@ -2062,6 +2082,153 @@ UPDATEWORKEREOF
   else
     mv -f "$updater_tmp" "$updater"
     chmod 0755 "$updater"
+  fi
+}
+
+write_dns_worker_uninstaller() {
+  local uninstaller="${INSTALL_DIR}/uninstall-dns-worker.sh"
+  local uninstaller_tmp
+
+  log "Writing DNS Worker uninstaller..."
+  uninstaller_tmp="$(mktemp)"
+  cat > "$uninstaller_tmp" <<'UNINSTALLEREOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_DIR="/opt/dushengcdn-dns-worker"
+SERVICE_NAME="${DUSHENGCDN_DNS_WORKER_SERVICE_NAME:-dushengcdn-dns-worker}"
+SELF_UNINSTALL="false"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+    --service-name) SERVICE_NAME="$2"; shift 2 ;;
+    --self-uninstall) SELF_UNINSTALL="true"; shift ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
+run_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "Error: this operation requires root or sudo." >&2
+    exit 1
+  fi
+}
+
+validate_install_dir() {
+  while [[ "$INSTALL_DIR" != "/" && "$INSTALL_DIR" == */ ]]; do
+    INSTALL_DIR="${INSTALL_DIR%/}"
+  done
+  case "$INSTALL_DIR" in
+    /*) ;;
+    *) echo "Refusing to remove non-absolute install directory: '${INSTALL_DIR}'" >&2; exit 1 ;;
+  esac
+  case "$INSTALL_DIR" in
+    *"/../"*|*/..|*"/./"*|*/.)
+      echo "Refusing to remove non-normalized install directory: '${INSTALL_DIR}'" >&2
+      exit 1
+      ;;
+  esac
+  case "$INSTALL_DIR" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/Applications)
+      echo "Refusing to remove unsafe install directory: '${INSTALL_DIR}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_install_dir
+
+WORKER_BINARY="${INSTALL_DIR}/dushengcdn-dns-worker"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+SOURCE_DATABASE_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}-source-database-update.service"
+SOURCE_DATABASE_TIMER_FILE="/etc/systemd/system/${SERVICE_NAME}-source-database-update.timer"
+SOURCE_DATABASE_TIMER_NAME="${SERVICE_NAME}-source-database-update.timer"
+
+SYSTEMCTL_AVAILABLE="false"
+if command -v systemctl >/dev/null 2>&1; then
+  SYSTEMCTL_AVAILABLE="true"
+fi
+
+echo "Uninstalling DuShengCDN DNS Worker from ${INSTALL_DIR}..."
+
+if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
+  if systemctl is-active --quiet "$SOURCE_DATABASE_TIMER_NAME"; then
+    echo "Stopping source database update timer: ${SOURCE_DATABASE_TIMER_NAME}"
+    run_as_root systemctl stop "$SOURCE_DATABASE_TIMER_NAME" || true
+  fi
+  if systemctl is-enabled --quiet "$SOURCE_DATABASE_TIMER_NAME" >/dev/null 2>&1; then
+    echo "Disabling source database update timer: ${SOURCE_DATABASE_TIMER_NAME}"
+    run_as_root systemctl disable "$SOURCE_DATABASE_TIMER_NAME" >/dev/null 2>&1 || true
+  fi
+  if [[ "$SELF_UNINSTALL" != "true" ]] && systemctl is-active --quiet "$SERVICE_NAME"; then
+    echo "Stopping service: ${SERVICE_NAME}"
+    run_as_root systemctl stop "$SERVICE_NAME"
+  fi
+  if systemctl is-enabled --quiet "$SERVICE_NAME" >/dev/null 2>&1; then
+    echo "Disabling service: ${SERVICE_NAME}"
+    run_as_root systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
+fi
+
+stop_worker_processes() {
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return
+  fi
+  worker_pids="$(pgrep -f "$WORKER_BINARY" || true)"
+  if [[ -n "$worker_pids" ]]; then
+    echo "Stopping DNS Worker process: ${worker_pids}"
+    # shellcheck disable=SC2086
+    run_as_root kill $worker_pids || true
+    sleep 1
+    remaining_worker_pids="$(pgrep -f "$WORKER_BINARY" || true)"
+    if [[ -n "$remaining_worker_pids" ]]; then
+      echo "Force stopping remaining DNS Worker process: ${remaining_worker_pids}"
+      # shellcheck disable=SC2086
+      run_as_root kill -9 $remaining_worker_pids || true
+    fi
+  fi
+}
+
+if [[ "$SELF_UNINSTALL" != "true" ]]; then
+  stop_worker_processes
+fi
+
+for file in "$SERVICE_FILE" "$SOURCE_DATABASE_SERVICE_FILE" "$SOURCE_DATABASE_TIMER_FILE"; do
+  if [[ -f "$file" ]]; then
+    echo "Removing systemd file: ${file}"
+    run_as_root rm -f "$file"
+  fi
+done
+
+if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
+  run_as_root systemctl daemon-reload || true
+  run_as_root systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+  run_as_root systemctl reset-failed "$SOURCE_DATABASE_TIMER_NAME" >/dev/null 2>&1 || true
+fi
+
+if [[ -d "$INSTALL_DIR" ]]; then
+  echo "Removing installation directory: ${INSTALL_DIR}"
+  run_as_root rm -rf -- "$INSTALL_DIR"
+else
+  echo "Installation directory not found, skipping: ${INSTALL_DIR}"
+fi
+
+echo "DuShengCDN DNS Worker uninstall finished."
+if [[ "$SELF_UNINSTALL" == "true" ]]; then
+  stop_worker_processes
+fi
+UNINSTALLEREOF
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root install -m 0755 "$uninstaller_tmp" "$uninstaller"
+    rm -f "$uninstaller_tmp"
+  else
+    mv -f "$uninstaller_tmp" "$uninstaller"
+    chmod 0755 "$uninstaller"
   fi
 }
 
@@ -2272,6 +2439,7 @@ fi
 
 write_source_database_updater
 write_dns_worker_updater
+write_dns_worker_uninstaller
 
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   log "Creating systemd service..."

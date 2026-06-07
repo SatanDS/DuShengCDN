@@ -490,7 +490,7 @@ func decodeGitHubRelease(reader io.Reader) (*githubReleaseResponse, error) {
 func buildLatestServerReleaseView(release *githubReleaseResponse, channel ReleaseChannel) *LatestServerRelease {
 	currentVersion := strings.TrimSpace(common.Version)
 	isDevBuild := currentVersion == "" || strings.EqualFold(currentVersion, "dev")
-	platformUpgradeSupported := !isDevBuild && runtime.GOOS != "windows"
+	platformUpgradeSupported := runtime.GOOS != "windows"
 	hasUpdate := false
 	if release != nil {
 		switch {

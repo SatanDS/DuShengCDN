@@ -58,6 +58,7 @@ type UpdateOptions struct {
 const autoUpdateCheckInterval = 6 * time.Hour
 
 var runSelfUninstallFunc = runSelfUninstall
+var runDNSWorkerUpdateFunc = runDNSWorkerUpdate
 var selfUninstallDelay = 2 * time.Second
 var probeDNSTargetsFunc = dnsprobe.ProbeTargets
 
@@ -190,6 +191,7 @@ func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, start
 		r.recordSyncError(err)
 		slog.Error("agent sync failed", "error", err)
 	}
+	r.handleDNSWorkerUpdates(ctx, heartbeatResult.DNSWorkerUpdates)
 	r.tryRestartOpenresty(ctx)
 	r.tryAutoUpdate(ctx)
 	return changed, nil
@@ -328,6 +330,14 @@ func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WS
 	case protocol.WSMessageTypeUninstallAgent:
 		r.requestSelfUninstall()
 		return false, errors.New("agent uninstall requested by server")
+	case protocol.WSMessageTypeDNSWorkerUpdate:
+		var request protocol.DNSWorkerUpdateRequest
+		if err := json.Unmarshal(message.Payload, &request); err != nil {
+			slog.Debug("agent ws dns worker update decode failed", "error", err)
+			return false, nil
+		}
+		r.handleDNSWorkerUpdate(ctx, request)
+		return false, nil
 	case protocol.WSMessageTypeCacheOperation:
 		var operation protocol.CacheOperation
 		if err := json.Unmarshal(message.Payload, &operation); err != nil {
@@ -368,6 +378,182 @@ func (r *Runner) handleCacheOperation(ctx context.Context, operation protocol.Ca
 	default:
 		slog.Warn("agent cache operation action is unsupported", "operation_id", operation.OperationID, "action", operation.Action)
 	}
+}
+
+func (r *Runner) handleDNSWorkerUpdate(ctx context.Context, request protocol.DNSWorkerUpdateRequest) {
+	if err := runDNSWorkerUpdateFunc(ctx, request); err != nil {
+		slog.Error("agent dns worker update failed",
+			"worker_id", strings.TrimSpace(request.WorkerID),
+			"worker_name", strings.TrimSpace(request.WorkerName),
+			"error", err,
+		)
+		return
+	}
+	slog.Info("agent dns worker update completed",
+		"worker_id", strings.TrimSpace(request.WorkerID),
+		"worker_name", strings.TrimSpace(request.WorkerName),
+	)
+}
+
+func (r *Runner) handleDNSWorkerUpdates(ctx context.Context, requests []protocol.DNSWorkerUpdateRequest) {
+	for _, request := range requests {
+		r.handleDNSWorkerUpdate(ctx, request)
+	}
+}
+
+func runDNSWorkerUpdate(ctx context.Context, request protocol.DNSWorkerUpdateRequest) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("DNS Worker remote update is only supported on Linux")
+	}
+	if runningInContainer() {
+		return fmt.Errorf("Agent is running in a container; refusing to modify host DNS Worker")
+	}
+	if !commandExists("bash") {
+		return fmt.Errorf("bash is required to run DNS Worker installer")
+	}
+	if !commandExists("curl") {
+		return fmt.Errorf("curl is required to download DNS Worker installer")
+	}
+	installDir := strings.TrimSpace(request.InstallDir)
+	if installDir == "" {
+		installDir = "/opt/dushengcdn-dns-worker"
+	}
+	installDir, err := safeDNSWorkerInstallDir(installDir)
+	if err != nil {
+		return err
+	}
+	envFile := filepath.Join(installDir, "dns-worker.env")
+	if _, err := os.Stat(envFile); err != nil {
+		return fmt.Errorf("DNS Worker env file is not available at %s: %w", envFile, err)
+	}
+	repo := strings.TrimSpace(request.Repo)
+	if repo == "" {
+		repo = "SatanDS/SatanDS-DuShengCDN-releases"
+	}
+	if !isSafeGitHubRepo(repo) {
+		return fmt.Errorf("DNS Worker release repo is invalid: %s", repo)
+	}
+	channel := strings.ToLower(strings.TrimSpace(request.Channel))
+	if channel != "preview" {
+		channel = "stable"
+	}
+	tagName := strings.TrimSpace(request.TagName)
+	if tagName != "" && !isSafeReleaseTag(tagName) {
+		return fmt.Errorf("DNS Worker release tag is invalid: %s", tagName)
+	}
+
+	script := buildDNSWorkerUpdateScript(envFile, installDir, repo, channel, tagName)
+	cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(cmdCtx, "bash", "-c", script)
+	output, err := cmd.CombinedOutput()
+	if cmdCtx.Err() != nil {
+		return fmt.Errorf("DNS Worker installer timed out")
+	}
+	if err != nil {
+		return fmt.Errorf("DNS Worker installer failed: %w: %s", err, trimCommandOutput(output, 4000))
+	}
+	return nil
+}
+
+func buildDNSWorkerUpdateScript(envFile string, installDir string, repo string, channel string, tagName string) string {
+	releaseSelector := "latest/download"
+	tagArg := ""
+	if tagName != "" {
+		releaseSelector = "download/" + tagName
+		tagArg = " --release-tag " + shellQuote(tagName)
+	}
+	return strings.Join([]string{
+		"set -euo pipefail",
+		"set -a",
+		". " + shellQuote(envFile),
+		"set +a",
+		"SERVER_URL=\"${DUSHENGCDN_DNS_WORKER_SERVER_URL:?missing DUSHENGCDN_DNS_WORKER_SERVER_URL}\"",
+		"TOKEN=\"${DUSHENGCDN_DNS_WORKER_TOKEN:?missing DUSHENGCDN_DNS_WORKER_TOKEN}\"",
+		"LISTEN_ADDR=\"${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-:53}\"",
+		"SNAPSHOT_PATH=\"${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-}\"",
+		"if [ -z \"$SNAPSHOT_PATH\" ]; then SNAPSHOT_PATH=" + shellQuote(filepath.ToSlash(filepath.Join(installDir, "data/dns-worker-snapshot.json"))) + "; fi",
+		"PROFILE=\"${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}\"",
+		"curl -fsSL " + shellQuote("https://github.com/"+repo+"/releases/"+releaseSelector+"/install-dns-worker.sh") + " | bash -s --" +
+			" --server-url \"$SERVER_URL\"" +
+			" --token \"$TOKEN\"" +
+			" --install-dir " + shellQuote(installDir) +
+			" --listen \"$LISTEN_ADDR\"" +
+			" --snapshot-path \"$SNAPSHOT_PATH\"" +
+			" --source-database-profile \"$PROFILE\"" +
+			" --release-channel " + shellQuote(channel) +
+			tagArg,
+	}, "\n")
+}
+
+func safeDNSWorkerInstallDir(path string) (string, error) {
+	candidate := strings.TrimSpace(path)
+	if candidate == "" {
+		return "", errors.New("DNS Worker install directory cannot be empty")
+	}
+	if strings.Contains(candidate, "\x00") || strings.ContainsAny(candidate, "\r\n") {
+		return "", errors.New("DNS Worker install directory contains invalid characters")
+	}
+	cleaned := filepath.Clean(candidate)
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("DNS Worker install directory %q must be absolute", path)
+	}
+	if pathComponentCount(cleaned) < 2 {
+		return "", fmt.Errorf("DNS Worker install directory %q is too shallow", path)
+	}
+	base := strings.ToLower(filepath.Base(cleaned))
+	base = strings.NewReplacer("-", "", "_", "", ".", "", " ", "").Replace(base)
+	if !strings.Contains(base, "dushengcdn") || !strings.Contains(base, "dnsworker") {
+		return "", fmt.Errorf("DNS Worker install directory %q does not look like a DuShengCDN DNS Worker directory", path)
+	}
+	return cleaned, nil
+}
+
+func isSafeGitHubRepo(repo string) bool {
+	parts := strings.Split(strings.TrimSpace(repo), "/")
+	if len(parts) != 2 {
+		return false
+	}
+	for _, part := range parts {
+		if !isSafeGitHubPathPart(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSafeGitHubPathPart(value string) bool {
+	if value == "" || len(value) > 100 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isSafeReleaseTag(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func trimCommandOutput(output []byte, limit int) string {
+	text := strings.TrimSpace(string(output))
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	return text[len(text)-limit:]
 }
 
 type webSocketBackoff struct {

@@ -440,7 +440,17 @@ jobs:
           fi
 
           {
-            echo "## 更新内容"
+            echo "## 升级说明"
+            echo
+            echo "- 发布类型：$CHANNEL_LABEL"
+            echo "- 发布版本：$VERSION"
+            if [[ -n "$PREVIOUS_LABEL" ]]; then
+              echo "- 对比基线：$PREVIOUS_LABEL"
+            fi
+            echo "- 本 Release 只包含商业版二进制、SHA-256 校验文件和签名文件，不发布源码。"
+            echo "- 面板检测到该版本后，可在版本面板中查看更新说明并执行手动或自动升级。"
+            echo
+            echo "### 更新内容"
             echo
             if [[ -f "$MANUAL_NOTES" ]]; then
               cat "$MANUAL_NOTES"
@@ -458,16 +468,6 @@ jobs:
                 done
               fi
             fi
-            echo
-            echo "## 升级说明"
-            echo
-            echo "- 发布类型：$CHANNEL_LABEL"
-            echo "- 发布版本：$VERSION"
-            if [[ -n "$PREVIOUS_LABEL" ]]; then
-              echo "- 对比基线：$PREVIOUS_LABEL"
-            fi
-            echo "- 本 Release 只包含商业版二进制、SHA-256 校验文件和签名文件，不发布源码。"
-            echo "- 面板检测到该版本后，可在版本面板中查看更新说明并执行手动或自动升级。"
             echo
             echo "## 发布资产"
             echo

@@ -39,6 +39,7 @@ export interface DNSWorkerItem {
   id: number;
   worker_id: string;
   name: string;
+  remark: string;
   token?: string;
   public_address: string;
   version: string;
@@ -47,6 +48,7 @@ export interface DNSWorkerItem {
   last_snapshot_at?: string | null;
   last_seen_at?: string | null;
   last_heartbeat_at?: string | null;
+  last_remote_ip: string;
   last_rollup_at?: string | null;
   last_rollup_count: number;
   last_error: string;
@@ -67,6 +69,14 @@ export interface DNSWorkerItem {
   update_tag: string;
   update_supported: boolean;
   last_update_supported_at?: string | null;
+  update_dispatch_mode: string;
+  update_dispatch_message: string;
+  update_dispatched_at?: string | null;
+  update_dispatched_node_id: string;
+  uninstall_supported: boolean;
+  last_uninstall_supported_at?: string | null;
+  uninstall_requested: boolean;
+  uninstall_requested_at?: string | null;
   last_probe_at?: string | null;
   last_probe_query: string;
   last_probe_results: DNSWorkerProbeResult[];
@@ -307,6 +317,7 @@ export interface DNSWorkerSnapshotWorker {
   last_snapshot_at?: string | null;
   last_seen_at?: string | null;
   last_heartbeat_at?: string | null;
+  last_remote_ip: string;
   last_rollup_at?: string | null;
   last_rollup_count: number;
   stale: boolean;
@@ -357,6 +368,7 @@ export interface DNSWorkerHealthItem {
   id: number;
   worker_id: string;
   name: string;
+  remark: string;
   status: 'online' | 'offline';
   public_address: string;
   query_count: number;
@@ -366,6 +378,7 @@ export interface DNSWorkerHealthItem {
   max_latency_ms: number;
   last_seen_at?: string | null;
   last_heartbeat_at?: string | null;
+  last_remote_ip: string;
   last_rollup_at?: string | null;
   last_rollup_count: number;
   last_snapshot_at?: string | null;
@@ -388,6 +401,14 @@ export interface DNSWorkerHealthItem {
   update_tag: string;
   update_supported: boolean;
   last_update_supported_at?: string | null;
+  update_dispatch_mode: string;
+  update_dispatch_message: string;
+  update_dispatched_at?: string | null;
+  update_dispatched_node_id: string;
+  uninstall_supported: boolean;
+  last_uninstall_supported_at?: string | null;
+  uninstall_requested: boolean;
+  uninstall_requested_at?: string | null;
   last_error: string;
   last_probe_at?: string | null;
   last_probe_results: DNSWorkerProbeResult[];
@@ -465,4 +486,9 @@ export interface DNSRecordMutationPayload {
 export interface DNSWorkerMutationPayload {
   name: string;
   public_address: string;
+  remark?: string;
+}
+
+export interface DNSWorkerUpdatePayload {
+  remark: string;
 }

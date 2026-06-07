@@ -78,11 +78,13 @@ type DNSRecordInput struct {
 type DNSWorkerInput struct {
 	Name          string `json:"name"`
 	PublicAddress string `json:"public_address"`
+	Remark        string `json:"remark"`
 }
 
 type DNSWorkerHeartbeatInput struct {
 	Version                  string                                    `json:"version"`
 	Status                   string                                    `json:"status"`
+	RemoteIP                 string                                    `json:"-"`
 	LastSnapshotVersion      string                                    `json:"last_snapshot_version"`
 	LastSnapshotAt           *time.Time                                `json:"last_snapshot_at"`
 	LastError                string                                    `json:"last_error"`
@@ -99,12 +101,14 @@ type DNSWorkerHeartbeatInput struct {
 	OperatorCIDRDatabasePath string                                    `json:"operator_cidr_database_path"`
 	OperatorCIDRLastError    string                                    `json:"operator_cidr_last_error"`
 	UpdateSupported          bool                                      `json:"update_supported"`
+	UninstallSupported       bool                                      `json:"uninstall_supported"`
 	Rollups                  []DNSQueryRollupInput                     `json:"rollups"`
 	SchedulingStates         []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type DNSWorkerSettings struct {
 	UpdateNow     bool   `json:"update_now"`
+	UninstallNow  bool   `json:"uninstall_now"`
 	UpdateRepo    string `json:"update_repo"`
 	UpdateChannel string `json:"update_channel"`
 	UpdateTag     string `json:"update_tag"`
@@ -157,6 +161,7 @@ type DNSWorkerView struct {
 	ID                       uint                       `json:"id"`
 	WorkerID                 string                     `json:"worker_id"`
 	Name                     string                     `json:"name"`
+	Remark                   string                     `json:"remark"`
 	Token                    string                     `json:"token,omitempty"`
 	PublicAddress            string                     `json:"public_address"`
 	Version                  string                     `json:"version"`
@@ -165,6 +170,7 @@ type DNSWorkerView struct {
 	LastSnapshotAt           *time.Time                 `json:"last_snapshot_at"`
 	LastSeenAt               *time.Time                 `json:"last_seen_at"`
 	LastHeartbeatAt          *time.Time                 `json:"last_heartbeat_at"`
+	LastRemoteIP             string                     `json:"last_remote_ip"`
 	LastRollupAt             *time.Time                 `json:"last_rollup_at"`
 	LastRollupCount          int64                      `json:"last_rollup_count"`
 	LastError                string                     `json:"last_error"`
@@ -185,6 +191,14 @@ type DNSWorkerView struct {
 	UpdateTag                string                     `json:"update_tag"`
 	UpdateSupported          bool                       `json:"update_supported"`
 	LastUpdateSupportedAt    *time.Time                 `json:"last_update_supported_at"`
+	UpdateDispatchMode       string                     `json:"update_dispatch_mode"`
+	UpdateDispatchMessage    string                     `json:"update_dispatch_message"`
+	UpdateDispatchedAt       *time.Time                 `json:"update_dispatched_at"`
+	UpdateDispatchedNodeID   string                     `json:"update_dispatched_node_id"`
+	UninstallSupported       bool                       `json:"uninstall_supported"`
+	LastUninstallSupportedAt *time.Time                 `json:"last_uninstall_supported_at"`
+	UninstallRequested       bool                       `json:"uninstall_requested"`
+	UninstallRequestedAt     *time.Time                 `json:"uninstall_requested_at"`
 	LastProbeAt              *time.Time                 `json:"last_probe_at"`
 	LastProbeQuery           string                     `json:"last_probe_query"`
 	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -208,6 +222,10 @@ type DNSWorkerProbeInput struct {
 type DNSWorkerUpdateInput struct {
 	Channel string `json:"channel"`
 	TagName string `json:"tag_name"`
+}
+
+type DNSWorkerMutationInput struct {
+	Remark string `json:"remark"`
 }
 
 type DNSGSLBSimulationInput struct {
@@ -574,6 +592,7 @@ type DNSWorkerHealthItemView struct {
 	ID                       uint                       `json:"id"`
 	WorkerID                 string                     `json:"worker_id"`
 	Name                     string                     `json:"name"`
+	Remark                   string                     `json:"remark"`
 	Status                   string                     `json:"status"`
 	PublicAddress            string                     `json:"public_address"`
 	QueryCount               int64                      `json:"query_count"`
@@ -583,6 +602,7 @@ type DNSWorkerHealthItemView struct {
 	MaxLatencyMs             int64                      `json:"max_latency_ms"`
 	LastSeenAt               *time.Time                 `json:"last_seen_at"`
 	LastHeartbeatAt          *time.Time                 `json:"last_heartbeat_at"`
+	LastRemoteIP             string                     `json:"last_remote_ip"`
 	LastRollupAt             *time.Time                 `json:"last_rollup_at"`
 	LastRollupCount          int64                      `json:"last_rollup_count"`
 	LastSnapshotAt           *time.Time                 `json:"last_snapshot_at"`
@@ -605,6 +625,14 @@ type DNSWorkerHealthItemView struct {
 	UpdateTag                string                     `json:"update_tag"`
 	UpdateSupported          bool                       `json:"update_supported"`
 	LastUpdateSupportedAt    *time.Time                 `json:"last_update_supported_at"`
+	UpdateDispatchMode       string                     `json:"update_dispatch_mode"`
+	UpdateDispatchMessage    string                     `json:"update_dispatch_message"`
+	UpdateDispatchedAt       *time.Time                 `json:"update_dispatched_at"`
+	UpdateDispatchedNodeID   string                     `json:"update_dispatched_node_id"`
+	UninstallSupported       bool                       `json:"uninstall_supported"`
+	LastUninstallSupportedAt *time.Time                 `json:"last_uninstall_supported_at"`
+	UninstallRequested       bool                       `json:"uninstall_requested"`
+	UninstallRequestedAt     *time.Time                 `json:"uninstall_requested_at"`
 	LastError                string                     `json:"last_error"`
 	LastProbeAt              *time.Time                 `json:"last_probe_at"`
 	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -992,6 +1020,9 @@ func ListAuthoritativeDNSWorkers() ([]DNSWorkerView, error) {
 	}
 	views := make([]DNSWorkerView, 0, len(workers))
 	for _, worker := range workers {
+		if worker.UninstallRequested {
+			continue
+		}
 		views = append(views, buildDNSWorkerView(worker, false))
 	}
 	return views, nil
@@ -1277,6 +1308,10 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 	if len(name) > 128 {
 		return nil, errors.New("DNS worker name is too long")
 	}
+	remark := strings.TrimSpace(input.Remark)
+	if len(remark) > 255 {
+		return nil, errors.New("DNS worker remark is too long")
+	}
 	token, err := newRandomToken()
 	if err != nil {
 		return nil, err
@@ -1288,6 +1323,7 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 	worker := &model.DNSWorker{
 		WorkerID:      "dns-" + workerIDSeed,
 		Name:          name,
+		Remark:        remark,
 		Token:         token,
 		PublicAddress: strings.TrimSpace(input.PublicAddress),
 		Status:        dnsWorkerStatusOffline,
@@ -1301,6 +1337,25 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 	return ptrDNSWorkerView(buildDNSWorkerView(worker, true)), nil
 }
 
+func UpdateAuthoritativeDNSWorker(id uint, input DNSWorkerMutationInput) (*DNSWorkerView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
+	worker, err := model.GetDNSWorkerByID(id)
+	if err != nil {
+		return nil, err
+	}
+	remark := strings.TrimSpace(input.Remark)
+	if len(remark) > 255 {
+		return nil, errors.New("DNS worker remark is too long")
+	}
+	worker.Remark = remark
+	if err := model.DB.Model(worker).Select("remark").Updates(worker).Error; err != nil {
+		return nil, err
+	}
+	return ptrDNSWorkerView(buildDNSWorkerView(worker, false)), nil
+}
+
 func DeleteAuthoritativeDNSWorker(id uint) error {
 	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
 		return err
@@ -1309,7 +1364,35 @@ func DeleteAuthoritativeDNSWorker(id uint) error {
 	if err != nil {
 		return err
 	}
-	return worker.Delete()
+	if !worker.UninstallSupported {
+		return errors.New("该 DNS 响应端当前版本不支持远程卸载，请先强制更新一次，或登录机器手动执行 uninstall-dns-worker.sh")
+	}
+	now := time.Now()
+	worker.UninstallRequested = true
+	worker.UninstallRequestedAt = &now
+	worker.Status = dnsWorkerStatusOffline
+	if err := model.DB.Model(worker).Select(
+		"uninstall_requested",
+		"uninstall_requested_at",
+		"status",
+	).Updates(worker).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteDNSWorkerRuntimeDataWithDB(db *gorm.DB, workerID string) error {
+	workerID = strings.TrimSpace(workerID)
+	if workerID == "" {
+		return nil
+	}
+	if err := db.Where("worker_id = ?", workerID).Delete(&model.DNSQueryRollup{}).Error; err != nil {
+		return err
+	}
+	if err := db.Where("worker_id = ?", workerID).Delete(&model.DNSWorkerNodeProbe{}).Error; err != nil {
+		return err
+	}
+	return nil
 }
 
 func RequestAuthoritativeDNSWorkerUpdate(id uint, input DNSWorkerUpdateInput) (*DNSWorkerView, error) {
@@ -1334,13 +1417,171 @@ func RequestAuthoritativeDNSWorkerUpdate(id uint, input DNSWorkerUpdateInput) (*
 			return nil, errors.New("正式版更新不能选择 preview 发布")
 		}
 	}
+	mode, message, nodeID := dispatchDNSWorkerUpdateViaAgent(worker, channel, tagName)
 	worker.UpdateRequested = true
 	worker.UpdateChannel = channel.String()
 	worker.UpdateTag = tagName
-	if err = model.DB.Model(worker).Select("update_requested", "update_channel", "update_tag").Updates(worker).Error; err != nil {
+	now := time.Now()
+	if mode != "" {
+		worker.UpdateDispatchMode = mode
+		worker.UpdateDispatchMessage = message
+		worker.UpdateDispatchedNodeID = nodeID
+		worker.UpdateDispatchedAt = &now
+	}
+	if err = model.DB.Model(worker).Select(
+		"update_requested",
+		"update_channel",
+		"update_tag",
+		"update_dispatch_mode",
+		"update_dispatch_message",
+		"update_dispatched_node_id",
+		"update_dispatched_at",
+	).Updates(worker).Error; err != nil {
 		return nil, err
 	}
 	return ptrDNSWorkerView(buildDNSWorkerView(worker, false)), nil
+}
+
+func dispatchDNSWorkerUpdateViaAgent(worker *model.DNSWorker, channel ReleaseChannel, tagName string) (string, string, string) {
+	node := findDNSWorkerHostNode(worker)
+	if node == nil {
+		return "worker_heartbeat", "未匹配到同机 Agent，已回退为 DNS 响应端心跳更新。", ""
+	}
+	request := buildAgentDNSWorkerUpdateRequest(worker, channel, tagName)
+	if SendAgentWSDNSWorkerUpdate(node.NodeID, &request) {
+		return "agent_ws", fmt.Sprintf("已通过同机 Agent %s 立即下发 DNS Worker 更新。", strings.TrimSpace(node.Name)), node.NodeID
+	}
+	return "agent_heartbeat", fmt.Sprintf("已匹配同机 Agent %s，等待该 Agent 下一次心跳执行 DNS Worker 更新。", strings.TrimSpace(node.Name)), node.NodeID
+}
+
+func pendingAgentDNSWorkerUpdatesForNode(node *model.Node) []AgentDNSWorkerUpdateRequest {
+	if node == nil {
+		return nil
+	}
+	workers, err := model.ListDNSWorkers()
+	if err != nil || len(workers) == 0 {
+		return nil
+	}
+	updates := make([]AgentDNSWorkerUpdateRequest, 0, 1)
+	for _, worker := range workers {
+		if worker == nil || !worker.UpdateRequested {
+			continue
+		}
+		if strings.TrimSpace(worker.UpdateDispatchMode) != "agent_heartbeat" {
+			continue
+		}
+		if strings.TrimSpace(worker.UpdateDispatchedNodeID) != strings.TrimSpace(node.NodeID) {
+			continue
+		}
+		updates = append(updates, buildAgentDNSWorkerUpdateRequest(worker, normalizeReleaseChannel(worker.UpdateChannel), strings.TrimSpace(worker.UpdateTag)))
+		markDNSWorkerUpdateDispatched(worker, "agent_heartbeat_sent", fmt.Sprintf("已随 Agent %s 心跳返回 DNS Worker 更新任务。", strings.TrimSpace(node.Name)), node.NodeID)
+	}
+	return updates
+}
+
+func buildAgentDNSWorkerUpdateRequest(worker *model.DNSWorker, channel ReleaseChannel, tagName string) AgentDNSWorkerUpdateRequest {
+	request := AgentDNSWorkerUpdateRequest{
+		Repo:    common.ServerUpdateRepo,
+		Channel: channel.String(),
+		TagName: strings.TrimSpace(tagName),
+	}
+	if worker != nil {
+		request.WorkerID = strings.TrimSpace(worker.WorkerID)
+		request.WorkerName = strings.TrimSpace(worker.Name)
+	}
+	return request
+}
+
+func markDNSWorkerUpdateDispatched(worker *model.DNSWorker, mode string, message string, nodeID string) {
+	if worker == nil {
+		return
+	}
+	now := time.Now()
+	updates := map[string]any{
+		"update_dispatch_mode":      strings.TrimSpace(mode),
+		"update_dispatch_message":   truncateForDatabase(strings.TrimSpace(message), 16000),
+		"update_dispatched_node_id": strings.TrimSpace(nodeID),
+		"update_dispatched_at":      &now,
+	}
+	if err := model.DB.Model(worker).Updates(updates).Error; err != nil {
+		return
+	}
+	worker.UpdateDispatchMode = updates["update_dispatch_mode"].(string)
+	worker.UpdateDispatchMessage = updates["update_dispatch_message"].(string)
+	worker.UpdateDispatchedNodeID = updates["update_dispatched_node_id"].(string)
+	worker.UpdateDispatchedAt = &now
+}
+
+func findDNSWorkerHostNode(worker *model.DNSWorker) *model.Node {
+	workerIPs := dnsWorkerHostCandidateIPs(worker)
+	if len(workerIPs) == 0 {
+		return nil
+	}
+	nodes, err := model.ListNodes()
+	if err != nil {
+		return nil
+	}
+	for _, node := range nodes {
+		for _, workerIP := range workerIPs {
+			if nodeMatchesDNSWorkerIP(node, workerIP) {
+				return node
+			}
+		}
+	}
+	return nil
+}
+
+func dnsWorkerHostCandidateIPs(worker *model.DNSWorker) []string {
+	if worker == nil {
+		return nil
+	}
+	candidates := []string{dnsWorkerPublicAddressIP(worker), worker.LastRemoteIP}
+	result := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		ip := iputil.NormalizeIP(candidate)
+		if ip == "" {
+			continue
+		}
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		result = append(result, ip)
+	}
+	return result
+}
+
+func dnsWorkerPublicAddressIP(worker *model.DNSWorker) string {
+	if worker == nil {
+		return ""
+	}
+	value := strings.TrimSpace(worker.PublicAddress)
+	if value == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	} else if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		value = strings.Trim(value, "[]")
+	}
+	return iputil.NormalizeIP(value)
+}
+
+func nodeMatchesDNSWorkerIP(node *model.Node, workerIP string) bool {
+	workerIP = iputil.NormalizeIP(workerIP)
+	if node == nil || workerIP == "" {
+		return false
+	}
+	if iputil.NormalizeIP(node.IP) == workerIP {
+		return true
+	}
+	for _, value := range resolveNodePublicIPs(node) {
+		if iputil.NormalizeIP(value) == workerIP {
+			return true
+		}
+	}
+	return false
 }
 
 func ProbeAuthoritativeDNSWorker(id uint, input DNSWorkerProbeInput) (*DNSWorkerProbeView, error) {
@@ -1398,6 +1639,7 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		return nil, errors.New("DNS worker is nil")
 	}
 	now := time.Now()
+	uninstallNow := worker.UninstallRequested
 	updateNow := worker.UpdateRequested && input.UpdateSupported
 	updateChannel := normalizeReleaseChannel(worker.UpdateChannel)
 	updateTag := strings.TrimSpace(worker.UpdateTag)
@@ -1407,6 +1649,9 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	worker.LastSnapshotAt = normalizeDNSWorkerSnapshotAt(input.LastSnapshotAt, now)
 	worker.LastSeenAt = &now
 	worker.LastHeartbeatAt = &now
+	if remoteIP := iputil.NormalizeIP(input.RemoteIP); remoteIP != "" {
+		worker.LastRemoteIP = remoteIP
+	}
 	worker.LastError = truncateForDatabase(strings.TrimSpace(input.LastError), 16000)
 	worker.GeoIPEnabled = input.GeoIPEnabled
 	worker.GeoIPDatabasePath = truncateForDatabase(strings.TrimSpace(input.GeoIPDatabasePath), 512)
@@ -1424,6 +1669,10 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	if input.UpdateSupported {
 		worker.LastUpdateSupportedAt = &now
 	}
+	worker.UninstallSupported = input.UninstallSupported
+	if input.UninstallSupported {
+		worker.LastUninstallSupportedAt = &now
+	}
 	rollupMeta := summarizeDNSQueryRollupInputs(input.Rollups)
 	if rollupMeta.count > 0 {
 		worker.LastRollupAt = &rollupMeta.lastRollupAt
@@ -1431,6 +1680,12 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	}
 	db := model.DB.Session(&gorm.Session{DisableNestedTransaction: true})
 	if err := db.Transaction(func(tx *gorm.DB) error {
+		if uninstallNow {
+			if err := deleteDNSWorkerRuntimeDataWithDB(tx, worker.WorkerID); err != nil {
+				return err
+			}
+			return tx.Delete(worker).Error
+		}
 		if err := tx.Save(worker).Error; err != nil {
 			return err
 		}
@@ -1445,6 +1700,7 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		Worker: buildDNSWorkerView(worker, false),
 		Settings: DNSWorkerSettings{
 			UpdateNow:     updateNow,
+			UninstallNow:  uninstallNow,
 			UpdateRepo:    common.ServerUpdateRepo,
 			UpdateChannel: updateChannel.String(),
 			UpdateTag:     updateTag,
@@ -2740,6 +2996,7 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		ID:                       worker.ID,
 		WorkerID:                 worker.WorkerID,
 		Name:                     worker.Name,
+		Remark:                   worker.Remark,
 		PublicAddress:            worker.PublicAddress,
 		Version:                  worker.Version,
 		Status:                   normalizeDNSWorkerStatus(worker.Status),
@@ -2747,6 +3004,7 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		LastSnapshotAt:           worker.LastSnapshotAt,
 		LastSeenAt:               worker.LastSeenAt,
 		LastHeartbeatAt:          worker.LastHeartbeatAt,
+		LastRemoteIP:             worker.LastRemoteIP,
 		LastRollupAt:             worker.LastRollupAt,
 		LastRollupCount:          worker.LastRollupCount,
 		LastError:                worker.LastError,
@@ -2767,6 +3025,14 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		UpdateTag:                worker.UpdateTag,
 		UpdateSupported:          worker.UpdateSupported,
 		LastUpdateSupportedAt:    worker.LastUpdateSupportedAt,
+		UpdateDispatchMode:       worker.UpdateDispatchMode,
+		UpdateDispatchMessage:    worker.UpdateDispatchMessage,
+		UpdateDispatchedAt:       worker.UpdateDispatchedAt,
+		UpdateDispatchedNodeID:   worker.UpdateDispatchedNodeID,
+		UninstallSupported:       worker.UninstallSupported,
+		LastUninstallSupportedAt: worker.LastUninstallSupportedAt,
+		UninstallRequested:       worker.UninstallRequested,
+		UninstallRequestedAt:     worker.UninstallRequestedAt,
 		LastProbeAt:              probeAt,
 		LastProbeQuery:           worker.LastProbeQuery,
 		LastProbeResults:         probeResults,
@@ -4935,6 +5201,9 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 		if worker == nil {
 			continue
 		}
+		if worker.UninstallRequested {
+			continue
+		}
 		workerID := strings.TrimSpace(worker.WorkerID)
 		if workerID == "" {
 			continue
@@ -5042,6 +5311,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			ID:                       worker.ID,
 			WorkerID:                 worker.WorkerID,
 			Name:                     workerName,
+			Remark:                   worker.Remark,
 			Status:                   status,
 			PublicAddress:            worker.PublicAddress,
 			QueryCount:               stats.queryCount,
@@ -5051,6 +5321,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			MaxLatencyMs:             stats.maxDurationMs,
 			LastSeenAt:               worker.LastSeenAt,
 			LastHeartbeatAt:          worker.LastHeartbeatAt,
+			LastRemoteIP:             worker.LastRemoteIP,
 			LastRollupAt:             worker.LastRollupAt,
 			LastRollupCount:          worker.LastRollupCount,
 			LastSnapshotAt:           snapshotAt,
@@ -5073,6 +5344,14 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			UpdateTag:                worker.UpdateTag,
 			UpdateSupported:          worker.UpdateSupported,
 			LastUpdateSupportedAt:    worker.LastUpdateSupportedAt,
+			UpdateDispatchMode:       worker.UpdateDispatchMode,
+			UpdateDispatchMessage:    worker.UpdateDispatchMessage,
+			UpdateDispatchedAt:       worker.UpdateDispatchedAt,
+			UpdateDispatchedNodeID:   worker.UpdateDispatchedNodeID,
+			UninstallSupported:       worker.UninstallSupported,
+			LastUninstallSupportedAt: worker.LastUninstallSupportedAt,
+			UninstallRequested:       worker.UninstallRequested,
+			UninstallRequestedAt:     worker.UninstallRequestedAt,
 			LastError:                worker.LastError,
 			LastProbeAt:              probeAt,
 			LastProbeResults:         probeResults,

@@ -53,8 +53,9 @@ func (c *Client) Heartbeat(ctx context.Context, payload protocol.NodePayload) (*
 		return nil, errors.New(resp.Message)
 	}
 	return &protocol.HeartbeatResult{
-		AgentSettings: resp.AgentSettings,
-		ActiveConfig:  resp.ActiveConfig,
+		AgentSettings:    resp.AgentSettings,
+		ActiveConfig:     resp.ActiveConfig,
+		DNSWorkerUpdates: resp.DNSWorkerUpdates,
 	}, nil
 }
 

@@ -206,6 +206,23 @@ func CreateDNSWorker(c *gin.Context) {
 	respondSuccess(c, worker)
 }
 
+func UpdateDNSWorker(c *gin.Context) {
+	id, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	var input service.DNSWorkerMutationInput
+	if !decodeJSONRequest(c, &input) {
+		return
+	}
+	worker, err := service.UpdateAuthoritativeDNSWorker(id, input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, worker)
+}
+
 func DeleteDNSWorker(c *gin.Context) {
 	id, ok := parseUintParam(c, "id")
 	if !ok {
@@ -310,6 +327,13 @@ func DNSWorkerHeartbeat(c *gin.Context) {
 	if !decodeJSONRequest(c, &input) {
 		return
 	}
+	input.RemoteIP = service.ResolveReportedNodeIP(
+		"",
+		c.Request.RemoteAddr,
+		c.GetHeader("X-Forwarded-For"),
+		c.GetHeader("X-Real-IP"),
+		c.GetHeader("Forwarded"),
+	)
 	view, err := service.RecordDNSWorkerHeartbeat(worker, input)
 	if err != nil {
 		respondFailure(c, err.Error())
