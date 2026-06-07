@@ -41,6 +41,7 @@ const PowStaticDirPlaceholder = "__DUSHENGCDN_POW_STATIC_DIR__"
 const (
 	cachePurgeReadBatchSize = 256
 	maxWarmCacheRedirects   = 5
+	managedDirMarkerName    = ".dushengcdn-managed"
 )
 
 var blockedWarmIPPrefixes = []netip.Prefix{
@@ -1300,6 +1301,9 @@ func (m *Manager) readCertFiles() ([]protocol.SupportFile, error) {
 		if filepath.ToSlash(relativePath) == "cc_config.json" {
 			return nil
 		}
+		if filepath.ToSlash(relativePath) == managedDirMarkerName {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -1625,11 +1629,18 @@ func syncManagedFiles(baseDir string, files []managedFile) error {
 		if err != nil {
 			return err
 		}
+		if cleanPath == managedDirMarkerName {
+			return fmt.Errorf("managed file path %q is reserved", file.Path)
+		}
 		desired[cleanPath] = managedFile{
 			Path:    cleanPath,
 			Content: file.Content,
 			Mode:    file.Mode,
 		}
+	}
+
+	if err := ensureManagedDirCanBeCleaned(baseDir, desired); err != nil {
+		return err
 	}
 
 	if err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
@@ -1644,6 +1655,9 @@ func syncManagedFiles(baseDir string, files []managedFile) error {
 			return err
 		}
 		if _, ok := desired[filepath.Clean(relativePath)]; ok {
+			return nil
+		}
+		if filepath.Clean(relativePath) == managedDirMarkerName {
 			return nil
 		}
 		return os.Remove(path)
@@ -1668,7 +1682,86 @@ func syncManagedFiles(baseDir string, files []managedFile) error {
 		}
 	}
 
+	if err := writeManagedDirMarker(baseDir); err != nil {
+		return err
+	}
 	return removeEmptyManagedDirs(baseDir)
+}
+
+func ensureManagedDirCanBeCleaned(baseDir string, desired map[string]managedFile) error {
+	hasMarker, err := managedDirHasMarker(baseDir)
+	if err != nil {
+		return err
+	}
+	if hasMarker {
+		return nil
+	}
+	unknownFiles, err := unmanagedExistingFiles(baseDir, desired)
+	if err != nil {
+		return err
+	}
+	if len(unknownFiles) == 0 {
+		return nil
+	}
+	sort.Strings(unknownFiles)
+	return fmt.Errorf("managed dir %q is missing %s and contains unknown files: %s", baseDir, managedDirMarkerName, strings.Join(unknownFiles, ", "))
+}
+
+func managedDirHasMarker(baseDir string) (bool, error) {
+	info, err := os.Stat(filepath.Join(baseDir, managedDirMarkerName))
+	if err == nil {
+		return !info.IsDir(), nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func unmanagedExistingFiles(baseDir string, desired map[string]managedFile) ([]string, error) {
+	unknownFiles := make([]string, 0)
+	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relativePath, err := filepath.Rel(baseDir, path)
+		if err != nil {
+			return err
+		}
+		cleanPath := filepath.Clean(relativePath)
+		if cleanPath == managedDirMarkerName {
+			return nil
+		}
+		if isKnownLegacyManagedFile(cleanPath) {
+			return nil
+		}
+		if _, ok := desired[cleanPath]; ok {
+			return nil
+		}
+		unknownFiles = append(unknownFiles, filepath.ToSlash(cleanPath))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return unknownFiles, nil
+}
+
+func isKnownLegacyManagedFile(path string) bool {
+	switch filepath.ToSlash(filepath.Clean(path)) {
+	case "pow_config.json", "region_config.json", "waf_config.json", "cc_config.json":
+		return true
+	default:
+		return false
+	}
+}
+
+func writeManagedDirMarker(baseDir string) error {
+	markerPath := filepath.Join(baseDir, managedDirMarkerName)
+	return os.WriteFile(markerPath, []byte("DuShengCDN managed directory\n"), 0o644)
 }
 
 func cleanManagedFilePath(raw string) (string, error) {

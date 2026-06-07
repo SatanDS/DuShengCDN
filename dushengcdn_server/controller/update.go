@@ -4,6 +4,7 @@ import (
 	"dushengcdn/service"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -141,8 +142,26 @@ func UploadManualServerBinary(c *gin.Context) {
 	defer func() {
 		_ = file.Close()
 	}()
+	checksumFile, checksumClose, err := openManualUploadFormFile(c, "checksum", "Please upload the matching .sha256 file.")
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	defer checksumClose()
+	signatureFile, signatureClose, err := openManualUploadFormFile(c, "signature", "Please upload the matching .sig file.")
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	defer signatureClose()
 
-	info, err := service.UploadManualServerBinary(c.Request.Context(), fileHeader.Filename, file)
+	info, err := service.UploadManualServerBinary(c.Request.Context(), fileHeader.Filename, file, checksumFile, signatureFile)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -168,6 +187,20 @@ func manualUploadFormErrorMessage(err error) string {
 		return "上传二进制超过大小限制。"
 	}
 	return "请先选择要上传的服务端二进制文件。"
+}
+
+func openManualUploadFormFile(c *gin.Context, field string, missingMessage string) (multipart.File, func(), error) {
+	fileHeader, err := c.FormFile(field)
+	if err != nil {
+		return nil, func() {}, errors.New(missingMessage)
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return file, func() {
+		_ = file.Close()
+	}, nil
 }
 
 // ConfirmManualServerUpgrade godoc

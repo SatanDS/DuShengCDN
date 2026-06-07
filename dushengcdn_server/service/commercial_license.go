@@ -1181,6 +1181,9 @@ func decodeCommercialLicenseKey(raw string, expectedSize int, label string) ([]b
 }
 
 func commercialLicenseAllowUnsigned() bool {
+	if strings.EqualFold(strings.TrimSpace(common.CommercialBuildMode), "required-online") {
+		return false
+	}
 	if common.CommercialLicenseAllowUnsigned {
 		return true
 	}
@@ -1568,11 +1571,28 @@ func currentCommercialMachineFingerprint() string {
 		runtime.GOOS,
 		runtime.GOARCH,
 		strings.ToLower(strings.TrimSpace(hostname)),
+		commercialMachineIDHash(),
 		strings.TrimSpace(common.SQLitePath),
 		strings.TrimSpace(common.SQLDSN),
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])
+}
+
+func commercialMachineIDHash() string {
+	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		value := strings.TrimSpace(string(raw))
+		if value == "" {
+			continue
+		}
+		sum := sha256.Sum256([]byte("dushengcdn-machine-id|" + value))
+		return hex.EncodeToString(sum[:])
+	}
+	return ""
 }
 
 func normalizeCommercialMachineFingerprint(value string) string {

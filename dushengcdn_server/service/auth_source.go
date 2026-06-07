@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	jose "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"gorm.io/gorm"
 )
 
@@ -72,7 +74,28 @@ type oauthTokenResponse struct {
 
 var oauthHTTPClient = &http.Client{Timeout: 8 * time.Second}
 
+var allowedOIDCSignatureAlgorithms = []jose.SignatureAlgorithm{
+	jose.RS256,
+	jose.RS384,
+	jose.RS512,
+	jose.PS256,
+	jose.PS384,
+	jose.PS512,
+	jose.ES256,
+	jose.ES384,
+	jose.ES512,
+	jose.EdDSA,
+}
+
 func GenerateOAuthState() (string, error) {
+	buffer := make([]byte, 24)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buffer), nil
+}
+
+func GenerateOIDCNonce() (string, error) {
 	buffer := make([]byte, 24)
 	if _, err := rand.Read(buffer); err != nil {
 		return "", err
@@ -100,6 +123,10 @@ func PublicAuthSources(baseAPIPath string) ([]PublicAuthSource, error) {
 }
 
 func BuildAuthorizeURL(ctx context.Context, source *model.AuthSource, redirectURL string, state string) (string, error) {
+	return BuildAuthorizeURLWithNonce(ctx, source, redirectURL, state, "")
+}
+
+func BuildAuthorizeURLWithNonce(ctx context.Context, source *model.AuthSource, redirectURL string, state string, nonce string) (string, error) {
 	source.Normalize()
 	switch source.Type {
 	case model.AuthSourceTypeGitHub:
@@ -129,6 +156,9 @@ func BuildAuthorizeURL(ctx context.Context, source *model.AuthSource, redirectUR
 		values.Set("response_type", "code")
 		values.Set("scope", source.Scopes)
 		values.Set("state", state)
+		if strings.TrimSpace(nonce) != "" {
+			values.Set("nonce", strings.TrimSpace(nonce))
+		}
 		authorizeURL.RawQuery = values.Encode()
 		return authorizeURL.String(), nil
 	default:
@@ -137,6 +167,10 @@ func BuildAuthorizeURL(ctx context.Context, source *model.AuthSource, redirectUR
 }
 
 func ExchangeOAuthProfile(ctx context.Context, source *model.AuthSource, code string, redirectURL string) (*OAuthProfile, error) {
+	return ExchangeOAuthProfileWithNonce(ctx, source, code, redirectURL, "")
+}
+
+func ExchangeOAuthProfileWithNonce(ctx context.Context, source *model.AuthSource, code string, redirectURL string, nonce string) (*OAuthProfile, error) {
 	if strings.TrimSpace(code) == "" {
 		return nil, errors.New("授权 code 不能为空")
 	}
@@ -145,7 +179,7 @@ func ExchangeOAuthProfile(ctx context.Context, source *model.AuthSource, code st
 	case model.AuthSourceTypeGitHub:
 		return exchangeGitHubProfile(ctx, source, code, redirectURL)
 	case model.AuthSourceTypeOIDC:
-		return exchangeOIDCProfile(ctx, source, code, redirectURL)
+		return exchangeOIDCProfile(ctx, source, code, redirectURL, nonce)
 	default:
 		return nil, errors.New("不支持的认证源类型")
 	}
@@ -383,7 +417,7 @@ func exchangeGitHubProfile(ctx context.Context, source *model.AuthSource, code s
 	}, nil
 }
 
-func exchangeOIDCProfile(ctx context.Context, source *model.AuthSource, code string, redirectURL string) (*OAuthProfile, error) {
+func exchangeOIDCProfile(ctx context.Context, source *model.AuthSource, code string, redirectURL string, nonce string) (*OAuthProfile, error) {
 	discovery, err := fetchOIDCDiscovery(ctx, source.OpenIDDiscoveryURL)
 	if err != nil {
 		return nil, err
@@ -395,13 +429,18 @@ func exchangeOIDCProfile(ctx context.Context, source *model.AuthSource, code str
 	if token.AccessToken == "" {
 		return nil, errors.New("OIDC 未返回 access token")
 	}
+	if strings.TrimSpace(token.IDToken) == "" {
+		return nil, errors.New("OIDC did not return an ID token")
+	}
+	idTokenClaims, err := verifyOIDCIDToken(ctx, discovery, source, token.IDToken, nonce)
+	if err != nil {
+		return nil, err
+	}
 	claims, err := fetchOIDCUserInfo(ctx, discovery.UserInfoEndpoint, token.AccessToken)
 	if err != nil {
 		return nil, err
 	}
-	if len(claims) == 0 && token.IDToken != "" {
-		claims = decodeJWTClaims(token.IDToken)
-	}
+	claims = mergeOIDCClaims(idTokenClaims, claims)
 	profile := profileFromClaims(claims)
 	if profile.ExternalID == "" {
 		return nil, errors.New("OIDC 用户资料缺少 sub")
@@ -426,7 +465,7 @@ func fetchOIDCDiscovery(ctx context.Context, discoveryURL string) (*oidcDiscover
 	if err := json.NewDecoder(resp.Body).Decode(&discovery); err != nil {
 		return nil, err
 	}
-	if discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" {
+	if discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" || discovery.JWKSURI == "" || discovery.Issuer == "" {
 		return nil, errors.New("OIDC discovery 缺少授权或 token 端点")
 	}
 	return &discovery, nil
@@ -487,20 +526,110 @@ func fetchOIDCUserInfo(ctx context.Context, endpoint string, accessToken string)
 	return claims, nil
 }
 
-func decodeJWTClaims(token string) map[string]any {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return map[string]any{}
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+func fetchOIDCJWKS(ctx context.Context, jwksURL string) (*jose.JSONWebKeySet, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
-		return map[string]any{}
+		return nil, err
 	}
-	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return map[string]any{}
+	resp, err := oauthHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC JWKS request failed: %w", err)
 	}
-	return claims
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("OIDC JWKS returned %s", resp.Status)
+	}
+	var jwks jose.JSONWebKeySet
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, err
+	}
+	if len(jwks.Keys) == 0 {
+		return nil, errors.New("OIDC JWKS is empty")
+	}
+	return &jwks, nil
+}
+
+type oidcIDTokenCustomClaims struct {
+	Nonce             string `json:"nonce"`
+	PreferredUsername string `json:"preferred_username"`
+	Nickname          string `json:"nickname"`
+	Name              string `json:"name"`
+	Email             string `json:"email"`
+}
+
+func verifyOIDCIDToken(ctx context.Context, discovery *oidcDiscovery, source *model.AuthSource, rawIDToken string, expectedNonce string) (map[string]any, error) {
+	token, err := jwt.ParseSigned(rawIDToken, allowedOIDCSignatureAlgorithms)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC ID token format is invalid: %w", err)
+	}
+	jwks, err := fetchOIDCJWKS(ctx, discovery.JWKSURI)
+	if err != nil {
+		return nil, err
+	}
+
+	var claims jwt.Claims
+	var custom oidcIDTokenCustomClaims
+	if err := token.Claims(jwks, &claims, &custom); err != nil {
+		return nil, fmt.Errorf("OIDC ID token signature validation failed: %w", err)
+	}
+	expected := jwt.Expected{
+		Issuer:      discovery.Issuer,
+		AnyAudience: jwt.Audience{source.ClientID},
+		Time:        time.Now(),
+	}
+	if err := claims.ValidateWithLeeway(expected, time.Minute); err != nil {
+		return nil, fmt.Errorf("OIDC ID token claims validation failed: %w", err)
+	}
+	expectedNonce = strings.TrimSpace(expectedNonce)
+	if expectedNonce != "" {
+		if custom.Nonce == "" {
+			return nil, errors.New("OIDC ID token is missing nonce")
+		}
+		if custom.Nonce != expectedNonce {
+			return nil, errors.New("OIDC ID token nonce validation failed")
+		}
+	}
+
+	result := map[string]any{
+		"sub": claims.Subject,
+	}
+	if custom.PreferredUsername != "" {
+		result["preferred_username"] = custom.PreferredUsername
+	}
+	if custom.Nickname != "" {
+		result["nickname"] = custom.Nickname
+	}
+	if custom.Name != "" {
+		result["name"] = custom.Name
+	}
+	if custom.Email != "" {
+		result["email"] = custom.Email
+	}
+	return result, nil
+}
+
+func mergeOIDCClaims(idTokenClaims map[string]any, userInfoClaims map[string]any) map[string]any {
+	if len(userInfoClaims) == 0 {
+		return idTokenClaims
+	}
+	merged := make(map[string]any, len(idTokenClaims)+len(userInfoClaims))
+	for key, value := range idTokenClaims {
+		merged[key] = value
+	}
+	for key, value := range userInfoClaims {
+		merged[key] = value
+	}
+	if strings.TrimSpace(stringClaimValue(merged["sub"])) == "" {
+		merged["sub"] = idTokenClaims["sub"]
+	}
+	return merged
+}
+
+func stringClaimValue(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 
 func profileFromClaims(claims map[string]any) *OAuthProfile {

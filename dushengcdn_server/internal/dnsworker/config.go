@@ -38,7 +38,7 @@ func LoadConfig(args []string, version string) (*Config, error) {
 		SnapshotPath:             strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH")),
 		InstallDir:               strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_INSTALL_DIR")),
 		UpdateScriptPath:         strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_UPDATE_SCRIPT")),
-		UpdateEnabled:            parseBoolEnv("DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED", true),
+		UpdateEnabled:            parseBoolEnv("DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED", false),
 		GeoIPDatabasePath:        strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH")),
 		ASNDatabasePath:          strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH")),
 		OperatorCIDRDatabasePath: strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH")),

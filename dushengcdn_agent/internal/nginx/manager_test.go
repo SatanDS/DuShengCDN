@@ -639,6 +639,9 @@ func TestWriteCertFilesKeepsBaseDirAndRemovesStaleFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(certDir, "stale", "old.crt"), []byte("old"), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(certDir, managedDirMarkerName), []byte("managed"), 0o644); err != nil {
+		t.Fatalf("WriteFile marker failed: %v", err)
+	}
 	manager := &Manager{CertDir: certDir}
 
 	if err := manager.writeCertFiles([]protocol.SupportFile{
@@ -659,6 +662,30 @@ func TestWriteCertFilesKeepsBaseDirAndRemovesStaleFiles(t *testing.T) {
 	}
 }
 
+func TestWriteCertFilesRejectsUnknownFilesWithoutMarker(t *testing.T) {
+	tempDir := t.TempDir()
+	certDir := filepath.Join(tempDir, "certs")
+	unknownPath := filepath.Join(certDir, "customer.crt")
+	if err := os.MkdirAll(certDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(unknownPath, []byte("customer"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	manager := &Manager{CertDir: certDir}
+
+	err := manager.writeCertFiles([]protocol.SupportFile{{Path: "managed.crt", Content: "managed"}})
+	if err == nil {
+		t.Fatal("expected writeCertFiles to reject unknown files without marker")
+	}
+	if !strings.Contains(err.Error(), managedDirMarkerName) {
+		t.Fatalf("expected marker error, got %v", err)
+	}
+	if data, readErr := os.ReadFile(unknownPath); readErr != nil || string(data) != "customer" {
+		t.Fatalf("expected customer cert to remain, data=%q err=%v", string(data), readErr)
+	}
+}
+
 func TestEnsureLuaAssetsKeepsBaseDirAndRemovesStaleFiles(t *testing.T) {
 	tempDir := t.TempDir()
 	luaDir := filepath.Join(tempDir, "lua")
@@ -667,6 +694,9 @@ func TestEnsureLuaAssetsKeepsBaseDirAndRemovesStaleFiles(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(luaDir, "stale", "old.lua"), []byte("old"), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(luaDir, managedDirMarkerName), []byte("managed"), 0o644); err != nil {
+		t.Fatalf("WriteFile marker failed: %v", err)
 	}
 	manager := &Manager{LuaDir: luaDir}
 
@@ -1383,6 +1413,67 @@ func TestSyncManagedFilesAcceptsNestedRelativePaths(t *testing.T) {
 	}
 	if string(data) != "ok" {
 		t.Fatalf("unexpected nested managed file content: %s", string(data))
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, managedDirMarkerName)); err != nil {
+		t.Fatalf("expected managed marker to be written: %v", err)
+	}
+}
+
+func TestSyncManagedFilesRejectsUnknownFilesWithoutMarker(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), "managed")
+	unknownPath := filepath.Join(baseDir, "customer-file.txt")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(unknownPath, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	err := syncManagedFiles(baseDir, []managedFile{{
+		Path:    "managed.lua",
+		Content: []byte("ok"),
+		Mode:    0o644,
+	}})
+	if err == nil {
+		t.Fatal("expected syncManagedFiles to reject unknown files without marker")
+	}
+	if !strings.Contains(err.Error(), managedDirMarkerName) {
+		t.Fatalf("expected marker error, got %v", err)
+	}
+	data, readErr := os.ReadFile(unknownPath)
+	if readErr != nil {
+		t.Fatalf("expected unknown file to remain: %v", readErr)
+	}
+	if string(data) != "keep" {
+		t.Fatalf("unexpected unknown file content: %s", string(data))
+	}
+}
+
+func TestSyncManagedFilesCleansUnknownFilesWithMarker(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), "managed")
+	stalePath := filepath.Join(baseDir, "stale.lua")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, managedDirMarkerName), []byte("managed"), 0o644); err != nil {
+		t.Fatalf("WriteFile marker failed: %v", err)
+	}
+	if err := os.WriteFile(stalePath, []byte("old"), 0o644); err != nil {
+		t.Fatalf("WriteFile stale failed: %v", err)
+	}
+
+	if err := syncManagedFiles(baseDir, []managedFile{{
+		Path:    "managed.lua",
+		Content: []byte("new"),
+		Mode:    0o644,
+	}}); err != nil {
+		t.Fatalf("syncManagedFiles failed: %v", err)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale file to be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, managedDirMarkerName)); err != nil {
+		t.Fatalf("expected marker to remain: %v", err)
 	}
 }
 

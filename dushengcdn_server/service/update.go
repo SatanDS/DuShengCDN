@@ -131,6 +131,8 @@ type preparedServerUpgrade struct {
 type UploadedServerBinary struct {
 	UploadToken       string    `json:"upload_token"`
 	FileName          string    `json:"file_name"`
+	Checksum          string    `json:"checksum,omitempty"`
+	SignatureVerified bool      `json:"signature_verified"`
 	DetectedVersion   string    `json:"detected_version"`
 	CurrentVersion    string    `json:"current_version"`
 	HasUpdate         bool      `json:"has_update"`
@@ -143,6 +145,7 @@ type UploadedServerBinary struct {
 type manualServerBinaryCandidate struct {
 	UploadToken     string
 	FileName        string
+	Checksum        string
 	DetectedVersion string
 	CurrentVersion  string
 	TempPath        string
@@ -205,7 +208,7 @@ func scheduleServerUpgradeFromRelease(channel string) (*LatestServerRelease, err
 	return prepared.release, nil
 }
 
-func UploadManualServerBinary(ctx context.Context, fileName string, reader io.Reader) (*UploadedServerBinary, error) {
+func UploadManualServerBinary(ctx context.Context, fileName string, reader io.Reader, checksumReader io.Reader, signatureReader io.Reader) (*UploadedServerBinary, error) {
 	inProgress, _, _ := snapshotServerUpgradeState()
 	if inProgress {
 		return nil, fmt.Errorf("服务升级正在执行中，请稍后再试")
@@ -215,6 +218,13 @@ func UploadManualServerBinary(ctx context.Context, fileName string, reader io.Re
 	}
 	if reader == nil {
 		return nil, fmt.Errorf("缺少上传文件内容")
+	}
+
+	if checksumReader == nil {
+		return nil, errors.New("manual server upgrade requires a .sha256 file")
+	}
+	if signatureReader == nil {
+		return nil, errors.New("manual server upgrade requires a .sig file")
 	}
 
 	execPath, err := os.Executable()
@@ -234,10 +244,31 @@ func UploadManualServerBinary(ctx context.Context, fileName string, reader io.Re
 		_ = os.Remove(tempPath)
 		return nil, err
 	}
+	assetName := serverAssetName(runtime.GOOS, runtime.GOARCH)
+	checksum, err := readUploadedServerChecksum(checksumReader, assetName)
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return nil, err
+	}
+	signature, err := readUploadedServerSignature(signatureReader)
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return nil, err
+	}
+	if err = verifyServerBinaryChecksum(tempPath, checksum); err != nil {
+		_ = os.Remove(tempPath)
+		return nil, err
+	}
+	if err = verifyServerReleaseSignature(detectedVersion, assetName, checksum, signature); err != nil {
+		_ = os.Remove(tempPath)
+		return nil, fmt.Errorf("manual server upgrade signature validation failed: %w", err)
+	}
 
 	currentVersion := strings.TrimSpace(common.Version)
 	uploadedAt := time.Now()
 	info := buildUploadedServerBinaryView(fileName, currentVersion, detectedVersion, uploadedAt)
+	info.Checksum = checksum
+	info.SignatureVerified = true
 	if !info.ReadyToUpgrade {
 		_ = os.Remove(tempPath)
 		return info, nil
@@ -254,6 +285,7 @@ func UploadManualServerBinary(ctx context.Context, fileName string, reader io.Re
 	manualServerBinaryState.candidate = &manualServerBinaryCandidate{
 		UploadToken:     uploadToken,
 		FileName:        fileName,
+		Checksum:        checksum,
 		DetectedVersion: detectedVersion,
 		CurrentVersion:  currentVersion,
 		TempPath:        tempPath,
@@ -303,6 +335,8 @@ func ConfirmManualServerUpgrade(uploadToken string) (*UploadedServerBinary, erro
 
 	info := buildUploadedServerBinaryView(candidate.FileName, candidate.CurrentVersion, candidate.DetectedVersion, candidate.UploadedAt)
 	info.UploadToken = candidate.UploadToken
+	info.Checksum = candidate.Checksum
+	info.SignatureVerified = candidate.Checksum != ""
 	if !info.ReadyToUpgrade {
 		_ = os.Remove(candidate.TempPath)
 		return nil, fmt.Errorf("当前上传的二进制不满足升级条件")
@@ -825,6 +859,28 @@ func downloadServerSignature(ctx context.Context, url string) ([]byte, error) {
 		}
 	}
 	content, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > 8*1024 {
+		return nil, errors.New("signature asset exceeds 8 KB")
+	}
+	return parseServerReleaseSignature(string(content))
+}
+
+func readUploadedServerChecksum(reader io.Reader, assetName string) (string, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, 64*1024+1))
+	if err != nil {
+		return "", err
+	}
+	if len(content) > 64*1024 {
+		return "", errors.New("checksum asset exceeds 64 KB")
+	}
+	return parseServerChecksum(string(content), assetName)
+}
+
+func readUploadedServerSignature(reader io.Reader) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, 8*1024+1))
 	if err != nil {
 		return nil, err
 	}

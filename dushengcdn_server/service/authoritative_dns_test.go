@@ -2828,8 +2828,8 @@ func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 	if !heartbeat.Settings.UpdateNow || heartbeat.Settings.UpdateRepo == "" || heartbeat.Settings.UpdateChannel != string(ReleaseChannelPreview) {
 		t.Fatalf("expected heartbeat to deliver update settings, got %+v", heartbeat.Settings)
 	}
-	if heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateChannel != string(ReleaseChannelStable) {
-		t.Fatalf("expected heartbeat view to clear pending update, got %+v", heartbeat.Worker)
+	if !heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateChannel != string(ReleaseChannelPreview) {
+		t.Fatalf("expected heartbeat view to keep pending update until success is reported, got %+v", heartbeat.Worker)
 	}
 	if !heartbeat.Worker.UpdateSupported || heartbeat.Worker.LastUpdateSupportedAt == nil {
 		t.Fatalf("expected heartbeat view to record update support, got %+v", heartbeat.Worker)
@@ -2838,8 +2838,8 @@ func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDNSWorkerByID: %v", err)
 	}
-	if reloaded.UpdateRequested || reloaded.UpdateChannel != string(ReleaseChannelStable) || reloaded.UpdateTag != "" {
-		t.Fatalf("expected pending update to be cleared in database, got %+v", reloaded)
+	if !reloaded.UpdateRequested || reloaded.UpdateChannel != string(ReleaseChannelPreview) || reloaded.UpdateTag != "" {
+		t.Fatalf("expected pending update to remain in database until success is reported, got %+v", reloaded)
 	}
 	if !reloaded.UpdateSupported || reloaded.LastUpdateSupportedAt == nil {
 		t.Fatalf("expected update support to be recorded in database, got %+v", reloaded)

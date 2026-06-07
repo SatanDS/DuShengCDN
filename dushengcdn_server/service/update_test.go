@@ -66,6 +66,16 @@ func signServerReleaseForTest(t *testing.T, privateKey ed25519.PrivateKey, tagNa
 	return base64.StdEncoding.EncodeToString(signature)
 }
 
+func manualServerUploadVerificationReadersForTest(t *testing.T, tagName string, content []byte) (*strings.Reader, *strings.Reader) {
+	t.Helper()
+	privateKey := withServerReleaseSigningKey(t)
+	checksumBytes := sha256.Sum256(content)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	assetName := serverAssetName(runtime.GOOS, runtime.GOARCH)
+	signature := signServerReleaseForTest(t, privateKey, tagName, assetName, checksum)
+	return strings.NewReader(checksum + "  " + assetName + "\n"), strings.NewReader(signature + "\n")
+}
+
 func TestIsVersionNewer(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -339,7 +349,8 @@ func TestUploadManualServerBinary(t *testing.T) {
 	})
 
 	fileName, content := fakeServerBinaryFixture("v0.5.0")
-	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content))
+	checksumReader, signatureReader := manualServerUploadVerificationReadersForTest(t, "v0.5.0", content)
+	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content), checksumReader, signatureReader)
 	if err != nil {
 		t.Fatalf("expected upload to succeed: %v", err)
 	}
@@ -374,6 +385,23 @@ func TestUploadManualServerBinary(t *testing.T) {
 	}
 }
 
+func TestUploadManualServerBinaryRequiresChecksumAndSignature(t *testing.T) {
+	originalVersion := common.Version
+	common.Version = "v0.4.0"
+	t.Cleanup(func() {
+		common.Version = originalVersion
+		resetServerUpgradeTestState(t)
+	})
+
+	fileName, content := fakeServerBinaryFixture("v0.5.0")
+	if _, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content), nil, strings.NewReader("sig")); err == nil {
+		t.Fatal("expected missing checksum to fail")
+	}
+	if _, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content), strings.NewReader("checksum"), nil); err == nil {
+		t.Fatal("expected missing signature to fail")
+	}
+}
+
 func TestBuildUploadedServerBinaryViewAcceptsGitDescribeNewerThanTag(t *testing.T) {
 	info := buildUploadedServerBinaryView("dushengcdn-server-test", "v0.6.3", "v0.6.3-2-gf4d36be", time.Now())
 	if !info.HasUpdate || !info.ReadyToUpgrade {
@@ -390,7 +418,8 @@ func TestUploadManualServerBinaryRejectsSameVersion(t *testing.T) {
 	})
 
 	fileName, content := fakeServerBinaryFixture("v0.5.0")
-	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content))
+	checksumReader, signatureReader := manualServerUploadVerificationReadersForTest(t, "v0.5.0", content)
+	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content), checksumReader, signatureReader)
 	if err != nil {
 		t.Fatalf("expected upload to succeed: %v", err)
 	}
@@ -419,7 +448,8 @@ func TestUploadManualServerBinaryRejectsOversizedUpload(t *testing.T) {
 		resetServerUpgradeTestState(t)
 	})
 
-	_, err := UploadManualServerBinary(context.Background(), "dushengcdn-server-test", bytes.NewReader([]byte("0123456789")))
+	checksumReader, signatureReader := manualServerUploadVerificationReadersForTest(t, "v0.5.0", []byte("0123456789"))
+	_, err := UploadManualServerBinary(context.Background(), "dushengcdn-server-test", bytes.NewReader([]byte("0123456789")), checksumReader, signatureReader)
 	if err == nil {
 		t.Fatal("expected oversized upload to fail")
 	}
@@ -437,7 +467,8 @@ func TestConfirmManualServerUpgradeRejectsExpiredCandidate(t *testing.T) {
 	})
 
 	fileName, content := fakeServerBinaryFixture("v0.5.0")
-	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content))
+	checksumReader, signatureReader := manualServerUploadVerificationReadersForTest(t, "v0.5.0", content)
+	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content), checksumReader, signatureReader)
 	if err != nil {
 		t.Fatalf("expected upload to succeed: %v", err)
 	}
@@ -506,7 +537,8 @@ func TestConfirmManualServerUpgrade(t *testing.T) {
 	})
 
 	fileName, content := fakeServerBinaryFixture("v0.5.0")
-	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content))
+	checksumReader, signatureReader := manualServerUploadVerificationReadersForTest(t, "v0.5.0", content)
+	info, err := UploadManualServerBinary(context.Background(), fileName, bytes.NewReader(content), checksumReader, signatureReader)
 	if err != nil {
 		t.Fatalf("expected upload to succeed: %v", err)
 	}

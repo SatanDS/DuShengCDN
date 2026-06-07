@@ -254,10 +254,7 @@ func handleAgentWSStatus(c *gin.Context, node *model.Node, message service.Agent
 func resolveAgentNodeIP(c *gin.Context, reportedIP string) string {
 	return service.ResolveReportedNodeIP(
 		reportedIP,
-		c.Request.RemoteAddr,
-		c.GetHeader("X-Forwarded-For"),
-		c.GetHeader("X-Real-IP"),
-		c.GetHeader("Forwarded"),
+		c.ClientIP(),
 	)
 }
 

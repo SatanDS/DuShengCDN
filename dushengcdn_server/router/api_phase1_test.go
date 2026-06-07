@@ -95,7 +95,7 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 	}
 
 	repeatPublishReq := httptest.NewRequest(http.MethodPost, "/api/config-versions/publish", nil)
-	repeatPublishReq.Header.Set("Authorization", "Bearer "+token)
+	repeatPublishReq.AddCookie(loginAsRoot(t, engine))
 	repeatPublishRecorder := httptest.NewRecorder()
 	engine.ServeHTTP(repeatPublishRecorder, repeatPublishReq)
 	if repeatPublishRecorder.Code != http.StatusOK {
@@ -554,7 +554,7 @@ func performJSONRequest(t *testing.T, engine http.Handler, token string, method 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.AddCookie(loginAsRoot(t, engine))
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -584,7 +584,7 @@ func performJSONRequestNoFatal(t *testing.T, engine http.Handler, token string, 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.AddCookie(loginAsRoot(t, engine))
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK && recorder.Code != http.StatusBadRequest {
@@ -631,7 +631,7 @@ func performMultipartRequest(t *testing.T, engine http.Handler, token string, pa
 	}
 	req := httptest.NewRequest(http.MethodPost, path, &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.AddCookie(loginAsRoot(t, engine))
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {

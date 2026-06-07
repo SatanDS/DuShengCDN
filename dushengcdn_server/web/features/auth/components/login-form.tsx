@@ -119,9 +119,9 @@ export function LoginForm() {
     loginMutation.mutate(values);
   });
 
-  const handleOAuthLogin = (sourceName: string) => {
+  const handleOAuthLogin = (authorizeUrl: string) => {
     setErrorMessage('');
-    oauthMutation.mutate(sourceName);
+    oauthMutation.mutate(authorizeUrl);
   };
   const hasGitHubAuthSource = (statusQuery.data?.auth_sources ?? []).some(
     (source) => source.type === 'github',
@@ -179,7 +179,7 @@ export function LoginForm() {
                   <SecondaryButton
                     key={source.id}
                     type="button"
-                    onClick={() => handleOAuthLogin(source.name)}
+                    onClick={() => handleOAuthLogin(source.authorize_url || source.name)}
                     className="min-w-36"
                     disabled={oauthMutation.isPending}
                   >

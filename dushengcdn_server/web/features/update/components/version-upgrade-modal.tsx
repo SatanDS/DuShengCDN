@@ -43,7 +43,7 @@ interface VersionUpgradeModalProps {
     onChannelChange: (channel: ReleaseChannel) => void;
     onCheck: () => void;
     onUpgrade: () => void;
-    onUploadBinary: (file: File) => void;
+    onUploadBinary: (binary: File, checksum: File, signature: File) => void;
     onConfirmManualUpgrade: () => void;
 }
 
@@ -107,6 +107,8 @@ export function VersionUpgradeModal({
                                     }: VersionUpgradeModalProps) {
     const upgradeBadge = getUpgradeBadge(release);
     const [selectedBinary, setSelectedBinary] = useState<File | null>(null);
+    const [selectedChecksum, setSelectedChecksum] = useState<File | null>(null);
+    const [selectedSignature, setSelectedSignature] = useState<File | null>(null);
     const uploadPhaseLabel =
         uploadProgress >= 100
             ? '已上传，正在服务端校验版本...'
@@ -136,6 +138,8 @@ export function VersionUpgradeModal({
     useEffect(() => {
         if (!isOpen) {
             setSelectedBinary(null);
+            setSelectedChecksum(null);
+            setSelectedSignature(null);
         }
     }, [isOpen]);
 
@@ -360,6 +364,32 @@ export function VersionUpgradeModal({
                                     disabled={isUploadingBinary || isConfirmingManualUpgrade}
                                 />
                             </ResourceField>
+                            <ResourceField
+                                label=".sha256"
+                                hint="Upload the matching release checksum file."
+                            >
+                                <ResourceInput
+                                    type="file"
+                                    onChange={(event) => {
+                                        const file = event.target.files?.[0] ?? null;
+                                        setSelectedChecksum(file);
+                                    }}
+                                    disabled={isUploadingBinary || isConfirmingManualUpgrade}
+                                />
+                            </ResourceField>
+                            <ResourceField
+                                label=".sig"
+                                hint="Upload the matching release signature file."
+                            >
+                                <ResourceInput
+                                    type="file"
+                                    onChange={(event) => {
+                                        const file = event.target.files?.[0] ?? null;
+                                        setSelectedSignature(file);
+                                    }}
+                                    disabled={isUploadingBinary || isConfirmingManualUpgrade}
+                                />
+                            </ResourceField>
 
                             <div className="flex justify-end">
                                 {showConfirmManualUpgradeAction ? (
@@ -379,12 +409,14 @@ export function VersionUpgradeModal({
                                     <PrimaryButton
                                         type="button"
                                         onClick={() => {
-                                            if (selectedBinary) {
-                                                onUploadBinary(selectedBinary);
+                                            if (selectedBinary && selectedChecksum && selectedSignature) {
+                                                onUploadBinary(selectedBinary, selectedChecksum, selectedSignature);
                                             }
                                         }}
                                         disabled={
                                             !selectedBinary ||
+                                            !selectedChecksum ||
+                                            !selectedSignature ||
                                             isUploadingBinary ||
                                             isConfirmingManualUpgrade
                                         }

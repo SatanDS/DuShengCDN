@@ -147,14 +147,25 @@ func OAuthAuthorize(c *gin.Context) {
 		respondFailure(c, err.Error())
 		return
 	}
+	nonce := ""
+	if source.Type == model.AuthSourceTypeOIDC {
+		nonce, err = service.GenerateOIDCNonce()
+		if err != nil {
+			respondFailure(c, err.Error())
+			return
+		}
+	}
 	session := sessions.Default(c)
 	session.Set(oauthStateSessionKey(source.ID), state)
+	if nonce != "" {
+		session.Set(oauthNonceSessionKey(source.ID), nonce)
+	}
 	if err := session.Save(); err != nil {
 		respondFailure(c, "无法保存授权状态，请重试")
 		return
 	}
 	redirectURL := oauthFrontendCallbackURL(c, source.ID)
-	authorizeURL, err := service.BuildAuthorizeURL(c.Request.Context(), source, redirectURL, state)
+	authorizeURL, err := service.BuildAuthorizeURLWithNonce(c.Request.Context(), source, redirectURL, state, nonce)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -174,12 +185,18 @@ func OAuthCallback(c *gin.Context) {
 	}
 	session := sessions.Default(c)
 	expectedState, _ := session.Get(oauthStateSessionKey(source.ID)).(string)
+	expectedNonce, _ := session.Get(oauthNonceSessionKey(source.ID)).(string)
 	state := c.Query("state")
 	if expectedState == "" || state == "" || state != expectedState {
 		respondFailure(c, "授权状态无效，请重新登录")
 		return
 	}
+	if source.Type == model.AuthSourceTypeOIDC && expectedNonce == "" {
+		respondFailure(c, "OIDC nonce is missing; please start login again")
+		return
+	}
 	session.Delete(oauthStateSessionKey(source.ID))
+	session.Delete(oauthNonceSessionKey(source.ID))
 	if err := session.Save(); err != nil {
 		respondFailure(c, "无法更新授权状态，请重试")
 		return
@@ -193,7 +210,7 @@ func OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	profile, err := service.ExchangeOAuthProfile(c.Request.Context(), source, c.Query("code"), oauthFrontendCallbackURL(c, source.ID))
+	profile, err := service.ExchangeOAuthProfileWithNonce(c.Request.Context(), source, c.Query("code"), oauthFrontendCallbackURL(c, source.ID), expectedNonce)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -332,6 +349,10 @@ func getAuthSourceFromRoute(c *gin.Context) (*model.AuthSource, error) {
 
 func oauthStateSessionKey(sourceID uint) string {
 	return fmt.Sprintf("oauth_state_%d", sourceID)
+}
+
+func oauthNonceSessionKey(sourceID uint) string {
+	return fmt.Sprintf("oauth_nonce_%d", sourceID)
 }
 
 func oauthFrontendCallbackURL(c *gin.Context, sourceID uint) string {

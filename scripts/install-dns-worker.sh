@@ -16,35 +16,36 @@ RELEASE_CHANNEL="${DUSHENGCDN_DNS_WORKER_RELEASE_CHANNEL:-stable}"
 RELEASE_TAG="${DUSHENGCDN_DNS_WORKER_RELEASE_TAG:-}"
 SERVER_URL=""
 TOKEN=""
-SERVICE_NAME="dushengcdn-dns-worker"
+SERVICE_NAME="${DUSHENGCDN_DNS_WORKER_SERVICE_NAME:-}"
 CREATE_SERVICE="true"
 AUTO_INSTALL_DEPS="true"
-LISTEN_ADDR=":53"
+LISTEN_ADDR="${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-}"
 SNAPSHOT_PATH=""
-SOURCE_DATABASE_PROFILE="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}"
+SOURCE_DATABASE_PROFILE="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-}"
 GEOIP_DATABASE=""
 GEOIP_DATABASE_EXPLICIT="false"
-GEOIP_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb}"
+GEOIP_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL:-}"
 AUTO_GEOIP_DOWNLOAD="true"
 ASN_DATABASE=""
 ASN_DATABASE_EXPLICIT="false"
-ASN_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb}"
+ASN_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL:-}"
 AUTO_ASN_DOWNLOAD="true"
 OPERATOR_CIDR_DATABASE=""
 OPERATOR_CIDR_DATABASE_EXPLICIT="false"
-OPERATOR_CIDR_BASE_URL="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL:-https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists}"
-OPERATOR_CIDR_FILES="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES:-chinanet.txt chinanet6.txt cmcc.txt cmcc6.txt unicom.txt unicom6.txt cernet.txt cernet6.txt cstnet.txt cstnet6.txt drpeng.txt drpeng6.txt googlecn.txt googlecn6.txt}"
+OPERATOR_CIDR_BASE_URL="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL:-}"
+OPERATOR_CIDR_FILES="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES:-}"
 AUTO_OPERATOR_CIDR_DOWNLOAD="true"
 SOURCE_DATABASE_METADATA_DIR=""
-SOURCE_DATABASE_UPDATE_TIMER="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER:-true}"
-HEARTBEAT_INTERVAL="10s"
-REQUEST_TIMEOUT="10s"
-SNAPSHOT_MAX_AGE="5m"
-QUERY_RATE_LIMIT="200"
-UDP_RESPONSE_SIZE="1232"
-LOG_LEVEL_VALUE="info"
+SOURCE_DATABASE_UPDATE_TIMER="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER:-}"
+HEARTBEAT_INTERVAL="${DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL:-}"
+REQUEST_TIMEOUT="${DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT:-}"
+SNAPSHOT_MAX_AGE="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE:-}"
+QUERY_RATE_LIMIT="${DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT:-}"
+UDP_RESPONSE_SIZE="${DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE:-}"
+LOG_LEVEL_VALUE="${LOG_LEVEL:-}"
 DUSHENGCDN_BUILD_GO_DIR="${DUSHENGCDN_BUILD_GO_DIR:-/opt/dushengcdn-build/go}"
 OPENSSL_BIN=""
+FORCE_OVERWRITE_ENV="false"
 
 usage() {
   cat <<EOF
@@ -96,6 +97,7 @@ Options:
   --install-deps             Install missing download/build dependencies automatically (default)
   --no-install-deps          Do not install missing dependencies automatically
   --no-service               Do not create systemd service
+  --force-overwrite-env      Overwrite existing dns-worker.env instead of reusing it as defaults
   -h, --help                 Show this help message
 
 Examples:
@@ -150,6 +152,7 @@ while [[ $# -gt 0 ]]; do
     --install-deps) AUTO_INSTALL_DEPS="true"; shift ;;
     --no-install-deps) AUTO_INSTALL_DEPS="false"; shift ;;
     --no-service) CREATE_SERVICE="false"; shift ;;
+    --force-overwrite-env) FORCE_OVERWRITE_ENV="true"; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -190,6 +193,53 @@ env_quote() {
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
   printf '"%s"' "$value"
+}
+
+load_existing_env_defaults() {
+  local env_file="${INSTALL_DIR}/dns-worker.env"
+  [[ "$FORCE_OVERWRITE_ENV" != "true" && -f "$env_file" ]] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+  [[ -n "$SERVER_URL" ]] || SERVER_URL="${DUSHENGCDN_DNS_WORKER_SERVER_URL:-}"
+  [[ -n "$TOKEN" ]] || TOKEN="${DUSHENGCDN_DNS_WORKER_TOKEN:-}"
+  [[ -n "$LISTEN_ADDR" ]] || LISTEN_ADDR="${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-:53}"
+  [[ -n "$SNAPSHOT_PATH" ]] || SNAPSHOT_PATH="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-}"
+  [[ -n "$GEOIP_DATABASE" ]] || GEOIP_DATABASE="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH:-}"
+  [[ -n "$ASN_DATABASE" ]] || ASN_DATABASE="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH:-}"
+  [[ -n "$OPERATOR_CIDR_DATABASE" ]] || OPERATOR_CIDR_DATABASE="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH:-}"
+  [[ -n "$SOURCE_DATABASE_PROFILE" ]] || SOURCE_DATABASE_PROFILE="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-}"
+  [[ -n "$SOURCE_DATABASE_METADATA_DIR" ]] || SOURCE_DATABASE_METADATA_DIR="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_METADATA_DIR:-}"
+  [[ -n "$GEOIP_DATABASE_URL" ]] || GEOIP_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL:-}"
+  [[ -n "$ASN_DATABASE_URL" ]] || ASN_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL:-}"
+  [[ -n "$OPERATOR_CIDR_BASE_URL" ]] || OPERATOR_CIDR_BASE_URL="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL:-}"
+  [[ -n "$OPERATOR_CIDR_FILES" ]] || OPERATOR_CIDR_FILES="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES:-}"
+  [[ -n "$SERVICE_NAME" ]] || SERVICE_NAME="${DUSHENGCDN_DNS_WORKER_SERVICE_NAME:-}"
+  [[ -n "$SOURCE_DATABASE_UPDATE_TIMER" ]] || SOURCE_DATABASE_UPDATE_TIMER="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER:-}"
+  [[ -n "$HEARTBEAT_INTERVAL" ]] || HEARTBEAT_INTERVAL="${DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL:-}"
+  [[ -n "$REQUEST_TIMEOUT" ]] || REQUEST_TIMEOUT="${DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT:-}"
+  [[ -n "$SNAPSHOT_MAX_AGE" ]] || SNAPSHOT_MAX_AGE="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE:-}"
+  [[ -n "$QUERY_RATE_LIMIT" ]] || QUERY_RATE_LIMIT="${DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT:-}"
+  [[ -n "$UDP_RESPONSE_SIZE" ]] || UDP_RESPONSE_SIZE="${DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE:-}"
+  [[ -n "$LOG_LEVEL_VALUE" ]] || LOG_LEVEL_VALUE="${LOG_LEVEL:-}"
+}
+
+apply_dns_worker_defaults() {
+  [[ -n "$SERVICE_NAME" ]] || SERVICE_NAME="dushengcdn-dns-worker"
+  [[ -n "$LISTEN_ADDR" ]] || LISTEN_ADDR=":53"
+  [[ -n "$SOURCE_DATABASE_PROFILE" ]] || SOURCE_DATABASE_PROFILE="full"
+  [[ -n "$GEOIP_DATABASE_URL" ]] || GEOIP_DATABASE_URL="https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb"
+  [[ -n "$ASN_DATABASE_URL" ]] || ASN_DATABASE_URL="https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb"
+  [[ -n "$OPERATOR_CIDR_BASE_URL" ]] || OPERATOR_CIDR_BASE_URL="https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists"
+  [[ -n "$OPERATOR_CIDR_FILES" ]] || OPERATOR_CIDR_FILES="chinanet.txt chinanet6.txt cmcc.txt cmcc6.txt unicom.txt unicom6.txt cernet.txt cernet6.txt cstnet.txt cstnet6.txt drpeng.txt drpeng6.txt googlecn.txt googlecn6.txt"
+  [[ -n "$SOURCE_DATABASE_UPDATE_TIMER" ]] || SOURCE_DATABASE_UPDATE_TIMER="true"
+  [[ -n "$HEARTBEAT_INTERVAL" ]] || HEARTBEAT_INTERVAL="10s"
+  [[ -n "$REQUEST_TIMEOUT" ]] || REQUEST_TIMEOUT="10s"
+  [[ -n "$SNAPSHOT_MAX_AGE" ]] || SNAPSHOT_MAX_AGE="5m"
+  [[ -n "$QUERY_RATE_LIMIT" ]] || QUERY_RATE_LIMIT="200"
+  [[ -n "$UDP_RESPONSE_SIZE" ]] || UDP_RESPONSE_SIZE="1232"
+  [[ -n "$LOG_LEVEL_VALUE" ]] || LOG_LEVEL_VALUE="info"
 }
 
 listen_port_from_addr() {
@@ -1871,8 +1921,9 @@ SNAPSHOT_MAX_AGE="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE:-5m}"
 QUERY_RATE_LIMIT="${DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT:-200}"
 UDP_RESPONSE_SIZE="${DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE:-1232}"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
-CHANNEL="${DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL:-preview}"
+CHANNEL="${DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL:-stable}"
 TAG="${DUSHENGCDN_DNS_WORKER_UPDATE_TAG:-}"
+RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__}"
 
 if [[ -z "$SERVER_URL" || -z "$TOKEN" ]]; then
   echo "DNS Worker update requires SERVER_URL and TOKEN in ${ENV_FILE}" >&2
@@ -1914,7 +1965,96 @@ if [[ -n "$TAG" ]]; then
   args+=(--release-tag "$TAG")
 fi
 
-curl -fsSL "https://github.com/${REPO}/releases/latest/download/install-dns-worker.sh" | bash -s -- "${args[@]}"
+installer="$(mktemp)"
+sha_file="$(mktemp)"
+sig_file="$(mktemp)"
+release_json="$(mktemp)"
+cleanup() {
+  rm -f "$installer" "$sha_file" "$sig_file" "$release_json"
+}
+trap cleanup EXIT
+
+if [[ -n "$TAG" ]]; then
+  curl -fsSL -o "$release_json" "https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
+elif [[ "$CHANNEL" == "preview" ]]; then
+  curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=20" | awk '
+    BEGIN { block=""; depth=0; found=0 }
+    {
+      line=$0
+      if (index(line, "{") > 0) { depth++ }
+      if (depth > 0) { block = block line "\n" }
+      if (index(line, "}") > 0) {
+        depth--
+        if (depth == 0) {
+          if (block ~ /"prerelease"[[:space:]]*:[[:space:]]*true/ && block !~ /"draft"[[:space:]]*:[[:space:]]*true/) {
+            printf "%s", block
+            found=1
+            exit
+          }
+          block=""
+        }
+      }
+    }
+    END { if (!found) exit 1 }
+  ' > "$release_json"
+else
+  curl -fsSL -o "$release_json" "https://api.github.com/repos/${REPO}/releases/latest"
+fi
+
+release_tag="$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$release_json" | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/"$//')"
+installer_url="$(grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*install-dns-worker.sh"' "$release_json" | grep -o 'https://[^"]*' | head -n1 || true)"
+sha_url="$(grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*install-dns-worker.sh\.sha256"' "$release_json" | grep -o 'https://[^"]*' | head -n1 || true)"
+sig_url="$(grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*install-dns-worker.sh\.sig"' "$release_json" | grep -o 'https://[^"]*' | head -n1 || true)"
+if [[ -z "$release_tag" || -z "$installer_url" || -z "$sha_url" || -z "$sig_url" ]]; then
+  echo "release installer assets are incomplete" >&2
+  exit 1
+fi
+
+curl -fsSL -o "$installer" "$installer_url"
+curl -fsSL -o "$sha_file" "$sha_url"
+curl -fsSL -o "$sig_file" "$sig_url"
+
+expected="$(awk 'NF { print $1; exit }' "$sha_file")"
+if [[ -z "$expected" ]]; then
+  echo "installer checksum is empty" >&2
+  exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$installer" | awk '{print $1}')"
+else
+  actual="$(shasum -a 256 "$installer" | awk '{print $1}')"
+fi
+if [[ "$actual" != "$expected" ]]; then
+  echo "installer checksum verification failed" >&2
+  exit 1
+fi
+if [[ -z "$RELEASE_SIGNATURE_PUBLIC_KEY" || "$RELEASE_SIGNATURE_PUBLIC_KEY" == "__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__" ]]; then
+  echo "release signature public key is not configured" >&2
+  exit 1
+fi
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "openssl is required to verify installer signature" >&2
+  exit 1
+fi
+verify_dir="$(mktemp -d)"
+trap 'cleanup; rm -rf "$verify_dir"' EXIT
+{
+  printf 'dushengcdn-release-v1\n'
+  printf '%s\n' "$release_tag"
+  printf '%s\n' "install-dns-worker.sh"
+  printf '%s\n' "$expected"
+} > "${verify_dir}/payload"
+printf '%s' "$RELEASE_SIGNATURE_PUBLIC_KEY" | openssl base64 -d -A > "${verify_dir}/pub.raw"
+printf '%s' "$(awk 'NF { print $1; exit }' "$sig_file")" | openssl base64 -d -A > "${verify_dir}/sig.raw"
+printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00' > "${verify_dir}/prefix.der"
+cat "${verify_dir}/prefix.der" "${verify_dir}/pub.raw" > "${verify_dir}/pub.der"
+openssl pkey -pubin -inform DER -in "${verify_dir}/pub.der" -out "${verify_dir}/pub.pem" >/dev/null 2>&1
+if ! openssl pkeyutl -verify -pubin -inkey "${verify_dir}/pub.pem" -sigfile "${verify_dir}/sig.raw" -rawin -in "${verify_dir}/payload" >/dev/null 2>&1; then
+  echo "installer signature verification failed" >&2
+  exit 1
+fi
+
+bash "$installer" "${args[@]}"
 UPDATEWORKEREOF
   if [[ "$NEEDS_ROOT" == "true" ]]; then
     run_as_root install -m 0755 "$updater_tmp" "$updater"
@@ -1924,6 +2064,9 @@ UPDATEWORKEREOF
     chmod 0755 "$updater"
   fi
 }
+
+load_existing_env_defaults
+apply_dns_worker_defaults
 
 if [[ -z "$SERVER_URL" ]]; then
   die "--server-url is required"
@@ -2068,6 +2211,7 @@ prune_source_database_metadata
 
 ENV_FILE="${INSTALL_DIR}/dns-worker.env"
 ENV_MODE="0600"
+UPDATE_ENABLED_VALUE="${DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED:-true}"
 log "Writing DNS Worker environment file..."
 if [[ "$NEEDS_ROOT" == "true" ]]; then
   write_file_as_root "$ENV_FILE" "$ENV_MODE" <<ENVEOF
@@ -2075,7 +2219,7 @@ DUSHENGCDN_DNS_WORKER_SERVER_URL=$(env_quote "$SERVER_URL")
 DUSHENGCDN_DNS_WORKER_TOKEN=$(env_quote "$TOKEN")
 DUSHENGCDN_DNS_WORKER_INSTALL_DIR=$(env_quote "$INSTALL_DIR")
 DUSHENGCDN_DNS_WORKER_UPDATE_SCRIPT=$(env_quote "${INSTALL_DIR}/update-dns-worker.sh")
-DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED="true"
+DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED=$(env_quote "$UPDATE_ENABLED_VALUE")
 DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=$(env_quote "$LISTEN_ADDR")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=$(env_quote "$SNAPSHOT_PATH")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=$(env_quote "$GEOIP_DATABASE")
@@ -2083,6 +2227,7 @@ DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=$(env_quote "$ASN_DATABASE")
 DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=$(env_quote "$OPERATOR_CIDR_DATABASE")
 DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE=$(env_quote "$SOURCE_DATABASE_PROFILE")
 DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_METADATA_DIR=$(env_quote "$SOURCE_DATABASE_METADATA_DIR")
+DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER=$(env_quote "$SOURCE_DATABASE_UPDATE_TIMER")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL=$(env_quote "$GEOIP_DATABASE_URL")
 DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL=$(env_quote "$ASN_DATABASE_URL")
 DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL=$(env_quote "$OPERATOR_CIDR_BASE_URL")
@@ -2101,7 +2246,7 @@ DUSHENGCDN_DNS_WORKER_SERVER_URL=$(env_quote "$SERVER_URL")
 DUSHENGCDN_DNS_WORKER_TOKEN=$(env_quote "$TOKEN")
 DUSHENGCDN_DNS_WORKER_INSTALL_DIR=$(env_quote "$INSTALL_DIR")
 DUSHENGCDN_DNS_WORKER_UPDATE_SCRIPT=$(env_quote "${INSTALL_DIR}/update-dns-worker.sh")
-DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED="true"
+DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED=$(env_quote "$UPDATE_ENABLED_VALUE")
 DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=$(env_quote "$LISTEN_ADDR")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=$(env_quote "$SNAPSHOT_PATH")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=$(env_quote "$GEOIP_DATABASE")
@@ -2109,6 +2254,7 @@ DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=$(env_quote "$ASN_DATABASE")
 DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=$(env_quote "$OPERATOR_CIDR_DATABASE")
 DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE=$(env_quote "$SOURCE_DATABASE_PROFILE")
 DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_METADATA_DIR=$(env_quote "$SOURCE_DATABASE_METADATA_DIR")
+DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_UPDATE_TIMER=$(env_quote "$SOURCE_DATABASE_UPDATE_TIMER")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL=$(env_quote "$GEOIP_DATABASE_URL")
 DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL=$(env_quote "$ASN_DATABASE_URL")
 DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL=$(env_quote "$OPERATOR_CIDR_BASE_URL")

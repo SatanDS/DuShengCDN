@@ -23,10 +23,14 @@ export function upgradeServer(channel: ReleaseChannel = 'stable') {
 
 export function uploadServerBinary(
   binary: File,
+  checksum: File,
+  signature: File,
   onProgress?: (progress: number) => void,
 ): Promise<UploadedServerBinaryInfo> {
   const formData = new FormData();
   formData.append('binary', binary);
+  formData.append('checksum', checksum);
+  formData.append('signature', signature);
 
   if (!onProgress) {
     return apiRequest<UploadedServerBinaryInfo>('/update/manual-upload', {

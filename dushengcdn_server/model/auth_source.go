@@ -15,6 +15,13 @@ const (
 )
 
 var authSourceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$`)
+var reservedAuthSourceNames = map[string]struct{}{
+	"callback": {},
+	"email":    {},
+	"github":   {},
+	"link":     {},
+	"wechat":   {},
+}
 
 type AuthSource struct {
 	ID                     uint      `json:"id"`
@@ -82,6 +89,9 @@ func (source *AuthSource) Validate() error {
 	}
 	if !authSourceNamePattern.MatchString(source.Name) {
 		return errors.New("认证源名称只能包含字母、数字、短横线或下划线，且必须以字母或数字开头")
+	}
+	if _, ok := reservedAuthSourceNames[strings.ToLower(source.Name)]; ok {
+		return errors.New("认证源名称与系统保留路径冲突")
 	}
 	switch source.Type {
 	case AuthSourceTypeGitHub:

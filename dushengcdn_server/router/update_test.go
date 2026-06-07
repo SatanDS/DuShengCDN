@@ -2,9 +2,14 @@ package router_test
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"dushengcdn/common"
 	"dushengcdn/router"
 	"dushengcdn/service"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -210,6 +215,47 @@ func fakeManualServerBinary(version string) (string, []byte) {
 	return "dushengcdn-server-test.sh", []byte("#!/bin/sh\necho " + version + "\n")
 }
 
+func addManualServerVerificationFilesForTest(t *testing.T, writer *multipart.Writer, tagName string, content []byte) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate release signing key: %v", err)
+	}
+	originalPublicKey := common.ReleaseSignaturePublicKey
+	common.ReleaseSignaturePublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	t.Cleanup(func() {
+		common.ReleaseSignaturePublicKey = originalPublicKey
+	})
+	assetName := "dushengcdn-server-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		assetName += ".exe"
+	}
+	checksumBytes := sha256.Sum256(content)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	checksumPart, err := writer.CreateFormFile("checksum", assetName+".sha256")
+	if err != nil {
+		t.Fatalf("failed to create checksum form file: %v", err)
+	}
+	if _, err = checksumPart.Write([]byte(checksum + "  " + assetName + "\n")); err != nil {
+		t.Fatalf("failed to write checksum form file: %v", err)
+	}
+	payload := []byte(strings.Join([]string{
+		"dushengcdn-release-v1",
+		tagName,
+		assetName,
+		checksum,
+		"",
+	}, "\n"))
+	signature := ed25519.Sign(privateKey, payload)
+	signaturePart, err := writer.CreateFormFile("signature", assetName+".sig")
+	if err != nil {
+		t.Fatalf("failed to create signature form file: %v", err)
+	}
+	if _, err = signaturePart.Write([]byte(base64.StdEncoding.EncodeToString(signature) + "\n")); err != nil {
+		t.Fatalf("failed to write signature form file: %v", err)
+	}
+}
+
 func TestManualUploadRoute(t *testing.T) {
 	originalVersion := common.Version
 	common.Version = "v0.4.0"
@@ -231,6 +277,7 @@ func TestManualUploadRoute(t *testing.T) {
 	if _, err = part.Write(content); err != nil {
 		t.Fatalf("failed to write upload content: %v", err)
 	}
+	addManualServerVerificationFilesForTest(t, writer, "v0.5.0", content)
 	if err = writer.Close(); err != nil {
 		t.Fatalf("failed to close multipart writer: %v", err)
 	}
@@ -345,6 +392,7 @@ func TestManualUpgradeConfirmRoute(t *testing.T) {
 	if _, err = part.Write(content); err != nil {
 		t.Fatalf("failed to write upload content: %v", err)
 	}
+	addManualServerVerificationFilesForTest(t, writer, "v0.5.0", content)
 	if err = writer.Close(); err != nil {
 		t.Fatalf("failed to close multipart writer: %v", err)
 	}

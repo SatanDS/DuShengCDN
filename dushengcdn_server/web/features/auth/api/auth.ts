@@ -81,8 +81,11 @@ export interface LinkExistingOAuthPayload {
 }
 
 export function getOAuthAuthorizeUrl(source: number | string) {
+  const sourcePath = String(source).startsWith('/oauth/')
+    ? String(source)
+    : `/oauth/${encodeURIComponent(String(source))}/authorize`;
   return apiRequest<OAuthAuthorizeResult>(
-    `/oauth/${encodeURIComponent(String(source))}/authorize`,
+    sourcePath,
   );
 }
 

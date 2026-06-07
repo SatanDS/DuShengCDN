@@ -18,8 +18,12 @@ var HomePageLink = ""
 // Any options with "Secret", "Token" in its key won't be return by GetOptions
 
 var SessionSecret = uuid.New().String()
+var SessionCookieSecureConfigured = false
+var SessionCookieSecure = false
+var SessionCookieSameSite = ""
 var InitialRootPassword = ""
 var TrustedProxies = ""
+var JSONBodyMaxBytes int64 = 2 * 1024 * 1024
 var SQLitePath = "dushengcdn.db"
 var SQLDSN = ""
 var DatabaseMaxOpenConns = 30
@@ -87,6 +91,7 @@ var CommercialLicenseOnlineActivationRequired = false
 var CommercialLicenseActivationServerEnabled = false
 var CommercialLicenseLeaseDuration = 72 * time.Hour
 var CommercialLicenseLeaseRenewBefore = 6 * time.Hour
+var CommercialBuildMode = ""
 var CommercialBuildWatermark = ""
 var ServerAutoUpgradeEnabled = false
 var ServerUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"

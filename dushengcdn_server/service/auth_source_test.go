@@ -1,11 +1,21 @@
 package service
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"dushengcdn/common"
 	"dushengcdn/model"
+
+	jose "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 )
 
 func TestCompleteOAuthLoginRequiresLinkWhenRegistrationDisabled(t *testing.T) {
@@ -153,6 +163,140 @@ func TestCompleteOAuthLoginFailsWhenLinkedUserIsMissing(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected linked missing user to fail, got result=%#v pending=%#v", result, pending)
 	}
+}
+
+func TestExchangeOIDCProfileVerifiesJWKSNonceAudienceAndIssuer(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	nonce := "nonce-123"
+	var issuer string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 issuer,
+				"authorization_endpoint": issuer + "/authorize",
+				"token_endpoint":         issuer + "/token",
+				"userinfo_endpoint":      issuer + "/userinfo",
+				"jwks_uri":               issuer + "/jwks",
+			})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+				Key:       publicKey,
+				KeyID:     "test-key",
+				Algorithm: string(jose.EdDSA),
+				Use:       "sig",
+			}}})
+		case "/token":
+			rawIDToken := signedOIDCIDTokenForTest(t, privateKey, issuer, "client-id", "oidc-subject", nonce)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "access-token",
+				"token_type":   "Bearer",
+				"id_token":     rawIDToken,
+			})
+		case "/userinfo":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sub":                "oidc-subject",
+				"preferred_username": "alice",
+				"name":               "Alice",
+				"email":              "alice@example.com",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	issuer = server.URL
+
+	source := &model.AuthSource{
+		Name:               "oidc-test",
+		Type:               model.AuthSourceTypeOIDC,
+		ClientID:           "client-id",
+		ClientSecret:       "client-secret",
+		OpenIDDiscoveryURL: server.URL + "/.well-known/openid-configuration",
+		Scopes:             "openid profile email",
+	}
+	profile, err := ExchangeOAuthProfileWithNonce(context.Background(), source, "code", "https://app.example.com/oauth/oidc-test", nonce)
+	if err != nil {
+		t.Fatalf("ExchangeOAuthProfileWithNonce failed: %v", err)
+	}
+	if profile.ExternalID != "oidc-subject" || profile.ExternalUsername != "alice" || profile.Email != "alice@example.com" {
+		t.Fatalf("unexpected profile: %+v", profile)
+	}
+}
+
+func TestExchangeOIDCProfileRejectsUnsignedIDToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 serverIssuer(r),
+				"authorization_endpoint": serverIssuer(r) + "/authorize",
+				"token_endpoint":         serverIssuer(r) + "/token",
+				"userinfo_endpoint":      "",
+				"jwks_uri":               serverIssuer(r) + "/jwks",
+			})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{})
+		case "/token":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "access-token",
+				"id_token":     "eyJhbGciOiJub25lIn0.eyJzdWIiOiJmb3JnZWQifQ.",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	source := &model.AuthSource{
+		Name:               "oidc-test",
+		Type:               model.AuthSourceTypeOIDC,
+		ClientID:           "client-id",
+		ClientSecret:       "client-secret",
+		OpenIDDiscoveryURL: server.URL + "/.well-known/openid-configuration",
+	}
+	if _, err := ExchangeOAuthProfileWithNonce(context.Background(), source, "code", "https://app.example.com/oauth/oidc-test", "nonce"); err == nil {
+		t.Fatal("expected unsigned id token to be rejected")
+	}
+}
+
+func signedOIDCIDTokenForTest(t *testing.T, privateKey ed25519.PrivateKey, issuer string, audience string, subject string, nonce string) string {
+	t.Helper()
+	options := (&jose.SignerOptions{}).WithType("JWT").WithHeader(jose.HeaderKey("kid"), "test-key")
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.EdDSA, Key: privateKey}, options)
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+	raw, err := jwt.Signed(signer).
+		Claims(jwt.Claims{
+			Issuer:   issuer,
+			Subject:  subject,
+			Audience: jwt.Audience{audience},
+			Expiry:   jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt: jwt.NewNumericDate(time.Now().Add(-time.Minute)),
+		}).
+		Claims(map[string]any{
+			"nonce":              nonce,
+			"preferred_username": "alice",
+			"name":               "Alice",
+			"email":              "alice@example.com",
+		}).
+		Serialize()
+	if err != nil {
+		t.Fatalf("serialize token: %v", err)
+	}
+	return raw
+}
+
+func serverIssuer(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }
 
 func createTestAuthSource(t *testing.T) *model.AuthSource {

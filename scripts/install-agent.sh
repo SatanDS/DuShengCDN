@@ -17,6 +17,8 @@ CREATE_SERVICE="true"
 SERVICE_NAME="dushengcdn-agent"
 OPENRESTY_PATH=""
 AUTO_INSTALL_DEPS="true"
+REINSTALL="false"
+WIPE_DATA="false"
 SOURCE_REF="${SOURCE_REF:-main}"
 ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
 GEOIP_LOOKUP_API_URL=""
@@ -44,6 +46,8 @@ Options:
   --geoip-api-token TOKEN   Optional bearer token for --geoip-api-url
   --install-deps            Install missing runtime dependencies automatically (default)
   --no-install-deps         Do not install missing dependencies automatically
+  --reinstall               Reinstall the Agent binary; preserves existing data unless --wipe-data is also set
+  --wipe-data               With --reinstall, remove the whole install directory before installing
   --no-service              Do not create systemd service
   -h, --help                Show this help message
 
@@ -55,8 +59,9 @@ Examples:
   install-agent.sh --server-url http://10.0.0.1:3000 --agent-token node-token-xyz
 
 Notes:
-  Reinstall will remove the entire install directory before installing again,
-  including the old agent.json, local state, cached data, and downloaded binary.
+  Rerunning the installer upgrades the Agent binary in place and preserves
+  agent.json, local state, cached data, certificates, and observability buffers.
+  A destructive clean reinstall requires both --reinstall and --wipe-data.
 EOF
   exit 0
 }
@@ -75,6 +80,8 @@ while [[ $# -gt 0 ]]; do
     --geoip-api-token) GEOIP_LOOKUP_API_TOKEN="$2"; shift 2 ;;
     --install-deps) AUTO_INSTALL_DEPS="true"; shift ;;
     --no-install-deps) AUTO_INSTALL_DEPS="false"; shift ;;
+    --reinstall)    REINSTALL="true"; shift ;;
+    --wipe-data)    WIPE_DATA="true"; shift ;;
     --no-service)   CREATE_SERVICE="false"; shift ;;
     -h|--help)      usage ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -113,6 +120,11 @@ fi
 
 if [[ -z "$DISCOVERY_TOKEN" && -z "$AGENT_TOKEN" ]]; then
   echo "Error: either --discovery-token or --agent-token is required"
+  exit 1
+fi
+
+if [[ "$WIPE_DATA" == "true" && "$REINSTALL" != "true" ]]; then
+  echo "Error: --wipe-data requires --reinstall" >&2
   exit 1
 fi
 
@@ -1216,11 +1228,15 @@ if [[ "$OS" == "linux" && "$SYSTEMCTL_AVAILABLE" == "true" ]] && systemctl is-ac
 fi
 
 if [[ -d "$INSTALL_DIR" ]]; then
-  echo "Removing existing installation directory: ${INSTALL_DIR}"
-  if [[ "$NEEDS_ROOT" == "true" ]]; then
-    run_as_root rm -rf -- "$INSTALL_DIR"
+  if [[ "$REINSTALL" == "true" && "$WIPE_DATA" == "true" ]]; then
+    echo "Removing existing installation directory: ${INSTALL_DIR}"
+    if [[ "$NEEDS_ROOT" == "true" ]]; then
+      run_as_root rm -rf -- "$INSTALL_DIR"
+    else
+      rm -rf -- "$INSTALL_DIR"
+    fi
   else
-    rm -rf -- "$INSTALL_DIR"
+    echo "Existing installation found; upgrading in place and preserving local data."
   fi
 fi
 
@@ -1236,8 +1252,10 @@ trap - EXIT
 
 # Generate config
 CONFIG_FILE="${INSTALL_DIR}/agent.json"
-echo "Generating agent.json..."
-if [[ -n "$AGENT_TOKEN" ]]; then
+if [[ -f "$CONFIG_FILE" && ( "$REINSTALL" != "true" || "$WIPE_DATA" != "true" ) ]]; then
+  echo "Preserving existing agent.json: ${CONFIG_FILE}"
+elif [[ -n "$AGENT_TOKEN" ]]; then
+  echo "Generating agent.json..."
   if [[ "$NEEDS_ROOT" == "true" ]]; then
     write_file_as_root "$CONFIG_FILE" <<CFGEOF
 {
@@ -1266,6 +1284,7 @@ CFGEOF
 CFGEOF
   fi
 else
+  echo "Generating agent.json..."
   if [[ "$NEEDS_ROOT" == "true" ]]; then
     write_file_as_root "$CONFIG_FILE" <<CFGEOF
 {

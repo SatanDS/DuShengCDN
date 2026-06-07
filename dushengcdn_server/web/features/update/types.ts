@@ -32,6 +32,8 @@ export interface UpgradeStreamSnapshot {
 export interface UploadedServerBinaryInfo {
   upload_token: string;
   file_name: string;
+  checksum?: string;
+  signature_verified: boolean;
   detected_version: string;
   current_version: string;
   has_update: boolean;

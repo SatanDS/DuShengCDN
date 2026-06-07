@@ -215,7 +215,7 @@ func TestAuthSourceUpdateAcceptsClientSecret(t *testing.T) {
 	loginCookie := loginAsRoot(t, engine)
 
 	createResp := performSessionJSONRequest(t, engine, loginCookie, http.MethodPost, "/api/auth-sources/", map[string]any{
-		"name":          "GitHub",
+		"name":          "github-main",
 		"type":          "github",
 		"display_name":  "GitHub",
 		"is_active":     false,
@@ -234,7 +234,7 @@ func TestAuthSourceUpdateAcceptsClientSecret(t *testing.T) {
 	}
 
 	updateResp := performSessionJSONRequest(t, engine, loginCookie, http.MethodPost, "/api/auth-sources/1/update", map[string]any{
-		"name":          "GitHub",
+		"name":          "github-main",
 		"type":          "github",
 		"display_name":  "GitHub",
 		"is_active":     true,
@@ -566,6 +566,32 @@ func TestSessionAuthUsesCurrentRoleAfterDowngrade(t *testing.T) {
 	}
 	if !strings.Contains(resp.Message, "权限不足") {
 		t.Fatalf("expected permission denied message, got %q", resp.Message)
+	}
+}
+
+func TestBearerTokenRejectedForHighRiskAdminRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	token := prepareRootToken(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/config-versions/publish", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Success || !strings.Contains(resp.Message, "token") {
+		t.Fatalf("expected bearer token to be rejected, got %+v", resp)
 	}
 }
 

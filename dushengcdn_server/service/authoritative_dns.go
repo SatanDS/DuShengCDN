@@ -1429,11 +1429,6 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		worker.LastRollupAt = &rollupMeta.lastRollupAt
 		worker.LastRollupCount = rollupMeta.count
 	}
-	if updateNow {
-		worker.UpdateRequested = false
-		worker.UpdateChannel = ReleaseChannelStable.String()
-		worker.UpdateTag = ""
-	}
 	db := model.DB.Session(&gorm.Session{DisableNestedTransaction: true})
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(worker).Error; err != nil {

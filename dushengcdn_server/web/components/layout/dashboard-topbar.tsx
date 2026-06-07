@@ -108,8 +108,12 @@ export function DashboardTopbar() {
   });
 
   const uploadBinaryMutation = useMutation({
-    mutationFn: (binary: File) =>
-      uploadServerBinary(binary, (progress) => {
+    mutationFn: (payload: {
+      binary: File;
+      checksum: File;
+      signature: File;
+    }) =>
+      uploadServerBinary(payload.binary, payload.checksum, payload.signature, (progress) => {
         setUploadProgress(progress);
       }),
     onSuccess: (candidate) => {
@@ -276,11 +280,11 @@ export function DashboardTopbar() {
     setVersionFeedback(null);
   };
 
-  const handleUploadBinary = (binary: File) => {
+  const handleUploadBinary = (binary: File, checksum: File, signature: File) => {
     setUploadProgress(0);
     setManualUpgradeStatus(null);
     setManualUpgradeError(null);
-    uploadBinaryMutation.mutate(binary);
+    uploadBinaryMutation.mutate({ binary, checksum, signature });
   };
 
   const handleConfirmManualUpgrade = () => {

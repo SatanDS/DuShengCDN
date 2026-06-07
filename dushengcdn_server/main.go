@@ -114,6 +114,7 @@ func main() {
 	configureTrustedProxies(server)
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.CORS())
+	server.Use(middleware.JSONBodyLimit())
 
 	// Initialize session store
 	sessionStoreConfigured := false
@@ -181,11 +182,26 @@ func configureSessionStore(store sessions.Store) {
 	if store == nil {
 		return
 	}
+	sameSite := http.SameSiteLaxMode
+	switch strings.ToLower(strings.TrimSpace(common.SessionCookieSameSite)) {
+	case "strict":
+		sameSite = http.SameSiteStrictMode
+	case "none":
+		sameSite = http.SameSiteNoneMode
+	case "default":
+		sameSite = http.SameSiteDefaultMode
+	case "lax", "":
+		sameSite = http.SameSiteLaxMode
+	}
+	secure := strings.HasPrefix(strings.ToLower(strings.TrimSpace(common.ServerAddress)), "https://")
+	if common.SessionCookieSecureConfigured {
+		secure = common.SessionCookieSecure
+	}
 	store.Options(sessions.Options{
 		Path:     "/",
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   strings.HasPrefix(strings.ToLower(strings.TrimSpace(common.ServerAddress)), "https://"),
+		SameSite: sameSite,
+		Secure:   secure,
 	})
 }
 

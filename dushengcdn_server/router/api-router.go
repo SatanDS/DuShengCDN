@@ -107,7 +107,7 @@ func SetApiRouter(router *gin.Engine) {
 			licenseRoute.POST("/restore", controller.RestoreCommercialLicense)
 		}
 		proxyRoute := apiRouter.Group("/proxy-routes")
-		proxyRoute.Use(middleware.AdminAuth())
+		proxyRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			proxyRoute.GET("/", controller.GetProxyRoutes)
 			proxyRoute.GET("/:id", controller.GetProxyRoute)
@@ -119,7 +119,7 @@ func SetApiRouter(router *gin.Engine) {
 			proxyRoute.POST("/:id/cache/warm", controller.WarmProxyRouteCache)
 		}
 		originRoute := apiRouter.Group("/origins")
-		originRoute.Use(middleware.AdminAuth())
+		originRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			originRoute.GET("/", controller.GetOrigins)
 			originRoute.GET("/:id", controller.GetOrigin)
@@ -128,7 +128,7 @@ func SetApiRouter(router *gin.Engine) {
 			originRoute.POST("/:id/delete", controller.DeleteOrigin)
 		}
 		managedDomainRoute := apiRouter.Group("/managed-domains")
-		managedDomainRoute.Use(middleware.AdminAuth())
+		managedDomainRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			managedDomainRoute.GET("/", controller.GetManagedDomains)
 			managedDomainRoute.GET("/match", controller.MatchManagedDomainCertificate)
@@ -137,7 +137,7 @@ func SetApiRouter(router *gin.Engine) {
 			managedDomainRoute.POST("/:id/delete", controller.DeleteManagedDomain)
 		}
 		tlsCertificateRoute := apiRouter.Group("/tls-certificates")
-		tlsCertificateRoute.Use(middleware.AdminAuth())
+		tlsCertificateRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			tlsCertificateRoute.GET("/", controller.GetTLSCertificates)
 			tlsCertificateRoute.GET("/:id", controller.GetTLSCertificate)
@@ -152,12 +152,12 @@ func SetApiRouter(router *gin.Engine) {
 			tlsCertificateRoute.POST("/:id/renew", controller.RenewTLSCertificate)
 		}
 		acmeAccountRoute := apiRouter.Group("/acme-accounts")
-		acmeAccountRoute.Use(middleware.AdminAuth())
+		acmeAccountRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			acmeAccountRoute.GET("/default", controller.GetDefaultAcmeAccount)
 		}
 		dnsAccountRoute := apiRouter.Group("/dns-accounts")
-		dnsAccountRoute.Use(middleware.AdminAuth())
+		dnsAccountRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			dnsAccountRoute.GET("/", controller.GetDnsAccounts)
 			dnsAccountRoute.POST("/", controller.CreateDnsAccount)
@@ -165,7 +165,7 @@ func SetApiRouter(router *gin.Engine) {
 			dnsAccountRoute.POST("/:id/delete", controller.DeleteDnsAccount)
 		}
 		dnsZoneRoute := apiRouter.Group("/dns-zones")
-		dnsZoneRoute.Use(middleware.AdminAuth())
+		dnsZoneRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			dnsZoneRoute.GET("/", controller.GetDNSZones)
 			dnsZoneRoute.GET("/:id", controller.GetDNSZone)
@@ -177,13 +177,13 @@ func SetApiRouter(router *gin.Engine) {
 			dnsZoneRoute.POST("/:id/records", controller.CreateDNSZoneRecord)
 		}
 		dnsRecordRoute := apiRouter.Group("/dns-records")
-		dnsRecordRoute.Use(middleware.AdminAuth())
+		dnsRecordRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			dnsRecordRoute.POST("/:id/update", controller.UpdateDNSRecord)
 			dnsRecordRoute.POST("/:id/delete", controller.DeleteDNSRecord)
 		}
 		dnsWorkerAdminRoute := apiRouter.Group("/dns-workers")
-		dnsWorkerAdminRoute.Use(middleware.AdminAuth())
+		dnsWorkerAdminRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			dnsWorkerAdminRoute.GET("/", controller.GetDNSWorkers)
 			dnsWorkerAdminRoute.GET("/observability", controller.GetDNSObservability)
@@ -206,7 +206,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/dns-source-databases/manifest", controller.GetDNSSourceDatabaseManifest)
 		apiRouter.GET("/dns-source-databases/files/:kind/:name", controller.DownloadDNSSourceDatabaseFile)
 		configVersionRoute := apiRouter.Group("/config-versions")
-		configVersionRoute.Use(middleware.AdminAuth())
+		configVersionRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			configVersionRoute.GET("/", controller.GetConfigVersions)
 			configVersionRoute.GET("/active", controller.GetActiveConfigVersion)
@@ -218,12 +218,12 @@ func SetApiRouter(router *gin.Engine) {
 			configVersionRoute.POST("/cleanup", controller.CleanupConfigVersions)
 		}
 		dashboardRoute := apiRouter.Group("/dashboard")
-		dashboardRoute.Use(middleware.AdminAuth())
+		dashboardRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			dashboardRoute.GET("/overview", controller.GetDashboardOverview)
 		}
 		nodeRoute := apiRouter.Group("/nodes")
-		nodeRoute.Use(middleware.AdminAuth())
+		nodeRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			nodeRoute.GET("/bootstrap-token", controller.GetNodeBootstrapToken)
 			nodeRoute.POST("/bootstrap-token/rotate", controller.RotateNodeBootstrapToken)
@@ -239,13 +239,13 @@ func SetApiRouter(router *gin.Engine) {
 			nodeRoute.POST("/:id/observability/cleanup", controller.CleanupNodeHealthEvents)
 		}
 		applyLogRoute := apiRouter.Group("/apply-logs")
-		applyLogRoute.Use(middleware.AdminAuth())
+		applyLogRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			applyLogRoute.GET("/", controller.GetApplyLogs)
 			applyLogRoute.POST("/cleanup", controller.CleanupApplyLogs)
 		}
 		accessLogRoute := apiRouter.Group("/access-logs")
-		accessLogRoute.Use(middleware.AdminAuth())
+		accessLogRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			accessLogRoute.GET("/", controller.GetAccessLogs)
 			accessLogRoute.GET("/folds", controller.GetFoldedAccessLogs)

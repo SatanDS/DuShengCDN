@@ -14,7 +14,6 @@ on:
         required: false
         type: string
   push:
-    branches: ["main"]
     tags: ["v*"]
 
 jobs:
@@ -48,17 +47,6 @@ jobs:
           elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             echo "workflow_dispatch requires an explicit version input when HEAD is not tagged" >&2
             exit 1
-          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
-            BASE_VERSION="$(tr -d '[:space:]' < VERSION)"
-            BASE_VERSION="${BASE_VERSION#v}"
-            if [[ "$BASE_VERSION" =~ ^([0-9]+)\.([0-9]+)\.x$ ]]; then
-              BASE_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${GITHUB_RUN_NUMBER}"
-            elif [[ ! "$BASE_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
-              echo "VERSION file must contain a numeric base version for automatic main releases" >&2
-              exit 1
-            fi
-            SHORT_SHA="$(git rev-parse --short=12 HEAD)"
-            VERSION="v${BASE_VERSION}-private.${GITHUB_RUN_NUMBER}-g${SHORT_SHA}"
           else
             echo "unable to resolve release version from the current ref" >&2
             exit 1
@@ -66,7 +54,7 @@ jobs:
 
           echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [[ "$VERSION" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+          if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           else
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
@@ -162,6 +150,7 @@ jobs:
           RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY }}
         run: |
           go mod download
+          go install mvdan.cc/garble@latest
           if [[ -z "$RELEASE_SIGNATURE_PUBLIC_KEY" || -z "$RELEASE_SIGNING_PRIVATE_KEY" ]]; then
             echo "release signing secrets are required" >&2
             exit 1
@@ -171,7 +160,7 @@ jobs:
             exit 1
           fi
           mkdir -p ../dist
-          go build -trimpath -buildvcs=false -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY' -X 'dushengcdn/common.CommercialBuildWatermark=$BUILD_WATERMARK' -X 'dushengcdn/common.CommercialLicensePublicKeys=$COMMERCIAL_LICENSE_PUBLIC_KEYS'" -o "../dist/$ASSET_NAME" .
+          garble -literals build -trimpath -buildvcs=false -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY' -X 'dushengcdn/common.CommercialBuildMode=required-online' -X 'dushengcdn/common.CommercialBuildWatermark=$BUILD_WATERMARK' -X 'dushengcdn/common.CommercialLicensePublicKeys=$COMMERCIAL_LICENSE_PUBLIC_KEYS'" -o "../dist/$ASSET_NAME" .
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
           GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
@@ -504,3 +493,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
           GH_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
+
+      - name: Verify Release Metadata
+        env:
+          GH_TOKEN: ${{ secrets.DUSHENGCDN_RELEASE_REPO_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+          REPO: ${{ env.DUSHENGCDN_RELEASE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          prerelease="$(gh api "repos/${REPO}/releases/tags/${VERSION}" --jq '.prerelease')"
+          if [[ "$prerelease" != "$IS_PRERELEASE" ]]; then
+            echo "release prerelease flag mismatch: expected $IS_PRERELEASE got $prerelease" >&2
+            exit 1
+          fi
+          latest_tag="$(gh api "repos/${REPO}/releases/latest" --jq '.tag_name')"
+          if [[ "$IS_PRERELEASE" == "true" && "$latest_tag" == "$VERSION" ]]; then
+            echo "prerelease must not become /releases/latest" >&2
+            exit 1
+          fi
+          if [[ "$IS_PRERELEASE" != "true" && "$latest_tag" != "$VERSION" ]]; then
+            echo "stable release did not become /releases/latest: $latest_tag" >&2
+            exit 1
+          fi

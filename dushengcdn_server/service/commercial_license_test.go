@@ -832,6 +832,26 @@ func TestInstallCommercialLicenseAllowsUnsignedOnlyWhenConfigured(t *testing.T) 
 	}
 }
 
+func TestInstallCommercialLicenseRejectsUnsignedInRequiredOnlineBuild(t *testing.T) {
+	setupServiceTestDB(t)
+	withCommercialLicenseTestConfig(t, true, "", true)
+	previousBuildMode := common.CommercialBuildMode
+	common.CommercialBuildMode = "required-online"
+	t.Cleanup(func() {
+		common.CommercialBuildMode = previousBuildMode
+	})
+
+	token := buildUnsignedCommercialLicenseToken(t, CommercialLicensePayload{
+		LicenseID:    "lic-required-online",
+		CustomerName: "Production",
+		Plan:         "enterprise",
+		MaxNodes:     10,
+	})
+	if _, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: token}); err == nil {
+		t.Fatal("expected required-online commercial build to reject unsigned license")
+	}
+}
+
 func buildUnsignedCommercialLicenseToken(t *testing.T, payload CommercialLicensePayload) string {
 	t.Helper()
 	raw, err := json.Marshal(payload)

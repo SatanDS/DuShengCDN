@@ -50,11 +50,23 @@ func init() {
 	if os.Getenv("SESSION_SECRET") != "" {
 		SessionSecret = os.Getenv("SESSION_SECRET")
 	}
+	if os.Getenv("SESSION_COOKIE_SECURE") != "" {
+		SessionCookieSecureConfigured = true
+		SessionCookieSecure = readBoolEnv("SESSION_COOKIE_SECURE")
+	}
+	if strings.TrimSpace(os.Getenv("SESSION_COOKIE_SAME_SITE")) != "" {
+		SessionCookieSameSite = strings.ToLower(strings.TrimSpace(os.Getenv("SESSION_COOKIE_SAME_SITE")))
+	}
 	if os.Getenv("DUSHENGCDN_INITIAL_ROOT_PASSWORD") != "" {
 		InitialRootPassword = os.Getenv("DUSHENGCDN_INITIAL_ROOT_PASSWORD")
 	}
 	if os.Getenv("TRUSTED_PROXIES") != "" {
 		TrustedProxies = os.Getenv("TRUSTED_PROXIES")
+	}
+	if value := readPositiveInt64Env("DUSHENGCDN_JSON_BODY_MAX_BYTES"); value > 0 {
+		JSONBodyMaxBytes = value
+	} else if value := readPositiveInt64Env("JSON_BODY_MAX_BYTES"); value > 0 {
+		JSONBodyMaxBytes = value
 	}
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")
@@ -119,6 +131,7 @@ func init() {
 	if strings.TrimSpace(os.Getenv("DUSHENGCDN_BUILD_WATERMARK")) != "" {
 		CommercialBuildWatermark = strings.TrimSpace(os.Getenv("DUSHENGCDN_BUILD_WATERMARK"))
 	}
+	enforceCommercialBuildMode()
 	if os.Getenv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED") != "" {
 		ServerAutoUpgradeEnabled = readBoolEnv("DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED")
 	}
@@ -179,11 +192,32 @@ func readPositiveIntEnv(key string) int {
 	return value
 }
 
+func readPositiveInt64Env(key string) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		slog.Warn("ignore invalid positive integer environment value", "key", key, "value", raw)
+		return 0
+	}
+	return value
+}
+
 func readBoolEnv(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
 	case "1", "true", "yes", "on":
 		return true
 	default:
 		return false
+	}
+}
+
+func enforceCommercialBuildMode() {
+	if strings.EqualFold(strings.TrimSpace(CommercialBuildMode), "required-online") {
+		CommercialLicenseRequired = true
+		CommercialLicenseOnlineActivationRequired = true
+		CommercialLicenseAllowUnsigned = false
 	}
 }
