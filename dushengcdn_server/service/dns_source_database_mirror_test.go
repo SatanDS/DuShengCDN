@@ -84,6 +84,10 @@ func TestRefreshDNSSourceDatabaseMirrorPublishesCurrentAndRemovesPrevious(t *tes
 	if len(manifest.Sources) != 3 {
 		t.Fatalf("expected three mirrored sources, got %+v", manifest.Sources)
 	}
+	status := GetDNSSourceDatabaseMirrorStatus()
+	if !status.Available || status.UpdatedAt == nil || status.SourceCount != 3 || status.FileCount != 5 || status.TotalSize <= 0 {
+		t.Fatalf("unexpected mirror status: %+v", status)
+	}
 	file, meta, err := OpenDNSSourceDatabaseMirrorFile("operator", "chinanet.txt")
 	if err != nil {
 		t.Fatalf("OpenDNSSourceDatabaseMirrorFile: %v", err)
@@ -99,6 +103,20 @@ func TestRefreshDNSSourceDatabaseMirrorPublishesCurrentAndRemovesPrevious(t *tes
 	defer emptyFile.Close()
 	if emptyMeta.Name != "drpeng6.txt" || emptyMeta.SHA256 == "" || emptyMeta.Size != 0 {
 		t.Fatalf("unexpected empty operator mirror file metadata: %+v", emptyMeta)
+	}
+}
+
+func TestGetDNSSourceDatabaseMirrorStatusMissing(t *testing.T) {
+	root := t.TempDir()
+	oldMirrorPath := common.DNSSourceDatabaseMirrorPath
+	common.DNSSourceDatabaseMirrorPath = root
+	t.Cleanup(func() {
+		common.DNSSourceDatabaseMirrorPath = oldMirrorPath
+	})
+
+	status := GetDNSSourceDatabaseMirrorStatus()
+	if status.Available || status.UpdatedAt != nil || len(status.MissingKinds) != 3 {
+		t.Fatalf("expected missing mirror status, got %+v", status)
 	}
 }
 

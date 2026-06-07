@@ -281,6 +281,10 @@ func RefreshDNSSourceDatabaseMirror(c *gin.Context) {
 	})
 }
 
+func GetDNSSourceDatabaseMirrorStatus(c *gin.Context) {
+	respondSuccess(c, service.GetDNSSourceDatabaseMirrorStatus())
+}
+
 func GetDNSSnapshot(c *gin.Context) {
 	worker, ok := authenticateDNSWorker(c)
 	if !ok {

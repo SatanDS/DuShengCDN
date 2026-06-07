@@ -51,6 +51,16 @@ type DNSSourceDatabaseMirrorFile struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type DNSSourceDatabaseMirrorStatus struct {
+	Available    bool       `json:"available"`
+	UpdatedAt    *time.Time `json:"updated_at"`
+	SourceCount  int        `json:"source_count"`
+	FileCount    int        `json:"file_count"`
+	TotalSize    int64      `json:"total_size"`
+	MissingKinds []string   `json:"missing_kinds"`
+	Message      string     `json:"message"`
+}
+
 type dnsSourceDatabaseSource struct {
 	kind  string
 	files []dnsSourceDatabaseDownload
@@ -130,6 +140,46 @@ func GetDNSSourceDatabaseMirrorManifest() (*DNSSourceDatabaseMirrorManifest, err
 		return nil, err
 	}
 	return &manifest, nil
+}
+
+func GetDNSSourceDatabaseMirrorStatus() DNSSourceDatabaseMirrorStatus {
+	manifest, err := GetDNSSourceDatabaseMirrorManifest()
+	if err != nil {
+		return DNSSourceDatabaseMirrorStatus{
+			Available:    false,
+			MissingKinds: []string{dnsSourceDatabaseKindOperator, dnsSourceDatabaseKindASN, dnsSourceDatabaseKindCountry},
+			Message:      "面板端暂未完成源库备份。",
+		}
+	}
+
+	expectedKinds := []string{
+		dnsSourceDatabaseKindOperator,
+		dnsSourceDatabaseKindASN,
+		dnsSourceDatabaseKindCountry,
+	}
+	status := DNSSourceDatabaseMirrorStatus{
+		Available:    true,
+		UpdatedAt:    &manifest.UpdatedAt,
+		SourceCount:  len(manifest.Sources),
+		MissingKinds: []string{},
+		Message:      "面板端源库备份已可用。",
+	}
+	for _, kind := range expectedKinds {
+		entry, ok := manifest.Sources[kind]
+		if !ok || len(entry.Files) == 0 {
+			status.Available = false
+			status.MissingKinds = append(status.MissingKinds, kind)
+			continue
+		}
+		for _, file := range entry.Files {
+			status.FileCount++
+			status.TotalSize += file.Size
+		}
+	}
+	if !status.Available {
+		status.Message = "面板端源库备份不完整。"
+	}
+	return status
 }
 
 func OpenDNSSourceDatabaseMirrorFile(kind string, name string) (*os.File, DNSSourceDatabaseMirrorFile, error) {

@@ -13,6 +13,7 @@ import type {
   DatabaseCleanupPayload,
   DatabaseCleanupResult,
   DNSSourceDatabaseMirrorRefreshResult,
+  DNSSourceDatabaseMirrorStatus,
   ExternalAccountBinding,
   GeoIPLookupResult,
   OptionBatchPayload,
@@ -60,6 +61,17 @@ export function refreshDNSSourceDatabaseMirror() {
       method: 'POST',
     },
   );
+}
+
+export function getDNSSourceDatabaseMirrorStatus() {
+  return apiRequest<DNSSourceDatabaseMirrorStatus>(
+    '/dns-source-databases/status',
+  ).then((status) => ({
+    ...status,
+    missing_kinds: Array.isArray(status.missing_kinds)
+      ? status.missing_kinds
+      : [],
+  }));
 }
 
 export function getCommercialLicenseStatus() {

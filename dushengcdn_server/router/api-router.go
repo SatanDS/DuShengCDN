@@ -198,6 +198,7 @@ func SetApiRouter(router *gin.Engine) {
 		dnsSourceDatabaseAdminRoute := apiRouter.Group("/dns-source-databases")
 		dnsSourceDatabaseAdminRoute.Use(middleware.RootAuth(), middleware.NoTokenAuth())
 		{
+			dnsSourceDatabaseAdminRoute.GET("/status", controller.GetDNSSourceDatabaseMirrorStatus)
 			dnsSourceDatabaseAdminRoute.POST("/refresh", controller.RefreshDNSSourceDatabaseMirror)
 		}
 		apiRouter.GET("/dns-snapshot", controller.GetDNSSnapshot)

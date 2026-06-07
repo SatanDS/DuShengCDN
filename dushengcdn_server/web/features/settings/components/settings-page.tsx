@@ -33,6 +33,7 @@ import {
   getCommercialLicenseIssuerStatus,
   getBootstrapToken,
   getCommercialLicenseStatus,
+  getDNSSourceDatabaseMirrorStatus,
   getExternalAccountBindings,
   getOptions,
   getSettingsProfile,
@@ -89,6 +90,10 @@ const commercialLicenseIssuerQueryKey = [
 const commercialLicenseActivationsQueryKey = [
   'settings',
   'commercial-license-activations',
+] as const;
+const dnsSourceDatabaseMirrorStatusQueryKey = [
+  'settings',
+  'dns-source-database-mirror-status',
 ] as const;
 const installerScriptUrl =
   'https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh';
@@ -531,6 +536,12 @@ export function SettingsPage() {
     queryKey: commercialLicenseActivationsQueryKey,
     queryFn: getCommercialLicenseActivations,
     enabled: isRoot && activeTab === 'license',
+  });
+
+  const dnsSourceDatabaseMirrorStatusQuery = useQuery({
+    queryKey: dnsSourceDatabaseMirrorStatusQueryKey,
+    queryFn: getDNSSourceDatabaseMirrorStatus,
+    enabled: isRoot && activeTab === 'database',
   });
 
   useEffect(() => {
@@ -1190,29 +1201,80 @@ export function SettingsPage() {
       title="DNS 源库镜像"
       description="在面板服务器端刷新 gaoyifan/china-operator-ip、GeoLite2-ASN 与 GeoLite2-Country 的本地镜像，供 DNS 响应端 GitHub 下载失败时回退使用。"
       action={
-        <SecondaryButton
-          type="button"
-          onClick={() =>
-            void runBusyAction(
-              'dns-source-database-refresh',
-              async () => {
-                const result = await refreshDNSSourceDatabaseMirror();
-                setFeedback({
-                  tone: result.started ? 'success' : 'info',
-                  message: result.message,
-                });
-              },
-              '刷新 DNS 源库镜像',
-            )
-          }
-          disabled={busyKey === 'dns-source-database-refresh'}
-        >
-          {busyKey === 'dns-source-database-refresh'
-            ? '触发中...'
-            : '刷新源库镜像'}
-        </SecondaryButton>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <StatusBadge
+            label={
+              dnsSourceDatabaseMirrorStatusQuery.isLoading
+                ? '检测中'
+                : dnsSourceDatabaseMirrorStatusQuery.data?.available
+                  ? '面板已备份'
+                  : '面板未备份'
+            }
+            variant={
+              dnsSourceDatabaseMirrorStatusQuery.isLoading
+                ? 'info'
+                : dnsSourceDatabaseMirrorStatusQuery.data?.available
+                  ? 'success'
+                  : 'warning'
+            }
+          />
+          <SecondaryButton
+            type="button"
+            onClick={() =>
+              void runBusyAction(
+                'dns-source-database-refresh',
+                async () => {
+                  const result = await refreshDNSSourceDatabaseMirror();
+                  setFeedback({
+                    tone: result.started ? 'success' : 'info',
+                    message: result.message,
+                  });
+                  await queryClient.invalidateQueries({
+                    queryKey: dnsSourceDatabaseMirrorStatusQueryKey,
+                  });
+                },
+                '刷新 DNS 源库镜像',
+              )
+            }
+            disabled={busyKey === 'dns-source-database-refresh'}
+          >
+            {busyKey === 'dns-source-database-refresh'
+              ? '触发中...'
+              : '刷新源库镜像'}
+          </SecondaryButton>
+        </div>
       }
     >
+      <div className="mb-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+              面板端备份状态
+            </p>
+            <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
+              {dnsSourceDatabaseMirrorStatusQuery.isLoading
+                ? '正在检测源库镜像'
+                : (dnsSourceDatabaseMirrorStatusQuery.data?.message ??
+                  '面板端暂未完成源库备份。')}
+            </p>
+          </div>
+          <p className="text-right text-sm text-[var(--foreground-secondary)]">
+            {dnsSourceDatabaseMirrorStatusQuery.data?.updated_at
+              ? `备份时间 ${formatDateTime(new Date(dnsSourceDatabaseMirrorStatusQuery.data.updated_at))}`
+              : '暂无备份时间'}
+          </p>
+        </div>
+        {dnsSourceDatabaseMirrorStatusQuery.data?.available ? (
+          <p className="mt-3 text-xs text-[var(--foreground-muted)]">
+            已备份 {dnsSourceDatabaseMirrorStatusQuery.data.source_count} 类源库，
+            {dnsSourceDatabaseMirrorStatusQuery.data.file_count} 个文件。
+          </p>
+        ) : dnsSourceDatabaseMirrorStatusQuery.data?.missing_kinds.length ? (
+          <p className="mt-3 text-xs text-[var(--foreground-muted)]">
+            缺少：{dnsSourceDatabaseMirrorStatusQuery.data.missing_kinds.join('、')}
+          </p>
+        ) : null}
+      </div>
       <div className="grid gap-4 md:grid-cols-3">
         <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
           <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">

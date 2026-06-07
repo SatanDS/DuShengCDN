@@ -82,6 +82,16 @@ export interface DNSSourceDatabaseMirrorRefreshResult {
   message: string;
 }
 
+export interface DNSSourceDatabaseMirrorStatus {
+  available: boolean;
+  updated_at?: string | null;
+  source_count: number;
+  file_count: number;
+  total_size: number;
+  missing_kinds: string[];
+  message: string;
+}
+
 export type CommercialLicenseStatus =
   | 'community'
   | 'missing'
