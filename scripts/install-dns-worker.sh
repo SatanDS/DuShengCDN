@@ -626,7 +626,7 @@ verify_release_signature() {
   local asset="$2"
   local checksum="$3"
   local signature_file="$4"
-  local public_key key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len
+  local public_key key_b64 sig_text sig_b64 verify_dir pub_raw sig_raw pub_der pub_pem payload pub_len sig_len verify_log
 
   public_key="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-$RELEASE_SIGNATURE_PUBLIC_KEY}"
   [[ -n "$tag" && -n "$asset" && -n "$checksum" ]] || return 1
@@ -643,30 +643,36 @@ verify_release_signature() {
   pub_der="${verify_dir}/public.der"
   pub_pem="${verify_dir}/public.pem"
   payload="${verify_dir}/payload.txt"
+  verify_log="${verify_dir}/openssl-verify.log"
 
   if ! printf '%s' "$key_b64" | "$OPENSSL_BIN" base64 -d -A > "$pub_raw" 2>/dev/null; then
+    log "Release signature public key is not valid base64."
     rm -rf -- "$verify_dir"
     return 1
   fi
   pub_len="$(wc -c < "$pub_raw" | tr -d '[:space:]')"
   if [[ "$pub_len" != "32" ]]; then
+    log "Release signature public key length is invalid: ${pub_len} bytes."
     rm -rf -- "$verify_dir"
     return 1
   fi
 
   if ! printf '%s' "$sig_b64" | "$OPENSSL_BIN" base64 -d -A > "$sig_raw" 2>/dev/null; then
+    log "Release signature asset is not valid base64."
     rm -rf -- "$verify_dir"
     return 1
   fi
   sig_len="$(wc -c < "$sig_raw" | tr -d '[:space:]')"
   if [[ "$sig_len" != "64" ]]; then
+    log "Release signature asset length is invalid: ${sig_len} bytes."
     rm -rf -- "$verify_dir"
     return 1
   fi
 
   printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00' > "$pub_der"
   cat "$pub_raw" >> "$pub_der"
-  if ! "$OPENSSL_BIN" pkey -pubin -inform DER -in "$pub_der" -out "$pub_pem" >/dev/null 2>&1; then
+  if ! "$OPENSSL_BIN" pkey -pubin -inform DER -in "$pub_der" -out "$pub_pem" >/dev/null 2>"$verify_log"; then
+    log "OpenSSL cannot import the Ed25519 release public key: $(tr '\n' ' ' < "$verify_log" | sed 's/[[:space:]]\+/ /g')"
     rm -rf -- "$verify_dir"
     return 1
   fi
@@ -678,7 +684,11 @@ verify_release_signature() {
     printf '%s\n' "$checksum"
   } > "$payload"
 
-  if ! "$OPENSSL_BIN" pkeyutl -verify -pubin -inkey "$pub_pem" -sigfile "$sig_raw" -rawin -in "$payload" >/dev/null 2>&1; then
+  if ! "$OPENSSL_BIN" pkeyutl -verify -pubin -inkey "$pub_pem" -sigfile "$sig_raw" -rawin -in "$payload" >/dev/null 2>"$verify_log"; then
+    log "OpenSSL release signature verification failed: $(tr '\n' ' ' < "$verify_log" | sed 's/[[:space:]]\+/ /g')"
+    if "$OPENSSL_BIN" version >/dev/null 2>&1; then
+      log "OpenSSL version: $("$OPENSSL_BIN" version 2>/dev/null)"
+    fi
     rm -rf -- "$verify_dir"
     return 1
   fi
