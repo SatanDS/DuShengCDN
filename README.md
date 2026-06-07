@@ -1,8 +1,10 @@
-# DuShengCDN
+# DuShengCDN 开发者 README
 
 DuShengCDN 是一个面向自托管边缘节点的 CDN 控制平面。它用 Server 管理站点、源站、证书、DNS、节点和发布版本，用 Agent 在边缘机器上托管 OpenResty 配置，用 DNS Worker 提供可选的自建权威 DNS 与 GSLB 响应能力。
 
 本仓库是源码社区版仓库。客户可部署的商业二进制包发布在 [SatanDS/SatanDS-DuShengCDN-releases](https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases)，该仓库只发布经过混淆、签名和校验的二进制与安装脚本，不发布源码。
+
+面向客户安装、升级和日常使用的文档请看 [用户 README](USER_README.md)。
 
 > 安全边界说明：客户控制本机二进制时，任何软件都无法绝对防止反编译、补丁或运行时绕过。商业版的目标是强在线授权、短租约续期、吊销审计、签名供应链和混淆加固，用工程手段提高绕过成本，而不是承诺无法被逆向。
 
