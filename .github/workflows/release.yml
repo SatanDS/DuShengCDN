@@ -151,6 +151,7 @@ jobs:
         run: |
           go mod download
           go install mvdan.cc/garble@latest
+          GARBLE="$(go env GOPATH)/bin/garble"
           if [[ -z "$RELEASE_SIGNATURE_PUBLIC_KEY" || -z "$RELEASE_SIGNING_PRIVATE_KEY" ]]; then
             echo "release signing secrets are required" >&2
             exit 1
@@ -160,7 +161,7 @@ jobs:
             exit 1
           fi
           mkdir -p ../dist
-          garble -literals build -trimpath -buildvcs=false -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY' -X 'dushengcdn/common.CommercialBuildMode=required-online' -X 'dushengcdn/common.CommercialBuildWatermark=$BUILD_WATERMARK' -X 'dushengcdn/common.CommercialLicensePublicKeys=$COMMERCIAL_LICENSE_PUBLIC_KEYS'" -o "../dist/$ASSET_NAME" .
+          "$GARBLE" -literals build -trimpath -buildvcs=false -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY' -X 'dushengcdn/common.CommercialBuildMode=required-online' -X 'dushengcdn/common.CommercialBuildWatermark=$BUILD_WATERMARK' -X 'dushengcdn/common.CommercialLicensePublicKeys=$COMMERCIAL_LICENSE_PUBLIC_KEYS'" -o "../dist/$ASSET_NAME" .
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
           GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
