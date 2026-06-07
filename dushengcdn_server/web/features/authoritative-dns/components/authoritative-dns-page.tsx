@@ -169,7 +169,15 @@ type MigrationRecheckResult = {
   simulations: DNSGSLBSimulationResult[];
 };
 
-const dnsObservabilityWindowHours = 6;
+const defaultDNSObservabilityWindowHours = 6;
+
+const dnsObservabilityWindowOptions = [
+  { key: '6h', label: '6 小时', hours: 6 },
+  { key: '12h', label: '12 小时', hours: 12 },
+  { key: '24h', label: '24 小时', hours: 24 },
+  { key: '1d', label: '1 天', hours: 24 },
+  { key: '7d', label: '7 天', hours: 168 },
+];
 
 const migrationRecheckStepTemplates: Array<{
   key: MigrationRecheckStepKey;
@@ -922,6 +930,7 @@ export function AuthoritativeDNSPage() {
   const [recheckingRouteId, setRecheckingRouteId] = useState<number | null>(
     null,
   );
+  const [observabilityWindowKey, setObservabilityWindowKey] = useState('6h');
   const [serverUrl, setServerUrl] = useState('https://cdn.example.com');
 
   useEffect(() => {
@@ -940,13 +949,19 @@ export function AuthoritativeDNSPage() {
     queryKey: ['proxy-routes'],
     queryFn: getProxyRoutes,
   });
+  const observabilityWindowOption =
+    dnsObservabilityWindowOptions.find(
+      (option) => option.key === observabilityWindowKey,
+    ) ?? dnsObservabilityWindowOptions[0];
+  const observabilityWindowHours =
+    observabilityWindowOption?.hours ?? defaultDNSObservabilityWindowHours;
   const observabilityQuery = useQuery({
     queryKey: [
       'authoritative-dns',
       'observability',
-      dnsObservabilityWindowHours,
+      observabilityWindowHours,
     ],
-    queryFn: () => getDNSObservability(dnsObservabilityWindowHours),
+    queryFn: () => getDNSObservability(observabilityWindowHours),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
@@ -1605,6 +1620,9 @@ export function AuthoritativeDNSPage() {
               ? getErrorMessage(observabilityQuery.error)
               : ''
           }
+          selectedWindowKey={observabilityWindowKey}
+          selectedWindowHours={observabilityWindowHours}
+          onWindowChange={setObservabilityWindowKey}
           onCopyCommand={handleCopyDNSWorkerCommand}
           onOpenWorkerSettings={setWorkerSettingsTarget}
         />
@@ -3495,22 +3513,70 @@ function CheckList({
   );
 }
 
+function DNSObservabilityWindowSelector({
+  selectedKey,
+  onChange,
+}: {
+  selectedKey: string;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <div
+      className="flex flex-wrap rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+      aria-label="DNS 查询观测时间范围"
+    >
+      {dnsObservabilityWindowOptions.map((option) => {
+        const active = option.key === selectedKey;
+        return (
+          <button
+            key={option.key}
+            type="button"
+            aria-pressed={active}
+            className={cn(
+              'rounded-xl px-3 py-1.5 text-xs font-medium transition',
+              active
+                ? 'bg-[var(--brand-primary)] text-[var(--foreground-inverse)] shadow-[var(--shadow-soft)]'
+                : 'text-[var(--foreground-secondary)] hover:bg-[var(--control-background-hover)] hover:text-[var(--foreground-primary)]',
+            )}
+            onClick={() => onChange(option.key)}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function DNSObservabilityPanel({
   summary,
   isLoading,
   error,
+  selectedWindowKey,
+  selectedWindowHours,
+  onWindowChange,
   onCopyCommand,
   onOpenWorkerSettings,
 }: {
   summary: DNSObservabilitySummary | null;
   isLoading: boolean;
   error: string;
+  selectedWindowKey: string;
+  selectedWindowHours: number;
+  onWindowChange: (key: string) => void;
   onCopyCommand: (value: string, message: string) => void;
   onOpenWorkerSettings?: (worker: DNSWorkerHealthItem) => void;
 }) {
+  const windowSelector = (
+    <DNSObservabilityWindowSelector
+      selectedKey={selectedWindowKey}
+      onChange={onWindowChange}
+    />
+  );
+
   if (isLoading) {
     return (
-      <AppCard title="DNS 查询观测">
+      <AppCard title="DNS 查询观测" action={windowSelector}>
         <LoadingState />
       </AppCard>
     );
@@ -3524,7 +3590,8 @@ function DNSObservabilityPanel({
     return (
       <AppCard
         title="DNS 查询观测"
-        description={`最近 ${dnsObservabilityWindowHours} 小时的响应端上报汇总。`}
+        description={`最近 ${selectedWindowHours} 小时的响应端上报汇总。`}
+        action={windowSelector}
       >
         <EmptyState
           title="暂无 DNS 查询数据"
@@ -3540,6 +3607,7 @@ function DNSObservabilityPanel({
     <AppCard
       title="DNS 查询观测"
       description={`最近 ${summary.window_hours} 小时聚合查询；最近上报 ${formatRelativeTime(summary.last_rollup_at)}。`}
+      action={windowSelector}
     >
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <InfoTile label="查询量" value={formatCount(summary.total_queries)} />
