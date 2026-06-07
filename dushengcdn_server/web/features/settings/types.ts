@@ -89,7 +89,18 @@ export interface DNSSourceDatabaseMirrorStatus {
   file_count: number;
   total_size: number;
   missing_kinds: string[];
+  sources: DNSSourceDatabaseMirrorSourceStatus[];
   message: string;
+}
+
+export interface DNSSourceDatabaseMirrorSourceStatus {
+  kind: 'operator' | 'asn' | 'country' | string;
+  label: string;
+  name: string;
+  available: boolean;
+  updated_at?: string | null;
+  file_count: number;
+  total_size: number;
 }
 
 export type CommercialLicenseStatus =

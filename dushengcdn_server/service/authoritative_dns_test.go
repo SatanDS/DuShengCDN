@@ -2796,6 +2796,45 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 }
 
+func TestUpdateDNSWorkerRemarkIsReturnedInHealthSummary(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:   "ns1",
+		Remark: "initial remark",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if worker.Remark != "initial remark" {
+		t.Fatalf("expected initial remark in create view, got %+v", worker)
+	}
+	updated, err := UpdateAuthoritativeDNSWorker(worker.ID, DNSWorkerMutationInput{
+		Remark: "  hk dns response  ",
+	})
+	if err != nil {
+		t.Fatalf("UpdateAuthoritativeDNSWorker: %v", err)
+	}
+	if updated.Remark != "hk dns response" {
+		t.Fatalf("expected trimmed remark in update view, got %+v", updated)
+	}
+	if _, err := UpdateAuthoritativeDNSWorker(worker.ID, DNSWorkerMutationInput{
+		Remark: strings.Repeat("x", 256),
+	}); err == nil {
+		t.Fatal("expected overlong remark to fail")
+	}
+	summary, err := GetAuthoritativeDNSObservabilitySummary(DNSObservabilitySummaryInput{Hours: 24})
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
+	}
+	if len(summary.WorkerHealth.Workers) != 1 {
+		t.Fatalf("expected one worker in health summary, got %+v", summary.WorkerHealth.Workers)
+	}
+	if summary.WorkerHealth.Workers[0].Remark != "hk dns response" {
+		t.Fatalf("expected remark in health summary, got %+v", summary.WorkerHealth.Workers[0])
+	}
+}
+
 func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 	setupServiceTestDB(t)
 

@@ -42,6 +42,7 @@ type DNSWorker struct {
 	ID                       uint       `json:"id" gorm:"primaryKey"`
 	WorkerID                 string     `json:"worker_id" gorm:"uniqueIndex;size:64;not null"`
 	Name                     string     `json:"name" gorm:"size:128;not null"`
+	Remark                   string     `json:"remark" gorm:"size:255;not null;default:''"`
 	Token                    string     `json:"-" gorm:"size:128;index;not null"`
 	PublicAddress            string     `json:"public_address" gorm:"size:255"`
 	Version                  string     `json:"version" gorm:"size:64"`

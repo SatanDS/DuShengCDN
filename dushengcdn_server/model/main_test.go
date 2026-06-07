@@ -3156,6 +3156,42 @@ func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerObservabilityFields(t *testing
 	}
 }
 
+func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerRemark(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "dns-worker-remark.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateAll(db); err != nil {
+		t.Fatalf("auto migrate current schema: %v", err)
+	}
+	if db.Migrator().HasColumn(&DNSWorker{}, "remark") {
+		if err := db.Migrator().DropColumn(&DNSWorker{}, "remark"); err != nil {
+			t.Fatalf("drop dns_workers.remark: %v", err)
+		}
+	}
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 37); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	if !db.Migrator().HasColumn(&DNSWorker{}, "remark") {
+		t.Fatal("expected dns_workers.remark column to exist")
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
 func TestEnsureDatabaseSchemaUpToDateCompletesPartialDNSWorkerSourceDatabaseMigration(t *testing.T) {
 	db := openBareTestSQLiteDB(t, "dns-worker-source-database-fields.db")
 	if err := registerSharding(db, "sqlite"); err != nil {

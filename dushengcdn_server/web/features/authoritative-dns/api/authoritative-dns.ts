@@ -12,6 +12,7 @@ import type {
   DNSWorkerMutationPayload,
   DNSWorkerProbe,
   DNSWorkerProbePayload,
+  DNSWorkerUpdatePayload,
   DNSZoneDelegationCheck,
   DNSZoneItem,
   DNSZoneMutationPayload,
@@ -112,6 +113,13 @@ export function createDNSWorker(payload: DNSWorkerMutationPayload) {
   }).then(normalizeDNSWorker);
 }
 
+export function updateDNSWorker(id: number, payload: DNSWorkerUpdatePayload) {
+  return apiRequest<DNSWorkerItem>(`/dns-workers/${id}/update-info`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then(normalizeDNSWorker);
+}
+
 export function deleteDNSWorker(id: number) {
   return apiRequest<void>(`/dns-workers/${id}/delete`, {
     method: 'POST',
@@ -173,6 +181,7 @@ function normalizeDNSWorkers(value: DNSWorkerItem[] | null | undefined) {
 function normalizeDNSWorker(worker: DNSWorkerItem) {
   return {
     ...worker,
+    remark: worker.remark ?? '',
     last_probe_results: asArray(worker.last_probe_results),
     probe_status: worker.probe_status || 'unknown',
     last_rollup_count: worker.last_rollup_count ?? 0,
@@ -356,6 +365,7 @@ function normalizeDNSWorkerHealthSummary(
     ...health,
     workers: asArray(health.workers).map((worker) => ({
       ...worker,
+      remark: worker.remark ?? '',
       last_probe_results: asArray(worker.last_probe_results),
       probe_status: worker.probe_status || 'unknown',
       last_rollup_count: worker.last_rollup_count ?? 0,

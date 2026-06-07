@@ -39,6 +39,7 @@ export interface DNSWorkerItem {
   id: number;
   worker_id: string;
   name: string;
+  remark: string;
   token?: string;
   public_address: string;
   version: string;
@@ -357,6 +358,7 @@ export interface DNSWorkerHealthItem {
   id: number;
   worker_id: string;
   name: string;
+  remark: string;
   status: 'online' | 'offline';
   public_address: string;
   query_count: number;
@@ -465,4 +467,9 @@ export interface DNSRecordMutationPayload {
 export interface DNSWorkerMutationPayload {
   name: string;
   public_address: string;
+  remark?: string;
+}
+
+export interface DNSWorkerUpdatePayload {
+  remark: string;
 }

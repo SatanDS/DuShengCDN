@@ -78,6 +78,7 @@ type DNSRecordInput struct {
 type DNSWorkerInput struct {
 	Name          string `json:"name"`
 	PublicAddress string `json:"public_address"`
+	Remark        string `json:"remark"`
 }
 
 type DNSWorkerHeartbeatInput struct {
@@ -157,6 +158,7 @@ type DNSWorkerView struct {
 	ID                       uint                       `json:"id"`
 	WorkerID                 string                     `json:"worker_id"`
 	Name                     string                     `json:"name"`
+	Remark                   string                     `json:"remark"`
 	Token                    string                     `json:"token,omitempty"`
 	PublicAddress            string                     `json:"public_address"`
 	Version                  string                     `json:"version"`
@@ -208,6 +210,10 @@ type DNSWorkerProbeInput struct {
 type DNSWorkerUpdateInput struct {
 	Channel string `json:"channel"`
 	TagName string `json:"tag_name"`
+}
+
+type DNSWorkerMutationInput struct {
+	Remark string `json:"remark"`
 }
 
 type DNSGSLBSimulationInput struct {
@@ -574,6 +580,7 @@ type DNSWorkerHealthItemView struct {
 	ID                       uint                       `json:"id"`
 	WorkerID                 string                     `json:"worker_id"`
 	Name                     string                     `json:"name"`
+	Remark                   string                     `json:"remark"`
 	Status                   string                     `json:"status"`
 	PublicAddress            string                     `json:"public_address"`
 	QueryCount               int64                      `json:"query_count"`
@@ -1277,6 +1284,10 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 	if len(name) > 128 {
 		return nil, errors.New("DNS worker name is too long")
 	}
+	remark := strings.TrimSpace(input.Remark)
+	if len(remark) > 255 {
+		return nil, errors.New("DNS worker remark is too long")
+	}
 	token, err := newRandomToken()
 	if err != nil {
 		return nil, err
@@ -1288,6 +1299,7 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 	worker := &model.DNSWorker{
 		WorkerID:      "dns-" + workerIDSeed,
 		Name:          name,
+		Remark:        remark,
 		Token:         token,
 		PublicAddress: strings.TrimSpace(input.PublicAddress),
 		Status:        dnsWorkerStatusOffline,
@@ -1299,6 +1311,25 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 		return nil, err
 	}
 	return ptrDNSWorkerView(buildDNSWorkerView(worker, true)), nil
+}
+
+func UpdateAuthoritativeDNSWorker(id uint, input DNSWorkerMutationInput) (*DNSWorkerView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
+	worker, err := model.GetDNSWorkerByID(id)
+	if err != nil {
+		return nil, err
+	}
+	remark := strings.TrimSpace(input.Remark)
+	if len(remark) > 255 {
+		return nil, errors.New("DNS worker remark is too long")
+	}
+	worker.Remark = remark
+	if err := model.DB.Model(worker).Select("remark").Updates(worker).Error; err != nil {
+		return nil, err
+	}
+	return ptrDNSWorkerView(buildDNSWorkerView(worker, false)), nil
 }
 
 func DeleteAuthoritativeDNSWorker(id uint) error {
@@ -2745,6 +2776,7 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		ID:                       worker.ID,
 		WorkerID:                 worker.WorkerID,
 		Name:                     worker.Name,
+		Remark:                   worker.Remark,
 		PublicAddress:            worker.PublicAddress,
 		Version:                  worker.Version,
 		Status:                   normalizeDNSWorkerStatus(worker.Status),
@@ -5047,6 +5079,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			ID:                       worker.ID,
 			WorkerID:                 worker.WorkerID,
 			Name:                     workerName,
+			Remark:                   worker.Remark,
 			Status:                   status,
 			PublicAddress:            worker.PublicAddress,
 			QueryCount:               stats.queryCount,

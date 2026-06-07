@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Minus, Plus } from 'lucide-react';
+import { Minus, Plus, Settings } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
@@ -34,6 +34,7 @@ import {
   probeDNSWorker,
   requestDNSWorkerUpdate,
   simulateDNSGSLB,
+  updateDNSWorker,
   updateDNSRecord,
   updateDNSZone,
 } from '@/features/authoritative-dns/api/authoritative-dns';
@@ -116,6 +117,11 @@ type RecordFormValues = {
 type WorkerFormValues = {
   name: string;
   public_address: string;
+  remark: string;
+};
+
+type WorkerSettingsFormValues = {
+  remark: string;
 };
 
 type GSLBSimulationFormValues = {
@@ -903,6 +909,8 @@ export function AuthoritativeDNSPage() {
   );
   const [recordZone, setRecordZone] = useState<DNSZoneItem | null>(null);
   const [isWorkerModalOpen, setIsWorkerModalOpen] = useState(false);
+  const [workerSettingsTarget, setWorkerSettingsTarget] =
+    useState<DNSWorkerHealthItem | null>(null);
   const [createdWorker, setCreatedWorker] = useState<DNSWorkerItem | null>(
     null,
   );
@@ -964,6 +972,17 @@ export function AuthoritativeDNSPage() {
   );
   const observability = observabilityQuery.data ?? null;
   const schedulingStates = schedulingStatesQuery.data ?? null;
+  useEffect(() => {
+    if (!workerSettingsTarget || !observability?.worker_health?.workers) {
+      return;
+    }
+    const refreshed = observability.worker_health.workers.find(
+      (worker) => worker.id === workerSettingsTarget.id,
+    );
+    if (refreshed && refreshed !== workerSettingsTarget) {
+      setWorkerSettingsTarget(refreshed);
+    }
+  }, [observability?.worker_health?.workers, workerSettingsTarget]);
   const authoritativeRoutes = useMemo(
     () =>
       proxyRoutes
@@ -1043,6 +1062,36 @@ export function AuthoritativeDNSPage() {
       await queryClient.invalidateQueries({
         queryKey: ['authoritative-dns', 'workers'],
       });
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const updateWorkerMutation = useMutation({
+    mutationFn: ({
+      id,
+      values,
+    }: {
+      id: number;
+      values: WorkerSettingsFormValues;
+    }) =>
+      updateDNSWorker(id, {
+        remark: values.remark.trim(),
+      }),
+    onSuccess: async (worker) => {
+      setFeedback({
+        tone: 'success',
+        message: `DNS 响应端“${worker.name}”备注已保存。`,
+      });
+      setWorkerSettingsTarget(null);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'workers'],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'observability'],
+        }),
+      ]);
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -1557,14 +1606,7 @@ export function AuthoritativeDNSPage() {
               : ''
           }
           onCopyCommand={handleCopyDNSWorkerCommand}
-          onRequestWorkerUpdate={(workerId) =>
-            requestWorkerUpdateMutation.mutate(workerId)
-          }
-          updatingWorkerId={
-            requestWorkerUpdateMutation.isPending
-              ? (requestWorkerUpdateMutation.variables ?? null)
-              : null
-          }
+          onOpenWorkerSettings={setWorkerSettingsTarget}
         />
 
         <GSLBSimulationPanel
@@ -1774,6 +1816,27 @@ export function AuthoritativeDNSPage() {
           worker={createdWorker}
           serverUrl={serverUrl}
           onClose={() => setCreatedWorker(null)}
+        />
+      ) : null}
+
+      {workerSettingsTarget ? (
+        <WorkerSettingsModal
+          worker={workerSettingsTarget}
+          isSaving={updateWorkerMutation.isPending}
+          isRequestingUpdate={
+            requestWorkerUpdateMutation.isPending &&
+            requestWorkerUpdateMutation.variables === workerSettingsTarget.id
+          }
+          onClose={() => setWorkerSettingsTarget(null)}
+          onSave={(values) =>
+            updateWorkerMutation.mutate({
+              id: workerSettingsTarget.id,
+              values,
+            })
+          }
+          onRequestUpdate={() =>
+            requestWorkerUpdateMutation.mutate(workerSettingsTarget.id)
+          }
         />
       ) : null}
     </>
@@ -3437,15 +3500,13 @@ function DNSObservabilityPanel({
   isLoading,
   error,
   onCopyCommand,
-  onRequestWorkerUpdate,
-  updatingWorkerId,
+  onOpenWorkerSettings,
 }: {
   summary: DNSObservabilitySummary | null;
   isLoading: boolean;
   error: string;
   onCopyCommand: (value: string, message: string) => void;
-  onRequestWorkerUpdate?: (workerId: number) => void;
-  updatingWorkerId?: number | null;
+  onOpenWorkerSettings?: (worker: DNSWorkerHealthItem) => void;
 }) {
   if (isLoading) {
     return (
@@ -3511,8 +3572,7 @@ function DNSObservabilityPanel({
         />
         <DNSWorkerHealthPanel
           summary={summary}
-          onRequestUpdate={onRequestWorkerUpdate}
-          updatingWorkerId={updatingWorkerId}
+          onOpenWorkerSettings={onOpenWorkerSettings}
         />
         <CounterChart
           title="返回码"
@@ -3556,12 +3616,10 @@ function DNSObservabilityPanel({
 
 function DNSWorkerHealthPanel({
   summary,
-  onRequestUpdate,
-  updatingWorkerId,
+  onOpenWorkerSettings,
 }: {
   summary: DNSObservabilitySummary;
-  onRequestUpdate?: (workerId: number) => void;
-  updatingWorkerId?: number | null;
+  onOpenWorkerSettings?: (worker: DNSWorkerHealthItem) => void;
 }) {
   const health = summary.worker_health;
 
@@ -3650,8 +3708,7 @@ function DNSWorkerHealthPanel({
             <DNSWorkerHealthCard
               key={worker.worker_id}
               worker={worker}
-              onRequestUpdate={onRequestUpdate}
-              isRequestingUpdate={updatingWorkerId === worker.id}
+              onOpenSettings={onOpenWorkerSettings}
             />
           ))}
         </div>
@@ -3662,26 +3719,16 @@ function DNSWorkerHealthPanel({
 
 function DNSWorkerHealthCard({
   worker,
-  onRequestUpdate,
-  isRequestingUpdate = false,
+  onOpenSettings,
 }: {
   worker: DNSWorkerHealthItem;
-  onRequestUpdate?: (workerId: number) => void;
-  isRequestingUpdate?: boolean;
+  onOpenSettings?: (worker: DNSWorkerHealthItem) => void;
 }) {
   const visibleNodeProbes = (worker.node_probes ?? []).filter((probe) =>
     probe.node_name?.trim(),
   );
-  const updateDisabled = isRequestingUpdate || worker.update_requested;
   const isWaitingForUnsupportedUpdate =
     worker.update_requested && !worker.update_supported;
-  const updateButtonLabel = isRequestingUpdate
-    ? '下发中...'
-    : isWaitingForUnsupportedUpdate
-      ? '需先手动升级'
-      : worker.update_requested
-        ? '等待心跳执行'
-        : '下发更新';
 
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
@@ -3693,48 +3740,54 @@ function DNSWorkerHealthCard({
           <p className="mt-1 text-xs break-all text-[var(--foreground-muted)]">
             {worker.public_address || worker.worker_id}
           </p>
-        </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <StatusBadge
-            label={worker.status}
-            variant={getWorkerStatusVariant(worker.status)}
-          />
-          <StatusBadge
-            label={getProbeStatusLabel(worker.probe_status)}
-            variant={getProbeStatusVariant(worker.probe_status)}
-          />
-          {worker.snapshot_stale ? (
-            <StatusBadge label="解析配置过期" variant="danger" />
+          {worker.remark ? (
+            <p className="mt-1 text-xs text-[var(--foreground-secondary)]">
+              {worker.remark}
+            </p>
           ) : null}
-          {worker.update_requested ? (
+          <div className="mt-2 flex flex-wrap gap-2">
             <StatusBadge
-              label={isWaitingForUnsupportedUpdate ? '需手动升级' : '等待更新'}
-              variant="warning"
+              label={worker.status}
+              variant={getWorkerStatusVariant(worker.status)}
             />
-          ) : null}
-          <StatusBadge
-            label={worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'}
-            variant={worker.geoip_enabled ? 'success' : 'warning'}
-          />
-          <StatusBadge
-            label={worker.geoip_asn_enabled ? 'ASN 支持' : 'ASN 未支持'}
-            variant={worker.geoip_asn_enabled ? 'success' : 'warning'}
-          />
-          <StatusBadge
-            label={worker.geoip_operator_enabled ? '运营商支持' : '运营商未支持'}
-            variant={worker.geoip_operator_enabled ? 'success' : 'warning'}
-          />
-          {onRequestUpdate ? (
-            <SecondaryButton
-              type="button"
-              className="px-3 py-1.5 text-xs"
-              disabled={updateDisabled}
-              onClick={() => onRequestUpdate(worker.id)}
-            >
-              {updateButtonLabel}
-            </SecondaryButton>
-          ) : null}
+            <StatusBadge
+              label={getProbeStatusLabel(worker.probe_status)}
+              variant={getProbeStatusVariant(worker.probe_status)}
+            />
+            {worker.snapshot_stale ? (
+              <StatusBadge label="解析配置过期" variant="danger" />
+            ) : null}
+            {worker.update_requested ? (
+              <StatusBadge
+                label={isWaitingForUnsupportedUpdate ? '需手动升级' : '等待更新'}
+                variant="warning"
+              />
+            ) : null}
+            <StatusBadge
+              label={worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'}
+              variant={worker.geoip_enabled ? 'success' : 'warning'}
+            />
+            <StatusBadge
+              label={worker.geoip_asn_enabled ? 'ASN 支持' : 'ASN 未支持'}
+              variant={worker.geoip_asn_enabled ? 'success' : 'warning'}
+            />
+            <StatusBadge
+              label={worker.geoip_operator_enabled ? '运营商支持' : '运营商未支持'}
+              variant={worker.geoip_operator_enabled ? 'success' : 'warning'}
+            />
+          </div>
         </div>
+        {onOpenSettings ? (
+          <SecondaryButton
+            type="button"
+            aria-label={`设置 DNS 响应端 ${worker.name}`}
+            title="设置 DNS 响应端"
+            className="h-9 w-9 shrink-0 rounded-xl px-0 py-0"
+            onClick={() => onOpenSettings(worker)}
+          >
+            <Settings className="h-4 w-4" aria-hidden="true" />
+          </SecondaryButton>
+        ) : null}
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -4571,6 +4624,7 @@ function WorkerCreateModal({
     defaultValues: {
       name: '',
       public_address: '',
+      remark: '',
     },
   });
   const createMutation = useMutation({
@@ -4578,6 +4632,7 @@ function WorkerCreateModal({
       createDNSWorker({
         name: values.name.trim(),
         public_address: values.public_address.trim(),
+        remark: values.remark.trim(),
       }),
     onSuccess: onCreated,
     onError: (err) => setError(getErrorMessage(err)),
@@ -4586,7 +4641,7 @@ function WorkerCreateModal({
   useEffect(() => {
     if (isOpen) {
       setError('');
-      form.reset({ name: '', public_address: '' });
+      form.reset({ name: '', public_address: '', remark: '' });
     }
   }, [form, isOpen]);
 
@@ -4623,9 +4678,118 @@ function WorkerCreateModal({
             {...form.register('public_address')}
           />
         </ResourceField>
+        <ResourceField label="备注" hint="可选，只用于面板展示。">
+          <ResourceTextarea
+            maxLength={255}
+            placeholder="例如：香港阿里云 / 主响应端"
+            {...form.register('remark')}
+          />
+        </ResourceField>
         <PrimaryButton type="submit" disabled={createMutation.isPending}>
           {createMutation.isPending ? '创建中...' : '创建'}
         </PrimaryButton>
+      </form>
+    </AppModal>
+  );
+}
+
+function WorkerSettingsModal({
+  worker,
+  isSaving,
+  isRequestingUpdate,
+  onClose,
+  onSave,
+  onRequestUpdate,
+}: {
+  worker: DNSWorkerHealthItem;
+  isSaving: boolean;
+  isRequestingUpdate: boolean;
+  onClose: () => void;
+  onSave: (values: WorkerSettingsFormValues) => void;
+  onRequestUpdate: () => void;
+}) {
+  const form = useForm<WorkerSettingsFormValues>({
+    defaultValues: {
+      remark: worker.remark ?? '',
+    },
+  });
+  const isWaitingForUnsupportedUpdate =
+    worker.update_requested && !worker.update_supported;
+  const updateDisabled = isRequestingUpdate || worker.update_requested;
+  const updateButtonLabel = isRequestingUpdate
+    ? '下发中...'
+    : isWaitingForUnsupportedUpdate
+      ? '需先手动升级'
+      : worker.update_requested
+        ? '等待心跳执行'
+        : '强制下发更新';
+
+  useEffect(() => {
+    form.reset({ remark: worker.remark ?? '' });
+  }, [form, worker.id, worker.remark]);
+
+  return (
+    <AppModal
+      isOpen
+      onClose={onClose}
+      title="DNS 响应端设置"
+      description={`${worker.name} · ${worker.public_address || worker.worker_id}`}
+    >
+      <form
+        className="space-y-5"
+        onSubmit={form.handleSubmit((values) => onSave(values))}
+      >
+        <ResourceField
+          label="备注"
+          hint="备注只用于面板展示，不会改变响应端名称、密钥或 NS 配置。"
+        >
+          <ResourceTextarea
+            maxLength={255}
+            placeholder="例如：香港阿里云 / 主响应端"
+            {...form.register('remark')}
+          />
+        </ResourceField>
+        <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+                强制更新
+              </p>
+              <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
+                下发后由响应端下一次心跳消费；旧版响应端未声明支持自更新时，需要先手动执行新版安装脚本。
+              </p>
+            </div>
+            <StatusBadge
+              label={
+                worker.update_supported ? '支持远程更新' : '需先手动升级'
+              }
+              variant={worker.update_supported ? 'success' : 'warning'}
+            />
+          </div>
+          {isWaitingForUnsupportedUpdate ? (
+            <InlineMessage
+              className="mt-3"
+              tone="warning"
+              message="该响应端已有待执行更新，但当前版本未声明支持远程自更新。"
+            />
+          ) : null}
+          <SecondaryButton
+            type="button"
+            className="mt-4"
+            disabled={updateDisabled}
+            onClick={onRequestUpdate}
+          >
+            {updateButtonLabel}
+          </SecondaryButton>
+        </div>
+        <div className="flex flex-wrap justify-end gap-3">
+          <SecondaryButton type="button" onClick={onClose}>
+            取消
+          </SecondaryButton>
+          <PrimaryButton type="submit" disabled={isSaving}>
+            {isSaving ? '保存中...' : '保存备注'}
+          </PrimaryButton>
+        </div>
       </form>
     </AppModal>
   );
