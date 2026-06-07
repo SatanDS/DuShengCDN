@@ -192,6 +192,7 @@ func SetApiRouter(router *gin.Engine) {
 			dnsWorkerAdminRoute.POST("/simulate", controller.SimulateDNSGSLB)
 			dnsWorkerAdminRoute.POST("/", controller.CreateDNSWorker)
 			dnsWorkerAdminRoute.POST("/:id/probe", controller.ProbeDNSWorker)
+			dnsWorkerAdminRoute.POST("/:id/update", controller.RequestDNSWorkerUpdate)
 			dnsWorkerAdminRoute.POST("/:id/delete", controller.DeleteDNSWorker)
 		}
 		dnsSourceDatabaseAdminRoute := apiRouter.Group("/dns-source-databases")

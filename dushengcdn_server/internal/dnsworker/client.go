@@ -46,6 +46,24 @@ type HeartbeatInput struct {
 	SchedulingStates         []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
+type HeartbeatResponse struct {
+	Worker   HeartbeatWorkerInfo `json:"worker"`
+	Settings WorkerSettings      `json:"settings"`
+}
+
+type HeartbeatWorkerInfo struct {
+	WorkerID string `json:"worker_id"`
+	Version  string `json:"version"`
+	Status   string `json:"status"`
+}
+
+type WorkerSettings struct {
+	UpdateNow     bool   `json:"update_now"`
+	UpdateRepo    string `json:"update_repo"`
+	UpdateChannel string `json:"update_channel"`
+	UpdateTag     string `json:"update_tag"`
+}
+
 type QueryRollupPayload struct {
 	WindowStart     time.Time        `json:"window_start"`
 	WindowMinutes   int              `json:"window_minutes"`
@@ -85,15 +103,15 @@ func (c *APIClient) FetchSnapshot(ctx context.Context) (*Snapshot, error) {
 	return &response.Data, nil
 }
 
-func (c *APIClient) SendHeartbeat(ctx context.Context, input HeartbeatInput) error {
-	var response apiResponse[json.RawMessage]
+func (c *APIClient) SendHeartbeat(ctx context.Context, input HeartbeatInput) (*HeartbeatResponse, error) {
+	var response apiResponse[HeartbeatResponse]
 	if err := c.doJSON(ctx, http.MethodPost, "/api/dns-worker-heartbeat", input, &response); err != nil {
-		return err
+		return nil, err
 	}
 	if !response.Success {
-		return fmt.Errorf("heartbeat request failed: %s", response.Message)
+		return nil, fmt.Errorf("heartbeat request failed: %s", response.Message)
 	}
-	return nil
+	return &response.Data, nil
 }
 
 func (c *APIClient) doJSON(ctx context.Context, method string, path string, body any, out any) error {

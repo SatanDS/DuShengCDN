@@ -118,6 +118,13 @@ export function deleteDNSWorker(id: number) {
   });
 }
 
+export function requestDNSWorkerUpdate(id: number) {
+  return apiRequest<DNSWorkerItem>(`/dns-workers/${id}/update`, {
+    method: 'POST',
+    body: JSON.stringify({ channel: 'preview' }),
+  }).then(normalizeDNSWorker);
+}
+
 export function probeDNSWorker(
   id: number,
   payload: DNSWorkerProbePayload = {},
@@ -178,6 +185,12 @@ function normalizeDNSWorker(worker: DNSWorkerItem) {
     geoip_operator_enabled: Boolean(worker.geoip_operator_enabled),
     operator_cidr_database_path: worker.operator_cidr_database_path ?? '',
     operator_cidr_last_error: worker.operator_cidr_last_error ?? '',
+    update_requested: Boolean(worker.update_requested),
+    update_channel:
+      worker.update_channel === 'preview'
+        ? ('preview' as const)
+        : ('stable' as const),
+    update_tag: worker.update_tag ?? '',
   };
 }
 
@@ -353,6 +366,13 @@ function normalizeDNSWorkerHealthSummary(
       geoip_operator_enabled: Boolean(worker.geoip_operator_enabled),
       operator_cidr_database_path: worker.operator_cidr_database_path ?? '',
       operator_cidr_last_error: worker.operator_cidr_last_error ?? '',
+      update_requested: Boolean(worker.update_requested),
+      id: worker.id ?? 0,
+      update_channel:
+        worker.update_channel === 'preview'
+          ? ('preview' as const)
+          : ('stable' as const),
+      update_tag: worker.update_tag ?? '',
       node_probes: asArray(worker.node_probes).map((probe) => ({
         ...probe,
         probe_status: probe.probe_status || 'unknown',

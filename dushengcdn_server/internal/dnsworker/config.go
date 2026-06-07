@@ -16,6 +16,9 @@ type Config struct {
 	Token                    string
 	ListenAddr               string
 	SnapshotPath             string
+	InstallDir               string
+	UpdateScriptPath         string
+	UpdateEnabled            bool
 	GeoIPDatabasePath        string
 	ASNDatabasePath          string
 	OperatorCIDRDatabasePath string
@@ -33,6 +36,9 @@ func LoadConfig(args []string, version string) (*Config, error) {
 		Token:                    strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_TOKEN")),
 		ListenAddr:               strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_LISTEN_ADDR")),
 		SnapshotPath:             strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH")),
+		InstallDir:               strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_INSTALL_DIR")),
+		UpdateScriptPath:         strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_UPDATE_SCRIPT")),
+		UpdateEnabled:            parseBoolEnv("DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED", true),
 		GeoIPDatabasePath:        strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH")),
 		ASNDatabasePath:          strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH")),
 		OperatorCIDRDatabasePath: strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH")),
@@ -48,6 +54,9 @@ func LoadConfig(args []string, version string) (*Config, error) {
 	fs.StringVar(&cfg.Token, "token", cfg.Token, "DNS Worker token")
 	fs.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "DNS UDP/TCP listen address")
 	fs.StringVar(&cfg.SnapshotPath, "snapshot-path", cfg.SnapshotPath, "local snapshot cache path")
+	fs.StringVar(&cfg.InstallDir, "install-dir", cfg.InstallDir, "DNS Worker install directory used by controlled self-update")
+	fs.StringVar(&cfg.UpdateScriptPath, "update-script", cfg.UpdateScriptPath, "DNS Worker update script path")
+	fs.BoolVar(&cfg.UpdateEnabled, "update-enabled", cfg.UpdateEnabled, "allow controlled DNS Worker self-update when requested by Server")
 	fs.StringVar(&cfg.GeoIPDatabasePath, "geoip-database", cfg.GeoIPDatabasePath, "optional MaxMind-compatible country/ASN/ISP MMDB path")
 	fs.StringVar(&cfg.ASNDatabasePath, "asn-database", cfg.ASNDatabasePath, "optional MaxMind-compatible ASN MMDB path")
 	fs.StringVar(&cfg.OperatorCIDRDatabasePath, "operator-cidr-database", cfg.OperatorCIDRDatabasePath, "optional China operator CIDR list directory or file path")
@@ -74,6 +83,17 @@ func applyConfigDefaults(cfg *Config) {
 		cfg.SnapshotPath = DefaultSnapshotPath
 	}
 	cfg.SnapshotPath = filepath.Clean(cfg.SnapshotPath)
+	if strings.TrimSpace(cfg.InstallDir) == "" {
+		cfg.InstallDir = filepath.Dir(cfg.SnapshotPath)
+		if filepath.Base(cfg.InstallDir) == "data" {
+			cfg.InstallDir = filepath.Dir(cfg.InstallDir)
+		}
+	}
+	cfg.InstallDir = filepath.Clean(cfg.InstallDir)
+	if strings.TrimSpace(cfg.UpdateScriptPath) == "" {
+		cfg.UpdateScriptPath = filepath.Join(cfg.InstallDir, "update-dns-worker.sh")
+	}
+	cfg.UpdateScriptPath = filepath.Clean(cfg.UpdateScriptPath)
 	if cfg.HeartbeatInterval <= 0 {
 		cfg.HeartbeatInterval = DefaultHeartbeatInterval
 	}
@@ -154,4 +174,19 @@ func parseIntEnv(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func parseBoolEnv(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

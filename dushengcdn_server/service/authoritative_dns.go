@@ -102,6 +102,13 @@ type DNSWorkerHeartbeatInput struct {
 	SchedulingStates         []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
+type DNSWorkerSettings struct {
+	UpdateNow     bool   `json:"update_now"`
+	UpdateRepo    string `json:"update_repo"`
+	UpdateChannel string `json:"update_channel"`
+	UpdateTag     string `json:"update_tag"`
+}
+
 type DNSQueryRollupInput struct {
 	WindowStart     time.Time        `json:"window_start"`
 	WindowMinutes   int              `json:"window_minutes"`
@@ -172,6 +179,9 @@ type DNSWorkerView struct {
 	GeoIPOperatorEnabled     bool                       `json:"geoip_operator_enabled"`
 	OperatorCIDRDatabasePath string                     `json:"operator_cidr_database_path"`
 	OperatorCIDRLastError    string                     `json:"operator_cidr_last_error"`
+	UpdateRequested          bool                       `json:"update_requested"`
+	UpdateChannel            string                     `json:"update_channel"`
+	UpdateTag                string                     `json:"update_tag"`
 	LastProbeAt              *time.Time                 `json:"last_probe_at"`
 	LastProbeQuery           string                     `json:"last_probe_query"`
 	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -183,8 +193,18 @@ type DNSWorkerView struct {
 	UpdatedAt                time.Time                  `json:"updated_at"`
 }
 
+type DNSWorkerHeartbeatView struct {
+	Worker   DNSWorkerView     `json:"worker"`
+	Settings DNSWorkerSettings `json:"settings"`
+}
+
 type DNSWorkerProbeInput struct {
 	ZoneID uint `json:"zone_id"`
+}
+
+type DNSWorkerUpdateInput struct {
+	Channel string `json:"channel"`
+	TagName string `json:"tag_name"`
 }
 
 type DNSGSLBSimulationInput struct {
@@ -548,6 +568,7 @@ type DNSWorkerHealthSummaryView struct {
 }
 
 type DNSWorkerHealthItemView struct {
+	ID                       uint                       `json:"id"`
 	WorkerID                 string                     `json:"worker_id"`
 	Name                     string                     `json:"name"`
 	Status                   string                     `json:"status"`
@@ -576,6 +597,9 @@ type DNSWorkerHealthItemView struct {
 	GeoIPOperatorEnabled     bool                       `json:"geoip_operator_enabled"`
 	OperatorCIDRDatabasePath string                     `json:"operator_cidr_database_path"`
 	OperatorCIDRLastError    string                     `json:"operator_cidr_last_error"`
+	UpdateRequested          bool                       `json:"update_requested"`
+	UpdateChannel            string                     `json:"update_channel"`
+	UpdateTag                string                     `json:"update_tag"`
 	LastError                string                     `json:"last_error"`
 	LastProbeAt              *time.Time                 `json:"last_probe_at"`
 	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -1283,6 +1307,37 @@ func DeleteAuthoritativeDNSWorker(id uint) error {
 	return worker.Delete()
 }
 
+func RequestAuthoritativeDNSWorkerUpdate(id uint, input DNSWorkerUpdateInput) (*DNSWorkerView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
+	worker, err := model.GetDNSWorkerByID(id)
+	if err != nil {
+		return nil, err
+	}
+	channel := normalizeReleaseChannel(input.Channel)
+	tagName := strings.TrimSpace(input.TagName)
+	if tagName != "" {
+		release, releaseErr := fetchGitHubReleaseByTag(context.Background(), common.ServerUpdateRepo, tagName)
+		if releaseErr != nil {
+			return nil, releaseErr
+		}
+		if channel == ReleaseChannelPreview && !release.Prerelease {
+			return nil, errors.New("指定版本不是 preview 发布")
+		}
+		if channel == ReleaseChannelStable && release.Prerelease {
+			return nil, errors.New("正式版更新不能选择 preview 发布")
+		}
+	}
+	worker.UpdateRequested = true
+	worker.UpdateChannel = channel.String()
+	worker.UpdateTag = tagName
+	if err = model.DB.Model(worker).Select("update_requested", "update_channel", "update_tag").Updates(worker).Error; err != nil {
+		return nil, err
+	}
+	return ptrDNSWorkerView(buildDNSWorkerView(worker, false)), nil
+}
+
 func ProbeAuthoritativeDNSWorker(id uint, input DNSWorkerProbeInput) (*DNSWorkerProbeView, error) {
 	worker, err := model.GetDNSWorkerByID(id)
 	if err != nil {
@@ -1330,7 +1385,7 @@ func AuthenticateDNSWorkerToken(token string) (*model.DNSWorker, error) {
 	return worker, nil
 }
 
-func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatInput) (*DNSWorkerView, error) {
+func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatInput) (*DNSWorkerHeartbeatView, error) {
 	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
 		return nil, err
 	}
@@ -1338,6 +1393,9 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		return nil, errors.New("DNS worker is nil")
 	}
 	now := time.Now()
+	updateNow := worker.UpdateRequested
+	updateChannel := normalizeReleaseChannel(worker.UpdateChannel)
+	updateTag := strings.TrimSpace(worker.UpdateTag)
 	worker.Status = normalizeDNSWorkerStatus(input.Status)
 	worker.Version = strings.TrimSpace(input.Version)
 	worker.LastSnapshotVersion = strings.TrimSpace(input.LastSnapshotVersion)
@@ -1362,6 +1420,9 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		worker.LastRollupAt = &rollupMeta.lastRollupAt
 		worker.LastRollupCount = rollupMeta.count
 	}
+	worker.UpdateRequested = false
+	worker.UpdateChannel = ReleaseChannelStable.String()
+	worker.UpdateTag = ""
 	db := model.DB.Session(&gorm.Session{DisableNestedTransaction: true})
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(worker).Error; err != nil {
@@ -1374,7 +1435,15 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	}); err != nil {
 		return nil, err
 	}
-	return ptrDNSWorkerView(buildDNSWorkerView(worker, false)), nil
+	return &DNSWorkerHeartbeatView{
+		Worker: buildDNSWorkerView(worker, false),
+		Settings: DNSWorkerSettings{
+			UpdateNow:     updateNow,
+			UpdateRepo:    common.ServerUpdateRepo,
+			UpdateChannel: updateChannel.String(),
+			UpdateTag:     updateTag,
+		},
+	}, nil
 }
 
 func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnapshot, error) {
@@ -2687,6 +2756,9 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		GeoIPOperatorEnabled:     worker.GeoIPOperatorEnabled,
 		OperatorCIDRDatabasePath: worker.OperatorCIDRDatabasePath,
 		OperatorCIDRLastError:    worker.OperatorCIDRLastError,
+		UpdateRequested:          worker.UpdateRequested,
+		UpdateChannel:            normalizeReleaseChannel(worker.UpdateChannel).String(),
+		UpdateTag:                worker.UpdateTag,
 		LastProbeAt:              probeAt,
 		LastProbeQuery:           worker.LastProbeQuery,
 		LastProbeResults:         probeResults,
@@ -4959,6 +5031,7 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			view.NodeProbeMaxRTTMs = nodeProbeStats.maxRTTMs
 		}
 		view.Workers = append(view.Workers, DNSWorkerHealthItemView{
+			ID:                       worker.ID,
 			WorkerID:                 worker.WorkerID,
 			Name:                     workerName,
 			Status:                   status,
@@ -4987,6 +5060,9 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			GeoIPOperatorEnabled:     worker.GeoIPOperatorEnabled,
 			OperatorCIDRDatabasePath: worker.OperatorCIDRDatabasePath,
 			OperatorCIDRLastError:    worker.OperatorCIDRLastError,
+			UpdateRequested:          worker.UpdateRequested,
+			UpdateChannel:            normalizeReleaseChannel(worker.UpdateChannel).String(),
+			UpdateTag:                worker.UpdateTag,
 			LastError:                worker.LastError,
 			LastProbeAt:              probeAt,
 			LastProbeResults:         probeResults,

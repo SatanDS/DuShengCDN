@@ -11,6 +11,8 @@ INSTALL_DIR="/opt/dushengcdn-dns-worker"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
 SOURCE_REF="${SOURCE_REF:-main}"
 ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
+RELEASE_CHANNEL="${DUSHENGCDN_DNS_WORKER_RELEASE_CHANNEL:-stable}"
+RELEASE_TAG="${DUSHENGCDN_DNS_WORKER_RELEASE_TAG:-}"
 SERVER_URL=""
 TOKEN=""
 SERVICE_NAME="dushengcdn-dns-worker"
@@ -58,6 +60,8 @@ Options:
   --snapshot-path PATH       Snapshot cache path (default: INSTALL_DIR/data/dns-worker-snapshot.json)
   --source-database-profile PROFILE
                              Source database preset: full, country, asn, operator, none (default: full)
+  --source-database-metadata-dir DIR
+                             Source database metadata directory (default: INSTALL_DIR/data/source-database-metadata)
   --geoip-database PATH      Optional local MaxMind Country/City/Enterprise MMDB path
   --geoip-database-url URL   Country MMDB download URL (default: Loyalsoldier GeoLite2-Country)
   --asn-database PATH        Optional local MaxMind ASN MMDB path
@@ -81,7 +85,10 @@ Options:
   --query-rate-limit NUM     Per-source-IP DNS queries per second; 0 disables (default: 200)
   --udp-response-size NUM    Maximum UDP DNS response payload size (default: 1232)
   --log-level LEVEL          debug, info, warn, or error (default: info)
+  --service-name NAME        systemd service name (default: dushengcdn-dns-worker)
   --repo REPO                GitHub release repository (default: ${REPO})
+  --release-channel CHANNEL  Release channel: stable or preview (default: stable)
+  --release-tag TAG          Install a specific release tag
   --source-ref REF           Git branch, tag, or commit used when building from source (default: main)
   --allow-source-build       Allow fallback source build when no release binary is available
   --install-deps             Install missing download/build dependencies automatically (default)
@@ -113,6 +120,7 @@ while [[ $# -gt 0 ]]; do
     --listen) LISTEN_ADDR="$2"; shift 2 ;;
     --snapshot-path) SNAPSHOT_PATH="$2"; shift 2 ;;
     --source-database-profile) SOURCE_DATABASE_PROFILE="$2"; shift 2 ;;
+    --source-database-metadata-dir) SOURCE_DATABASE_METADATA_DIR="$2"; shift 2 ;;
     --geoip-database) GEOIP_DATABASE="$2"; GEOIP_DATABASE_EXPLICIT="true"; shift 2 ;;
     --geoip-database-url) GEOIP_DATABASE_URL="$2"; shift 2 ;;
     --asn-database) ASN_DATABASE="$2"; ASN_DATABASE_EXPLICIT="true"; shift 2 ;;
@@ -131,7 +139,10 @@ while [[ $# -gt 0 ]]; do
     --query-rate-limit) QUERY_RATE_LIMIT="$2"; shift 2 ;;
     --udp-response-size) UDP_RESPONSE_SIZE="$2"; shift 2 ;;
     --log-level) LOG_LEVEL_VALUE="$2"; shift 2 ;;
+    --service-name) SERVICE_NAME="$2"; shift 2 ;;
     --repo) REPO="$2"; shift 2 ;;
+    --release-channel) RELEASE_CHANNEL="$2"; shift 2 ;;
+    --release-tag) RELEASE_TAG="$2"; shift 2 ;;
     --source-ref) SOURCE_REF="$2"; shift 2 ;;
     --allow-source-build) ALLOW_SOURCE_BUILD="true"; shift ;;
     --install-deps) AUTO_INSTALL_DEPS="true"; shift ;;
@@ -1094,11 +1105,42 @@ prepare_operator_cidr_database() {
 
 resolve_release_binary() {
   local release_info
+  local normalized_channel
 
-  log "Fetching latest release from ${REPO}..."
-  if ! release_info="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")"; then
-    log "No latest release was found. Falling back to source build."
-    return 1
+  normalized_channel="$(echo "${RELEASE_CHANNEL:-stable}" | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "${RELEASE_TAG:-}" ]]; then
+    log "Fetching release ${RELEASE_TAG} from ${REPO}..."
+    if ! release_info="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}")"; then
+      log "Release tag ${RELEASE_TAG} was not found. Falling back to source build."
+      return 1
+    fi
+  elif [[ "$normalized_channel" == "preview" ]]; then
+    log "Fetching latest preview release from ${REPO}..."
+    if ! release_info="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=20" | awk '
+      BEGIN { depth=0; capture=0; obj=""; prerelease=0 }
+      /^[[:space:]]*{/ { depth=1; capture=1; obj=$0 ORS; prerelease=0; next }
+      capture {
+        obj = obj $0 ORS
+        if ($0 ~ /"prerelease"[[:space:]]*:[[:space:]]*true/) prerelease=1
+        if ($0 ~ /^[[:space:]]*}[,]?[[:space:]]*$/) {
+          if (prerelease) { printf "%s", obj; exit }
+          capture=0; obj=""; prerelease=0
+        }
+      }
+    ')"; then
+      log "No preview release list was found. Falling back to source build."
+      return 1
+    fi
+    if [[ -z "$release_info" ]]; then
+      log "No preview release was found. Falling back to source build."
+      return 1
+    fi
+  else
+    log "Fetching latest stable release from ${REPO}..."
+    if ! release_info="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")"; then
+      log "No latest stable release was found. Falling back to source build."
+      return 1
+    fi
   fi
 
   DOWNLOAD_URL="$(echo "$release_info" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET_NAME}\"" | grep -o 'https://[^"]*' | grep -v '\.sha256$' | head -n 1 || true)"
@@ -1578,6 +1620,98 @@ UPDATEREOF
   fi
 }
 
+write_dns_worker_updater() {
+  local updater="${INSTALL_DIR}/update-dns-worker.sh"
+  local updater_tmp
+
+  log "Writing DNS Worker updater..."
+  updater_tmp="$(mktemp)"
+  cat > "$updater_tmp" <<'UPDATEWORKEREOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${INSTALL_DIR}/dns-worker.env"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  . "$ENV_FILE"
+  set +a
+fi
+
+SERVER_URL="${DUSHENGCDN_DNS_WORKER_SERVER_URL:-}"
+TOKEN="${DUSHENGCDN_DNS_WORKER_TOKEN:-}"
+LISTEN_ADDR="${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-:53}"
+SNAPSHOT_PATH="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-${INSTALL_DIR}/data/dns-worker-snapshot.json}"
+GEOIP_DATABASE="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH:-}"
+ASN_DATABASE="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH:-}"
+OPERATOR_CIDR_DATABASE="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH:-}"
+SOURCE_DATABASE_PROFILE="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}"
+SOURCE_DATABASE_METADATA_DIR="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_METADATA_DIR:-${INSTALL_DIR}/data/source-database-metadata}"
+GEOIP_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-Country.mmdb}"
+ASN_DATABASE_URL="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_URL:-https://raw.githubusercontent.com/Loyalsoldier/geoip/release/GeoLite2-ASN.mmdb}"
+OPERATOR_CIDR_BASE_URL="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_BASE_URL:-https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists}"
+OPERATOR_CIDR_FILES="${DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_FILES:-chinanet.txt chinanet6.txt cmcc.txt cmcc6.txt unicom.txt unicom6.txt cernet.txt cernet6.txt cstnet.txt cstnet6.txt drpeng.txt drpeng6.txt googlecn.txt googlecn6.txt}"
+SERVICE_NAME="${DUSHENGCDN_DNS_WORKER_SERVICE_NAME:-dushengcdn-dns-worker}"
+HEARTBEAT_INTERVAL="${DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL:-10s}"
+REQUEST_TIMEOUT="${DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT:-10s}"
+SNAPSHOT_MAX_AGE="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE:-5m}"
+QUERY_RATE_LIMIT="${DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT:-200}"
+UDP_RESPONSE_SIZE="${DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE:-1232}"
+REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
+CHANNEL="${DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL:-preview}"
+TAG="${DUSHENGCDN_DNS_WORKER_UPDATE_TAG:-}"
+
+if [[ -z "$SERVER_URL" || -z "$TOKEN" ]]; then
+  echo "DNS Worker update requires SERVER_URL and TOKEN in ${ENV_FILE}" >&2
+  exit 1
+fi
+
+args=(
+  --server-url "$SERVER_URL"
+  --token "$TOKEN"
+  --install-dir "$INSTALL_DIR"
+  --listen "$LISTEN_ADDR"
+  --snapshot-path "$SNAPSHOT_PATH"
+  --source-database-profile "$SOURCE_DATABASE_PROFILE"
+  --source-database-metadata-dir "$SOURCE_DATABASE_METADATA_DIR"
+  --geoip-database-url "$GEOIP_DATABASE_URL"
+  --asn-database-url "$ASN_DATABASE_URL"
+  --operator-cidr-base-url "$OPERATOR_CIDR_BASE_URL"
+  --operator-cidr-files "$OPERATOR_CIDR_FILES"
+  --service-name "$SERVICE_NAME"
+  --heartbeat-interval "$HEARTBEAT_INTERVAL"
+  --request-timeout "$REQUEST_TIMEOUT"
+  --snapshot-max-age "$SNAPSHOT_MAX_AGE"
+  --query-rate-limit "$QUERY_RATE_LIMIT"
+  --udp-response-size "$UDP_RESPONSE_SIZE"
+  --repo "$REPO"
+  --release-channel "$CHANNEL"
+)
+
+if [[ -n "$GEOIP_DATABASE" ]]; then
+  args+=(--geoip-database "$GEOIP_DATABASE")
+fi
+if [[ -n "$ASN_DATABASE" ]]; then
+  args+=(--asn-database "$ASN_DATABASE")
+fi
+if [[ -n "$OPERATOR_CIDR_DATABASE" ]]; then
+  args+=(--operator-cidr-database "$OPERATOR_CIDR_DATABASE")
+fi
+if [[ -n "$TAG" ]]; then
+  args+=(--release-tag "$TAG")
+fi
+
+curl -fsSL "https://github.com/${REPO}/releases/latest/download/install-dns-worker.sh" | bash -s -- "${args[@]}"
+UPDATEWORKEREOF
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root install -m 0755 "$updater_tmp" "$updater"
+    rm -f "$updater_tmp"
+  else
+    mv -f "$updater_tmp" "$updater"
+    chmod 0755 "$updater"
+  fi
+}
+
 if [[ -z "$SERVER_URL" ]]; then
   die "--server-url is required"
 fi
@@ -1602,7 +1736,9 @@ normalize_source_database_profile
 if [[ -z "$SNAPSHOT_PATH" ]]; then
   SNAPSHOT_PATH="${INSTALL_DIR}/data/dns-worker-snapshot.json"
 fi
-SOURCE_DATABASE_METADATA_DIR="${INSTALL_DIR}/data/source-database-metadata"
+if [[ -z "$SOURCE_DATABASE_METADATA_DIR" ]]; then
+  SOURCE_DATABASE_METADATA_DIR="${INSTALL_DIR}/data/source-database-metadata"
+fi
 if [[ -z "$GEOIP_DATABASE" && "$AUTO_GEOIP_DOWNLOAD" == "true" ]] && source_profile_wants_country; then
   GEOIP_DATABASE="${INSTALL_DIR}/data/geoip/GeoLite2-Country.mmdb"
 fi
@@ -1723,6 +1859,9 @@ if [[ "$NEEDS_ROOT" == "true" ]]; then
   write_file_as_root "$ENV_FILE" "$ENV_MODE" <<ENVEOF
 DUSHENGCDN_DNS_WORKER_SERVER_URL=$(env_quote "$SERVER_URL")
 DUSHENGCDN_DNS_WORKER_TOKEN=$(env_quote "$TOKEN")
+DUSHENGCDN_DNS_WORKER_INSTALL_DIR=$(env_quote "$INSTALL_DIR")
+DUSHENGCDN_DNS_WORKER_UPDATE_SCRIPT=$(env_quote "${INSTALL_DIR}/update-dns-worker.sh")
+DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED="true"
 DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=$(env_quote "$LISTEN_ADDR")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=$(env_quote "$SNAPSHOT_PATH")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=$(env_quote "$GEOIP_DATABASE")
@@ -1746,6 +1885,9 @@ else
   cat > "$ENV_FILE" <<ENVEOF
 DUSHENGCDN_DNS_WORKER_SERVER_URL=$(env_quote "$SERVER_URL")
 DUSHENGCDN_DNS_WORKER_TOKEN=$(env_quote "$TOKEN")
+DUSHENGCDN_DNS_WORKER_INSTALL_DIR=$(env_quote "$INSTALL_DIR")
+DUSHENGCDN_DNS_WORKER_UPDATE_SCRIPT=$(env_quote "${INSTALL_DIR}/update-dns-worker.sh")
+DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED="true"
 DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=$(env_quote "$LISTEN_ADDR")
 DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=$(env_quote "$SNAPSHOT_PATH")
 DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=$(env_quote "$GEOIP_DATABASE")
@@ -1769,6 +1911,7 @@ ENVEOF
 fi
 
 write_source_database_updater
+write_dns_worker_updater
 
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   log "Creating systemd service..."

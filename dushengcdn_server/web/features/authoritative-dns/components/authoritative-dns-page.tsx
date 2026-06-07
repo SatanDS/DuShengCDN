@@ -32,6 +32,7 @@ import {
   getDNSZoneRecords,
   getDNSZones,
   probeDNSWorker,
+  requestDNSWorkerUpdate,
   simulateDNSGSLB,
   updateDNSRecord,
   updateDNSZone,
@@ -1070,6 +1071,26 @@ export function AuthoritativeDNSPage() {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
     },
   });
+  const requestWorkerUpdateMutation = useMutation({
+    mutationFn: requestDNSWorkerUpdate,
+    onSuccess: async (worker) => {
+      setFeedback({
+        tone: 'success',
+        message: `已向 DNS 响应端“${worker.name}”下发更新启动命令，等待下一次心跳执行。`,
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'workers'],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'observability'],
+        }),
+      ]);
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
   const simulateGSLBMutation = useMutation({
     mutationFn: simulateDNSGSLB,
     onError: (error) => {
@@ -1536,6 +1557,14 @@ export function AuthoritativeDNSPage() {
               : ''
           }
           onCopyCommand={handleCopyDNSWorkerCommand}
+          onRequestWorkerUpdate={(workerId) =>
+            requestWorkerUpdateMutation.mutate(workerId)
+          }
+          updatingWorkerId={
+            requestWorkerUpdateMutation.isPending
+              ? (requestWorkerUpdateMutation.variables ?? null)
+              : null
+          }
         />
 
         <GSLBSimulationPanel
@@ -3408,11 +3437,15 @@ function DNSObservabilityPanel({
   isLoading,
   error,
   onCopyCommand,
+  onRequestWorkerUpdate,
+  updatingWorkerId,
 }: {
   summary: DNSObservabilitySummary | null;
   isLoading: boolean;
   error: string;
   onCopyCommand: (value: string, message: string) => void;
+  onRequestWorkerUpdate?: (workerId: number) => void;
+  updatingWorkerId?: number | null;
 }) {
   if (isLoading) {
     return (
@@ -3476,7 +3509,11 @@ function DNSObservabilityPanel({
           consistency={summary.snapshot_consistency}
           onCopyCommand={onCopyCommand}
         />
-        <DNSWorkerHealthPanel summary={summary} />
+        <DNSWorkerHealthPanel
+          summary={summary}
+          onRequestUpdate={onRequestWorkerUpdate}
+          updatingWorkerId={updatingWorkerId}
+        />
         <CounterChart
           title="返回码"
           items={summary.rcode_breakdown}
@@ -3519,8 +3556,12 @@ function DNSObservabilityPanel({
 
 function DNSWorkerHealthPanel({
   summary,
+  onRequestUpdate,
+  updatingWorkerId,
 }: {
   summary: DNSObservabilitySummary;
+  onRequestUpdate?: (workerId: number) => void;
+  updatingWorkerId?: number | null;
 }) {
   const health = summary.worker_health;
 
@@ -3606,7 +3647,12 @@ function DNSWorkerHealthPanel({
       ) : (
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           {health.workers.map((worker) => (
-            <DNSWorkerHealthCard key={worker.worker_id} worker={worker} />
+            <DNSWorkerHealthCard
+              key={worker.worker_id}
+              worker={worker}
+              onRequestUpdate={onRequestUpdate}
+              isRequestingUpdate={updatingWorkerId === worker.id}
+            />
           ))}
         </div>
       )}
@@ -3614,10 +3660,19 @@ function DNSWorkerHealthPanel({
   );
 }
 
-function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
+function DNSWorkerHealthCard({
+  worker,
+  onRequestUpdate,
+  isRequestingUpdate = false,
+}: {
+  worker: DNSWorkerHealthItem;
+  onRequestUpdate?: (workerId: number) => void;
+  isRequestingUpdate?: boolean;
+}) {
   const visibleNodeProbes = (worker.node_probes ?? []).filter((probe) =>
     probe.node_name?.trim(),
   );
+  const updateDisabled = isRequestingUpdate || worker.update_requested;
 
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
@@ -3642,6 +3697,9 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
           {worker.snapshot_stale ? (
             <StatusBadge label="解析配置过期" variant="danger" />
           ) : null}
+          {worker.update_requested ? (
+            <StatusBadge label="等待更新" variant="warning" />
+          ) : null}
           <StatusBadge
             label={worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'}
             variant={worker.geoip_enabled ? 'success' : 'warning'}
@@ -3654,6 +3712,20 @@ function DNSWorkerHealthCard({ worker }: { worker: DNSWorkerHealthItem }) {
             label={worker.geoip_operator_enabled ? '运营商支持' : '运营商未支持'}
             variant={worker.geoip_operator_enabled ? 'success' : 'warning'}
           />
+          {onRequestUpdate ? (
+            <SecondaryButton
+              type="button"
+              className="px-3 py-1.5 text-xs"
+              disabled={updateDisabled}
+              onClick={() => onRequestUpdate(worker.id)}
+            >
+              {isRequestingUpdate
+                ? '下发中...'
+                : worker.update_requested
+                  ? '等待心跳执行'
+                  : '下发更新'}
+            </SecondaryButton>
+          ) : null}
         </div>
       </div>
 

@@ -62,6 +62,9 @@ export interface DNSWorkerItem {
   geoip_operator_enabled: boolean;
   operator_cidr_database_path: string;
   operator_cidr_last_error: string;
+  update_requested: boolean;
+  update_channel: 'stable' | 'preview';
+  update_tag: string;
   last_probe_at?: string | null;
   last_probe_query: string;
   last_probe_results: DNSWorkerProbeResult[];
@@ -349,6 +352,7 @@ export interface DNSWorkerHealthSummary {
 }
 
 export interface DNSWorkerHealthItem {
+  id: number;
   worker_id: string;
   name: string;
   status: 'online' | 'offline';
@@ -377,6 +381,9 @@ export interface DNSWorkerHealthItem {
   geoip_operator_enabled: boolean;
   operator_cidr_database_path: string;
   operator_cidr_last_error: string;
+  update_requested: boolean;
+  update_channel: 'stable' | 'preview';
+  update_tag: string;
   last_error: string;
   last_probe_at?: string | null;
   last_probe_results: DNSWorkerProbeResult[];

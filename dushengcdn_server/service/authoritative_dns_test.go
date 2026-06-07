@@ -2751,26 +2751,27 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
 	}
-	if view.Token != "" {
+	workerView := view.Worker
+	if workerView.Token != "" {
 		t.Fatal("expected heartbeat worker view to omit token")
 	}
-	if view.Status != dnsWorkerStatusOnline || view.Version != "v1.0.0" {
-		t.Fatalf("unexpected heartbeat view: %+v", view)
+	if workerView.Status != dnsWorkerStatusOnline || workerView.Version != "v1.0.0" {
+		t.Fatalf("unexpected heartbeat view: %+v", workerView)
 	}
-	if !view.GeoIPEnabled || view.GeoIPDatabasePath == "" {
-		t.Fatalf("expected heartbeat view to include geoip status: %+v", view)
+	if !workerView.GeoIPEnabled || workerView.GeoIPDatabasePath == "" {
+		t.Fatalf("expected heartbeat view to include geoip status: %+v", workerView)
 	}
-	if !view.GeoIPCountryEnabled || !view.GeoIPASNEnabled || !view.GeoIPOperatorEnabled {
-		t.Fatalf("expected heartbeat view to include source capabilities: %+v", view)
+	if !workerView.GeoIPCountryEnabled || !workerView.GeoIPASNEnabled || !workerView.GeoIPOperatorEnabled {
+		t.Fatalf("expected heartbeat view to include source capabilities: %+v", workerView)
 	}
-	if view.ASNDatabasePath == "" || view.OperatorCIDRDatabasePath == "" {
-		t.Fatalf("expected heartbeat view to include source database paths: %+v", view)
+	if workerView.ASNDatabasePath == "" || workerView.OperatorCIDRDatabasePath == "" {
+		t.Fatalf("expected heartbeat view to include source database paths: %+v", workerView)
 	}
-	if view.LastHeartbeatAt == nil {
-		t.Fatalf("expected heartbeat timestamp in view: %+v", view)
+	if workerView.LastHeartbeatAt == nil {
+		t.Fatalf("expected heartbeat timestamp in view: %+v", workerView)
 	}
-	if view.LastRollupAt == nil || view.LastRollupCount != 42 {
-		t.Fatalf("expected rollup metadata in view: %+v", view)
+	if workerView.LastRollupAt == nil || workerView.LastRollupCount != 42 {
+		t.Fatalf("expected rollup metadata in view: %+v", workerView)
 	}
 	var count int64
 	if err := model.DB.Model(&model.DNSQueryRollup{}).Where("worker_id = ?", authenticated.WorkerID).Count(&count).Error; err != nil {
@@ -2792,6 +2793,49 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	targetSummary := decodeDNSTargetSummary(rollup.TargetSummary)
 	if len(targetSummary) != 1 || targetSummary["8.8.8.8"] != 42 {
 		t.Fatalf("expected sanitized target summary, got raw=%s decoded=%+v", rollup.TargetSummary, targetSummary)
+	}
+}
+
+func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	requested, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{
+		Channel: string(ReleaseChannelPreview),
+	})
+	if err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	if !requested.UpdateRequested || requested.UpdateChannel != string(ReleaseChannelPreview) {
+		t.Fatalf("expected pending preview update request, got %+v", requested)
+	}
+
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version: "v1.0.0",
+		Status:  dnsWorkerStatusOnline,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if !heartbeat.Settings.UpdateNow || heartbeat.Settings.UpdateRepo == "" || heartbeat.Settings.UpdateChannel != string(ReleaseChannelPreview) {
+		t.Fatalf("expected heartbeat to deliver update settings, got %+v", heartbeat.Settings)
+	}
+	if heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateChannel != string(ReleaseChannelStable) {
+		t.Fatalf("expected heartbeat view to clear pending update, got %+v", heartbeat.Worker)
+	}
+	reloaded, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if reloaded.UpdateRequested || reloaded.UpdateChannel != string(ReleaseChannelStable) || reloaded.UpdateTag != "" {
+		t.Fatalf("expected pending update to be cleared in database, got %+v", reloaded)
 	}
 }
 
@@ -2938,8 +2982,8 @@ func TestDNSWorkerHeartbeatClampsFutureSnapshotTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
 	}
-	if view.LastSnapshotAt == nil || !view.LastSnapshotAt.Before(futureSnapshotAt) {
-		t.Fatalf("expected future snapshot time to be clamped in view, got %+v", view.LastSnapshotAt)
+	if view.Worker.LastSnapshotAt == nil || !view.Worker.LastSnapshotAt.Before(futureSnapshotAt) {
+		t.Fatalf("expected future snapshot time to be clamped in view, got %+v", view.Worker.LastSnapshotAt)
 	}
 	reloaded, err := model.GetDNSWorkerByID(worker.ID)
 	if err != nil {

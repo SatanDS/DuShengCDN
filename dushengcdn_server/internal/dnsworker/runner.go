@@ -123,7 +123,7 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 	if r.SourceResolver != nil {
 		sourceStatus = r.SourceResolver.Status()
 	}
-	err := r.Client.SendHeartbeat(ctx, HeartbeatInput{
+	response, err := r.Client.SendHeartbeat(ctx, HeartbeatInput{
 		Version:                  r.Config.Version,
 		Status:                   status,
 		LastSnapshotVersion:      r.Store.Version(),
@@ -153,6 +153,9 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 			"error", err,
 		)
 		return err
+	}
+	if response != nil {
+		r.maybeStartUpdate(response.Settings)
 	}
 	slog.Info(
 		"dns worker heartbeat sent",
