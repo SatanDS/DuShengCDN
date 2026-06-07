@@ -141,6 +141,7 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		GeoIPOperatorEnabled:     sourceStatus.OperatorEnabled,
 		OperatorCIDRDatabasePath: sourceStatus.OperatorCIDRDatabasePath,
 		OperatorCIDRLastError:    sourceStatus.OperatorCIDRLastError,
+		UpdateSupported:          r.Config.UpdateEnabled,
 		Rollups:                  rollups,
 		SchedulingStates:         schedulingStates,
 	})

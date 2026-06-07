@@ -98,6 +98,7 @@ type DNSWorkerHeartbeatInput struct {
 	GeoIPOperatorEnabled     bool                                      `json:"geoip_operator_enabled"`
 	OperatorCIDRDatabasePath string                                    `json:"operator_cidr_database_path"`
 	OperatorCIDRLastError    string                                    `json:"operator_cidr_last_error"`
+	UpdateSupported          bool                                      `json:"update_supported"`
 	Rollups                  []DNSQueryRollupInput                     `json:"rollups"`
 	SchedulingStates         []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
@@ -1393,7 +1394,7 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		return nil, errors.New("DNS worker is nil")
 	}
 	now := time.Now()
-	updateNow := worker.UpdateRequested
+	updateNow := worker.UpdateRequested && input.UpdateSupported
 	updateChannel := normalizeReleaseChannel(worker.UpdateChannel)
 	updateTag := strings.TrimSpace(worker.UpdateTag)
 	worker.Status = normalizeDNSWorkerStatus(input.Status)
@@ -1420,9 +1421,11 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		worker.LastRollupAt = &rollupMeta.lastRollupAt
 		worker.LastRollupCount = rollupMeta.count
 	}
-	worker.UpdateRequested = false
-	worker.UpdateChannel = ReleaseChannelStable.String()
-	worker.UpdateTag = ""
+	if updateNow {
+		worker.UpdateRequested = false
+		worker.UpdateChannel = ReleaseChannelStable.String()
+		worker.UpdateTag = ""
+	}
 	db := model.DB.Session(&gorm.Session{DisableNestedTransaction: true})
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(worker).Error; err != nil {

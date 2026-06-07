@@ -42,6 +42,7 @@ type HeartbeatInput struct {
 	GeoIPOperatorEnabled     bool                      `json:"geoip_operator_enabled"`
 	OperatorCIDRDatabasePath string                    `json:"operator_cidr_database_path"`
 	OperatorCIDRLastError    string                    `json:"operator_cidr_last_error"`
+	UpdateSupported          bool                      `json:"update_supported"`
 	Rollups                  []QueryRollupPayload      `json:"rollups"`
 	SchedulingStates         []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }

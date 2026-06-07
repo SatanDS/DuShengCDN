@@ -2818,8 +2818,9 @@ func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
 	}
 	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
-		Version: "v1.0.0",
-		Status:  dnsWorkerStatusOnline,
+		Version:         "v1.0.0",
+		Status:          dnsWorkerStatusOnline,
+		UpdateSupported: true,
 	})
 	if err != nil {
 		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
@@ -2836,6 +2837,41 @@ func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 	}
 	if reloaded.UpdateRequested || reloaded.UpdateChannel != string(ReleaseChannelStable) || reloaded.UpdateTag != "" {
 		t.Fatalf("expected pending update to be cleared in database, got %+v", reloaded)
+	}
+}
+
+func TestDNSWorkerManualUpdateRequestWaitsForSupportedHeartbeat(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if _, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{
+		Channel: string(ReleaseChannelPreview),
+	}); err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version: "v1.0.0",
+		Status:  dnsWorkerStatusOnline,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if heartbeat.Settings.UpdateNow {
+		t.Fatalf("expected unsupported heartbeat to leave update pending, got %+v", heartbeat.Settings)
+	}
+	reloaded, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if !reloaded.UpdateRequested || reloaded.UpdateChannel != string(ReleaseChannelPreview) {
+		t.Fatalf("expected pending update to remain in database, got %+v", reloaded)
 	}
 }
 
