@@ -3,19 +3,19 @@ package model
 import "time"
 
 type NodeHealthEvent struct {
-	ID               uint       `json:"id" gorm:"primaryKey"`
-	NodeID           string     `json:"node_id" gorm:"index;size:64;not null"`
-	EventType        string     `json:"event_type" gorm:"index;size:64;not null"`
-	Severity         string     `json:"severity" gorm:"size:16;not null"`
-	Status           string     `json:"status" gorm:"index;size:16;not null"`
-	Message          string     `json:"message" gorm:"type:text"`
-	FirstTriggeredAt time.Time  `json:"first_triggered_at" gorm:"index"`
-	LastTriggeredAt  time.Time  `json:"last_triggered_at" gorm:"index"`
-	ReportedAt       time.Time  `json:"reported_at" gorm:"index"`
-	ResolvedAt       *time.Time `json:"resolved_at" gorm:"index"`
-	MetadataJSON     string     `json:"metadata_json" gorm:"type:text"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID               uint       `json:"id" gorm:"column:id;primaryKey"`
+	NodeID           string     `json:"node_id" gorm:"column:node_id;index;size:64;not null"`
+	EventType        string     `json:"event_type" gorm:"column:event_type;index;size:64;not null"`
+	Severity         string     `json:"severity" gorm:"column:severity;size:16;not null"`
+	Status           string     `json:"status" gorm:"column:status;index;size:16;not null"`
+	Message          string     `json:"message" gorm:"column:message;type:text"`
+	FirstTriggeredAt time.Time  `json:"first_triggered_at" gorm:"column:first_triggered_at;index"`
+	LastTriggeredAt  time.Time  `json:"last_triggered_at" gorm:"column:last_triggered_at;index"`
+	ReportedAt       time.Time  `json:"reported_at" gorm:"column:reported_at;index"`
+	ResolvedAt       *time.Time `json:"resolved_at" gorm:"column:resolved_at;index"`
+	MetadataJSON     string     `json:"metadata_json" gorm:"column:metadata_json;type:text"`
+	CreatedAt        time.Time  `json:"created_at" gorm:"column:created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" gorm:"column:updated_at"`
 }
 
 func GetActiveNodeHealthEvent(nodeID string, eventType string) (*NodeHealthEvent, error) {

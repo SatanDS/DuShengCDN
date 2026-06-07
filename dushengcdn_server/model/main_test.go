@@ -776,6 +776,33 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 	}
 }
 
+func TestNodeHealthEventColumnNamesAreStable(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "node-health-event-columns.db")
+	if err := db.AutoMigrate(&NodeHealthEvent{}); err != nil {
+		t.Fatalf("AutoMigrate NodeHealthEvent: %v", err)
+	}
+	want := []string{
+		"id",
+		"node_id",
+		"event_type",
+		"severity",
+		"status",
+		"message",
+		"first_triggered_at",
+		"last_triggered_at",
+		"reported_at",
+		"resolved_at",
+		"metadata_json",
+		"created_at",
+		"updated_at",
+	}
+	for _, column := range want {
+		if !db.Migrator().HasColumn(&NodeHealthEvent{}, column) {
+			t.Fatalf("expected node_health_events.%s column", column)
+		}
+	}
+}
+
 func findDBModelByTableName(t *testing.T, tableName string) dbModel {
 	t.Helper()
 
