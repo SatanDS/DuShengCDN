@@ -2926,6 +2926,89 @@ func TestDNSWorkerManualUpdateRequestWaitsForSupportedHeartbeat(t *testing.T) {
 	}
 }
 
+func TestDeleteDNSWorkerDeliversUninstallOnHeartbeatAndRemovesRecord(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	supportHeartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:            "v1.0.0",
+		Status:             dnsWorkerStatusOnline,
+		UninstallSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat support: %v", err)
+	}
+	if !supportHeartbeat.Worker.UninstallSupported || supportHeartbeat.Worker.LastUninstallSupportedAt == nil {
+		t.Fatalf("expected heartbeat view to record uninstall support, got %+v", supportHeartbeat.Worker)
+	}
+	if err := DeleteAuthoritativeDNSWorker(worker.ID); err != nil {
+		t.Fatalf("DeleteAuthoritativeDNSWorker: %v", err)
+	}
+	workers, err := ListAuthoritativeDNSWorkers()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSWorkers: %v", err)
+	}
+	if len(workers) != 0 {
+		t.Fatalf("expected uninstall-requested worker to be hidden, got %+v", workers)
+	}
+	marked, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if !marked.UninstallRequested || marked.UninstallRequestedAt == nil {
+		t.Fatalf("expected uninstall request to be persisted, got %+v", marked)
+	}
+	authenticated, err = AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:            "v1.0.0",
+		Status:             dnsWorkerStatusOnline,
+		UpdateSupported:    true,
+		UninstallSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if !heartbeat.Settings.UninstallNow {
+		t.Fatalf("expected heartbeat to deliver uninstall command, got %+v", heartbeat.Settings)
+	}
+	if _, err := model.GetDNSWorkerByID(worker.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected DNS worker record to be removed after uninstall heartbeat, got err=%v", err)
+	}
+	if _, err := AuthenticateDNSWorkerToken(worker.Token); err == nil {
+		t.Fatal("expected token to be invalid after uninstall heartbeat")
+	}
+}
+
+func TestDeleteDNSWorkerRequiresUninstallSupport(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	err = DeleteAuthoritativeDNSWorker(worker.ID)
+	if err == nil || !strings.Contains(err.Error(), "不支持远程卸载") {
+		t.Fatalf("expected unsupported uninstall error, got %v", err)
+	}
+	workers, err := ListAuthoritativeDNSWorkers()
+	if err != nil {
+		t.Fatalf("ListAuthoritativeDNSWorkers: %v", err)
+	}
+	if len(workers) != 1 || workers[0].ID != worker.ID {
+		t.Fatalf("expected unsupported worker to remain visible, got %+v", workers)
+	}
+}
+
 func TestPersistDNSQueryRollupsBatchesInserts(t *testing.T) {
 	setupServiceTestDB(t)
 

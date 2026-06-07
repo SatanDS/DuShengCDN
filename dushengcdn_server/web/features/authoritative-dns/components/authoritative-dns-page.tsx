@@ -124,6 +124,11 @@ type WorkerSettingsFormValues = {
   remark: string;
 };
 
+function getDNSWorkerDisplayName(worker: Pick<DNSWorkerItem | DNSWorkerHealthItem, 'name' | 'remark'>) {
+  const remark = worker.remark?.trim();
+  return remark || worker.name;
+}
+
 type GSLBSimulationFormValues = {
   proxy_route_id: string;
   qname: string;
@@ -1073,10 +1078,19 @@ export function AuthoritativeDNSPage() {
   const deleteWorkerMutation = useMutation({
     mutationFn: deleteDNSWorker,
     onSuccess: async () => {
-      setFeedback({ tone: 'success', message: 'DNS 响应端已删除。' });
-      await queryClient.invalidateQueries({
-        queryKey: ['authoritative-dns', 'workers'],
+      setFeedback({
+        tone: 'success',
+        message: '已从面板移除 DNS 响应端，并等待响应端下一次心跳执行自动卸载清理。',
       });
+      setWorkerSettingsTarget(null);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'workers'],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'observability'],
+        }),
+      ]);
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -1096,7 +1110,7 @@ export function AuthoritativeDNSPage() {
     onSuccess: async (worker) => {
       setFeedback({
         tone: 'success',
-        message: `DNS 响应端“${worker.name}”备注已保存。`,
+        message: `DNS 响应端“${getDNSWorkerDisplayName(worker)}”显示名称已保存。`,
       });
       setWorkerSettingsTarget(null);
       await Promise.all([
@@ -1140,7 +1154,7 @@ export function AuthoritativeDNSPage() {
     onSuccess: async (worker) => {
       setFeedback({
         tone: 'success',
-        message: `已向 DNS 响应端“${worker.name}”下发更新启动命令，等待下一次心跳执行。`,
+        message: `已向 DNS 响应端“${getDNSWorkerDisplayName(worker)}”下发更新启动命令，等待下一次心跳执行。`,
       });
       await Promise.all([
         queryClient.invalidateQueries({
@@ -1485,11 +1499,18 @@ export function AuthoritativeDNSPage() {
     }
   };
 
-  const handleDeleteWorker = async (worker: DNSWorkerItem) => {
+  const handleDeleteWorker = async (worker: DNSWorkerItem | DNSWorkerHealthItem) => {
+    if (!worker.uninstall_supported) {
+      setFeedback({
+        tone: 'info',
+        message: '该 DNS 响应端当前版本不支持远程卸载，请先强制更新一次，或登录机器手动执行 uninstall-dns-worker.sh。',
+      });
+      return;
+    }
     const confirmed = await confirmDialog({
       title: '删除 DNS 响应端',
-      message: `确认删除响应端“${worker.name}”吗？删除后该响应端密钥将不能再拉取解析配置。`,
-      confirmLabel: '删除',
+      message: `确认删除响应端“${getDNSWorkerDisplayName(worker)}”吗？面板会先隐藏该响应端，并在下一次心跳下发自动卸载清理命令；如果响应端已经离线，命令会等到它恢复心跳后执行。`,
+      confirmLabel: '删除并卸载',
       tone: 'danger',
     });
     if (confirmed) {
@@ -1719,7 +1740,6 @@ export function AuthoritativeDNSPage() {
           <WorkersPanel
             workers={workers}
             onCreateWorker={() => setIsWorkerModalOpen(true)}
-            onDeleteWorker={handleDeleteWorker}
             onProbeWorker={handleProbeWorker}
             busy={deleteWorkerMutation.isPending}
             probingWorkerId={
@@ -1845,6 +1865,10 @@ export function AuthoritativeDNSPage() {
             requestWorkerUpdateMutation.isPending &&
             requestWorkerUpdateMutation.variables === workerSettingsTarget.id
           }
+          isDeleting={
+            deleteWorkerMutation.isPending &&
+            deleteWorkerMutation.variables === workerSettingsTarget.id
+          }
           onClose={() => setWorkerSettingsTarget(null)}
           onSave={(values) =>
             updateWorkerMutation.mutate({
@@ -1855,6 +1879,7 @@ export function AuthoritativeDNSPage() {
           onRequestUpdate={() =>
             requestWorkerUpdateMutation.mutate(workerSettingsTarget.id)
           }
+          onDelete={() => handleDeleteWorker(workerSettingsTarget)}
         />
       ) : null}
     </>
@@ -2253,7 +2278,6 @@ function WorkersPanel({
   probingWorkerId,
   probeResults,
   onCreateWorker,
-  onDeleteWorker,
   onProbeWorker,
 }: {
   workers: DNSWorkerItem[];
@@ -2261,7 +2285,6 @@ function WorkersPanel({
   probingWorkerId: number | null;
   probeResults: Record<number, DNSWorkerProbe>;
   onCreateWorker: () => void;
-  onDeleteWorker: (worker: DNSWorkerItem) => void;
   onProbeWorker: (worker: DNSWorkerItem) => void;
 }) {
   return (
@@ -2294,7 +2317,7 @@ function WorkersPanel({
                 <div className="min-w-0 space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-base font-semibold text-[var(--foreground-primary)]">
-                      {worker.name}
+                      {getDNSWorkerDisplayName(worker)}
                     </h2>
                     <StatusBadge
                       label={worker.status === 'online' ? '在线' : '离线'}
@@ -2418,13 +2441,6 @@ function WorkersPanel({
                   >
                     {probingWorkerId === worker.id ? '探测中...' : '探测'}
                   </SecondaryButton>
-                  <DangerButton
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onDeleteWorker(worker)}
-                  >
-                    删除
-                  </DangerButton>
                 </div>
               </div>
             </div>
@@ -3803,16 +3819,11 @@ function DNSWorkerHealthCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-[var(--foreground-primary)]">
-            {worker.name}
+            {getDNSWorkerDisplayName(worker)}
           </p>
           <p className="mt-1 text-xs break-all text-[var(--foreground-muted)]">
             {worker.public_address || worker.worker_id}
           </p>
-          {worker.remark ? (
-            <p className="mt-1 text-xs text-[var(--foreground-secondary)]">
-              {worker.remark}
-            </p>
-          ) : null}
           <div className="mt-2 flex flex-wrap gap-2">
             <StatusBadge
               label={worker.status}
@@ -3848,7 +3859,7 @@ function DNSWorkerHealthCard({
         {onOpenSettings ? (
           <SecondaryButton
             type="button"
-            aria-label={`设置 DNS 响应端 ${worker.name}`}
+            aria-label={`设置 DNS 响应端 ${getDNSWorkerDisplayName(worker)}`}
             title="设置 DNS 响应端"
             className="h-9 w-9 shrink-0 rounded-xl px-0 py-0"
             onClick={() => onOpenSettings(worker)}
@@ -4746,7 +4757,7 @@ function WorkerCreateModal({
             {...form.register('public_address')}
           />
         </ResourceField>
-        <ResourceField label="备注" hint="可选，只用于面板展示。">
+        <ResourceField label="显示名称" hint="可选，用于替换卡片标题。">
           <ResourceTextarea
             maxLength={255}
             placeholder="例如：香港阿里云 / 主响应端"
@@ -4765,16 +4776,20 @@ function WorkerSettingsModal({
   worker,
   isSaving,
   isRequestingUpdate,
+  isDeleting,
   onClose,
   onSave,
   onRequestUpdate,
+  onDelete,
 }: {
   worker: DNSWorkerHealthItem;
   isSaving: boolean;
   isRequestingUpdate: boolean;
+  isDeleting: boolean;
   onClose: () => void;
   onSave: (values: WorkerSettingsFormValues) => void;
   onRequestUpdate: () => void;
+  onDelete: () => void;
 }) {
   const form = useForm<WorkerSettingsFormValues>({
     defaultValues: {
@@ -4784,6 +4799,7 @@ function WorkerSettingsModal({
   const isWaitingForUnsupportedUpdate =
     worker.update_requested && !worker.update_supported;
   const updateDisabled = isRequestingUpdate || worker.update_requested;
+  const deleteDisabled = isDeleting || !worker.uninstall_supported;
   const updateButtonLabel = isRequestingUpdate
     ? '下发中...'
     : isWaitingForUnsupportedUpdate
@@ -4801,15 +4817,15 @@ function WorkerSettingsModal({
       isOpen
       onClose={onClose}
       title="DNS 响应端设置"
-      description={`${worker.name} · ${worker.public_address || worker.worker_id}`}
+      description={`${getDNSWorkerDisplayName(worker)} · ${worker.public_address || worker.worker_id}`}
     >
       <form
         className="space-y-5"
         onSubmit={form.handleSubmit((values) => onSave(values))}
       >
         <ResourceField
-          label="备注"
-          hint="备注只用于面板展示，不会改变响应端名称、密钥或 NS 配置。"
+          label="显示名称"
+          hint="用于替换卡片标题；留空时显示创建时的响应端名称。不会改变密钥或 NS 配置。"
         >
           <ResourceTextarea
             maxLength={255}
@@ -4850,12 +4866,43 @@ function WorkerSettingsModal({
             {updateButtonLabel}
           </SecondaryButton>
         </div>
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+                删除并卸载
+              </p>
+              <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
+                删除后面板会隐藏该响应端，并等待它下一次心跳执行本机卸载脚本，清理服务、定时器和本地数据目录。
+              </p>
+            </div>
+            <StatusBadge
+              label={worker.uninstall_supported ? '支持远程卸载' : '需先强制更新'}
+              variant={worker.uninstall_supported ? 'success' : 'warning'}
+            />
+          </div>
+          {!worker.uninstall_supported ? (
+            <InlineMessage
+              className="mt-3"
+              tone="warning"
+              message="该响应端尚未上报卸载脚本能力。请先使用上方“强制下发更新”，或登录机器手动执行 uninstall-dns-worker.sh。"
+            />
+          ) : null}
+          <DangerButton
+            type="button"
+            className="mt-4"
+            disabled={deleteDisabled}
+            onClick={onDelete}
+          >
+            {isDeleting ? '删除中...' : '删除并卸载响应端'}
+          </DangerButton>
+        </div>
         <div className="flex flex-wrap justify-end gap-3">
           <SecondaryButton type="button" onClick={onClose}>
             取消
           </SecondaryButton>
           <PrimaryButton type="submit" disabled={isSaving}>
-            {isSaving ? '保存中...' : '保存备注'}
+            {isSaving ? '保存中...' : '保存显示名称'}
           </PrimaryButton>
         </div>
       </form>
@@ -4920,7 +4967,7 @@ go run ./cmd/dns-worker \\
       isOpen
       onClose={onClose}
       title="DNS 响应端密钥"
-      description={`响应端 ${worker.name} 已创建。密钥离开弹窗后不会再次显示。`}
+      description={`响应端 ${getDNSWorkerDisplayName(worker)} 已创建。密钥离开弹窗后不会再次显示。`}
       size="xl"
     >
       <div className="space-y-5">

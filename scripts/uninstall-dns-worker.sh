@@ -3,6 +3,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/dushengcdn-dns-worker"
 SERVICE_NAME="dushengcdn-dns-worker"
+SELF_UNINSTALL="false"
 
 usage() {
   cat <<EOF
@@ -14,6 +15,7 @@ Usage:
 Options:
   --install-dir DIR         Installation directory (default: /opt/dushengcdn-dns-worker)
   --service-name NAME       systemd service name (default: dushengcdn-dns-worker)
+  --self-uninstall          Internal mode used by a running DNS Worker
   -h, --help                Show this help message
 
 Behavior:
@@ -32,6 +34,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --service-name) SERVICE_NAME="$2"; shift 2 ;;
+    --self-uninstall) SELF_UNINSTALL="true"; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -77,6 +80,9 @@ validate_install_dir
 
 WORKER_BINARY="${INSTALL_DIR}/dushengcdn-dns-worker"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+SOURCE_DATABASE_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}-source-database-update.service"
+SOURCE_DATABASE_TIMER_FILE="/etc/systemd/system/${SERVICE_NAME}-source-database-update.timer"
+SOURCE_DATABASE_TIMER_NAME="${SERVICE_NAME}-source-database-update.timer"
 
 SYSTEMCTL_AVAILABLE="false"
 if command -v systemctl >/dev/null 2>&1; then
@@ -86,7 +92,17 @@ fi
 echo "Uninstalling DuShengCDN DNS Worker from ${INSTALL_DIR}..."
 
 if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
-  if systemctl is-active --quiet "$SERVICE_NAME"; then
+  if systemctl is-active --quiet "$SOURCE_DATABASE_TIMER_NAME"; then
+    echo "Stopping source database update timer: ${SOURCE_DATABASE_TIMER_NAME}"
+    run_as_root systemctl stop "$SOURCE_DATABASE_TIMER_NAME" || true
+  fi
+
+  if systemctl is-enabled --quiet "$SOURCE_DATABASE_TIMER_NAME" >/dev/null 2>&1; then
+    echo "Disabling source database update timer: ${SOURCE_DATABASE_TIMER_NAME}"
+    run_as_root systemctl disable "$SOURCE_DATABASE_TIMER_NAME" >/dev/null 2>&1 || true
+  fi
+
+  if [[ "$SELF_UNINSTALL" != "true" ]] && systemctl is-active --quiet "$SERVICE_NAME"; then
     echo "Stopping service: ${SERVICE_NAME}"
     run_as_root systemctl stop "$SERVICE_NAME"
   fi
@@ -97,7 +113,10 @@ if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   fi
 fi
 
-if command -v pgrep >/dev/null 2>&1; then
+stop_worker_processes() {
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return
+  fi
   worker_pids="$(pgrep -f "$WORKER_BINARY" || true)"
   if [[ -n "$worker_pids" ]]; then
     echo "Stopping DNS Worker process: ${worker_pids}"
@@ -112,11 +131,25 @@ if command -v pgrep >/dev/null 2>&1; then
       run_as_root kill -9 $remaining_worker_pids || true
     fi
   fi
+}
+
+if [[ "$SELF_UNINSTALL" != "true" ]]; then
+  stop_worker_processes
 fi
 
 if [[ -f "$SERVICE_FILE" ]]; then
   echo "Removing service file: ${SERVICE_FILE}"
   run_as_root rm -f "$SERVICE_FILE"
+fi
+
+if [[ -f "$SOURCE_DATABASE_SERVICE_FILE" ]]; then
+  echo "Removing source database update service file: ${SOURCE_DATABASE_SERVICE_FILE}"
+  run_as_root rm -f "$SOURCE_DATABASE_SERVICE_FILE"
+fi
+
+if [[ -f "$SOURCE_DATABASE_TIMER_FILE" ]]; then
+  echo "Removing source database update timer file: ${SOURCE_DATABASE_TIMER_FILE}"
+  run_as_root rm -f "$SOURCE_DATABASE_TIMER_FILE"
 fi
 
 if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
@@ -132,3 +165,6 @@ else
 fi
 
 echo "DuShengCDN DNS Worker uninstall finished."
+if [[ "$SELF_UNINSTALL" == "true" ]]; then
+  stop_worker_processes
+fi

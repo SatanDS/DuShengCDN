@@ -71,6 +71,10 @@ type DNSWorker struct {
 	UpdateTag                string     `json:"update_tag" gorm:"size:128;not null;default:''"`
 	UpdateSupported          bool       `json:"update_supported" gorm:"not null;default:false"`
 	LastUpdateSupportedAt    *time.Time `json:"last_update_supported_at"`
+	UninstallSupported       bool       `json:"uninstall_supported" gorm:"not null;default:false"`
+	LastUninstallSupportedAt *time.Time `json:"last_uninstall_supported_at"`
+	UninstallRequested       bool       `json:"uninstall_requested" gorm:"not null;default:false"`
+	UninstallRequestedAt     *time.Time `json:"uninstall_requested_at"`
 	LastProbeAt              *time.Time `json:"last_probe_at"`
 	LastProbeQuery           string     `json:"last_probe_query" gorm:"size:255"`
 	LastProbeResult          string     `json:"last_probe_result" gorm:"type:text;not null;default:'[]'"`

@@ -100,12 +100,14 @@ type DNSWorkerHeartbeatInput struct {
 	OperatorCIDRDatabasePath string                                    `json:"operator_cidr_database_path"`
 	OperatorCIDRLastError    string                                    `json:"operator_cidr_last_error"`
 	UpdateSupported          bool                                      `json:"update_supported"`
+	UninstallSupported       bool                                      `json:"uninstall_supported"`
 	Rollups                  []DNSQueryRollupInput                     `json:"rollups"`
 	SchedulingStates         []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
 }
 
 type DNSWorkerSettings struct {
 	UpdateNow     bool   `json:"update_now"`
+	UninstallNow  bool   `json:"uninstall_now"`
 	UpdateRepo    string `json:"update_repo"`
 	UpdateChannel string `json:"update_channel"`
 	UpdateTag     string `json:"update_tag"`
@@ -187,6 +189,10 @@ type DNSWorkerView struct {
 	UpdateTag                string                     `json:"update_tag"`
 	UpdateSupported          bool                       `json:"update_supported"`
 	LastUpdateSupportedAt    *time.Time                 `json:"last_update_supported_at"`
+	UninstallSupported       bool                       `json:"uninstall_supported"`
+	LastUninstallSupportedAt *time.Time                 `json:"last_uninstall_supported_at"`
+	UninstallRequested       bool                       `json:"uninstall_requested"`
+	UninstallRequestedAt     *time.Time                 `json:"uninstall_requested_at"`
 	LastProbeAt              *time.Time                 `json:"last_probe_at"`
 	LastProbeQuery           string                     `json:"last_probe_query"`
 	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -612,6 +618,10 @@ type DNSWorkerHealthItemView struct {
 	UpdateTag                string                     `json:"update_tag"`
 	UpdateSupported          bool                       `json:"update_supported"`
 	LastUpdateSupportedAt    *time.Time                 `json:"last_update_supported_at"`
+	UninstallSupported       bool                       `json:"uninstall_supported"`
+	LastUninstallSupportedAt *time.Time                 `json:"last_uninstall_supported_at"`
+	UninstallRequested       bool                       `json:"uninstall_requested"`
+	UninstallRequestedAt     *time.Time                 `json:"uninstall_requested_at"`
 	LastError                string                     `json:"last_error"`
 	LastProbeAt              *time.Time                 `json:"last_probe_at"`
 	LastProbeResults         []DNSWorkerProbeResultView `json:"last_probe_results"`
@@ -999,6 +1009,9 @@ func ListAuthoritativeDNSWorkers() ([]DNSWorkerView, error) {
 	}
 	views := make([]DNSWorkerView, 0, len(workers))
 	for _, worker := range workers {
+		if worker.UninstallRequested {
+			continue
+		}
 		views = append(views, buildDNSWorkerView(worker, false))
 	}
 	return views, nil
@@ -1340,7 +1353,35 @@ func DeleteAuthoritativeDNSWorker(id uint) error {
 	if err != nil {
 		return err
 	}
-	return worker.Delete()
+	if !worker.UninstallSupported {
+		return errors.New("该 DNS 响应端当前版本不支持远程卸载，请先强制更新一次，或登录机器手动执行 uninstall-dns-worker.sh")
+	}
+	now := time.Now()
+	worker.UninstallRequested = true
+	worker.UninstallRequestedAt = &now
+	worker.Status = dnsWorkerStatusOffline
+	if err := model.DB.Model(worker).Select(
+		"uninstall_requested",
+		"uninstall_requested_at",
+		"status",
+	).Updates(worker).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteDNSWorkerRuntimeDataWithDB(db *gorm.DB, workerID string) error {
+	workerID = strings.TrimSpace(workerID)
+	if workerID == "" {
+		return nil
+	}
+	if err := db.Where("worker_id = ?", workerID).Delete(&model.DNSQueryRollup{}).Error; err != nil {
+		return err
+	}
+	if err := db.Where("worker_id = ?", workerID).Delete(&model.DNSWorkerNodeProbe{}).Error; err != nil {
+		return err
+	}
+	return nil
 }
 
 func RequestAuthoritativeDNSWorkerUpdate(id uint, input DNSWorkerUpdateInput) (*DNSWorkerView, error) {
@@ -1429,6 +1470,7 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		return nil, errors.New("DNS worker is nil")
 	}
 	now := time.Now()
+	uninstallNow := worker.UninstallRequested
 	updateNow := worker.UpdateRequested && input.UpdateSupported
 	updateChannel := normalizeReleaseChannel(worker.UpdateChannel)
 	updateTag := strings.TrimSpace(worker.UpdateTag)
@@ -1455,6 +1497,10 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	if input.UpdateSupported {
 		worker.LastUpdateSupportedAt = &now
 	}
+	worker.UninstallSupported = input.UninstallSupported
+	if input.UninstallSupported {
+		worker.LastUninstallSupportedAt = &now
+	}
 	rollupMeta := summarizeDNSQueryRollupInputs(input.Rollups)
 	if rollupMeta.count > 0 {
 		worker.LastRollupAt = &rollupMeta.lastRollupAt
@@ -1467,6 +1513,12 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	}
 	db := model.DB.Session(&gorm.Session{DisableNestedTransaction: true})
 	if err := db.Transaction(func(tx *gorm.DB) error {
+		if uninstallNow {
+			if err := deleteDNSWorkerRuntimeDataWithDB(tx, worker.WorkerID); err != nil {
+				return err
+			}
+			return tx.Delete(worker).Error
+		}
 		if err := tx.Save(worker).Error; err != nil {
 			return err
 		}
@@ -1481,6 +1533,7 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		Worker: buildDNSWorkerView(worker, false),
 		Settings: DNSWorkerSettings{
 			UpdateNow:     updateNow,
+			UninstallNow:  uninstallNow,
 			UpdateRepo:    common.ServerUpdateRepo,
 			UpdateChannel: updateChannel.String(),
 			UpdateTag:     updateTag,
@@ -2804,6 +2857,10 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		UpdateTag:                worker.UpdateTag,
 		UpdateSupported:          worker.UpdateSupported,
 		LastUpdateSupportedAt:    worker.LastUpdateSupportedAt,
+		UninstallSupported:       worker.UninstallSupported,
+		LastUninstallSupportedAt: worker.LastUninstallSupportedAt,
+		UninstallRequested:       worker.UninstallRequested,
+		UninstallRequestedAt:     worker.UninstallRequestedAt,
 		LastProbeAt:              probeAt,
 		LastProbeQuery:           worker.LastProbeQuery,
 		LastProbeResults:         probeResults,
@@ -4972,6 +5029,9 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 		if worker == nil {
 			continue
 		}
+		if worker.UninstallRequested {
+			continue
+		}
 		workerID := strings.TrimSpace(worker.WorkerID)
 		if workerID == "" {
 			continue
@@ -5111,6 +5171,10 @@ func buildDNSWorkerHealthSummary(now time.Time, rollups []dnsWorkerHealthRollupR
 			UpdateTag:                worker.UpdateTag,
 			UpdateSupported:          worker.UpdateSupported,
 			LastUpdateSupportedAt:    worker.LastUpdateSupportedAt,
+			UninstallSupported:       worker.UninstallSupported,
+			LastUninstallSupportedAt: worker.LastUninstallSupportedAt,
+			UninstallRequested:       worker.UninstallRequested,
+			UninstallRequestedAt:     worker.UninstallRequestedAt,
 			LastError:                worker.LastError,
 			LastProbeAt:              probeAt,
 			LastProbeResults:         probeResults,

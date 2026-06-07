@@ -129,7 +129,7 @@ export function deleteDNSWorker(id: number) {
 export function requestDNSWorkerUpdate(id: number) {
   return apiRequest<DNSWorkerItem>(`/dns-workers/${id}/update`, {
     method: 'POST',
-    body: JSON.stringify({ channel: 'preview' }),
+    body: JSON.stringify({ channel: 'stable' }),
   }).then(normalizeDNSWorker);
 }
 
@@ -202,6 +202,10 @@ function normalizeDNSWorker(worker: DNSWorkerItem) {
     update_tag: worker.update_tag ?? '',
     update_supported: Boolean(worker.update_supported),
     last_update_supported_at: worker.last_update_supported_at ?? null,
+    uninstall_supported: Boolean(worker.uninstall_supported),
+    last_uninstall_supported_at: worker.last_uninstall_supported_at ?? null,
+    uninstall_requested: Boolean(worker.uninstall_requested),
+    uninstall_requested_at: worker.uninstall_requested_at ?? null,
   };
 }
 
@@ -387,6 +391,10 @@ function normalizeDNSWorkerHealthSummary(
       update_tag: worker.update_tag ?? '',
       update_supported: Boolean(worker.update_supported),
       last_update_supported_at: worker.last_update_supported_at ?? null,
+      uninstall_supported: Boolean(worker.uninstall_supported),
+      last_uninstall_supported_at: worker.last_uninstall_supported_at ?? null,
+      uninstall_requested: Boolean(worker.uninstall_requested),
+      uninstall_requested_at: worker.uninstall_requested_at ?? null,
       node_probes: asArray(worker.node_probes).map((probe) => ({
         ...probe,
         probe_status: probe.probe_status || 'unknown',

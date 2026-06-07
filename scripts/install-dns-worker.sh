@@ -1888,7 +1888,7 @@ SNAPSHOT_MAX_AGE="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE:-5m}"
 QUERY_RATE_LIMIT="${DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT:-200}"
 UDP_RESPONSE_SIZE="${DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE:-1232}"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
-CHANNEL="${DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL:-preview}"
+CHANNEL="${DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL:-stable}"
 TAG="${DUSHENGCDN_DNS_WORKER_UPDATE_TAG:-}"
 
 if [[ -z "$SERVER_URL" || -z "$TOKEN" ]]; then
@@ -1939,6 +1939,153 @@ UPDATEWORKEREOF
   else
     mv -f "$updater_tmp" "$updater"
     chmod 0755 "$updater"
+  fi
+}
+
+write_dns_worker_uninstaller() {
+  local uninstaller="${INSTALL_DIR}/uninstall-dns-worker.sh"
+  local uninstaller_tmp
+
+  log "Writing DNS Worker uninstaller..."
+  uninstaller_tmp="$(mktemp)"
+  cat > "$uninstaller_tmp" <<'UNINSTALLEREOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_DIR="/opt/dushengcdn-dns-worker"
+SERVICE_NAME="${DUSHENGCDN_DNS_WORKER_SERVICE_NAME:-dushengcdn-dns-worker}"
+SELF_UNINSTALL="false"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+    --service-name) SERVICE_NAME="$2"; shift 2 ;;
+    --self-uninstall) SELF_UNINSTALL="true"; shift ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
+run_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "Error: this operation requires root or sudo." >&2
+    exit 1
+  fi
+}
+
+validate_install_dir() {
+  while [[ "$INSTALL_DIR" != "/" && "$INSTALL_DIR" == */ ]]; do
+    INSTALL_DIR="${INSTALL_DIR%/}"
+  done
+  case "$INSTALL_DIR" in
+    /*) ;;
+    *) echo "Refusing to remove non-absolute install directory: '${INSTALL_DIR}'" >&2; exit 1 ;;
+  esac
+  case "$INSTALL_DIR" in
+    *"/../"*|*/..|*"/./"*|*/.)
+      echo "Refusing to remove non-normalized install directory: '${INSTALL_DIR}'" >&2
+      exit 1
+      ;;
+  esac
+  case "$INSTALL_DIR" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/Applications)
+      echo "Refusing to remove unsafe install directory: '${INSTALL_DIR}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_install_dir
+
+WORKER_BINARY="${INSTALL_DIR}/dushengcdn-dns-worker"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+SOURCE_DATABASE_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}-source-database-update.service"
+SOURCE_DATABASE_TIMER_FILE="/etc/systemd/system/${SERVICE_NAME}-source-database-update.timer"
+SOURCE_DATABASE_TIMER_NAME="${SERVICE_NAME}-source-database-update.timer"
+
+SYSTEMCTL_AVAILABLE="false"
+if command -v systemctl >/dev/null 2>&1; then
+  SYSTEMCTL_AVAILABLE="true"
+fi
+
+echo "Uninstalling DuShengCDN DNS Worker from ${INSTALL_DIR}..."
+
+if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
+  if systemctl is-active --quiet "$SOURCE_DATABASE_TIMER_NAME"; then
+    echo "Stopping source database update timer: ${SOURCE_DATABASE_TIMER_NAME}"
+    run_as_root systemctl stop "$SOURCE_DATABASE_TIMER_NAME" || true
+  fi
+  if systemctl is-enabled --quiet "$SOURCE_DATABASE_TIMER_NAME" >/dev/null 2>&1; then
+    echo "Disabling source database update timer: ${SOURCE_DATABASE_TIMER_NAME}"
+    run_as_root systemctl disable "$SOURCE_DATABASE_TIMER_NAME" >/dev/null 2>&1 || true
+  fi
+  if [[ "$SELF_UNINSTALL" != "true" ]] && systemctl is-active --quiet "$SERVICE_NAME"; then
+    echo "Stopping service: ${SERVICE_NAME}"
+    run_as_root systemctl stop "$SERVICE_NAME"
+  fi
+  if systemctl is-enabled --quiet "$SERVICE_NAME" >/dev/null 2>&1; then
+    echo "Disabling service: ${SERVICE_NAME}"
+    run_as_root systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
+fi
+
+stop_worker_processes() {
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return
+  fi
+  worker_pids="$(pgrep -f "$WORKER_BINARY" || true)"
+  if [[ -n "$worker_pids" ]]; then
+    echo "Stopping DNS Worker process: ${worker_pids}"
+    # shellcheck disable=SC2086
+    run_as_root kill $worker_pids || true
+    sleep 1
+    remaining_worker_pids="$(pgrep -f "$WORKER_BINARY" || true)"
+    if [[ -n "$remaining_worker_pids" ]]; then
+      echo "Force stopping remaining DNS Worker process: ${remaining_worker_pids}"
+      # shellcheck disable=SC2086
+      run_as_root kill -9 $remaining_worker_pids || true
+    fi
+  fi
+}
+
+if [[ "$SELF_UNINSTALL" != "true" ]]; then
+  stop_worker_processes
+fi
+
+for file in "$SERVICE_FILE" "$SOURCE_DATABASE_SERVICE_FILE" "$SOURCE_DATABASE_TIMER_FILE"; do
+  if [[ -f "$file" ]]; then
+    echo "Removing systemd file: ${file}"
+    run_as_root rm -f "$file"
+  fi
+done
+
+if [[ "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
+  run_as_root systemctl daemon-reload || true
+  run_as_root systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+  run_as_root systemctl reset-failed "$SOURCE_DATABASE_TIMER_NAME" >/dev/null 2>&1 || true
+fi
+
+if [[ -d "$INSTALL_DIR" ]]; then
+  echo "Removing installation directory: ${INSTALL_DIR}"
+  run_as_root rm -rf -- "$INSTALL_DIR"
+else
+  echo "Installation directory not found, skipping: ${INSTALL_DIR}"
+fi
+
+echo "DuShengCDN DNS Worker uninstall finished."
+if [[ "$SELF_UNINSTALL" == "true" ]]; then
+  stop_worker_processes
+fi
+UNINSTALLEREOF
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root install -m 0755 "$uninstaller_tmp" "$uninstaller"
+    rm -f "$uninstaller_tmp"
+  else
+    mv -f "$uninstaller_tmp" "$uninstaller"
+    chmod 0755 "$uninstaller"
   fi
 }
 
@@ -2143,6 +2290,7 @@ fi
 
 write_source_database_updater
 write_dns_worker_updater
+write_dns_worker_uninstaller
 
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   log "Creating systemd service..."

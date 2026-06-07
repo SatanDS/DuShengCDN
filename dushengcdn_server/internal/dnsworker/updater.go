@@ -14,6 +14,7 @@ import (
 )
 
 var dnsWorkerUpdateRunning atomic.Bool
+var dnsWorkerUninstallRunning atomic.Bool
 
 func (r *Runner) maybeStartUpdate(settings WorkerSettings) {
 	if r == nil || r.Config == nil || !settings.UpdateNow {
@@ -31,6 +32,22 @@ func (r *Runner) maybeStartUpdate(settings WorkerSettings) {
 		defer dnsWorkerUpdateRunning.Store(false)
 		if err := r.runUpdate(settings); err != nil {
 			slog.Error("dns worker update failed", "error", err)
+		}
+	}()
+}
+
+func (r *Runner) maybeStartUninstall(settings WorkerSettings) {
+	if r == nil || r.Config == nil || !settings.UninstallNow {
+		return
+	}
+	if !dnsWorkerUninstallRunning.CompareAndSwap(false, true) {
+		slog.Info("dns worker uninstall requested but an uninstall is already running")
+		return
+	}
+	go func() {
+		defer dnsWorkerUninstallRunning.Store(false)
+		if err := r.runUninstall(); err != nil {
+			slog.Error("dns worker uninstall failed", "error", err)
 		}
 	}()
 }
@@ -82,6 +99,50 @@ func (r *Runner) runUpdate(settings WorkerSettings) error {
 		return err
 	}
 	slog.Info("dns worker update command completed")
+	return nil
+}
+
+func (r *Runner) runUninstall() error {
+	installDir := strings.TrimSpace(r.Config.InstallDir)
+	if installDir == "" {
+		return errors.New("dns worker install directory is not configured")
+	}
+	cleanInstallDir := filepath.Clean(installDir)
+	if !filepath.IsAbs(cleanInstallDir) {
+		return errors.New("dns worker install directory must be an absolute path")
+	}
+	script := filepath.Join(cleanInstallDir, "uninstall-dns-worker.sh")
+	info, err := os.Stat(script)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return errors.New("dns worker uninstall script path is a directory")
+	}
+
+	serviceName := strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SERVICE_NAME"))
+	if serviceName == "" {
+		serviceName = "dushengcdn-dns-worker"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, script)
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/sh", script, "--install-dir", cleanInstallDir, "--service-name", serviceName, "--self-uninstall")
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	slog.Info("dns worker uninstall started", "script", script, "install_dir", cleanInstallDir, "service", serviceName)
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errors.New("dns worker uninstall timed out")
+		}
+		return err
+	}
+	slog.Info("dns worker uninstall command completed")
 	return nil
 }
 
