@@ -1170,9 +1170,12 @@ export function AuthoritativeDNSPage() {
   const requestWorkerUpdateMutation = useMutation({
     mutationFn: requestDNSWorkerUpdate,
     onSuccess: async (worker) => {
+      const dispatchMessage =
+        worker.update_dispatch_message ||
+        '已下发 DNS Worker 更新任务。匹配到同机 Agent 时会由 Agent 执行；未匹配时回退为响应端心跳更新。';
       setFeedback({
         tone: 'success',
-        message: `已向 DNS 响应端“${getDNSWorkerDisplayName(worker)}”下发更新启动命令，等待下一次心跳执行。`,
+        message: `${getDNSWorkerDisplayName(worker)}：${dispatchMessage}`,
       });
       await Promise.all([
         queryClient.invalidateQueries({
@@ -4830,15 +4833,36 @@ function WorkerSettingsModal({
   });
   const isWaitingForUnsupportedUpdate =
     worker.update_requested && !worker.update_supported;
-  const updateDisabled = isRequestingUpdate || worker.update_requested;
   const deleteDisabled = isDeleting || !worker.uninstall_supported;
+  const dispatchMode = worker.update_dispatch_mode || '';
+  const hasAgentDispatch =
+    dispatchMode === 'agent_ws' ||
+    dispatchMode === 'agent_heartbeat' ||
+    dispatchMode === 'agent_heartbeat_sent';
+  const updateDisabled =
+    isRequestingUpdate || (worker.update_requested && !hasAgentDispatch);
+  const dispatchBadge =
+    dispatchMode === 'agent_ws'
+      ? { label: 'Agent 已立即下发', variant: 'success' as const }
+      : dispatchMode === 'agent_heartbeat_sent'
+        ? { label: '已随 Agent 心跳下发', variant: 'success' as const }
+        : dispatchMode === 'agent_heartbeat'
+          ? { label: '等待 Agent 心跳', variant: 'info' as const }
+          : dispatchMode === 'worker_heartbeat'
+            ? { label: '回退响应端心跳', variant: 'warning' as const }
+            : {
+                label: worker.update_supported ? '支持远程更新' : '需先手动升级',
+                variant: worker.update_supported ? ('success' as const) : ('warning' as const),
+              };
   const updateButtonLabel = isRequestingUpdate
     ? '下发中...'
-    : isWaitingForUnsupportedUpdate
-      ? '需先手动升级'
-      : worker.update_requested
-        ? '等待心跳执行'
-        : '强制下发更新';
+    : worker.update_requested
+      ? hasAgentDispatch
+        ? '再次由 Agent 执行'
+        : isWaitingForUnsupportedUpdate
+          ? '需先手动升级'
+          : '等待响应端心跳'
+      : '由 Agent 执行更新';
 
   useEffect(() => {
     form.reset({ remark: worker.remark ?? '' });
@@ -4872,21 +4896,30 @@ function WorkerSettingsModal({
                 强制更新
               </p>
               <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
-                下发后由响应端下一次心跳消费；旧版响应端未声明支持自更新时，需要先手动执行新版安装脚本。
+                优先匹配同机 Agent 直接执行安装器；未匹配到 Agent 时回退为响应端心跳更新。若要走 Agent，请把公网地址填成该机器的公网 IP。
               </p>
             </div>
             <StatusBadge
-              label={
-                worker.update_supported ? '支持远程更新' : '需先手动升级'
-              }
-              variant={worker.update_supported ? 'success' : 'warning'}
+              label={dispatchBadge.label}
+              variant={dispatchBadge.variant}
             />
           </div>
+          {worker.update_dispatch_message ? (
+            <InlineMessage
+              className="mt-3"
+              tone={dispatchMode === 'worker_heartbeat' ? 'warning' : 'info'}
+              message={worker.update_dispatch_message}
+            />
+          ) : null}
           {isWaitingForUnsupportedUpdate ? (
             <InlineMessage
               className="mt-3"
               tone="warning"
-              message="该响应端已有待执行更新，但当前版本未声明支持远程自更新。"
+              message={
+                hasAgentDispatch
+                  ? '已交给同机 Agent 执行；响应端当前版本未声明自更新能力，等待 Agent 侧安装器完成后重新心跳上报。'
+                  : '该响应端已有待执行更新，但当前版本未声明支持远程自更新。'
+              }
             />
           ) : null}
           <SecondaryButton

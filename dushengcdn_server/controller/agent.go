@@ -81,8 +81,9 @@ func AgentHeartbeat(c *gin.Context) {
 		node.AgentSettings.WebsocketUpgradeEnabled = false
 	}
 	respondSuccessWithExtras(c, node.Node, gin.H{
-		"agent_settings": node.AgentSettings,
-		"active_config":  node.ActiveConfig,
+		"agent_settings":     node.AgentSettings,
+		"active_config":      node.ActiveConfig,
+		"dns_worker_updates": node.DNSWorkerUpdates,
 	})
 }
 
@@ -242,12 +243,20 @@ func handleAgentWSStatus(c *gin.Context, node *model.Node, message service.Agent
 	if response.ActiveConfig != nil {
 		activeConfigSent = service.SendAgentWSActiveConfig(node.NodeID, response.ActiveConfig)
 	}
+	dnsWorkerUpdateSent := 0
+	for _, update := range response.DNSWorkerUpdates {
+		updateCopy := update
+		if service.SendAgentWSDNSWorkerUpdate(node.NodeID, &updateCopy) {
+			dnsWorkerUpdateSent++
+		}
+	}
 	slog.Debug("agent ws status processed",
 		"node_id", node.NodeID,
 		"current_version", payload.CurrentVersion,
 		"openresty_status", payload.OpenrestyStatus,
 		"settings_sent", settingsSent,
 		"active_config_sent", activeConfigSent,
+		"dns_worker_update_sent", dnsWorkerUpdateSent,
 	)
 }
 

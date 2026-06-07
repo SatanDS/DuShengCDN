@@ -125,6 +125,10 @@ export function VersionUpgradeModal({
     const hasRelease = Boolean(release?.available && release.tag_name);
     const onlineUpgradeLabel =
         selectedChannel === 'preview' ? '手动升级预览版' : '手动升级正式版';
+    const onlineUpgradeBlockedMessage =
+        release && hasRelease && !release.upgrade_supported
+            ? '当前运行环境不支持在线替换服务端二进制；请使用安装脚本或上传已审阅的 Server 二进制进行升级。'
+            : '';
     const safeReleaseBodyHtml = useMemo(
         () =>
             sanitizeHtml(
@@ -242,6 +246,12 @@ export function VersionUpgradeModal({
                                     <StatusBadge label="自动升级关闭，可手动升级" variant="info"/>
                                 ) : null}
                             </div>
+                            {onlineUpgradeBlockedMessage ? (
+                                <ErrorState
+                                    title="在线升级不可用"
+                                    description={onlineUpgradeBlockedMessage}
+                                />
+                            ) : null}
                             <div
                                 className="prose prose-sm max-w-none text-[var(--foreground-primary)] [&_a]:text-[var(--brand-primary)]"
                                 dangerouslySetInnerHTML={{

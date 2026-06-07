@@ -9,16 +9,18 @@ type APIResponse[T any] struct {
 }
 
 type HeartbeatAPIResponse struct {
-	Success       bool              `json:"success"`
-	Message       string            `json:"message"`
-	Data          any               `json:"data"`
-	AgentSettings *AgentSettings    `json:"agent_settings,omitempty"`
-	ActiveConfig  *ActiveConfigMeta `json:"active_config,omitempty"`
+	Success          bool                     `json:"success"`
+	Message          string                   `json:"message"`
+	Data             any                      `json:"data"`
+	AgentSettings    *AgentSettings           `json:"agent_settings,omitempty"`
+	ActiveConfig     *ActiveConfigMeta        `json:"active_config,omitempty"`
+	DNSWorkerUpdates []DNSWorkerUpdateRequest `json:"dns_worker_updates,omitempty"`
 }
 
 type HeartbeatResult struct {
-	AgentSettings *AgentSettings
-	ActiveConfig  *ActiveConfigMeta
+	AgentSettings    *AgentSettings
+	ActiveConfig     *ActiveConfigMeta
+	DNSWorkerUpdates []DNSWorkerUpdateRequest
 }
 
 type AgentSettings struct {
@@ -39,6 +41,7 @@ const (
 	WSMessageTypeActiveConfig    = "active_config"
 	WSMessageTypeForceSyncConfig = "force_sync_config"
 	WSMessageTypeUninstallAgent  = "uninstall_agent"
+	WSMessageTypeDNSWorkerUpdate = "dns_worker_update"
 	WSMessageTypeCacheOperation  = "cache_operation"
 	WSMessageTypePing            = "ping"
 	WSMessageTypePong            = "pong"
@@ -170,6 +173,15 @@ type CacheOperation struct {
 	Prefixes     []string `json:"prefixes,omitempty"`
 	CachePath    string   `json:"cache_path,omitempty"`
 	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+}
+
+type DNSWorkerUpdateRequest struct {
+	WorkerID   string `json:"worker_id"`
+	WorkerName string `json:"worker_name"`
+	Repo       string `json:"repo"`
+	Channel    string `json:"channel"`
+	TagName    string `json:"tag_name,omitempty"`
+	InstallDir string `json:"install_dir,omitempty"`
 }
 
 type NodeAccessLog struct {

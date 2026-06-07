@@ -2885,6 +2885,124 @@ func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerManualUpdateRequestDispatchesViaMatchingAgentWS(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:          "node-dns-worker-host",
+		Name:            "edge-dns-host",
+		IP:              "8.8.4.4",
+		PublicIPs:       `["8.8.4.4"]`,
+		AgentToken:      "agent-token",
+		AgentVersion:    "v1.0.0",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+	wsClient := RegisterAgentWSClient(node.NodeID)
+	defer UnregisterAgentWSClient(wsClient)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-agent", PublicAddress: "8.8.4.4:53"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	requested, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{})
+	if err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	if requested.UpdateDispatchMode != "agent_ws" {
+		t.Fatalf("expected agent ws dispatch mode, got %+v", requested)
+	}
+	if requested.UpdateDispatchedNodeID != node.NodeID {
+		t.Fatalf("expected dispatch node id %s, got %+v", node.NodeID, requested)
+	}
+
+	select {
+	case message := <-wsClient.Messages():
+		if message.Type != AgentWSMessageTypeDNSWorkerUpdate {
+			t.Fatalf("expected dns worker update ws message, got %s", message.Type)
+		}
+		payload, ok := message.Payload.(*AgentDNSWorkerUpdateRequest)
+		if !ok {
+			t.Fatalf("expected AgentDNSWorkerUpdateRequest payload, got %T", message.Payload)
+		}
+		if payload.WorkerID != worker.WorkerID || payload.Channel != "stable" || payload.Repo == "" {
+			t.Fatalf("unexpected dns worker update payload: %+v", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected dns worker update websocket message")
+	}
+}
+
+func TestDNSWorkerManualUpdateRequestFallsBackWhenNoMatchingAgent(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-no-agent", PublicAddress: "9.9.9.9:53"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	requested, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{})
+	if err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	if requested.UpdateDispatchMode != "worker_heartbeat" {
+		t.Fatalf("expected worker heartbeat fallback, got %+v", requested)
+	}
+}
+
+func TestDNSWorkerManualUpdateRequestMatchesAgentByHeartbeatRemoteIP(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:          "node-dns-worker-remote-ip",
+		Name:            "edge-remote-ip",
+		IP:              "1.1.1.1",
+		PublicIPs:       `["1.1.1.1"]`,
+		AgentToken:      "agent-token",
+		AgentVersion:    "v1.0.0",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+	wsClient := RegisterAgentWSClient(node.NodeID)
+	defer UnregisterAgentWSClient(wsClient)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-remote-ip", PublicAddress: ":53"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	if _, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status:   dnsWorkerStatusOnline,
+		RemoteIP: "1.1.1.1",
+	}); err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+
+	requested, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{})
+	if err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	if requested.UpdateDispatchMode != "agent_ws" || requested.UpdateDispatchedNodeID != node.NodeID {
+		t.Fatalf("expected agent ws dispatch via heartbeat remote ip, got %+v", requested)
+	}
+	select {
+	case message := <-wsClient.Messages():
+		if message.Type != AgentWSMessageTypeDNSWorkerUpdate {
+			t.Fatalf("expected dns worker update ws message, got %s", message.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected dns worker update websocket message")
+	}
+}
+
 func TestDNSWorkerManualUpdateRequestWaitsForSupportedHeartbeat(t *testing.T) {
 	setupServiceTestDB(t)
 

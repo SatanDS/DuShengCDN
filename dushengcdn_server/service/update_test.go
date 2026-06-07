@@ -179,8 +179,8 @@ func TestBuildLatestServerReleaseViewDevBuild(t *testing.T) {
 	if !view.HasUpdate {
 		t.Fatal("expected dev build to report available release package")
 	}
-	if view.UpgradeSupported {
-		t.Fatal("expected dev build not to support self-upgrade")
+	if view.UpgradeSupported != (runtime.GOOS != "windows") {
+		t.Fatalf("expected dev build online upgrade support to depend on platform, got %v", view.UpgradeSupported)
 	}
 }
 

@@ -769,6 +769,48 @@ func TestRunnerHonorsManualUpdateRequest(t *testing.T) {
 	}
 }
 
+func TestRunnerHandlesDNSWorkerUpdateRequest(t *testing.T) {
+	var calls int
+	var captured protocol.DNSWorkerUpdateRequest
+	original := runDNSWorkerUpdateFunc
+	runDNSWorkerUpdateFunc = func(ctx context.Context, request protocol.DNSWorkerUpdateRequest) error {
+		calls++
+		captured = request
+		return nil
+	}
+	defer func() {
+		runDNSWorkerUpdateFunc = original
+	}()
+
+	payload, err := json.Marshal(protocol.DNSWorkerUpdateRequest{
+		WorkerID:   "dns-worker-1",
+		WorkerName: "ns1",
+		Repo:       "SatanDS/SatanDS-DuShengCDN-releases",
+		Channel:    "stable",
+	})
+	if err != nil {
+		t.Fatalf("marshal dns worker update: %v", err)
+	}
+
+	runner := &Runner{}
+	changed, err := runner.handleWebSocketMessage(context.Background(), protocol.WSMessage{
+		Type:    protocol.WSMessageTypeDNSWorkerUpdate,
+		Payload: payload,
+	}, &fakeWebSocketConnection{})
+	if err != nil {
+		t.Fatalf("handle dns worker update ws message: %v", err)
+	}
+	if changed {
+		t.Fatal("dns worker update should not change heartbeat interval")
+	}
+	if calls != 1 {
+		t.Fatalf("expected one dns worker update execution, got %d", calls)
+	}
+	if captured.WorkerID != "dns-worker-1" || captured.Channel != "stable" {
+		t.Fatalf("unexpected captured request: %+v", captured)
+	}
+}
+
 func TestRunnerHandlesUninstallRequest(t *testing.T) {
 	calls := 0
 	original := runSelfUninstallFunc

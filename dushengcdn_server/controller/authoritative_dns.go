@@ -327,6 +327,13 @@ func DNSWorkerHeartbeat(c *gin.Context) {
 	if !decodeJSONRequest(c, &input) {
 		return
 	}
+	input.RemoteIP = service.ResolveReportedNodeIP(
+		"",
+		c.Request.RemoteAddr,
+		c.GetHeader("X-Forwarded-For"),
+		c.GetHeader("X-Real-IP"),
+		c.GetHeader("Forwarded"),
+	)
 	view, err := service.RecordDNSWorkerHeartbeat(worker, input)
 	if err != nil {
 		respondFailure(c, err.Error())
