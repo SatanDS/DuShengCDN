@@ -1753,7 +1753,7 @@ func markDNSWorkerHeartbeatUpdateDelivered(worker *model.DNSWorker, now time.Tim
 		return
 	}
 	worker.UpdateDispatchMode = "worker_heartbeat_sent"
-	worker.UpdateDispatchMessage = "DNS Worker update task was returned in heartbeat; waiting for update result or follow-up heartbeat."
+	worker.UpdateDispatchMessage = "已随 DNS 响应端心跳返回更新任务，正在等待更新结果或后续心跳确认。"
 	worker.UpdateDispatchedAt = &now
 }
 
@@ -1807,7 +1807,7 @@ func applyLegacyAgentDNSWorkerUpdateAck(worker *model.DNSWorker, input DNSWorker
 	worker.UpdateRequested = false
 	worker.UpdateTag = ""
 	worker.UpdateDispatchMode = "agent_heartbeat_ack"
-	worker.UpdateDispatchMessage = "DNS Worker heartbeat was received after the Agent update task was dispatched; the pending update has been marked complete for compatibility with older Agents."
+	worker.UpdateDispatchMessage = "Agent 更新任务下发后已收到 DNS 响应端心跳；为兼容旧版 Agent，已结束本次更新等待。"
 	worker.UpdateDispatchedAt = &now
 }
 
@@ -1831,9 +1831,9 @@ func applyDNSWorkerHeartbeatUpdateAck(worker *model.DNSWorker, input DNSWorkerHe
 	worker.UpdateTag = ""
 	worker.UpdateDispatchMode = "worker_heartbeat_ack"
 	if updateTag != "" {
-		worker.UpdateDispatchMessage = "DNS Worker reported the requested version; the heartbeat update wait has been marked complete."
+		worker.UpdateDispatchMessage = "DNS 响应端已上报目标版本，已结束响应端心跳更新等待。"
 	} else {
-		worker.UpdateDispatchMessage = "DNS Worker kept heartbeating after the heartbeat update task was dispatched; the pending update has been marked complete."
+		worker.UpdateDispatchMessage = "DNS 响应端在更新任务下发后持续心跳，已结束本次更新等待。"
 	}
 	worker.UpdateDispatchedAt = &now
 }
