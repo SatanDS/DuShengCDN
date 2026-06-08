@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm"
 )
 
@@ -486,12 +487,23 @@ func ensureConfigVersionArtifactsForPools(version *model.ConfigVersion, requeste
 	if err != nil {
 		return err
 	}
-	if len(existing) > 0 {
-		return nil
+	existingPools := make(map[string]struct{}, len(existing))
+	for _, artifact := range existing {
+		existingPools[normalizeNodePoolName(artifact.PoolName)] = struct{}{}
 	}
 	pools, err := compatibilityArtifactPools(requestedPools)
 	if err != nil {
 		return err
+	}
+	missingPools := make([]string, 0, len(pools))
+	for _, poolName := range pools {
+		if _, ok := existingPools[poolName]; ok {
+			continue
+		}
+		missingPools = append(missingPools, poolName)
+	}
+	if len(missingPools) == 0 {
+		return nil
 	}
 	var supportFiles []SupportFile
 	if strings.TrimSpace(version.SupportFilesJSON) != "" {
@@ -507,7 +519,7 @@ func ensureConfigVersionArtifactsForPools(version *model.ConfigVersion, requeste
 	routeConfigChecksum := checksum(version.RenderedConfig)
 	routeCount := len(versionRoutesFromSnapshot(version.SnapshotJSON))
 	return model.DB.Transaction(func(tx *gorm.DB) error {
-		for _, poolName := range pools {
+		for _, poolName := range missingPools {
 			record := &model.ConfigVersionArtifact{
 				ConfigVersionID:     version.ID,
 				PoolName:            poolName,
@@ -518,7 +530,7 @@ func ensureConfigVersionArtifactsForPools(version *model.ConfigVersion, requeste
 				SupportFilesJSON:    string(supportFilesJSON),
 				RouteCount:          routeCount,
 			}
-			if err := tx.Where("config_version_id = ? AND pool_name = ?", version.ID, poolName).FirstOrCreate(record).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(record).Error; err != nil {
 				return err
 			}
 		}

@@ -292,11 +292,11 @@ function getPoolHealthBadge(pool: NodePoolSummary) {
 
 function NodeStack({ nodes }: { nodes: NodeItem[] }) {
   return (
-    <div className="scrollbar-none max-h-64 min-w-[360px] space-y-2 overflow-y-auto pr-1">
+    <div className="scrollbar-none max-h-64 min-w-[360px] space-y-2 overflow-y-auto overflow-x-hidden pr-0.5">
       {nodes.map((node) => (
         <div
           key={node.id}
-          className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-3"
+          className="node-stack-card rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-3"
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">

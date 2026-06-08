@@ -340,6 +340,57 @@ func TestHistoricalActiveConfigBackfillsPoolArtifacts(t *testing.T) {
 	}
 }
 
+func TestEnsureConfigVersionArtifactsForPoolsBackfillsMissingPools(t *testing.T) {
+	setupServiceTestDB(t)
+
+	version := &model.ConfigVersion{
+		Version:          "20260609-partial",
+		SnapshotJSON:     `{"routes":[{"domain":"partial.example.com"}]}`,
+		MainConfig:       "worker_processes auto;",
+		RenderedConfig:   "server { server_name partial.example.com; }",
+		SupportFilesJSON: "[]",
+		Checksum:         "partial-checksum",
+		IsActive:         true,
+		CreatedBy:        "root",
+	}
+	if err := model.DB.Create(version).Error; err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	if err := model.DB.Create(&model.ConfigVersionArtifact{
+		ConfigVersionID:     version.ID,
+		PoolName:            "default",
+		Checksum:            version.Checksum,
+		MainConfigChecksum:  "main-default",
+		RouteConfigChecksum: "route-default",
+		RenderedConfig:      "default rendered",
+		SupportFilesJSON:    "[]",
+		RouteCount:          0,
+	}).Error; err != nil {
+		t.Fatalf("seed default artifact: %v", err)
+	}
+
+	if err := ensureConfigVersionArtifactsForPools(version, []string{"default", "hk", "eu"}); err != nil {
+		t.Fatalf("ensureConfigVersionArtifactsForPools failed: %v", err)
+	}
+
+	artifacts, err := model.ListConfigVersionArtifacts(version.ID)
+	if err != nil {
+		t.Fatalf("ListConfigVersionArtifacts failed: %v", err)
+	}
+	if len(artifacts) != 3 {
+		t.Fatalf("expected 3 artifacts after backfill, got %d", len(artifacts))
+	}
+	pools := map[string]struct{}{}
+	for _, artifact := range artifacts {
+		pools[artifact.PoolName] = struct{}{}
+	}
+	for _, poolName := range []string{"default", "hk", "eu"} {
+		if _, ok := pools[poolName]; !ok {
+			t.Fatalf("expected artifact for pool %s, got %#v", poolName, pools)
+		}
+	}
+}
+
 func seedConfigVersionArtifactTestRoute(t *testing.T, route *model.ProxyRoute) {
 	t.Helper()
 	if route.DomainCertIDs == "" {
