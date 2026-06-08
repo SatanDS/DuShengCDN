@@ -538,7 +538,8 @@ func ensureCommercialProxyRouteInputFeaturesEnabled(input ProxyRouteInput) error
 	if input.DNSAutoSync && dnsProviderMode == DNSProviderModeCloudflare {
 		features = append(features, CommercialFeatureCloudflareDNS)
 	}
-	if input.GSLBEnabled && (dnsProviderMode == DNSProviderModeAuthoritative || input.DNSAutoSync) {
+	gslbInputEnabled := input.GSLBEnabled && (dnsProviderMode == DNSProviderModeAuthoritative || input.DNSAutoSync)
+	if gslbInputEnabled {
 		features = append(features, CommercialFeatureGSLB)
 	}
 	if normalizeDDOSProtectionMode(input.DDOSProtectionMode) == DDOSProtectionModeAuto {
@@ -551,7 +552,10 @@ func ensureCommercialProxyRouteInputFeaturesEnabled(input ProxyRouteInput) error
 		features = append(features, CommercialFeatureCCProtection)
 	}
 	if input.RegionRestrictionEnabled {
-		features = append(features, CommercialFeatureGeoAccessControl)
+		features = append(features, CommercialFeatureCountryRegionAccessControl)
+	}
+	if gslbInputEnabled {
+		features = append(features, commercialGSLBPolicyAccessControlFeatures(input.GSLBPolicy)...)
 	}
 	return ensureCommercialFeaturesEnabled(features...)
 }
@@ -580,9 +584,79 @@ func ensureCommercialProxyRouteFeaturesEnabled(route *model.ProxyRoute) error {
 		features = append(features, CommercialFeatureCCProtection)
 	}
 	if route.RegionRestrictionEnabled {
-		features = append(features, CommercialFeatureGeoAccessControl)
+		features = append(features, CommercialFeatureCountryRegionAccessControl)
+	}
+	if route.GSLBEnabled {
+		gslbPolicy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
+		if err != nil {
+			return err
+		}
+		features = append(features, commercialGSLBPolicyAccessControlFeatures(gslbPolicy)...)
 	}
 	return ensureCommercialFeaturesEnabled(features...)
+}
+
+func commercialGSLBPolicyAccessControlFeatures(policy ProxyRouteGSLBPolicy) []string {
+	features := make([]string, 0, 4)
+	hasCountry := false
+	hasOperator := false
+	hasSourceCIDR := false
+	hasASN := false
+	hasExplicitEnabledPool := false
+	for _, pool := range policy.Pools {
+		if pool.Enabled {
+			hasExplicitEnabledPool = true
+			break
+		}
+	}
+	for _, pool := range policy.Pools {
+		if hasExplicitEnabledPool && !pool.Enabled {
+			continue
+		}
+		if hasNonBlankCommercialFeatureValues(pool.Countries) {
+			hasCountry = true
+		}
+		if hasNonBlankCommercialFeatureValues(pool.Operators) {
+			hasOperator = true
+		}
+		if hasNonBlankCommercialFeatureValues(pool.SourceCIDRs) {
+			hasSourceCIDR = true
+		}
+		if hasCommercialFeatureASNValues(pool.ASNs) {
+			hasASN = true
+		}
+	}
+	if hasCountry {
+		features = append(features, CommercialFeatureCountryRegionAccessControl)
+	}
+	if hasOperator {
+		features = append(features, CommercialFeatureOperatorAccessControl)
+	}
+	if hasSourceCIDR {
+		features = append(features, CommercialFeatureSourceCIDRAccessControl)
+	}
+	if hasASN {
+		features = append(features, CommercialFeatureASNAccessControl)
+	}
+	return features
+}
+
+func hasNonBlankCommercialFeatureValues(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCommercialFeatureASNValues(values []uint32) bool {
+	for _, value := range values {
+		if value > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldPrecheckAuthoritativeDNSRoute(

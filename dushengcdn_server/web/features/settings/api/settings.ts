@@ -109,7 +109,9 @@ export function issueCommercialLicense(payload: CommercialLicenseIssuePayload) {
 }
 
 export function getCommercialLicenseActivations() {
-  return apiRequest<CommercialLicenseActivationRecord[]>('/license/activations');
+  return apiRequest<CommercialLicenseActivationRecord[]>(
+    '/license/activations',
+  );
 }
 
 export function revokeCommercialLicense(
@@ -125,6 +127,15 @@ export function restoreCommercialLicense(
   payload: CommercialLicenseRevocationPayload,
 ) {
   return apiRequest<CommercialLicenseActivationRecord[]>('/license/restore', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteCommercialLicenseActivation(
+  payload: CommercialLicenseRevocationPayload,
+) {
+  return apiRequest<CommercialLicenseActivationRecord[]>('/license/delete', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

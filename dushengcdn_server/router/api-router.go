@@ -105,6 +105,7 @@ func SetApiRouter(router *gin.Engine) {
 			licenseRoute.GET("/activations", controller.ListCommercialLicenseActivations)
 			licenseRoute.POST("/revoke", controller.RevokeCommercialLicense)
 			licenseRoute.POST("/restore", controller.RestoreCommercialLicense)
+			licenseRoute.POST("/delete", controller.DeleteCommercialLicenseActivation)
 		}
 		proxyRoute := apiRouter.Group("/proxy-routes")
 		proxyRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())

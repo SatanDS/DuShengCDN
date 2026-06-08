@@ -124,7 +124,9 @@ type WorkerSettingsFormValues = {
   remark: string;
 };
 
-function getDNSWorkerDisplayName(worker: Pick<DNSWorkerItem | DNSWorkerHealthItem, 'name' | 'remark'>) {
+function getDNSWorkerDisplayName(
+  worker: Pick<DNSWorkerItem | DNSWorkerHealthItem, 'name' | 'remark'>,
+) {
   const remark = worker.remark?.trim();
   return remark || worker.name;
 }
@@ -180,7 +182,7 @@ const dnsObservabilityWindowOptions = [
   { key: '6h', label: '6 小时', hours: 6 },
   { key: '12h', label: '12 小时', hours: 12 },
   { key: '24h', label: '24 小时', hours: 24 },
-  { key: '1d', label: '1 天', hours: 24 },
+  { key: '3d', label: '3 天', hours: 72 },
   { key: '7d', label: '7 天', hours: 168 },
 ];
 
@@ -426,11 +428,11 @@ function isAddressRecordType(type: DNSRecordType) {
 }
 
 function getRecordValueLabel(type: DNSRecordType) {
-	switch (type) {
-	case 'A':
-		return 'IP 地址';
-	case 'AAAA':
-		return 'IP 地址';
+  switch (type) {
+    case 'A':
+      return 'IP 地址';
+    case 'AAAA':
+      return 'IP 地址';
     case 'MX':
       return '邮件服务器';
     case 'CNAME':
@@ -445,15 +447,15 @@ function getRecordValueLabel(type: DNSRecordType) {
 }
 
 function getRecordValueHint(type: DNSRecordType) {
-	switch (type) {
-	case 'A':
-		return '这里填写 IPv4，一个输入框一个 IP；点 + 可继续添加，保存时会创建多条 A 记录。';
-	case 'AAAA':
-		return '这里填写 IPv6，一个输入框一个 IP；点 + 可继续添加，保存时会创建多条 AAAA 记录。';
-	case 'CNAME':
-		return '填写目标域名，同名下不要再添加其它记录。';
-	case 'MX':
-		return '记录值填写邮件服务器域名；MX 优先级数字越小越优先，例如 10 会早于 20。';
+  switch (type) {
+    case 'A':
+      return '这里填写 IPv4，一个输入框一个 IP；点 + 可继续添加，保存时会创建多条 A 记录。';
+    case 'AAAA':
+      return '这里填写 IPv6，一个输入框一个 IP；点 + 可继续添加，保存时会创建多条 AAAA 记录。';
+    case 'CNAME':
+      return '填写目标域名，同名下不要再添加其它记录。';
+    case 'MX':
+      return '记录值填写邮件服务器域名；MX 优先级数字越小越优先，例如 10 会早于 20。';
     case 'NS':
       return '填写注册商要指向的解析服务器域名。';
     case 'SOA':
@@ -576,7 +578,10 @@ function formatSourceScopeBaseLabel(value: string) {
     return operator ? `运营商 ${formatGSLBOperatorLabel(operator)}` : text;
   }
   if (lower.startsWith('asn:')) {
-    const asn = text.slice(text.indexOf(':') + 1).trim().replace(/^AS/i, '');
+    const asn = text
+      .slice(text.indexOf(':') + 1)
+      .trim()
+      .replace(/^AS/i, '');
     return asn ? `ASN AS${asn}` : text;
   }
   return text;
@@ -666,7 +671,10 @@ function isProbeSchedulingGateMessage(message: string) {
 function formatDiagnosticMessage(message: string) {
   return message
     .replaceAll('节点负载超过 GSLB 阈值', '节点压力超过上限')
-    .replaceAll('当前 Server 生成的权威 DNS 快照', '当前面板生成的本地解析配置快照')
+    .replaceAll(
+      '当前 Server 生成的权威 DNS 快照',
+      '当前面板生成的本地解析配置快照',
+    )
     .replaceAll('OpenResty 健康', '代理服务是否正常')
     .replaceAll('GSLB 阈值', '压力上限')
     .replaceAll('GSLB 负载阈值', '压力上限')
@@ -998,11 +1006,7 @@ export function AuthoritativeDNSPage() {
   const observabilityWindowHours =
     observabilityWindowOption?.hours ?? defaultDNSObservabilityWindowHours;
   const observabilityQuery = useQuery({
-    queryKey: [
-      'authoritative-dns',
-      'observability',
-      observabilityWindowHours,
-    ],
+    queryKey: ['authoritative-dns', 'observability', observabilityWindowHours],
     queryFn: () => getDNSObservability(observabilityWindowHours),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
@@ -1117,7 +1121,8 @@ export function AuthoritativeDNSPage() {
     onSuccess: async () => {
       setFeedback({
         tone: 'success',
-        message: '已从面板移除 DNS 响应端，并等待响应端下一次心跳执行自动卸载清理。',
+        message:
+          '已从面板移除 DNS 响应端，并等待响应端下一次心跳执行自动卸载清理。',
       });
       setWorkerSettingsTarget(null);
       await Promise.all([
@@ -1539,11 +1544,14 @@ export function AuthoritativeDNSPage() {
     }
   };
 
-  const handleDeleteWorker = async (worker: DNSWorkerItem | DNSWorkerHealthItem) => {
+  const handleDeleteWorker = async (
+    worker: DNSWorkerItem | DNSWorkerHealthItem,
+  ) => {
     if (!worker.uninstall_supported) {
       setFeedback({
         tone: 'info',
-        message: '该 DNS 响应端当前版本不支持远程卸载，请先强制更新一次，或登录机器手动执行 uninstall-dns-worker.sh。',
+        message:
+          '该 DNS 响应端当前版本不支持远程卸载，请先强制更新一次，或登录机器手动执行 uninstall-dns-worker.sh。',
       });
       return;
     }
@@ -2029,8 +2037,8 @@ function ZonesPanel({
                       />
                     </div>
                     <p className="text-sm leading-6 text-[var(--foreground-secondary)]">
-                      基础邮箱 {selectedZone.soa_email || 'hostmaster'}，默认缓存时间{' '}
-                      {selectedZone.default_ttl} 秒。
+                      基础邮箱 {selectedZone.soa_email || 'hostmaster'}
+                      ，默认缓存时间 {selectedZone.default_ttl} 秒。
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -2078,7 +2086,8 @@ function ZonesPanel({
                     </div>
                   ) : (
                     <p className="mt-2 text-sm text-[var(--foreground-secondary)]">
-                      暂未配置注册商 NS。生产环境至少配置两个 DNS 响应端对应的 NS。
+                      暂未配置注册商 NS。生产环境至少配置两个 DNS 响应端对应的
+                      NS。
                     </p>
                   )}
                 </div>
@@ -2099,7 +2108,8 @@ function ZonesPanel({
                       静态记录
                     </h3>
                     <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
-                      手动固定回答的记录；同名 A/AAAA/CNAME 会和网站配置里的本地自建解析自动记录互斥。
+                      手动固定回答的记录；同名 A/AAAA/CNAME
+                      会和网站配置里的本地自建解析自动记录互斥。
                     </p>
                   </div>
                   <PrimaryButton
@@ -2269,7 +2279,7 @@ function DelegationCheckPanel({
             </p>
           </div>
         ) : (
-            <p className="text-sm text-[var(--foreground-secondary)]">
+          <p className="text-sm text-[var(--foreground-secondary)]">
             点击后检查注册商是否已经把 {zone.name} 指向当前 NS。
           </p>
         )}
@@ -2373,21 +2383,35 @@ function WorkersPanel({
                     />
                     <StatusBadge
                       label={
-                        worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'
+                        worker.geoip_enabled
+                          ? '国家识别库已加载'
+                          : '国家识别库未加载'
                       }
                       variant={worker.geoip_enabled ? 'success' : 'warning'}
                     />
                     <StatusBadge
-                      label={worker.geoip_country_enabled ? '国家支持' : '国家未支持'}
-                      variant={worker.geoip_country_enabled ? 'success' : 'warning'}
+                      label={
+                        worker.geoip_country_enabled ? '国家支持' : '国家未支持'
+                      }
+                      variant={
+                        worker.geoip_country_enabled ? 'success' : 'warning'
+                      }
                     />
                     <StatusBadge
-                      label={worker.geoip_asn_enabled ? 'ASN 支持' : 'ASN 未支持'}
+                      label={
+                        worker.geoip_asn_enabled ? 'ASN 支持' : 'ASN 未支持'
+                      }
                       variant={worker.geoip_asn_enabled ? 'success' : 'warning'}
                     />
                     <StatusBadge
-                      label={worker.geoip_operator_enabled ? '运营商支持' : '运营商未支持'}
-                      variant={worker.geoip_operator_enabled ? 'success' : 'warning'}
+                      label={
+                        worker.geoip_operator_enabled
+                          ? '运营商支持'
+                          : '运营商未支持'
+                      }
+                      variant={
+                        worker.geoip_operator_enabled ? 'success' : 'warning'
+                      }
                     />
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -2450,9 +2474,17 @@ function WorkersPanel({
                     />
                   ) : (
                     <div className="space-y-1 text-xs break-all text-[var(--foreground-secondary)]">
-                      <p>国家识别库：{worker.geoip_database_path || '已加载'}</p>
-                      <p>ASN 识别库：{worker.asn_database_path || '未配置独立 ASN 库'}</p>
-                      <p>运营商 CIDR 库：{worker.operator_cidr_database_path || '未配置'}</p>
+                      <p>
+                        国家识别库：{worker.geoip_database_path || '已加载'}
+                      </p>
+                      <p>
+                        ASN 识别库：
+                        {worker.asn_database_path || '未配置独立 ASN 库'}
+                      </p>
+                      <p>
+                        运营商 CIDR 库：
+                        {worker.operator_cidr_database_path || '未配置'}
+                      </p>
                     </div>
                   )}
                   {worker.probe_message ? (
@@ -3136,7 +3168,9 @@ function GSLBSimulationPoolCard({
         {operators.length > 0
           ? ` · 运营商 ${operators.map(formatGSLBOperatorLabel).join(', ')}`
           : ''}
-        {asns.length > 0 ? ` · ASN ${asns.map((asn) => `AS${asn}`).join(', ')}` : ''}
+        {asns.length > 0
+          ? ` · ASN ${asns.map((asn) => `AS${asn}`).join(', ')}`
+          : ''}
         {sourceCIDRs.length > 0 ? ` · 来源网段 ${sourceCIDRs.join(', ')}` : ''}
       </p>
       <p className="mt-1 text-xs text-[var(--foreground-muted)]">
@@ -3261,7 +3295,10 @@ function DNSMigrationGuidePanel({
                           variant={candidate.dns_auto_sync ? 'info' : 'warning'}
                         />
                         {candidate.gslb_enabled ? (
-                          <StatusBadge label="多节点解析已启用" variant="success" />
+                          <StatusBadge
+                            label="多节点解析已启用"
+                            variant="success"
+                          />
                         ) : null}
                       </div>
                       <p className="text-sm break-all text-[var(--foreground-secondary)]">
@@ -3362,13 +3399,16 @@ function DNSMigrationGuidePanel({
             <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--foreground-secondary)]">
               <li>1. 创建覆盖网站域名的托管域名，并填写注册商要使用的 NS。</li>
               <li>
-                2. 部署至少两个 DNS 响应端，确认响应端在线、能拉取解析配置，并通过公网 UDP/TCP 53 探测。
+                2. 部署至少两个 DNS
+                响应端，确认响应端在线、能拉取解析配置，并通过公网 UDP/TCP 53
+                探测。
               </li>
               <li>
                 3. 在网站详情的「负载均衡」里切换为本地自建解析并选择托管域名。
               </li>
               <li>
-                4. 到注册商把域名 NS 指向 DNS 响应端，再回到托管域名详情检查指向。
+                4. 到注册商把域名 NS 指向 DNS
+                响应端，再回到托管域名详情检查指向。
               </li>
             </ol>
           </div>
@@ -3704,11 +3744,7 @@ function DNSObservabilityPanel({
         <InfoTile label="错误查询" value={formatCount(summary.error_queries)} />
       </div>
       {rollupHint ? (
-        <InlineMessage
-          className="mt-4"
-          tone="warning"
-          message={rollupHint}
-        />
+        <InlineMessage className="mt-4" tone="warning" message={rollupHint} />
       ) : null}
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
@@ -3799,7 +3835,9 @@ function DNSWorkerHealthPanel({
             响应端可用性
           </h3>
           <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
-            这里统计 DNS 响应端本地处理查询的耗时、错误率和解析配置新鲜度；不代表用户到各地 NS 的公网网络耗时。
+            这里统计 DNS
+            响应端本地处理查询的耗时、错误率和解析配置新鲜度；不代表用户到各地
+            NS 的公网网络耗时。
           </p>
         </div>
         <StatusBadge
@@ -3909,12 +3947,16 @@ function DNSWorkerHealthCard({
             ) : null}
             {worker.update_requested ? (
               <StatusBadge
-                label={isWaitingForUnsupportedUpdate ? '需手动升级' : '等待更新'}
+                label={
+                  isWaitingForUnsupportedUpdate ? '需手动升级' : '等待更新'
+                }
                 variant="warning"
               />
             ) : null}
             <StatusBadge
-              label={worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'}
+              label={
+                worker.geoip_enabled ? '国家识别库已加载' : '国家识别库未加载'
+              }
               variant={worker.geoip_enabled ? 'success' : 'warning'}
             />
             <StatusBadge
@@ -3922,7 +3964,9 @@ function DNSWorkerHealthCard({
               variant={worker.geoip_asn_enabled ? 'success' : 'warning'}
             />
             <StatusBadge
-              label={worker.geoip_operator_enabled ? '运营商支持' : '运营商未支持'}
+              label={
+                worker.geoip_operator_enabled ? '运营商支持' : '运营商未支持'
+              }
               variant={worker.geoip_operator_enabled ? 'success' : 'warning'}
             />
           </div>
@@ -4720,7 +4764,10 @@ function RecordEditorModal({
           </ResourceField>
         )}
         <div className="grid gap-5 md:grid-cols-3">
-          <ResourceField label="缓存时间" hint="0 表示使用托管域名默认缓存时间。">
+          <ResourceField
+            label="缓存时间"
+            hint="0 表示使用托管域名默认缓存时间。"
+          >
             <ResourceInput
               type="number"
               min={0}
@@ -4887,8 +4934,12 @@ function WorkerSettingsModal({
           : dispatchMode === 'worker_heartbeat'
             ? { label: '回退响应端心跳', variant: 'warning' as const }
             : {
-                label: worker.update_supported ? '支持远程更新' : '需先手动升级',
-                variant: worker.update_supported ? ('success' as const) : ('warning' as const),
+                label: worker.update_supported
+                  ? '支持远程更新'
+                  : '需先手动升级',
+                variant: worker.update_supported
+                  ? ('success' as const)
+                  : ('warning' as const),
               };
   const updateButtonLabel = isRequestingUpdate
     ? '下发中...'
@@ -4932,7 +4983,9 @@ function WorkerSettingsModal({
                 强制更新
               </p>
               <p className="mt-1 text-xs leading-5 text-[var(--foreground-secondary)]">
-                优先匹配同机 Agent 直接执行安装器；未匹配到 Agent 时回退为响应端心跳更新。若要走 Agent，请把公网地址填成该机器的公网 IP。
+                优先匹配同机 Agent 直接执行安装器；未匹配到 Agent
+                时回退为响应端心跳更新。若要走
+                Agent，请把公网地址填成该机器的公网 IP。
               </p>
             </div>
             <StatusBadge
@@ -4978,7 +5031,9 @@ function WorkerSettingsModal({
               </p>
             </div>
             <StatusBadge
-              label={worker.uninstall_supported ? '支持远程卸载' : '需先强制更新'}
+              label={
+                worker.uninstall_supported ? '支持远程卸载' : '需先强制更新'
+              }
               variant={worker.uninstall_supported ? 'success' : 'warning'}
             />
           </div>

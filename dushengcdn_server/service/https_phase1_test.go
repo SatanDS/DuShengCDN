@@ -359,6 +359,15 @@ func TestPublishConfigVersionRendersRouteLevelCachePolicy(t *testing.T) {
 	if !strings.Contains(result.Version.RenderedConfig, "if ($request_method != GET)") {
 		t.Fatal("expected rendered config to bypass non-GET requests")
 	}
+	if !strings.Contains(result.Version.RenderedConfig, "if ($http_range != \"\")") {
+		t.Fatal("expected rendered config to bypass Range requests")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, "proxy_cache_valid 200 301 302 10m;") {
+		t.Fatal("expected rendered config to cache full successful/static redirects only")
+	}
+	if strings.Contains(result.Version.RenderedConfig, "proxy_cache_valid 200 206") {
+		t.Fatal("expected rendered config to avoid caching partial content responses")
+	}
 	if !strings.Contains(result.Version.RenderedConfig, "if ($uri !~* \"\\\\.(?:jpg|css|js)$\")") {
 		t.Fatal("expected rendered config to render suffix cache matching rule")
 	}

@@ -120,6 +120,31 @@ func TestCommercialLicenseAllFeatureAllowsCommercialFeature(t *testing.T) {
 	}
 }
 
+func TestCommercialLicenseLegacyRegionFeatureExpandsToSplitAccessControls(t *testing.T) {
+	setupServiceTestDB(t)
+	withCommercialLicenseTestConfig(t, true, "", true)
+
+	token := buildUnsignedCommercialLicenseToken(t, CommercialLicensePayload{
+		LicenseID:    "lic-legacy-region",
+		CustomerName: "Legacy Region Ltd.",
+		Plan:         "enterprise",
+		Features:     []string{"region_access_control", "geo-access-control"},
+	})
+	view, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: token})
+	if err != nil {
+		t.Fatalf("InstallCommercialLicense failed: %v", err)
+	}
+	want := strings.Join(commercialRegionAccessControlFeatures(), ",")
+	if strings.Join(view.Features, ",") != want {
+		t.Fatalf("expected legacy region feature to expand to %s, got %+v", want, view.Features)
+	}
+	for _, feature := range commercialRegionAccessControlFeatures() {
+		if err := EnsureCommercialFeatureEnabled(feature); err != nil {
+			t.Fatalf("expected legacy region feature to allow %s, got %v", feature, err)
+		}
+	}
+}
+
 func TestCommercialLicenseRequiredBlocksAdvancedFeatureEntrypoints(t *testing.T) {
 	setupServiceTestDB(t)
 	withCommercialLicenseTestConfig(t, true, "", true)
@@ -186,7 +211,7 @@ func TestCommercialLicenseRequiredBlocksAdvancedFeatureEntrypoints(t *testing.T)
 		OriginURL:                  "http://origin.example.com",
 		RegionRestrictionEnabled:   true,
 		RegionRestrictionCountries: []string{"US"},
-	}); err == nil || !strings.Contains(err.Error(), "区域访问控制") {
+	}); err == nil || !strings.Contains(err.Error(), "国家/地区访问控制") {
 		t.Fatalf("expected region restriction to require feature, got %v", err)
 	}
 	if _, err := CreateProxyRoute(ProxyRouteInput{
@@ -222,6 +247,64 @@ func TestCommercialLicenseRequiredBlocksAdvancedFeatureEntrypoints(t *testing.T)
 	}); err == nil || !strings.Contains(err.Error(), "GSLB") {
 		t.Fatalf("expected GSLB to require feature, got %v", err)
 	}
+
+	gslbOnlyToken := buildUnsignedCommercialLicenseToken(t, CommercialLicensePayload{
+		LicenseID:    "lic-gslb-only",
+		CustomerName: "GSLB Only Ltd.",
+		Plan:         "business",
+		Features: []string{
+			CommercialFeatureAuthoritativeDNS,
+			CommercialFeatureGSLB,
+		},
+		MaxSites: 10,
+	})
+	if _, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: gslbOnlyToken}); err != nil {
+		t.Fatalf("InstallCommercialLicense gslb-only failed: %v", err)
+	}
+	gslbCases := []struct {
+		name      string
+		pool      ProxyRouteGSLBPoolPolicy
+		wantLabel string
+	}{
+		{
+			name:      "country",
+			pool:      ProxyRouteGSLBPoolPolicy{Name: "country", Weight: 100, Countries: []string{"CN"}, Enabled: true},
+			wantLabel: "国家/地区访问控制",
+		},
+		{
+			name:      "operator",
+			pool:      ProxyRouteGSLBPoolPolicy{Name: "operator", Weight: 100, Operators: []string{"cn-telecom"}, Enabled: true},
+			wantLabel: "运营商访问控制",
+		},
+		{
+			name:      "source_cidr",
+			pool:      ProxyRouteGSLBPoolPolicy{Name: "cidr", Weight: 100, SourceCIDRs: []string{"203.0.113.0/24"}, Enabled: true},
+			wantLabel: "来源网段访问控制",
+		},
+		{
+			name:      "asn",
+			pool:      ProxyRouteGSLBPoolPolicy{Name: "asn", Weight: 100, ASNs: []uint32{4134}, Enabled: true},
+			wantLabel: "ASN 访问控制",
+		},
+	}
+	for _, testCase := range gslbCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := CreateProxyRoute(ProxyRouteInput{
+				Domain:          testCase.name + ".gslb.example.com",
+				OriginURL:       "http://origin.example.com",
+				Enabled:         false,
+				DNSProviderMode: DNSProviderModeAuthoritative,
+				DNSZoneIDRef:    &zone.ID,
+				GSLBEnabled:     true,
+				GSLBPolicy: ProxyRouteGSLBPolicy{
+					Pools: []ProxyRouteGSLBPoolPolicy{testCase.pool},
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), testCase.wantLabel) {
+				t.Fatalf("expected GSLB %s scope to require %s, got %v", testCase.name, testCase.wantLabel, err)
+			}
+		})
+	}
 }
 
 func TestCommercialLicenseFeaturesAllowAdvancedFeatureEntrypoints(t *testing.T) {
@@ -239,7 +322,10 @@ func TestCommercialLicenseFeaturesAllowAdvancedFeatureEntrypoints(t *testing.T) 
 			CommercialFeatureGSLB,
 			CommercialFeatureWAF,
 			CommercialFeatureCCProtection,
-			CommercialFeatureGeoAccessControl,
+			CommercialFeatureCountryRegionAccessControl,
+			CommercialFeatureOperatorAccessControl,
+			CommercialFeatureSourceCIDRAccessControl,
+			CommercialFeatureASNAccessControl,
 		},
 		MaxSites: 10,
 	})
@@ -581,6 +667,56 @@ func TestCommercialLicenseRevocationBlocksLeaseRenewalByLicenseID(t *testing.T) 
 	}
 	if renewed.ActivationID != initial.ActivationID {
 		t.Fatalf("expected restored renewal to keep activation id, got %s want %s", renewed.ActivationID, initial.ActivationID)
+	}
+}
+
+func TestDeleteCommercialLicenseActivationRemovesRecordsAndInstalledLicense(t *testing.T) {
+	setupServiceTestDB(t)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+	withCommercialLicenseIssuerTestConfig(t, base64.RawURLEncoding.EncodeToString(privateKey), "")
+	withCommercialLicenseOnlineActivationTestConfig(t, true, "", 72*time.Hour, 24*time.Hour)
+	withCommercialLicenseTestConfig(t, true, base64.RawURLEncoding.EncodeToString(publicKey), true)
+
+	token := buildUnsignedCommercialLicenseToken(t, CommercialLicensePayload{
+		LicenseID:    "lic-delete",
+		CustomerID:   "cust-delete",
+		CustomerName: "Delete Customer",
+		Plan:         "enterprise",
+		Features:     []string{"all"},
+	})
+	if _, err := InstallCommercialLicense(CommercialLicenseInstallInput{Token: token}); err != nil {
+		t.Fatalf("InstallCommercialLicense failed: %v", err)
+	}
+	if _, err := ServeCommercialLicenseActivation(CommercialLicenseActivationRequest{
+		LicenseToken:       token,
+		MachineFingerprint: "machine-delete",
+		ServerVersion:      "v1",
+	}); err != nil {
+		t.Fatalf("ServeCommercialLicenseActivation failed: %v", err)
+	}
+	if _, err := RevokeCommercialLicense(CommercialLicenseRevocationInput{
+		LicenseID: "lic-delete",
+		Reason:    "cleanup",
+	}); err != nil {
+		t.Fatalf("RevokeCommercialLicense failed: %v", err)
+	}
+
+	records, err := DeleteCommercialLicenseActivation(CommercialLicenseRevocationInput{LicenseID: "lic-delete"})
+	if err != nil {
+		t.Fatalf("DeleteCommercialLicenseActivation failed: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected deleted activation list to be empty, got %+v", records)
+	}
+	view, err := GetCommercialLicenseStatus()
+	if err != nil {
+		t.Fatalf("GetCommercialLicenseStatus failed: %v", err)
+	}
+	if view.Status != CommercialLicenseStatusMissing {
+		t.Fatalf("expected installed license to be removed, got %+v", view)
 	}
 }
 

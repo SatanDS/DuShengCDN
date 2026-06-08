@@ -40,15 +40,19 @@ const (
 	CommercialLicenseStatusActivationRequired = "activation_required"
 	CommercialLicenseStatusLeaseExpired       = "lease_expired"
 
-	CommercialFeatureACMEAutomation   = "acme-automation"
-	CommercialFeatureAuthoritativeDNS = "authoritative-dns"
-	CommercialFeatureCloudflareDNS    = "cloudflare-dns"
-	CommercialFeatureGSLB             = "gslb"
-	CommercialFeatureDDoSProtection   = "ddos-protection"
-	CommercialFeatureWAF              = "waf"
-	CommercialFeatureCCProtection     = "cc-protection"
-	CommercialFeatureGeoAccessControl = "geo-access-control"
-	commercialFeatureAll              = "*"
+	CommercialFeatureACMEAutomation             = "acme-automation"
+	CommercialFeatureAuthoritativeDNS           = "authoritative-dns"
+	CommercialFeatureCloudflareDNS              = "cloudflare-dns"
+	CommercialFeatureGSLB                       = "gslb"
+	CommercialFeatureDDoSProtection             = "ddos-protection"
+	CommercialFeatureWAF                        = "waf"
+	CommercialFeatureCCProtection               = "cc-protection"
+	CommercialFeatureCountryRegionAccessControl = "country-region-access-control"
+	CommercialFeatureOperatorAccessControl      = "operator-access-control"
+	CommercialFeatureSourceCIDRAccessControl    = "source-cidr-access-control"
+	CommercialFeatureASNAccessControl           = "asn-access-control"
+	CommercialFeatureGeoAccessControl           = "geo-access-control"
+	commercialFeatureAll                        = "*"
 )
 
 var commercialLicenseNow = time.Now
@@ -526,6 +530,40 @@ func RestoreCommercialLicense(input CommercialLicenseRevocationInput) ([]Commerc
 	return ListCommercialLicenseActivations()
 }
 
+func DeleteCommercialLicenseActivation(input CommercialLicenseRevocationInput) ([]CommercialLicenseActivationView, error) {
+	licenseID := strings.TrimSpace(input.LicenseID)
+	if licenseID == "" {
+		return nil, errors.New("license_id is required")
+	}
+	if model.DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("license_id = ?", licenseID).Delete(&model.CommercialLicenseActivation{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("license_id = ?", licenseID).Delete(&model.CommercialLicenseRevocation{}).Error; err != nil {
+			return err
+		}
+		var installed model.CommercialLicense
+		err := tx.Where("id = ?", 1).First(&installed).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(installed.LicenseID) == licenseID {
+			return tx.Delete(&model.CommercialLicense{}, installed.ID).Error
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ListCommercialLicenseActivations()
+}
+
 func IssueCommercialLicense(input CommercialLicenseIssueInput) (*CommercialLicenseIssueResult, error) {
 	privateKey, err := commercialLicenseIssuerPrivateKey()
 	if err != nil {
@@ -718,17 +756,19 @@ func commercialLicenseStatusOperationError(status string) error {
 }
 
 func commercialLicenseFeaturesContain(features []string, feature string) bool {
-	feature = normalizeCommercialLicenseFeature(feature)
-	if feature == "" {
+	requested := normalizeCommercialLicenseFeatureValues(feature)
+	if len(requested) == 0 {
 		return true
 	}
-	for _, item := range features {
-		item = normalizeCommercialLicenseFeature(item)
-		if item == feature || item == commercialFeatureAll || item == "all" {
-			return true
+	for _, requestedFeature := range requested {
+		if requestedFeature == "" {
+			continue
+		}
+		if !commercialLicenseFeatureValueContained(features, requestedFeature) {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func commercialLicenseModelFromParsed(token string, parsed *parsedCommercialLicense, now time.Time) *model.CommercialLicense {
@@ -1045,23 +1085,32 @@ func normalizeCommercialLicenseLimit(limit int) int {
 }
 
 func normalizeCommercialLicenseFeatures(features []string) []string {
-	seen := make(map[string]struct{}, len(features))
+	seen := make(map[string]struct{}, len(features)*2)
 	result := make([]string, 0, len(features))
 	for _, feature := range features {
-		feature = normalizeCommercialLicenseFeature(feature)
-		if feature == "" {
-			continue
+		for _, normalizedFeature := range normalizeCommercialLicenseFeatureValues(feature) {
+			if normalizedFeature == "" {
+				continue
+			}
+			if _, ok := seen[normalizedFeature]; ok {
+				continue
+			}
+			seen[normalizedFeature] = struct{}{}
+			result = append(result, normalizedFeature)
 		}
-		if _, ok := seen[feature]; ok {
-			continue
-		}
-		seen[feature] = struct{}{}
-		result = append(result, feature)
 	}
 	return result
 }
 
 func normalizeCommercialLicenseFeature(feature string) string {
+	values := normalizeCommercialLicenseFeatureValues(feature)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func normalizeCommercialLicenseFeatureValues(feature string) []string {
 	feature = strings.ToLower(strings.TrimSpace(feature))
 	feature = strings.ReplaceAll(feature, "_", "-")
 	if len(feature) > 64 {
@@ -1069,22 +1118,57 @@ func normalizeCommercialLicenseFeature(feature string) string {
 	}
 	switch feature {
 	case "all", commercialFeatureAll:
-		return feature
+		return []string{feature}
 	case "acme", "tls-acme", "certificate-automation":
-		return CommercialFeatureACMEAutomation
+		return []string{CommercialFeatureACMEAutomation}
 	case "authoritative-dns", "dns-authoritative", "local-dns":
-		return CommercialFeatureAuthoritativeDNS
+		return []string{CommercialFeatureAuthoritativeDNS}
 	case "cloudflare", "cloudflare-dns-automation":
-		return CommercialFeatureCloudflareDNS
+		return []string{CommercialFeatureCloudflareDNS}
 	case "ddos", "ddos-auto":
-		return CommercialFeatureDDoSProtection
+		return []string{CommercialFeatureDDoSProtection}
 	case "cc", "cc-defense":
-		return CommercialFeatureCCProtection
-	case "geo-acl", "region-restriction":
-		return CommercialFeatureGeoAccessControl
+		return []string{CommercialFeatureCCProtection}
+	case "geo-access-control", "geo-acl", "region-access-control", "region-acl", "region-restriction":
+		return commercialRegionAccessControlFeatures()
+	case "country-region", "country-region-access", "country-region-access-control", "country-access-control", "country-acl", "country-restriction", "geo-country-access-control", "region-country-access-control":
+		return []string{CommercialFeatureCountryRegionAccessControl}
+	case "operator-access-control", "operator-acl", "operator-restriction", "source-operator-access-control", "carrier-access-control", "isp-access-control":
+		return []string{CommercialFeatureOperatorAccessControl}
+	case "source-cidr", "source-cidr-access-control", "source-cidr-acl", "source-cidr-restriction", "source-network", "source-network-access-control", "cidr-access-control", "cidr-acl":
+		return []string{CommercialFeatureSourceCIDRAccessControl}
+	case "asn", "asn-access-control", "asn-acl", "asn-restriction", "source-asn-access-control":
+		return []string{CommercialFeatureASNAccessControl}
 	default:
-		return feature
+		if feature == "" {
+			return nil
+		}
+		return []string{feature}
 	}
+}
+
+func commercialRegionAccessControlFeatures() []string {
+	return []string{
+		CommercialFeatureCountryRegionAccessControl,
+		CommercialFeatureOperatorAccessControl,
+		CommercialFeatureSourceCIDRAccessControl,
+		CommercialFeatureASNAccessControl,
+	}
+}
+
+func commercialLicenseFeatureValueContained(features []string, feature string) bool {
+	feature = normalizeCommercialLicenseFeature(feature)
+	if feature == "" {
+		return true
+	}
+	for _, item := range features {
+		for _, itemFeature := range normalizeCommercialLicenseFeatureValues(item) {
+			if itemFeature == feature || itemFeature == commercialFeatureAll || itemFeature == "all" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func decodeCommercialLicenseFeatures(raw string) []string {
@@ -1284,8 +1368,14 @@ func commercialLicenseFeatureLabel(feature string) string {
 		return "WAF"
 	case CommercialFeatureCCProtection:
 		return "CC 防护"
-	case CommercialFeatureGeoAccessControl:
-		return "区域访问控制"
+	case CommercialFeatureCountryRegionAccessControl:
+		return "国家/地区访问控制"
+	case CommercialFeatureOperatorAccessControl:
+		return "运营商访问控制"
+	case CommercialFeatureSourceCIDRAccessControl:
+		return "来源网段访问控制"
+	case CommercialFeatureASNAccessControl:
+		return "ASN 访问控制"
 	default:
 		return feature
 	}

@@ -395,5 +395,5 @@ func printUsage(writer *os.File) {
 	fmt.Fprintln(writer, "  go run ./cmd/license sign -private-key <key> -license-id <id> -customer-name <name> [options]")
 	fmt.Fprintln(writer, "  go run ./cmd/license inspect -token <token> [-public-key <key>]")
 	fmt.Fprintln(writer, "")
-	fmt.Fprintln(writer, "Features: all, acme-automation, authoritative-dns, cloudflare-dns, gslb, ddos-protection, waf, cc-protection, geo-access-control")
+	fmt.Fprintln(writer, "Features: all, acme-automation, authoritative-dns, cloudflare-dns, gslb, ddos-protection, waf, cc-protection, country-region-access-control, operator-access-control, source-cidr-access-control, asn-access-control")
 }

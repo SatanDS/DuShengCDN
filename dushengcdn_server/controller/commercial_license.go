@@ -202,6 +202,30 @@ func RestoreCommercialLicense(c *gin.Context) {
 	respondSuccess(c, result)
 }
 
+// DeleteCommercialLicenseActivation godoc
+// @Summary Delete commercial license activation records by license id
+// @Tags License
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param payload body service.CommercialLicenseRevocationInput true "License deletion payload"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/license/delete [post]
+func DeleteCommercialLicenseActivation(c *gin.Context) {
+	var input service.CommercialLicenseRevocationInput
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "")
+		return
+	}
+	result, err := service.DeleteCommercialLicenseActivation(input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, result)
+}
+
 // ActivateCommercialLicenseLease godoc
 // @Summary Issue short-lived commercial license lease
 // @Tags License

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
@@ -14,6 +14,117 @@ import {
 } from '@/lib/utils/navigation';
 import { useAppShellStore } from '@/store/app-shell';
 import type { NavigationIconKey, NavigationItem } from '@/types/navigation';
+
+type SidebarIconGlassTone = {
+  color: string;
+  tint: string;
+  border: string;
+  glow: string;
+};
+
+const sidebarIconGlassTones: Record<NavigationIconKey, SidebarIconGlassTone> = {
+  home: {
+    color: '#2563eb',
+    tint: 'rgba(37, 99, 235, 0.13)',
+    border: 'rgba(37, 99, 235, 0.24)',
+    glow: 'rgba(37, 99, 235, 0.16)',
+  },
+  traffic: {
+    color: '#0891b2',
+    tint: 'rgba(8, 145, 178, 0.14)',
+    border: 'rgba(8, 145, 178, 0.25)',
+    glow: 'rgba(8, 145, 178, 0.18)',
+  },
+  node: {
+    color: '#059669',
+    tint: 'rgba(5, 150, 105, 0.14)',
+    border: 'rgba(5, 150, 105, 0.25)',
+    glow: 'rgba(5, 150, 105, 0.18)',
+  },
+  website: {
+    color: '#4f46e5',
+    tint: 'rgba(79, 70, 229, 0.13)',
+    border: 'rgba(79, 70, 229, 0.24)',
+    glow: 'rgba(79, 70, 229, 0.16)',
+  },
+  origin: {
+    color: '#e11d48',
+    tint: 'rgba(225, 29, 72, 0.12)',
+    border: 'rgba(225, 29, 72, 0.22)',
+    glow: 'rgba(225, 29, 72, 0.16)',
+  },
+  domain: {
+    color: '#7c3aed',
+    tint: 'rgba(124, 58, 237, 0.13)',
+    border: 'rgba(124, 58, 237, 0.24)',
+    glow: 'rgba(124, 58, 237, 0.17)',
+  },
+  dns: {
+    color: '#0284c7',
+    tint: 'rgba(2, 132, 199, 0.13)',
+    border: 'rgba(2, 132, 199, 0.24)',
+    glow: 'rgba(2, 132, 199, 0.17)',
+  },
+  certificate: {
+    color: '#16a34a',
+    tint: 'rgba(22, 163, 74, 0.13)',
+    border: 'rgba(22, 163, 74, 0.24)',
+    glow: 'rgba(22, 163, 74, 0.17)',
+  },
+  proxy: {
+    color: '#db2777',
+    tint: 'rgba(219, 39, 119, 0.12)',
+    border: 'rgba(219, 39, 119, 0.23)',
+    glow: 'rgba(219, 39, 119, 0.16)',
+  },
+  release: {
+    color: '#9333ea',
+    tint: 'rgba(147, 51, 234, 0.13)',
+    border: 'rgba(147, 51, 234, 0.24)',
+    glow: 'rgba(147, 51, 234, 0.17)',
+  },
+  log: {
+    color: '#475569',
+    tint: 'rgba(71, 85, 105, 0.11)',
+    border: 'rgba(71, 85, 105, 0.2)',
+    glow: 'rgba(71, 85, 105, 0.14)',
+  },
+  performance: {
+    color: '#65a30d',
+    tint: 'rgba(101, 163, 13, 0.13)',
+    border: 'rgba(101, 163, 13, 0.24)',
+    glow: 'rgba(101, 163, 13, 0.17)',
+  },
+  shield: {
+    color: '#dc2626',
+    tint: 'rgba(220, 38, 38, 0.12)',
+    border: 'rgba(220, 38, 38, 0.23)',
+    glow: 'rgba(220, 38, 38, 0.16)',
+  },
+  user: {
+    color: '#c026d3',
+    tint: 'rgba(192, 38, 211, 0.12)',
+    border: 'rgba(192, 38, 211, 0.23)',
+    glow: 'rgba(192, 38, 211, 0.16)',
+  },
+  setting: {
+    color: '#d97706',
+    tint: 'rgba(245, 158, 11, 0.16)',
+    border: 'rgba(245, 158, 11, 0.3)',
+    glow: 'rgba(245, 158, 11, 0.22)',
+  },
+};
+
+function getSidebarIconGlassStyle(icon: NavigationIconKey): CSSProperties {
+  const tone = sidebarIconGlassTones[icon];
+
+  return {
+    '--sidebar-icon-color': tone.color,
+    '--sidebar-icon-tint': tone.tint,
+    '--sidebar-icon-border': tone.border,
+    '--sidebar-icon-glow': tone.glow,
+  } as CSSProperties;
+}
 
 function SidebarIcon({ icon }: { icon: NavigationIconKey }) {
   const commonProps = {
@@ -199,7 +310,13 @@ function SidebarNavItem({
             showLabel ? 'flex-1' : 'flex-1 justify-center',
           )}
         >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--control-background)] text-[var(--foreground-primary)]">
+          <span
+            className={cn(
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--control-background)] text-[var(--foreground-primary)]',
+              !showLabel && 'sidebar-collapsed-icon-glass',
+            )}
+            style={!showLabel ? getSidebarIconGlassStyle(item.icon) : undefined}
+          >
             <SidebarIcon icon={item.icon} />
           </span>
           {showLabel ? (
@@ -340,7 +457,7 @@ function SidebarContent({
       <nav className="min-h-0 flex-1 overflow-hidden">
         <div
           className={cn(
-            'flex h-full min-h-0 flex-col gap-2 overflow-y-auto',
+            'scrollbar-none flex h-full min-h-0 flex-col gap-2 overflow-y-auto',
             showLabel ? 'pr-1' : 'pr-0',
           )}
         >

@@ -1171,9 +1171,46 @@ button {
   border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
 }
 
+.sidebar-collapsed-icon-glass {
+  color: var(--sidebar-icon-color);
+  border: 1px solid var(--sidebar-icon-border);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.48),
+      rgba(255, 255, 255, 0.16)
+    ),
+    var(--sidebar-icon-tint);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.46),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.1),
+    0 10px 26px var(--sidebar-icon-glow);
+  backdrop-filter: blur(24px) saturate(1.55);
+  -webkit-backdrop-filter: blur(24px) saturate(1.55);
+}
+
+:root[data-theme='dark'] .sidebar-collapsed-icon-glass {
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.13),
+      rgba(255, 255, 255, 0.04)
+    ),
+    var(--sidebar-icon-tint);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 30px var(--sidebar-icon-glow);
+}
+
 .dashboard-modal-overlay {
   background:
-    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.1), transparent 30%),
+    radial-gradient(
+      circle at 18% 12%,
+      rgba(255, 255, 255, 0.1),
+      transparent 30%
+    ),
     radial-gradient(circle at 78% 0%, rgba(255, 79, 173, 0.1), transparent 32%),
     rgba(8, 7, 18, 0.74);
   backdrop-filter: blur(30px) saturate(1.45);
@@ -1184,7 +1221,11 @@ button {
 .dashboard-drawer-glass,
 .dashboard-modal-glass {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.42)),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.78),
+      rgba(255, 255, 255, 0.42)
+    ),
     rgba(255, 255, 255, 0.72);
   border-color: rgba(255, 255, 255, 0.5);
   box-shadow:
@@ -1197,7 +1238,11 @@ button {
 
 .dashboard-popover-glass {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.36)),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.76),
+      rgba(255, 255, 255, 0.36)
+    ),
     rgba(255, 255, 255, 0.66);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.66),
@@ -1210,7 +1255,11 @@ button {
 .dashboard-modal-header,
 .dashboard-modal-footer {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.12)),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.3),
+      rgba(255, 255, 255, 0.12)
+    ),
     rgba(255, 255, 255, 0.2);
 }
 
@@ -1224,7 +1273,11 @@ button {
 :root[data-theme='dark'] .dashboard-drawer-glass,
 :root[data-theme='dark'] .dashboard-modal-glass {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.19), rgba(255, 255, 255, 0.075)),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.19),
+      rgba(255, 255, 255, 0.075)
+    ),
     rgba(28, 21, 48, 0.76);
   border-color: rgba(255, 255, 255, 0.24);
   box-shadow:
@@ -1235,7 +1288,11 @@ button {
 
 :root[data-theme='dark'] .dashboard-popover-glass {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.06)),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.17),
+      rgba(255, 255, 255, 0.06)
+    ),
     rgba(24, 19, 43, 0.72);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
@@ -1246,7 +1303,11 @@ button {
 :root[data-theme='dark'] .dashboard-modal-header,
 :root[data-theme='dark'] .dashboard-modal-footer {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.028)),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.1),
+      rgba(255, 255, 255, 0.028)
+    ),
     rgba(26, 20, 46, 0.44);
 }
 
@@ -1269,26 +1330,58 @@ button {
 .dashboard-popover-glass [class~='bg-[var(--surface-muted)]'],
 .dashboard-popover-glass [class~='bg-[var(--control-background)]'] {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.24)),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.62),
+      rgba(255, 255, 255, 0.24)
+    ),
     rgba(255, 255, 255, 0.48);
   backdrop-filter: blur(28px) saturate(1.55);
   -webkit-backdrop-filter: blur(28px) saturate(1.55);
 }
 
-:root[data-theme='dark'] .dashboard-modal-glass [class~='bg-[var(--surface-elevated)]'],
-:root[data-theme='dark'] .dashboard-modal-glass [class~='bg-[var(--surface-panel)]'],
-:root[data-theme='dark'] .dashboard-modal-glass [class~='bg-[var(--surface-muted)]'],
-:root[data-theme='dark'] .dashboard-modal-glass [class~='bg-[var(--control-background)]'],
-:root[data-theme='dark'] .dashboard-drawer-glass [class~='bg-[var(--surface-elevated)]'],
-:root[data-theme='dark'] .dashboard-drawer-glass [class~='bg-[var(--surface-panel)]'],
-:root[data-theme='dark'] .dashboard-drawer-glass [class~='bg-[var(--surface-muted)]'],
-:root[data-theme='dark'] .dashboard-drawer-glass [class~='bg-[var(--control-background)]'],
-:root[data-theme='dark'] .dashboard-popover-glass [class~='bg-[var(--surface-elevated)]'],
-:root[data-theme='dark'] .dashboard-popover-glass [class~='bg-[var(--surface-panel)]'],
-:root[data-theme='dark'] .dashboard-popover-glass [class~='bg-[var(--surface-muted)]'],
-:root[data-theme='dark'] .dashboard-popover-glass [class~='bg-[var(--control-background)]'] {
+:root[data-theme='dark']
+  .dashboard-modal-glass
+  [class~='bg-[var(--surface-elevated)]'],
+:root[data-theme='dark']
+  .dashboard-modal-glass
+  [class~='bg-[var(--surface-panel)]'],
+:root[data-theme='dark']
+  .dashboard-modal-glass
+  [class~='bg-[var(--surface-muted)]'],
+:root[data-theme='dark']
+  .dashboard-modal-glass
+  [class~='bg-[var(--control-background)]'],
+:root[data-theme='dark']
+  .dashboard-drawer-glass
+  [class~='bg-[var(--surface-elevated)]'],
+:root[data-theme='dark']
+  .dashboard-drawer-glass
+  [class~='bg-[var(--surface-panel)]'],
+:root[data-theme='dark']
+  .dashboard-drawer-glass
+  [class~='bg-[var(--surface-muted)]'],
+:root[data-theme='dark']
+  .dashboard-drawer-glass
+  [class~='bg-[var(--control-background)]'],
+:root[data-theme='dark']
+  .dashboard-popover-glass
+  [class~='bg-[var(--surface-elevated)]'],
+:root[data-theme='dark']
+  .dashboard-popover-glass
+  [class~='bg-[var(--surface-panel)]'],
+:root[data-theme='dark']
+  .dashboard-popover-glass
+  [class~='bg-[var(--surface-muted)]'],
+:root[data-theme='dark']
+  .dashboard-popover-glass
+  [class~='bg-[var(--control-background)]'] {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.044)),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.13),
+      rgba(255, 255, 255, 0.044)
+    ),
     rgba(31, 25, 51, 0.52);
 }
 
@@ -1500,20 +1593,36 @@ button {
     0 12px 32px rgba(0, 0, 0, 0.2);
 }
 
-.dashboard-portal .dashboard-modal-glass [class~='bg-[var(--surface-elevated)]'],
+.dashboard-portal
+  .dashboard-modal-glass
+  [class~='bg-[var(--surface-elevated)]'],
 .dashboard-portal .dashboard-modal-glass [class~='bg-[var(--surface-panel)]'],
 .dashboard-portal .dashboard-modal-glass [class~='bg-[var(--surface-muted)]'],
-.dashboard-portal .dashboard-modal-glass [class~='bg-[var(--control-background)]'],
-.dashboard-portal .dashboard-drawer-glass [class~='bg-[var(--surface-elevated)]'],
+.dashboard-portal
+  .dashboard-modal-glass
+  [class~='bg-[var(--control-background)]'],
+.dashboard-portal
+  .dashboard-drawer-glass
+  [class~='bg-[var(--surface-elevated)]'],
 .dashboard-portal .dashboard-drawer-glass [class~='bg-[var(--surface-panel)]'],
 .dashboard-portal .dashboard-drawer-glass [class~='bg-[var(--surface-muted)]'],
-.dashboard-portal .dashboard-drawer-glass [class~='bg-[var(--control-background)]'],
-.dashboard-portal .dashboard-popover-glass [class~='bg-[var(--surface-elevated)]'],
+.dashboard-portal
+  .dashboard-drawer-glass
+  [class~='bg-[var(--control-background)]'],
+.dashboard-portal
+  .dashboard-popover-glass
+  [class~='bg-[var(--surface-elevated)]'],
 .dashboard-portal .dashboard-popover-glass [class~='bg-[var(--surface-panel)]'],
 .dashboard-portal .dashboard-popover-glass [class~='bg-[var(--surface-muted)]'],
-.dashboard-portal .dashboard-popover-glass [class~='bg-[var(--control-background)]'] {
+.dashboard-portal
+  .dashboard-popover-glass
+  [class~='bg-[var(--control-background)]'] {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.24)),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.62),
+      rgba(255, 255, 255, 0.24)
+    ),
     rgba(255, 255, 255, 0.48);
   backdrop-filter: blur(28px) saturate(1.55);
   -webkit-backdrop-filter: blur(28px) saturate(1.55);
@@ -1568,7 +1677,11 @@ button {
   .dashboard-popover-glass
   [class~='bg-[var(--control-background)]'] {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.044)),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.13),
+      rgba(255, 255, 255, 0.044)
+    ),
     rgba(31, 25, 51, 0.52);
 }
 

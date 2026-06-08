@@ -1820,12 +1820,13 @@ func renderRouteCacheBlock(cacheConfig routeCacheConfig, cfg openRestyConfigSnap
 	builder.WriteString("        if ($http_authorization != \"\") {\n            set $dushengcdn_skip_cache 1;\n        }\n")
 	builder.WriteString("        if ($http_cookie ~* \"(session|sess|token|auth|jwt|logged_in|remember|laravel_session|connect\\\\.sid|_session)\") {\n            set $dushengcdn_skip_cache 1;\n        }\n")
 	builder.WriteString("        if ($http_cache_control ~* \"(no-cache|no-store|private)\") {\n            set $dushengcdn_skip_cache 1;\n        }\n")
+	builder.WriteString("        if ($http_range != \"\") {\n            set $dushengcdn_skip_cache 1;\n        }\n")
 	if policyCondition := renderRouteCachePolicyCondition(cacheConfig); policyCondition != "" {
 		builder.WriteString(policyCondition)
 	}
 	builder.WriteString("        proxy_cache dushengcdn_cache;\n")
 	builder.WriteString("        proxy_cache_methods GET;\n")
-	builder.WriteString("        proxy_cache_valid 200 206 301 302 10m;\n")
+	builder.WriteString("        proxy_cache_valid 200 301 302 10m;\n")
 	builder.WriteString("        add_header X-DuShengCDN-Cache $upstream_cache_status always;\n")
 	builder.WriteString("        proxy_cache_bypass $dushengcdn_skip_cache;\n")
 	builder.WriteString("        proxy_no_cache $dushengcdn_skip_cache;\n")

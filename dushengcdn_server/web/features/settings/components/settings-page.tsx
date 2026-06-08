@@ -26,6 +26,7 @@ import {
   bindEmail,
   clearCommercialLicense,
   cleanupDatabaseObservability,
+  deleteCommercialLicenseActivation,
   deleteExternalAccountBinding,
   generateAccessToken,
   getAuthSources,
@@ -228,8 +229,19 @@ const commercialLicenseFeatureOptions = [
   { value: 'ddos-protection', label: 'DDoS 自动防护' },
   { value: 'waf', label: 'WAF' },
   { value: 'cc-protection', label: 'CC 防护' },
-  { value: 'geo-access-control', label: '区域访问控制' },
+  { value: 'country-region-access-control', label: '国家/地区访问控制' },
+  { value: 'operator-access-control', label: '运营商访问控制' },
+  { value: 'source-cidr-access-control', label: '来源网段访问控制' },
+  { value: 'asn-access-control', label: 'ASN 访问控制' },
 ];
+
+const commercialLicenseFeatureLabels = new Map(
+  commercialLicenseFeatureOptions.map((option) => [option.value, option.label]),
+);
+
+function getCommercialLicenseFeatureLabel(feature: string) {
+  return commercialLicenseFeatureLabels.get(feature) ?? feature;
+}
 
 type CleanupModalState = {
   target: DatabaseCleanupTarget;
@@ -328,10 +340,7 @@ function stripServerUrlProtocol(value: string) {
   return normalizeServerUrl(value).replace(/^https?:\/\//i, '');
 }
 
-function buildDeploymentServerUrl(
-  protocol: DeploymentProtocol,
-  value: string,
-) {
+function buildDeploymentServerUrl(protocol: DeploymentProtocol, value: string) {
   const endpoint = stripServerUrlProtocol(value);
   return endpoint ? `${protocol}://${endpoint}` : '';
 }
@@ -520,7 +529,9 @@ export function SettingsPage() {
     }
 
     const nextSearch = nextParams.toString();
-    router.replace(`${pathname ?? '/setting'}${nextSearch ? `?${nextSearch}` : ''}`);
+    router.replace(
+      `${pathname ?? '/setting'}${nextSearch ? `?${nextSearch}` : ''}`,
+    );
   };
 
   const handleCopy = async (value: string, message: string) => {
@@ -686,7 +697,8 @@ export function SettingsPage() {
         false,
       ),
       NodeOfflineThreshold: optionMap.NodeOfflineThreshold ?? '120000',
-      AgentUpdateRepo: optionMap.AgentUpdateRepo ?? 'SatanDS/SatanDS-DuShengCDN-releases',
+      AgentUpdateRepo:
+        optionMap.AgentUpdateRepo ?? 'SatanDS/SatanDS-DuShengCDN-releases',
       GeoIPProvider: optionMap.GeoIPProvider ?? 'ipinfo',
       OpenRestyWorkerProcesses: optionMap.OpenRestyWorkerProcesses ?? 'auto',
       OpenRestyWorkerConnections:
@@ -738,8 +750,7 @@ export function SettingsPage() {
       AuthoritativeDNSDefaultTTL: optionMap.AuthoritativeDNSDefaultTTL ?? '30',
       AuthoritativeDNSSnapshotMaxAge:
         optionMap.AuthoritativeDNSSnapshotMaxAge ?? '300',
-      GSLBMetricFreshnessSeconds:
-        optionMap.GSLBMetricFreshnessSeconds ?? '120',
+      GSLBMetricFreshnessSeconds: optionMap.GSLBMetricFreshnessSeconds ?? '120',
       GSLBProbeSchedulingEnabled: toBoolean(
         optionMap.GSLBProbeSchedulingEnabled,
         false,
@@ -1009,7 +1020,9 @@ export function SettingsPage() {
       `auth-source-bind-${sourceName}`,
       async () => {
         const result = await getOAuthAuthorizeUrl(sourceName);
-        window.location.href = normalizeTrustedExternalUrl(result.authorize_url);
+        window.location.href = normalizeTrustedExternalUrl(
+          result.authorize_url,
+        );
       },
       '发起第三方账号绑定',
     );
@@ -1194,7 +1207,10 @@ export function SettingsPage() {
         await queryClient.invalidateQueries({
           queryKey: commercialLicenseActivationsQueryKey,
         });
-        setFeedback({ tone: 'success', message: '授权已停用，后续续租会被拒绝。' });
+        setFeedback({
+          tone: 'success',
+          message: '授权已停用，后续续租会被拒绝。',
+        });
       },
       '停用商业授权',
     );
@@ -1214,18 +1230,22 @@ export function SettingsPage() {
         await queryClient.invalidateQueries({
           queryKey: commercialLicenseActivationsQueryKey,
         });
-        setFeedback({ tone: 'success', message: '授权已恢复，可以继续激活和续租。' });
+        setFeedback({
+          tone: 'success',
+          message: '授权已恢复，可以继续激活和续租。',
+        });
       },
       '恢复商业授权',
     );
   };
 
   const handleClearCommercialLicense = async () => {
+    const installedLicenseID =
+      commercialLicenseQuery.data?.license_id?.trim() ?? '';
     const confirmed = await confirmDialog({
-      title: '清除商业授权',
-      message:
-        '清除后，如果服务端启用了必须授权策略，将无法继续创建节点或站点。',
-      confirmLabel: '清除授权',
+      title: '删除本机授权',
+      message: `确认删除本机已安装的商业授权${installedLicenseID ? ` ${installedLicenseID}` : ''}？\n\n删除后会清除本机授权 token 和在线租约状态，不会停用或删除授权服务器上的激活记录。若服务端启用了强制授权，节点或站点创建会被阻断。`,
+      confirmLabel: '删除本机授权',
       tone: 'danger',
     });
     if (!confirmed) {
@@ -1239,9 +1259,48 @@ export function SettingsPage() {
         await queryClient.invalidateQueries({
           queryKey: commercialLicenseQueryKey,
         });
-        setFeedback({ tone: 'success', message: '商业授权已清除。' });
+        setFeedback({
+          tone: 'success',
+          message: '本机商业授权和在线租约已删除。',
+        });
       },
-      '清除商业授权',
+      '删除商业授权',
+    );
+  };
+
+  const handleDeleteCommercialLicenseActivation = async (
+    record: CommercialLicenseActivationRecord,
+  ) => {
+    const licenseID = record.license_id.trim();
+    if (!licenseID) {
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: '删除授权记录',
+      message: `确认删除授权 ${licenseID} 的激活记录和停用记录？\n\n删除后授权服务器将不再显示这组历史激活；如果当前面板安装的正是这个授权，本机授权 token 和在线租约也会一并清除。`,
+      confirmLabel: '删除授权',
+      tone: 'danger',
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    void runBusyAction(
+      `commercial-license-delete-${licenseID}`,
+      async () => {
+        await deleteCommercialLicenseActivation({
+          license_id: licenseID,
+          customer_id: record.customer_id,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: commercialLicenseActivationsQueryKey,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: commercialLicenseQueryKey,
+        });
+        setFeedback({ tone: 'success', message: '授权记录已删除。' });
+      },
+      '删除商业授权记录',
     );
   };
 
@@ -2526,8 +2585,8 @@ export function SettingsPage() {
                     disabled={busyKey === 'commercial-license-clear'}
                   >
                     {busyKey === 'commercial-license-clear'
-                      ? '清除中...'
-                      : '清除授权'}
+                      ? '删除中...'
+                      : '删除本机授权'}
                   </DangerButton>
                 </div>
               ) : null
@@ -2687,7 +2746,11 @@ export function SettingsPage() {
               {license.features.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {license.features.map((feature) => (
-                    <StatusBadge key={feature} label={feature} variant="info" />
+                    <StatusBadge
+                      key={feature}
+                      label={getCommercialLicenseFeatureLabel(feature)}
+                      variant="info"
+                    />
                   ))}
                 </div>
               ) : null}
@@ -2729,6 +2792,7 @@ export function SettingsPage() {
                       const isRevoked = Boolean(record.license_revoked_at);
                       const revokeBusyKey = `commercial-license-revoke-${record.license_id}`;
                       const restoreBusyKey = `commercial-license-restore-${record.license_id}`;
+                      const deleteBusyKey = `commercial-license-delete-${record.license_id}`;
                       return (
                         <div
                           key={record.activation_id || record.id}
@@ -2790,31 +2854,48 @@ export function SettingsPage() {
                                 </p>
                               ) : null}
                             </div>
-                            {isRevoked ? (
-                              <SecondaryButton
-                                type="button"
-                                onClick={() =>
-                                  handleRestoreCommercialLicense(record)
-                                }
-                                disabled={busyKey === restoreBusyKey}
-                              >
-                                {busyKey === restoreBusyKey
-                                  ? '恢复中...'
-                                  : '恢复授权'}
-                              </SecondaryButton>
-                            ) : (
-                              <DangerButton
-                                type="button"
-                                onClick={() =>
-                                  void handleRevokeCommercialLicense(record)
-                                }
-                                disabled={busyKey === revokeBusyKey}
-                              >
-                                {busyKey === revokeBusyKey
-                                  ? '停用中...'
-                                  : '停用授权'}
-                              </DangerButton>
-                            )}
+                            <div className="flex flex-col items-stretch gap-2 sm:items-end">
+                              {isRevoked ? (
+                                <SecondaryButton
+                                  type="button"
+                                  onClick={() =>
+                                    handleRestoreCommercialLicense(record)
+                                  }
+                                  disabled={busyKey === restoreBusyKey}
+                                >
+                                  {busyKey === restoreBusyKey
+                                    ? '恢复中...'
+                                    : '恢复授权'}
+                                </SecondaryButton>
+                              ) : (
+                                <DangerButton
+                                  type="button"
+                                  onClick={() =>
+                                    void handleRevokeCommercialLicense(record)
+                                  }
+                                  disabled={busyKey === revokeBusyKey}
+                                >
+                                  {busyKey === revokeBusyKey
+                                    ? '停用中...'
+                                    : '停用授权'}
+                                </DangerButton>
+                              )}
+                              {isRevoked ? (
+                                <DangerButton
+                                  type="button"
+                                  onClick={() =>
+                                    void handleDeleteCommercialLicenseActivation(
+                                      record,
+                                    )
+                                  }
+                                  disabled={busyKey === deleteBusyKey}
+                                >
+                                  {busyKey === deleteBusyKey
+                                    ? '删除中...'
+                                    : '删除授权'}
+                                </DangerButton>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
                       );
@@ -2864,7 +2945,10 @@ export function SettingsPage() {
                   <SecondaryButton
                     type="button"
                     onClick={() =>
-                      void handleCopy(commercialLicenseToken, '授权 token 已复制。')
+                      void handleCopy(
+                        commercialLicenseToken,
+                        '授权 token 已复制。',
+                      )
                     }
                     disabled={!commercialLicenseToken.trim()}
                   >
@@ -2888,8 +2972,7 @@ export function SettingsPage() {
                   type="button"
                   onClick={handleIssueCommercialLicense}
                   disabled={
-                    busyKey === 'commercial-license-issue' ||
-                    !issuer?.available
+                    busyKey === 'commercial-license-issue' || !issuer?.available
                   }
                 >
                   {busyKey === 'commercial-license-issue'
@@ -2925,10 +3008,7 @@ export function SettingsPage() {
                         type="button"
                         className="mt-2 text-left text-sm break-all text-[var(--brand-primary)]"
                         onClick={() =>
-                          void handleCopy(
-                            issuer.public_key,
-                            '签发公钥已复制。',
-                          )
+                          void handleCopy(issuer.public_key, '签发公钥已复制。')
                         }
                       >
                         {issuer.public_key}
@@ -2994,10 +3074,7 @@ export function SettingsPage() {
                       placeholder="cust-001"
                     />
                   </ResourceField>
-                  <ResourceField
-                    label="节点额度"
-                    hint="填写 0 表示不限。"
-                  >
+                  <ResourceField label="节点额度" hint="填写 0 表示不限。">
                     <ResourceInput
                       type="number"
                       min="0"
@@ -3010,10 +3087,7 @@ export function SettingsPage() {
                       }
                     />
                   </ResourceField>
-                  <ResourceField
-                    label="站点额度"
-                    hint="填写 0 表示不限。"
-                  >
+                  <ResourceField label="站点额度" hint="填写 0 表示不限。">
                     <ResourceInput
                       type="number"
                       min="0"
@@ -3111,7 +3185,6 @@ export function SettingsPage() {
                     </CodeBlock>
                   </div>
                 ) : null}
-
               </div>
             </AppCard>
           </div>
