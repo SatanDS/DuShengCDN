@@ -924,6 +924,131 @@ func TestAuthoritativeDNSSnapshotVersionIgnoresProbeRTTJitter(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDNSSnapshotVersionIgnoresRuntimeTelemetry(t *testing.T) {
+	now := time.Now().UTC()
+	metricCapturedAt := now.Add(-30 * time.Second)
+	lastChangedAt := now.Add(-time.Minute)
+	snapshot := &AuthoritativeDNSSnapshot{
+		GSLBProbeSchedulingEnabled: true,
+		GeneratedAt:                now,
+		Nodes: []AuthoritativeDNSSnapshotNode{
+			{
+				NodeID:               "node-a",
+				Name:                 "node-a",
+				PoolName:             "hk",
+				PublicIPs:            []string{"8.8.4.4"},
+				Weight:               100,
+				SchedulingEnabled:    true,
+				Status:               NodeStatusOnline,
+				OpenrestyStatus:      OpenrestyStatusHealthy,
+				LastSeenAt:           now,
+				OpenrestyConnections: 10,
+				CPUUsagePercent:      20,
+				MemoryUsagePercent:   30,
+				MetricCapturedAt:     &metricCapturedAt,
+				DNSProbeHealthy:      true,
+				DNSProbeCheckedCount: 4,
+				DNSProbeHealthyCount: 4,
+				DNSProbeAverageRTTMs: 12,
+				DNSProbeMaxRTTMs:     18,
+			},
+		},
+		SchedulingStates: []AuthoritativeDNSSnapshotSchedulingState{
+			{
+				RouteID:         1,
+				RecordType:      "A",
+				ScopeKey:        "global",
+				SelectedTargets: []string{"8.8.4.4"},
+				DesiredTargets:  []string{"8.8.4.4"},
+				LastChangedAt:   &lastChangedAt,
+			},
+		},
+	}
+	left, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("snapshot version: %v", err)
+	}
+
+	nextMetricCapturedAt := now.Add(15 * time.Second)
+	nextLastChangedAt := now.Add(5 * time.Second)
+	snapshot.GeneratedAt = now.Add(time.Minute)
+	snapshot.Nodes[0].LastSeenAt = now.Add(time.Minute)
+	snapshot.Nodes[0].OpenrestyConnections = 2048
+	snapshot.Nodes[0].CPUUsagePercent = 87
+	snapshot.Nodes[0].MemoryUsagePercent = 91
+	snapshot.Nodes[0].MetricCapturedAt = &nextMetricCapturedAt
+	snapshot.Nodes[0].DNSProbeCheckedCount = 20
+	snapshot.Nodes[0].DNSProbeHealthyCount = 19
+	snapshot.Nodes[0].DNSProbeStaleCount = 1
+	snapshot.Nodes[0].DNSProbeAverageRTTMs = 95
+	snapshot.Nodes[0].DNSProbeMaxRTTMs = 180
+	snapshot.SchedulingStates[0].DesiredTargets = []string{"1.1.1.1"}
+	snapshot.SchedulingStates[0].LastChangedAt = &nextLastChangedAt
+	right, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("snapshot version after telemetry changes: %v", err)
+	}
+	if left != right {
+		t.Fatalf("expected runtime telemetry not to change snapshot version, got %s and %s", left, right)
+	}
+
+	snapshot.SchedulingStates[0].SelectedTargets = []string{"1.1.1.1"}
+	changed, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("snapshot version after selected target change: %v", err)
+	}
+	if changed == left {
+		t.Fatalf("expected selected target change to affect snapshot version, got %s", changed)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotVersionIgnoresGSLBRoutePreviewTargets(t *testing.T) {
+	snapshot := &AuthoritativeDNSSnapshot{
+		Routes: []AuthoritativeDNSSnapshotRoute{
+			{
+				ID:             1,
+				SiteName:       "edge",
+				Domains:        []string{"edge.example.com"},
+				ZoneID:         1,
+				NodePool:       "default",
+				RecordType:     "A",
+				TargetCount:    1,
+				ScheduleMode:   "load_aware",
+				TTL:            30,
+				GSLBEnabled:    true,
+				GSLBPolicy:     defaultGSLBPolicy("default", 1, "load_aware", 30),
+				CurrentTargets: []string{"8.8.4.4"},
+			},
+		},
+	}
+	left, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("snapshot version: %v", err)
+	}
+	snapshot.Routes[0].CurrentTargets = []string{"1.1.1.1"}
+	right, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("snapshot version after gslb preview target change: %v", err)
+	}
+	if left != right {
+		t.Fatalf("expected GSLB preview targets not to change snapshot version, got %s and %s", left, right)
+	}
+
+	snapshot.Routes[0].GSLBEnabled = false
+	nonGSLBLeft, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("non-GSLB snapshot version: %v", err)
+	}
+	snapshot.Routes[0].CurrentTargets = []string{"8.8.4.4"}
+	nonGSLBRight, err := authoritativeDNSSnapshotVersion(snapshot)
+	if err != nil {
+		t.Fatalf("non-GSLB snapshot version after target change: %v", err)
+	}
+	if nonGSLBLeft == nonGSLBRight {
+		t.Fatalf("expected non-GSLB target changes to affect snapshot version, got %s", nonGSLBRight)
+	}
+}
+
 func TestAuthoritativeDNSProxyRouteRequiresZoneMatch(t *testing.T) {
 	setupServiceTestDB(t)
 

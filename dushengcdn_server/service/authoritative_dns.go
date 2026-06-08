@@ -3736,17 +3736,17 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 
 func authoritativeDNSSnapshotVersion(snapshot *AuthoritativeDNSSnapshot) (string, error) {
 	payload := struct {
-		GSLBProbeSchedulingEnabled bool                                      `json:"gslb_probe_scheduling_enabled"`
-		Zones                      []AuthoritativeDNSSnapshotZone            `json:"zones"`
-		Routes                     []AuthoritativeDNSSnapshotRoute           `json:"routes"`
-		Nodes                      []authoritativeDNSSnapshotVersionNode     `json:"nodes"`
-		SchedulingStates           []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
+		GSLBProbeSchedulingEnabled bool                                           `json:"gslb_probe_scheduling_enabled"`
+		Zones                      []AuthoritativeDNSSnapshotZone                 `json:"zones"`
+		Routes                     []authoritativeDNSSnapshotVersionRoute         `json:"routes"`
+		Nodes                      []authoritativeDNSSnapshotVersionNode          `json:"nodes"`
+		SchedulingStates           []authoritativeDNSSnapshotVersionScheduleState `json:"scheduling_states,omitempty"`
 	}{
 		GSLBProbeSchedulingEnabled: snapshot.GSLBProbeSchedulingEnabled,
 		Zones:                      snapshot.Zones,
-		Routes:                     snapshot.Routes,
+		Routes:                     authoritativeDNSSnapshotVersionRoutes(snapshot.Routes),
 		Nodes:                      authoritativeDNSSnapshotVersionNodes(snapshot.Nodes),
-		SchedulingStates:           snapshot.SchedulingStates,
+		SchedulingStates:           authoritativeDNSSnapshotVersionSchedulingStates(snapshot.SchedulingStates),
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -3756,45 +3756,129 @@ func authoritativeDNSSnapshotVersion(snapshot *AuthoritativeDNSSnapshot) (string
 	return hex.EncodeToString(sum[:])[:24], nil
 }
 
+type authoritativeDNSSnapshotVersionRoute struct {
+	ID             uint                 `json:"id"`
+	SiteName       string               `json:"site_name"`
+	Domains        []string             `json:"domains"`
+	ZoneID         uint                 `json:"zone_id"`
+	NodePool       string               `json:"node_pool"`
+	RecordType     string               `json:"record_type"`
+	TargetCount    int                  `json:"target_count"`
+	ScheduleMode   string               `json:"schedule_mode"`
+	TTL            int                  `json:"ttl"`
+	GSLBEnabled    bool                 `json:"gslb_enabled"`
+	GSLBPolicy     ProxyRouteGSLBPolicy `json:"gslb_policy"`
+	CurrentTargets []string             `json:"current_targets,omitempty"`
+	DDOSActive     bool                 `json:"ddos_active,omitempty"`
+	DDOSProvider   string               `json:"ddos_provider,omitempty"`
+	DDOSTarget     string               `json:"ddos_target,omitempty"`
+}
+
+func authoritativeDNSSnapshotVersionRoutes(routes []AuthoritativeDNSSnapshotRoute) []authoritativeDNSSnapshotVersionRoute {
+	result := make([]authoritativeDNSSnapshotVersionRoute, 0, len(routes))
+	for _, route := range routes {
+		item := authoritativeDNSSnapshotVersionRoute{
+			ID:           route.ID,
+			SiteName:     route.SiteName,
+			Domains:      append([]string(nil), route.Domains...),
+			ZoneID:       route.ZoneID,
+			NodePool:     route.NodePool,
+			RecordType:   normalizeDNSRecordType(route.RecordType),
+			TargetCount:  route.TargetCount,
+			ScheduleMode: route.ScheduleMode,
+			TTL:          route.TTL,
+			GSLBEnabled:  route.GSLBEnabled,
+			GSLBPolicy:   route.GSLBPolicy,
+			DDOSActive:   route.DDOSActive,
+			DDOSProvider: route.DDOSProvider,
+			DDOSTarget:   route.DDOSTarget,
+		}
+		if !route.GSLBEnabled {
+			item.CurrentTargets = append([]string(nil), route.CurrentTargets...)
+			sort.Strings(item.CurrentTargets)
+		}
+		result = append(result, item)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].ZoneID != result[j].ZoneID {
+			return result[i].ZoneID < result[j].ZoneID
+		}
+		if result[i].SiteName != result[j].SiteName {
+			return result[i].SiteName < result[j].SiteName
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result
+}
+
 type authoritativeDNSSnapshotVersionNode struct {
-	NodeID               string     `json:"node_id"`
-	Name                 string     `json:"name"`
-	PoolName             string     `json:"pool_name"`
-	PublicIPs            []string   `json:"public_ips"`
-	Weight               int        `json:"weight"`
-	SchedulingEnabled    bool       `json:"scheduling_enabled"`
-	DrainMode            bool       `json:"drain_mode"`
-	Status               string     `json:"status"`
-	OpenrestyStatus      string     `json:"openresty_status"`
-	LastSeenAt           time.Time  `json:"last_seen_at"`
-	OpenrestyConnections int64      `json:"openresty_connections"`
-	CPUUsagePercent      float64    `json:"cpu_usage_percent"`
-	MemoryUsagePercent   float64    `json:"memory_usage_percent"`
-	MetricCapturedAt     *time.Time `json:"metric_captured_at,omitempty"`
-	DNSProbeHealthy      bool       `json:"dns_probe_healthy"`
+	NodeID            string   `json:"node_id"`
+	Name              string   `json:"name"`
+	PoolName          string   `json:"pool_name"`
+	PublicIPs         []string `json:"public_ips"`
+	Weight            int      `json:"weight"`
+	SchedulingEnabled bool     `json:"scheduling_enabled"`
+	DrainMode         bool     `json:"drain_mode"`
+	Status            string   `json:"status"`
+	OpenrestyStatus   string   `json:"openresty_status"`
+	DNSProbeHealthy   bool     `json:"dns_probe_healthy"`
 }
 
 func authoritativeDNSSnapshotVersionNodes(nodes []AuthoritativeDNSSnapshotNode) []authoritativeDNSSnapshotVersionNode {
 	result := make([]authoritativeDNSSnapshotVersionNode, 0, len(nodes))
 	for _, node := range nodes {
 		result = append(result, authoritativeDNSSnapshotVersionNode{
-			NodeID:               node.NodeID,
-			Name:                 node.Name,
-			PoolName:             node.PoolName,
-			PublicIPs:            append([]string(nil), node.PublicIPs...),
-			Weight:               node.Weight,
-			SchedulingEnabled:    node.SchedulingEnabled,
-			DrainMode:            node.DrainMode,
-			Status:               node.Status,
-			OpenrestyStatus:      node.OpenrestyStatus,
-			LastSeenAt:           node.LastSeenAt,
-			OpenrestyConnections: node.OpenrestyConnections,
-			CPUUsagePercent:      node.CPUUsagePercent,
-			MemoryUsagePercent:   node.MemoryUsagePercent,
-			MetricCapturedAt:     node.MetricCapturedAt,
-			DNSProbeHealthy:      node.DNSProbeHealthy,
+			NodeID:            node.NodeID,
+			Name:              node.Name,
+			PoolName:          node.PoolName,
+			PublicIPs:         append([]string(nil), node.PublicIPs...),
+			Weight:            node.Weight,
+			SchedulingEnabled: node.SchedulingEnabled,
+			DrainMode:         node.DrainMode,
+			Status:            node.Status,
+			OpenrestyStatus:   node.OpenrestyStatus,
+			DNSProbeHealthy:   node.DNSProbeHealthy,
 		})
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].PoolName != result[j].PoolName {
+			return result[i].PoolName < result[j].PoolName
+		}
+		if result[i].NodeID != result[j].NodeID {
+			return result[i].NodeID < result[j].NodeID
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result
+}
+
+type authoritativeDNSSnapshotVersionScheduleState struct {
+	RouteID         uint     `json:"route_id"`
+	RecordType      string   `json:"record_type"`
+	ScopeKey        string   `json:"scope_key"`
+	SelectedTargets []string `json:"selected_targets"`
+}
+
+func authoritativeDNSSnapshotVersionSchedulingStates(states []AuthoritativeDNSSnapshotSchedulingState) []authoritativeDNSSnapshotVersionScheduleState {
+	result := make([]authoritativeDNSSnapshotVersionScheduleState, 0, len(states))
+	for _, state := range states {
+		result = append(result, authoritativeDNSSnapshotVersionScheduleState{
+			RouteID:         state.RouteID,
+			RecordType:      normalizeDNSRecordType(state.RecordType),
+			ScopeKey:        normalizeDNSSourceScope(state.ScopeKey),
+			SelectedTargets: append([]string(nil), state.SelectedTargets...),
+		})
+		sort.Strings(result[len(result)-1].SelectedTargets)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].RouteID != result[j].RouteID {
+			return result[i].RouteID < result[j].RouteID
+		}
+		if result[i].RecordType != result[j].RecordType {
+			return result[i].RecordType < result[j].RecordType
+		}
+		return result[i].ScopeKey < result[j].ScopeKey
+	})
 	return result
 }
 
