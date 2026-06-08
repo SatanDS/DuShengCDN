@@ -244,7 +244,7 @@ export function DomainListInput({
 
         return (
           <div key={`${index}-${safeRows.length}`} className="space-y-2">
-            <div className="grid gap-3 md:grid-cols-[44px_minmax(0,1fr)_280px] md:items-start">
+            <div className="grid gap-3 md:grid-cols-[44px_minmax(0,1fr)_minmax(180px,240px)] md:items-start lg:grid-cols-[44px_minmax(0,1fr)_280px]">
               <SecondaryButton
                 type="button"
                 aria-label={`删除域名输入框 ${index + 1}`}

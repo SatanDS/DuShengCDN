@@ -174,7 +174,7 @@ export function TrendChart({
 
   return (
       <div className="space-y-4">
-        <div className="flex flex-wrap gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:flex xl:flex-wrap">
           {series.map((item) => {
             const summaryValue =
               item.summaryValue ?? item.values[item.values.length - 1] ?? 0;
@@ -182,7 +182,7 @@ export function TrendChart({
             return (
                 <div
                     key={item.label}
-                    className="min-w-[140px] rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
+                    className="min-w-0 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 xl:min-w-[140px]"
                 >
                   <div className="flex items-center gap-2">
                 <span

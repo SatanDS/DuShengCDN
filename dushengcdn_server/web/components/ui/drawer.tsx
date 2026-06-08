@@ -93,8 +93,10 @@ export function Drawer({
         <DrawerContent
           aria-label={title}
           className={cn(
-            'w-full md:w-[50vw] md:max-w-none',
-            direction === 'right' || direction === 'left' ? '' : 'max-h-[85vh]',
+            'w-full md:w-[min(720px,100vw)] md:max-w-[720px]',
+            direction === 'right' || direction === 'left'
+              ? 'h-full max-h-[100dvh] max-md:w-[min(92vw,28rem)]'
+              : 'max-h-[85vh] max-h-[85dvh]',
           )}
         >
           <DrawerHeader className="flex items-start justify-between gap-4">
@@ -113,7 +115,7 @@ export function Drawer({
               ×
             </button>
           </DrawerHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 max-sm:px-4 max-sm:py-4">
             {children}
           </div>
           {footer ? <DrawerFooter>{footer}</DrawerFooter> : null}
@@ -214,9 +216,9 @@ export function DrawerContent({
 
   const positionClassName =
     direction === 'right'
-      ? 'inset-y-0 right-0 h-full border-l'
+      ? 'inset-y-0 right-0 h-full max-h-[100dvh] border-l'
       : direction === 'left'
-        ? 'inset-y-0 left-0 h-full border-r'
+        ? 'inset-y-0 left-0 h-full max-h-[100dvh] border-r'
         : direction === 'top'
           ? 'inset-x-0 top-0 border-b'
           : 'inset-x-0 bottom-0 border-t';
@@ -236,7 +238,7 @@ export function DrawerContent({
         aria-labelledby={ariaLabel ? undefined : titleId}
         aria-describedby={descriptionId}
         className={cn(
-          'dashboard-drawer-glass absolute flex w-full flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-panel)] shadow-2xl',
+          'dashboard-drawer-glass absolute flex w-full flex-col overflow-hidden overscroll-contain border-[var(--border-default)] bg-[var(--surface-panel)] shadow-2xl max-sm:max-h-[calc(100dvh_-_env(safe-area-inset-top))]',
           positionClassName,
           className,
         )}
@@ -271,14 +273,14 @@ export function DrawerHeader({
   className,
   ...props
 }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('border-b border-[var(--border-default)] px-6 py-5', className)} {...props} />;
+  return <div className={cn('border-b border-[var(--border-default)] px-6 py-5 max-sm:px-4 max-sm:py-4', className)} {...props} />;
 }
 
 export function DrawerFooter({
   className,
   ...props
 }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('border-t border-[var(--border-default)] px-6 py-4', className)} {...props} />;
+  return <div className={cn('border-t border-[var(--border-default)] px-6 py-4 max-sm:px-4 max-sm:pb-[max(1rem,env(safe-area-inset-bottom))]', className)} {...props} />;
 }
 
 export function DrawerTitle({
@@ -290,7 +292,7 @@ export function DrawerTitle({
   return (
     <h2
       id={titleId}
-      className={cn('text-xl font-semibold text-[var(--foreground-primary)]', className)}
+      className={cn('text-xl font-semibold text-[var(--foreground-primary)] max-sm:text-lg', className)}
       {...props}
     />
   );

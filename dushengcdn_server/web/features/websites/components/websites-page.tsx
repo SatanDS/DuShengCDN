@@ -151,11 +151,11 @@ export function WebsitesPage() {
                     key={domain.id}
                     className="rounded-[28px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="space-y-3">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0 space-y-3">
                         <div className="space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <h2 className="text-lg font-semibold text-[var(--foreground-primary)]">
+                            <h2 className="break-all text-lg font-semibold text-[var(--foreground-primary)]">
                               {domain.domain}
                             </h2>
                             <StatusBadge
@@ -177,7 +177,7 @@ export function WebsitesPage() {
                             <p className="text-xs uppercase tracking-[0.18em] text-[var(--foreground-muted)]">
                               绑定证书
                             </p>
-                            <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                            <p className="mt-2 break-words text-sm text-[var(--foreground-primary)]">
                               {certificate
                                 ? buildCertificateLabel(certificate)
                                 : '未绑定证书'}
@@ -186,7 +186,7 @@ export function WebsitesPage() {
                         </div>
                       </div>
 
-                      <div className="flex flex-row gap-2">
+                      <div className="flex shrink-0 flex-row flex-wrap gap-2">
                         <Link
                           href={`/website/detail?id=${domain.id}`}
                           className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"

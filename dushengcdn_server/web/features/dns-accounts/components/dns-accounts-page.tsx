@@ -93,16 +93,16 @@ export function DnsAccountsPage() {
             <div className="space-y-3">
               {accounts.map((account) => (
                 <div key={account.id} className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-2">
-                      <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 space-y-2">
+                      <p className="break-words text-sm font-semibold text-[var(--foreground-primary)]">
                         {account.name} <span className="ml-2 text-xs font-normal text-[var(--foreground-secondary)]">({account.type})</span>
                       </p>
                       <div className="text-xs leading-5 text-[var(--foreground-secondary)]">
                         <p>创建于：{formatDateTime(account.created_at)}</p>
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex shrink-0 flex-wrap gap-2">
                       <DangerButton
                         type="button"
                         onClick={() => handleDelete(account)}

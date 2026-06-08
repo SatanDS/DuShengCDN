@@ -56,17 +56,17 @@ export function AppModal({
   }
 
   return (
-    <div className='dashboard-modal-overlay fixed inset-0 z-50 flex items-center justify-center px-4 py-6' role='dialog' aria-modal='true' aria-label={title}>
+    <div className='dashboard-modal-overlay fixed inset-0 z-50 flex items-center justify-center px-4 py-6 max-sm:items-end max-sm:px-3 max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-sm:pt-[max(0.75rem,env(safe-area-inset-top))]' role='dialog' aria-modal='true' aria-label={title}>
       <button type='button' className='absolute inset-0 cursor-default' onClick={onClose} aria-label='关闭弹窗' />
       <div
         className={cn(
-          'dashboard-modal-glass relative flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-[28px] border border-[var(--border-default)] shadow-2xl',
+          'dashboard-modal-glass relative flex max-h-[calc(100vh_-_3rem)] max-h-[calc(100dvh_-_3rem)] w-full flex-col overflow-hidden rounded-[28px] border border-[var(--border-default)] shadow-2xl max-sm:max-h-[calc(100dvh_-_1.5rem_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom))] max-sm:rounded-[var(--radius-xl)]',
           sizeClassNameMap[size],
         )}
       >
-        <div className='dashboard-modal-header flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-6 py-5'>
+        <div className='dashboard-modal-header flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-6 py-5 max-sm:px-4 max-sm:py-4'>
           <div className='space-y-2'>
-            <h2 className='text-xl font-semibold text-[var(--foreground-primary)]'>{title}</h2>
+            <h2 className='text-xl font-semibold text-[var(--foreground-primary)] max-sm:text-lg'>{title}</h2>
             {description ? (
               <p className='max-w-2xl text-sm leading-6 text-[var(--foreground-secondary)]'>{description}</p>
             ) : null}
@@ -80,8 +80,8 @@ export function AppModal({
             ×
           </button>
         </div>
-        <div className='dashboard-modal-body min-h-0 flex-1 overflow-y-auto px-6 py-6'>{children}</div>
-        {footer ? <div className='dashboard-modal-footer border-t border-[var(--border-default)] px-6 py-5'>{footer}</div> : null}
+        <div className='dashboard-modal-body min-h-0 flex-1 overflow-y-auto px-6 py-6 max-sm:px-4 max-sm:py-4'>{children}</div>
+        {footer ? <div className='dashboard-modal-footer border-t border-[var(--border-default)] px-6 py-5 max-sm:px-4 max-sm:py-4 max-sm:pb-[max(1rem,env(safe-area-inset-bottom))]'>{footer}</div> : null}
       </div>
     </div>
   );

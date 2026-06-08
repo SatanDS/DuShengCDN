@@ -117,11 +117,11 @@ export function OriginsPage() {
                   key={origin.id}
                   className="rounded-[28px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 space-y-4">
                       <div className="space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="text-lg font-semibold text-[var(--foreground-primary)]">
+                          <h2 className="break-words text-lg font-semibold text-[var(--foreground-primary)]">
                             {origin.name}
                           </h2>
                           <StatusBadge
@@ -131,7 +131,7 @@ export function OriginsPage() {
                             }
                           />
                         </div>
-                        <p className="text-sm text-[var(--foreground-primary)]">
+                        <p className="break-all text-sm text-[var(--foreground-primary)]">
                           {origin.address}
                         </p>
                         <p className="text-sm text-[var(--foreground-secondary)]">
@@ -144,7 +144,7 @@ export function OriginsPage() {
                       </div>
                     </div>
 
-                    <div className="flex flex-row gap-2">
+                    <div className="flex shrink-0 flex-row flex-wrap gap-2">
                       <Link
                         href={`/origin/detail?id=${origin.id}`}
                         className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"

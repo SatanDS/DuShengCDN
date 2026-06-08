@@ -96,7 +96,7 @@ function NodeHealthRow({ node }: { node: DashboardNodeHealth }) {
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
         <div>
           <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
             处理器
@@ -131,7 +131,7 @@ function NodeHealthRow({ node }: { node: DashboardNodeHealth }) {
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-[var(--foreground-secondary)]">
+      <div className="mt-4 flex flex-col gap-2 text-sm text-[var(--foreground-secondary)] sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3">
         <p>当前版本：{node.current_version || '未应用'}</p>
         <p>
           最近心跳：

@@ -200,10 +200,10 @@ export function TlsCertificatesPage() {
                     key={certificate.id}
                     className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="space-y-2">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0 space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+                          <p className="break-words text-sm font-semibold text-[var(--foreground-primary)]">
                             {certificate.name}
                           </p>
                           <StatusBadge
@@ -228,7 +228,7 @@ export function TlsCertificatesPage() {
                           ) : null}
                           {certificate.provider === 'upload' &&
                           certificate.apply_status === 'error' ? (
-                            <p className="text-red-500">
+                            <p className="break-words text-red-500">
                               状态：转换失败 ({certificate.apply_message})
                             </p>
                           ) : certificate.apply_status === 'error' ? (

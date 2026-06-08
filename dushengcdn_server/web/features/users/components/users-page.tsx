@@ -350,7 +350,7 @@ export function UsersPage() {
             <EmptyState title='暂无用户' description='当前条件下没有可展示的用户记录。' />
           ) : (
             <div className='overflow-x-auto'>
-              <table className='min-w-full divide-y divide-[var(--border-default)] text-left text-sm'>
+              <table className='min-w-[760px] divide-y divide-[var(--border-default)] text-left text-sm'>
                 <thead>
                   <tr className='text-[var(--foreground-secondary)]'>
                     <th className='px-3 py-3 font-medium'>用户</th>

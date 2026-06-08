@@ -162,7 +162,7 @@ function OptionDiffTable({ items }: { items: ConfigOptionDiffItem[] }) {
 
   return (
     <div className="overflow-x-auto rounded-2xl border border-[var(--border-default)]">
-      <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+      <table className="min-w-[720px] divide-y divide-[var(--border-default)] text-left text-sm">
         <thead>
           <tr className="bg-[var(--surface-elevated)] text-[var(--foreground-secondary)]">
             <th className="px-3 py-3 font-medium">参数</th>
@@ -603,7 +603,7 @@ export function ConfigVersionsPage() {
             />
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+              <table className="min-w-[900px] divide-y divide-[var(--border-default)] text-left text-sm">
                 <thead>
                   <tr className="text-[var(--foreground-secondary)]">
                     <th className="px-3 py-3 font-medium">版本号</th>

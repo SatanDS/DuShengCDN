@@ -709,7 +709,7 @@ export function NodesPage() {
                 ) : null}
 
                 <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+                  <table className="min-w-[900px] divide-y divide-[var(--border-default)] text-left text-sm">
                     <thead>
                       <tr className="text-[var(--foreground-secondary)]">
                         <th className="px-3 py-3 font-medium">节点</th>
@@ -873,7 +873,7 @@ export function NodesPage() {
                 {renderRiskFilters()}
 
                 <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+                  <table className="min-w-[860px] divide-y divide-[var(--border-default)] text-left text-sm">
                     <thead>
                       <tr className="text-[var(--foreground-secondary)]">
                         <th className="px-3 py-3 font-medium">池</th>

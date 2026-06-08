@@ -972,11 +972,11 @@ export function ProxyRoutesPage() {
                         );
                         return (
                           <div className="flex flex-col gap-5">
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="space-y-3">
+                            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0 space-y-3">
                                 <div className="space-y-2">
                                   <div className="flex flex-wrap items-center gap-2">
-                                    <h2 className="text-lg font-semibold text-[var(--foreground-primary)]">
+                                    <h2 className="break-all text-lg font-semibold text-[var(--foreground-primary)]">
                                       {route.site_name}
                                     </h2>
                                     {getWebsiteStatusBadges(route).map(
@@ -992,7 +992,7 @@ export function ProxyRoutesPage() {
                                 </div>
                               </div>
 
-                              <div className="flex flex-wrap gap-2">
+                              <div className="flex shrink-0 flex-wrap gap-2">
                                 <Link
                                   href={`/proxy-route/detail?id=${route.id}&section=${preferredSection}`}
                                   className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
@@ -1014,7 +1014,7 @@ export function ProxyRoutesPage() {
                                 <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
                                   域名列表
                                 </p>
-                                <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                                <p className="mt-2 break-all text-sm text-[var(--foreground-primary)]">
                                   {route.domains.join(' / ')}
                                 </p>
                               </div>
@@ -1023,7 +1023,7 @@ export function ProxyRoutesPage() {
                                 <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
                                   {nodePoolSummary.label}
                                 </p>
-                                <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                                <p className="mt-2 break-words text-sm text-[var(--foreground-primary)]">
                                   {nodePoolSummary.value}
                                 </p>
                               </div>
@@ -1032,13 +1032,13 @@ export function ProxyRoutesPage() {
                                 <p className="text-xs tracking-[0.18em] text-[var(--foreground-muted)] uppercase">
                                   源站摘要
                                 </p>
-                                <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                                <p className="mt-2 break-all text-sm text-[var(--foreground-primary)]">
                                   {getUpstreamSummary(route)}
                                 </p>
                               </div>
                             </div>
 
-                            <p className="text-sm text-[var(--foreground-secondary)]">
+                            <p className="break-words text-sm text-[var(--foreground-secondary)]">
                               {route.remark || null}
                             </p>
                           </div>

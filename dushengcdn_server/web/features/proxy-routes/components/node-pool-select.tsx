@@ -74,7 +74,7 @@ export function NodePoolSelect({
       className={
         compact
           ? 'grid gap-2'
-          : 'grid gap-3 md:grid-cols-[minmax(0,280px)_minmax(0,1fr)]'
+          : 'grid gap-3 md:grid-cols-[minmax(0,220px)_minmax(0,1fr)] lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)]'
       }
     >
       <ResourceSelect

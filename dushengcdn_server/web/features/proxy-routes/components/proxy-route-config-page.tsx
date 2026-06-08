@@ -3432,7 +3432,7 @@ export function CCProtectionSection({
             hint="选择一种规则类型，点击加号后再填写。未添加的规则不会生效。"
             container="div"
           >
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <ResourceSelect
                 aria-label="按需添加 CC 规则"
                 disabled={!ccEnabled}
@@ -3622,7 +3622,7 @@ export function CCProtectionSection({
             hint="选择一种规则类型，点击加号后再填写。未添加的规则不会生效。"
             container="div"
           >
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <ResourceSelect
                 aria-label="按需添加计算验证规则"
                 disabled={!powControlsEnabled}
@@ -3773,7 +3773,7 @@ export function CCProtectionSection({
             hint="选择一种规则类型，点击加号后再填写。未添加的规则不会生效。"
             container="div"
           >
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <ResourceSelect
                 aria-label="按需添加白名单或拦截规则"
                 disabled={!wafEnabled}

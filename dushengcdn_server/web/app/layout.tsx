@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import Script from 'next/script';
 import type { ReactNode } from 'react';
 
@@ -20,6 +20,12 @@ export const metadata: Metadata = {
     shortcut: '/satan-du-leaf.png',
     apple: '/satan-du-leaf.png',
   },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 };
 
 interface RootLayoutProps {

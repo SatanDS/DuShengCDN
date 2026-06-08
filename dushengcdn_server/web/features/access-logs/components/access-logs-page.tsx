@@ -1116,7 +1116,7 @@ function TrafficTable({
         />
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+          <table className="min-w-[900px] divide-y divide-[var(--border-default)] text-left text-sm">
             <thead>
               <tr className="text-[var(--foreground-secondary)]">
                 <th className="px-3 py-3 font-medium">对象</th>
@@ -1244,7 +1244,7 @@ function DetailTab({
             />
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+              <table className="min-w-[900px] divide-y divide-[var(--border-default)] text-left text-sm">
                 <thead>
                   <tr className="text-[var(--foreground-secondary)]">
                     <th className="px-3 py-3 font-medium">时间桶</th>
@@ -1316,7 +1316,7 @@ function DetailTab({
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+            <table className="min-w-[1100px] divide-y divide-[var(--border-default)] text-left text-sm">
               <thead>
                 <tr className="text-[var(--foreground-secondary)]">
                   <th className="px-3 py-3 font-medium">时间</th>
@@ -1474,7 +1474,7 @@ function IPTab({
       ) : (
         <div className="space-y-4">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-[var(--border-default)] text-left text-sm">
+            <table className="min-w-[760px] divide-y divide-[var(--border-default)] text-left text-sm">
               <thead>
                 <tr className="text-[var(--foreground-secondary)]">
                   <th className="px-3 py-3 font-medium">IP</th>

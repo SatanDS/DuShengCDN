@@ -236,11 +236,11 @@ export function WorldStage({
         </div>
       </div>
 
-      <div className="grid gap-6 px-6 py-7 md:px-7 md:py-8 xl:grid-cols-[1.32fr_0.88fr]">
+      <div className="grid gap-5 px-4 py-5 md:gap-6 md:px-7 md:py-8 xl:grid-cols-[1.32fr_0.88fr]">
         <div className="space-y-5">
           <div
             className={cn(
-              'dashboard-glass-surface relative min-h-[540px] overflow-hidden rounded-[28px] border py-6 lg:min-h-[600px]',
+              'dashboard-glass-surface relative min-h-[420px] overflow-hidden rounded-[28px] border py-5 md:min-h-[540px] md:py-6 lg:min-h-[600px]',
               isDark ? 'border-white/10' : 'border-white/45',
             )}
           >
@@ -259,7 +259,7 @@ export function WorldStage({
                   : '节点覆盖信号'}
             </div>
 
-            <div className="absolute top-4 right-4 z-10 flex flex-wrap gap-2">
+            <div className="relative z-10 mx-4 mt-12 flex flex-wrap gap-2 md:absolute md:top-4 md:right-4 md:mx-0 md:mt-0">
               <LegendPill
                 label="国家底色: 来源热度"
                 tone="source"
@@ -284,7 +284,7 @@ export function WorldStage({
 
             <div
               ref={mapViewportRef}
-              className="absolute inset-x-3 top-16 bottom-6 flex items-center justify-center md:inset-x-4 md:top-18 md:bottom-8"
+              className="absolute inset-x-3 top-28 bottom-6 flex items-center justify-center md:inset-x-4 md:top-18 md:bottom-8"
             >
               <div className="h-full w-full min-w-0 overflow-hidden">
                 {shouldRenderMap ? (

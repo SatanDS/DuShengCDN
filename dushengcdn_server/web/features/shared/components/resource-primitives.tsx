@@ -29,7 +29,7 @@ function FieldTooltip({ content }: { content: string }) {
       >
         !
       </span>
-      <span className="pointer-events-none absolute top-full left-1/2 z-20 mt-2 w-72 -translate-x-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-3 py-2 text-xs leading-5 text-[var(--foreground-secondary)] opacity-0 shadow-[var(--shadow-soft)] transition-opacity delay-150 duration-200 group-focus-within/tooltip:opacity-100 group-hover/tooltip:opacity-100">
+      <span className="pointer-events-none absolute top-full left-1/2 z-20 mt-2 w-[min(18rem,calc(100vw_-_2rem))] -translate-x-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-3 py-2 text-xs leading-5 break-words text-[var(--foreground-secondary)] opacity-0 shadow-[var(--shadow-soft)] transition-opacity delay-150 duration-200 group-focus-within/tooltip:opacity-100 group-hover/tooltip:opacity-100 max-sm:left-auto max-sm:right-0 max-sm:translate-x-0">
         {content}
       </span>
     </span>
