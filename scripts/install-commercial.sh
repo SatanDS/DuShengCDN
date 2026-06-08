@@ -151,7 +151,7 @@ parse_release_checksum() {
   local file="$1"
   local asset="$2"
   awk -v asset="$asset" '
-    function issha(value) { return value ~ /^[0-9A-Fa-f]{64}$/ }
+    function issha(value) { return length(value) == 64 && value !~ /[^0-9A-Fa-f]/ }
     {
       line = $0
       sub(/^[[:space:]]+/, "", line)
