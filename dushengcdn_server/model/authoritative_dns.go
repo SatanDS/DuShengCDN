@@ -95,6 +95,9 @@ type DNSQueryRollup struct {
 	ZoneID          uint      `json:"zone_id" gorm:"column:zone_id;index;index:idx_dns_rollups_observability,priority:3"`
 	ProxyRouteID    uint      `json:"proxy_route_id" gorm:"column:proxy_route_id;index"`
 	SourceScope     string    `json:"source_scope" gorm:"column:source_scope;index;size:64;not null;default:'global'"`
+	SourceCountry   string    `json:"source_country" gorm:"column:source_country;index;size:8;not null;default:''"`
+	SourceASN       uint32    `json:"source_asn" gorm:"column:source_asn;index;not null;default:0"`
+	SourceOperator  string    `json:"source_operator" gorm:"column:source_operator;index;size:64;not null;default:''"`
 	QName           string    `json:"qname" gorm:"column:q_name;index;size:255"`
 	QType           string    `json:"qtype" gorm:"column:q_type;size:16"`
 	RCode           string    `json:"rcode" gorm:"column:r_code;size:32"`

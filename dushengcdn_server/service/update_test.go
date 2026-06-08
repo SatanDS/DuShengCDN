@@ -642,6 +642,9 @@ func TestValidateServerUpdateDownloadURL(t *testing.T) {
 		"https://github.com/SatanDS/DuShengCDN/releases/download/v0.5.0/dushengcdn-server-linux-amd64",
 		"https://objects.githubusercontent.com/github-production-release-asset/file",
 		"https://github-releases.githubusercontent.com/asset",
+		"https://release-assets.githubusercontent.com/github-production-release-asset/1260986579/file",
+		"https://releaseassetproduction.blob.core.windows.net/releaseassetproduction/file",
+		"https://releaseassetprodstorage19.blob.core.windows.net/releaseassetproduction/file",
 	}
 	for _, value := range validURLs {
 		if err := validateServerUpdateDownloadURL(value); err != nil {

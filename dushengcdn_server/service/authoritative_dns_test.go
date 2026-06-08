@@ -3865,7 +3865,24 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 				TotalDurationMs: 1600,
 				MaxDurationMs:   50,
 				SourceScope:     "country:HK",
+				SourceCountry:   "HK",
 				TargetSummary:   map[string]int64{"8.8.8.8": 64, "1.1.1.1": 16},
+			},
+			{
+				WindowStart:     windowStart,
+				WindowMinutes:   1,
+				ZoneID:          zone.ID,
+				ProxyRouteID:    route.ID,
+				QName:           "www.example.com",
+				QType:           "A",
+				RCode:           "NOERROR",
+				QueryCount:      11,
+				TotalDurationMs: 110,
+				MaxDurationMs:   20,
+				SourceScope:     "asn:45102",
+				SourceCountry:   "CN",
+				SourceASN:       45102,
+				SourceOperator:  "cn-telecom",
 			},
 			{
 				WindowStart:     windowStart,
@@ -3878,6 +3895,7 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 				TotalDurationMs: 50,
 				MaxDurationMs:   15,
 				SourceScope:     "country:DE",
+				SourceCountry:   "DE",
 			},
 			{
 				WindowStart:     windowStart,
@@ -3914,27 +3932,33 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAuthoritativeDNSObservabilitySummary: %v", err)
 	}
-	if summary.TotalQueries != 87 || summary.SuccessfulQueries != 80 || summary.NegativeQueries != 5 || summary.ErrorQueries != 2 {
+	if summary.TotalQueries != 98 || summary.SuccessfulQueries != 91 || summary.NegativeQueries != 5 || summary.ErrorQueries != 2 {
 		t.Fatalf("unexpected totals: %+v", summary)
 	}
-	if summary.DynamicQueries != 82 || summary.StaticQueries != 5 {
+	if summary.DynamicQueries != 93 || summary.StaticQueries != 5 {
 		t.Fatalf("unexpected dynamic/static totals: %+v", summary)
 	}
-	assertCounter(t, summary.RCodeBreakdown, "NOERROR", "NOERROR", 80)
+	assertCounter(t, summary.RCodeBreakdown, "NOERROR", "NOERROR", 91)
 	assertCounter(t, summary.RCodeBreakdown, "NXDOMAIN", "NXDOMAIN", 5)
 	assertCounter(t, summary.RCodeBreakdown, "SERVFAIL", "SERVFAIL", 2)
 	assertCounter(t, summary.TopTargets, "8.8.8.8", "8.8.8.8", 64)
 	assertCounter(t, summary.TopTargets, "1.1.1.1", "1.1.1.1", 16)
-	assertCounter(t, summary.WorkerBreakdown, authenticated.WorkerID, "ns1-hk", 87)
-	assertCounter(t, summary.ZoneBreakdown, "1", "example.com", 87)
-	assertCounter(t, summary.RouteBreakdown, "1", "edge-site", 82)
+	assertCounter(t, summary.WorkerBreakdown, authenticated.WorkerID, "ns1-hk", 98)
+	assertCounter(t, summary.ZoneBreakdown, "1", "example.com", 98)
+	assertCounter(t, summary.RouteBreakdown, "1", "edge-site", 93)
 	assertCounter(t, summary.SourceScopeBreakdown, "country:HK", "country:HK", 80)
+	assertCounter(t, summary.SourceScopeBreakdown, "asn:45102", "asn:45102", 11)
 	assertCounter(t, summary.SourceScopeBreakdown, "country:DE", "country:DE", 5)
 	assertCounter(t, summary.SourceScopeBreakdown, "global", "global", 2)
-	if trendTotalQueries(summary.TrendPoints) != 87 ||
+	assertCounter(t, summary.SourceCountryBreakdown, "HK", "HK", 80)
+	assertCounter(t, summary.SourceCountryBreakdown, "CN", "CN", 11)
+	assertCounter(t, summary.SourceCountryBreakdown, "DE", "DE", 5)
+	assertCounter(t, summary.SourceASNBreakdown, "45102", "45102", 11)
+	assertCounter(t, summary.SourceOperatorBreakdown, "cn-telecom", "cn-telecom", 11)
+	if trendTotalQueries(summary.TrendPoints) != 98 ||
 		trendTotalServfailQueries(summary.TrendPoints) != 2 ||
 		trendTotalNXDomainQueries(summary.TrendPoints) != 5 ||
-		trendTotalDynamicQueries(summary.TrendPoints) != 82 {
+		trendTotalDynamicQueries(summary.TrendPoints) != 93 {
 		t.Fatalf("unexpected trend points: %+v", summary.TrendPoints)
 	}
 	if summary.SnapshotConsistency.Status != dnsSnapshotDivergent {
@@ -3955,17 +3979,17 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	if summary.WorkerHealth.MaxLatencyMs != 50 {
 		t.Fatalf("unexpected worker max latency: %+v", summary.WorkerHealth)
 	}
-	if summary.WorkerHealth.AverageLatencyMs < 19.7 || summary.WorkerHealth.AverageLatencyMs > 19.8 {
+	if summary.WorkerHealth.AverageLatencyMs < 18.6 || summary.WorkerHealth.AverageLatencyMs > 18.7 {
 		t.Fatalf("unexpected worker average latency: %+v", summary.WorkerHealth)
 	}
-	if summary.WorkerHealth.ErrorRatePercent < 2.29 || summary.WorkerHealth.ErrorRatePercent > 2.3 {
+	if summary.WorkerHealth.ErrorRatePercent < 2.04 || summary.WorkerHealth.ErrorRatePercent > 2.05 {
 		t.Fatalf("unexpected worker error rate: %+v", summary.WorkerHealth)
 	}
 	if len(summary.WorkerHealth.Workers) != 2 {
 		t.Fatalf("expected two worker health items, got %+v", summary.WorkerHealth.Workers)
 	}
 	if summary.WorkerHealth.Workers[0].WorkerID != authenticated.WorkerID ||
-		summary.WorkerHealth.Workers[0].QueryCount != 87 ||
+		summary.WorkerHealth.Workers[0].QueryCount != 98 ||
 		summary.WorkerHealth.Workers[0].ErrorQueries != 2 ||
 		summary.WorkerHealth.Workers[0].MaxLatencyMs != 50 {
 		t.Fatalf("unexpected primary worker health: %+v", summary.WorkerHealth.Workers)

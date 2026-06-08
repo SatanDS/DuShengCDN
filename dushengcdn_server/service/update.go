@@ -33,10 +33,32 @@ const (
 
 var manualServerBinaryMaxBytes int64 = 200 * 1024 * 1024
 var allowedServerUpdateDownloadHosts = map[string]struct{}{
-	"api.github.com":                        {},
-	"github.com":                            {},
-	"objects.githubusercontent.com":         {},
-	"github-releases.githubusercontent.com": {},
+	"api.github.com":                                  {},
+	"github.com":                                      {},
+	"objects.githubusercontent.com":                   {},
+	"github-releases.githubusercontent.com":           {},
+	"release-assets.githubusercontent.com":            {},
+	"releaseassetproduction.blob.core.windows.net":    {},
+	"releaseassetprodstorage.blob.core.windows.net":   {},
+	"releaseassetprodstorage2.blob.core.windows.net":  {},
+	"releaseassetprodstorage3.blob.core.windows.net":  {},
+	"releaseassetprodstorage4.blob.core.windows.net":  {},
+	"releaseassetprodstorage5.blob.core.windows.net":  {},
+	"releaseassetprodstorage6.blob.core.windows.net":  {},
+	"releaseassetprodstorage7.blob.core.windows.net":  {},
+	"releaseassetprodstorage8.blob.core.windows.net":  {},
+	"releaseassetprodstorage9.blob.core.windows.net":  {},
+	"releaseassetprodstorage10.blob.core.windows.net": {},
+	"releaseassetprodstorage11.blob.core.windows.net": {},
+	"releaseassetprodstorage12.blob.core.windows.net": {},
+	"releaseassetprodstorage13.blob.core.windows.net": {},
+	"releaseassetprodstorage14.blob.core.windows.net": {},
+	"releaseassetprodstorage15.blob.core.windows.net": {},
+	"releaseassetprodstorage16.blob.core.windows.net": {},
+	"releaseassetprodstorage17.blob.core.windows.net": {},
+	"releaseassetprodstorage18.blob.core.windows.net": {},
+	"releaseassetprodstorage19.blob.core.windows.net": {},
+	"releaseassetprodstorage20.blob.core.windows.net": {},
 }
 
 type ReleaseChannel string

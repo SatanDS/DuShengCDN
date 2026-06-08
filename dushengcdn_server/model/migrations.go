@@ -2347,6 +2347,44 @@ func validateDatabaseSchemaV40(db *gorm.DB, backend string) error {
 	return nil
 }
 
+// migrateV41 adds independent DNS Worker source dimensions for observability.
+func migrateV41(db *gorm.DB, backend string) error {
+	if backend == "postgres" {
+		for _, column := range []struct {
+			name       string
+			definition string
+		}{
+			{name: "source_country", definition: "varchar(8) NOT NULL DEFAULT ''"},
+			{name: "source_asn", definition: "bigint NOT NULL DEFAULT 0"},
+			{name: "source_operator", definition: "varchar(64) NOT NULL DEFAULT ''"},
+		} {
+			sql := fmt.Sprintf(`ALTER TABLE "dns_query_rollups" ADD COLUMN IF NOT EXISTS "%s" %s`, column.name, column.definition)
+			if err := db.Exec(sql).Error; err != nil {
+				return fmt.Errorf("add dns_query_rollups.%s column failed: %w", column.name, err)
+			}
+		}
+		return nil
+	}
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV41(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV40(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{
+		"source_country",
+		"source_asn",
+		"source_operator",
+	} {
+		if !db.Migrator().HasColumn(&DNSQueryRollup{}, column) {
+			return fmt.Errorf("column dns_query_rollups.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -2388,6 +2426,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 37, toVersion: 38, migrate: migrateV38, validate: validateDatabaseSchemaV38},
 		{fromVersion: 38, toVersion: 39, migrate: migrateV39, validate: validateDatabaseSchemaV39},
 		{fromVersion: 39, toVersion: 40, migrate: migrateV40, validate: validateDatabaseSchemaV40},
+		{fromVersion: 40, toVersion: 41, migrate: migrateV41, validate: validateDatabaseSchemaV41},
 	}
 }
 
@@ -2435,7 +2474,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV40(db, backend)
+		return validateDatabaseSchemaV41(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2451,7 +2490,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV40(db, backend)
+	return validateDatabaseSchemaV41(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2482,7 +2521,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV40(db, backend); err != nil {
+	if err := validateDatabaseSchemaV41(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

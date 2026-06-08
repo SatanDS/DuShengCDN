@@ -130,9 +130,12 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	rcodeLabel := "NOERROR"
 	targets := []string{}
 	sourceScope := "global"
+	source := SourceContext{ScopeKey: "global"}
 	defer func() {
 		if s.Rollups != nil {
-			s.Rollups.Record(zoneID, routeID, sourceScope, qname, qtype, rcodeLabel, targets, time.Since(startedAt))
+			rollupSource := source
+			rollupSource.ScopeKey = sourceScope
+			s.Rollups.RecordWithSource(zoneID, routeID, rollupSource, qname, qtype, rcodeLabel, targets, time.Since(startedAt))
 		}
 	}()
 	if s.Limiter != nil && !s.Limiter.Allow(remoteAddr) {
@@ -159,7 +162,6 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	}
 	zoneID = zone.ID
 	response.Ns = append(response.Ns, soaRecord(zone))
-	source := SourceContext{ScopeKey: "global"}
 	if s.Resolver != nil {
 		source = s.Resolver.Resolve(request, remoteAddr)
 	}

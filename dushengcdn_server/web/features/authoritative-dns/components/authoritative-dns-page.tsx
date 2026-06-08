@@ -603,6 +603,25 @@ function isSourceScopeASNItem(item: DNSObservabilityCounterItem) {
     .startsWith('asn:');
 }
 
+function isSourceScopeCountryItem(item: DNSObservabilityCounterItem) {
+  return getSourceScopeBase(getSourceScopeCounterKey(item))
+    .toLowerCase()
+    .startsWith('country:');
+}
+
+function formatSourceCountryLabel(item: DNSObservabilityCounterItem) {
+  const value = (item.key || item.label || '').trim();
+  if (!value) {
+    return item.label || item.key;
+  }
+  return formatCountryName(value.toUpperCase(), value.toUpperCase());
+}
+
+function formatSourceASNLabel(item: DNSObservabilityCounterItem) {
+  const value = (item.key || item.label || '').trim().replace(/^AS/i, '');
+  return value ? `ASN AS${value}` : item.label || item.key;
+}
+
 function formatGSLBOperatorLabel(value: string) {
   const normalized = value.trim().toLowerCase();
   return (
@@ -3639,12 +3658,29 @@ function DNSObservabilityPanel({
   }
 
   const rollupHint = getDNSObservabilityRollupHint(summary);
-  const sourceASNBreakdown = summary.source_scope_breakdown.filter(
-    isSourceScopeASNItem,
+  const legacySourceASNBreakdown =
+    summary.source_scope_breakdown.filter(isSourceScopeASNItem);
+  const legacySourceRegionBreakdown = summary.source_scope_breakdown.filter(
+    isSourceScopeCountryItem,
   );
-  const sourceRegionBreakdown = summary.source_scope_breakdown.filter(
-    (item) => !isSourceScopeASNItem(item),
-  );
+  const sourceASNBreakdown =
+    summary.source_asn_breakdown.length > 0
+      ? summary.source_asn_breakdown
+      : legacySourceASNBreakdown;
+  const sourceRegionBreakdown =
+    summary.source_country_breakdown.length > 0
+      ? summary.source_country_breakdown
+      : legacySourceRegionBreakdown;
+  const formatSourceRegionChartLabel =
+    summary.source_country_breakdown.length > 0
+      ? formatSourceCountryLabel
+      : (item: DNSObservabilityCounterItem) =>
+          formatSourceScopeLabel(item.key || item.label);
+  const formatSourceASNChartLabel =
+    summary.source_asn_breakdown.length > 0
+      ? formatSourceASNLabel
+      : (item: DNSObservabilityCounterItem) =>
+          formatSourceScopeLabel(item.key || item.label);
 
   return (
     <AppCard
@@ -3717,7 +3753,7 @@ function DNSObservabilityPanel({
           items={sourceRegionBreakdown}
           total={summary.total_queries}
           emptyText="暂无来源地区分布。"
-          formatLabel={(item) => formatSourceScopeLabel(item.key || item.label)}
+          formatLabel={formatSourceRegionChartLabel}
           color="#14b8a6"
         />
         <CounterChart
@@ -3725,7 +3761,7 @@ function DNSObservabilityPanel({
           items={sourceASNBreakdown}
           total={summary.total_queries}
           emptyText="暂无来源 ASN 分布。"
-          formatLabel={(item) => formatSourceScopeLabel(item.key || item.label)}
+          formatLabel={formatSourceASNChartLabel}
           color="#8b5cf6"
         />
       </div>

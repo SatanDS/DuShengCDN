@@ -302,6 +302,9 @@ function normalizeDNSObservabilitySummary(
     zone_breakdown: asArray(summary.zone_breakdown),
     route_breakdown: asArray(summary.route_breakdown),
     source_scope_breakdown: asArray(summary.source_scope_breakdown),
+    source_country_breakdown: asArray(summary.source_country_breakdown),
+    source_asn_breakdown: asArray(summary.source_asn_breakdown),
+    source_operator_breakdown: asArray(summary.source_operator_breakdown),
     trend_points: asArray(summary.trend_points),
     snapshot_consistency: normalizeDNSWorkerSnapshotConsistency(
       summary.snapshot_consistency,

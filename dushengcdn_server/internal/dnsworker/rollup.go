@@ -24,13 +24,16 @@ type RollupAggregator struct {
 }
 
 type rollupKey struct {
-	WindowStart  time.Time
-	ZoneID       uint
-	ProxyRouteID uint
-	SourceScope  string
-	QName        string
-	QType        string
-	RCode        string
+	WindowStart    time.Time
+	ZoneID         uint
+	ProxyRouteID   uint
+	SourceScope    string
+	SourceCountry  string
+	SourceASN      uint32
+	SourceOperator string
+	QName          string
+	QType          string
+	RCode          string
 }
 
 type rollupBucket struct {
@@ -52,18 +55,30 @@ func NewRollupAggregator(window time.Duration) *RollupAggregator {
 }
 
 func (a *RollupAggregator) Record(zoneID uint, routeID uint, sourceScope string, qname string, qtype string, rcode string, targets []string, duration time.Duration) {
+	a.RecordWithSource(zoneID, routeID, SourceContext{ScopeKey: sourceScope}, qname, qtype, rcode, targets, duration)
+}
+
+func (a *RollupAggregator) RecordWithSource(zoneID uint, routeID uint, source SourceContext, qname string, qtype string, rcode string, targets []string, duration time.Duration) {
 	if a == nil {
 		return
 	}
 	now := time.Now().UTC()
+	sourceScope := strings.TrimSpace(source.ScopeKey)
+	if sourceScope == "" {
+		sourceScope = sourceScopeKey(source)
+	}
+	sourceCountry, sourceASN, sourceOperator := rollupSourceDimensions(source, sourceScope)
 	key := rollupKey{
-		WindowStart:  now.Truncate(a.window),
-		ZoneID:       zoneID,
-		ProxyRouteID: routeID,
-		SourceScope:  normalizeSourceScope(sourceScope),
-		QName:        normalizeDomain(qname),
-		QType:        strings.ToUpper(strings.TrimSpace(qtype)),
-		RCode:        normalizeRCode(rcode),
+		WindowStart:    now.Truncate(a.window),
+		ZoneID:         zoneID,
+		ProxyRouteID:   routeID,
+		SourceScope:    normalizeSourceScope(sourceScope),
+		SourceCountry:  sourceCountry,
+		SourceASN:      sourceASN,
+		SourceOperator: sourceOperator,
+		QName:          normalizeDomain(qname),
+		QType:          strings.ToUpper(strings.TrimSpace(qtype)),
+		RCode:          normalizeRCode(rcode),
 	}
 	if key.QType == "" {
 		key.QType = "A"
@@ -118,6 +133,9 @@ func (a *RollupAggregator) Drain() []QueryRollupPayload {
 			ZoneID:          key.ZoneID,
 			ProxyRouteID:    key.ProxyRouteID,
 			SourceScope:     key.SourceScope,
+			SourceCountry:   key.SourceCountry,
+			SourceASN:       key.SourceASN,
+			SourceOperator:  key.SourceOperator,
 			QName:           key.QName,
 			QType:           key.QType,
 			RCode:           key.RCode,
@@ -142,13 +160,16 @@ func (a *RollupAggregator) Restore(payloads []QueryRollupPayload) {
 			continue
 		}
 		key := rollupKey{
-			WindowStart:  payload.WindowStart,
-			ZoneID:       payload.ZoneID,
-			ProxyRouteID: payload.ProxyRouteID,
-			SourceScope:  normalizeSourceScope(payload.SourceScope),
-			QName:        normalizeDomain(payload.QName),
-			QType:        strings.ToUpper(strings.TrimSpace(payload.QType)),
-			RCode:        normalizeRCode(payload.RCode),
+			WindowStart:    payload.WindowStart,
+			ZoneID:         payload.ZoneID,
+			ProxyRouteID:   payload.ProxyRouteID,
+			SourceScope:    normalizeSourceScope(payload.SourceScope),
+			SourceCountry:  normalizeSourceCountry(payload.SourceCountry),
+			SourceASN:      payload.SourceASN,
+			SourceOperator: normalizeOperator(payload.SourceOperator),
+			QName:          normalizeDomain(payload.QName),
+			QType:          strings.ToUpper(strings.TrimSpace(payload.QType)),
+			RCode:          normalizeRCode(payload.RCode),
 		}
 		if key.WindowStart.IsZero() {
 			key.WindowStart = time.Now().UTC().Truncate(a.window)
@@ -193,6 +214,40 @@ func overflowRollupKey(key rollupKey) rollupKey {
 		QType:       "ANY",
 		RCode:       key.RCode,
 	}
+}
+
+func normalizeSourceCountry(raw string) string {
+	country := strings.ToUpper(strings.TrimSpace(raw))
+	if len(country) != 2 {
+		return ""
+	}
+	return country
+}
+
+func rollupSourceDimensions(source SourceContext, sourceScope string) (string, uint32, string) {
+	country := normalizeSourceCountry(source.Country)
+	asn := source.ASN
+	operator := normalizeOperator(source.Operator)
+	base := getSourceScopeBase(sourceScope)
+	lower := strings.ToLower(base)
+	if country == "" && strings.HasPrefix(lower, "country:") {
+		country = normalizeSourceCountry(base[strings.Index(base, ":")+1:])
+	}
+	if asn == 0 && strings.HasPrefix(lower, "asn:") {
+		value := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(base[strings.Index(base, ":")+1:])), "AS")
+		if parsed, err := strconv.ParseUint(value, 10, 32); err == nil {
+			asn = uint32(parsed)
+		}
+	}
+	if operator == "" && strings.HasPrefix(lower, "operator:") {
+		operator = normalizeOperator(base[strings.Index(base, ":")+1:])
+	}
+	return country, asn, operator
+}
+
+func getSourceScopeBase(sourceScope string) string {
+	base, _, _ := strings.Cut(normalizeSourceScope(sourceScope), "|")
+	return base
 }
 
 func topRollupTargets(values map[string]int64, limit int) map[string]int64 {

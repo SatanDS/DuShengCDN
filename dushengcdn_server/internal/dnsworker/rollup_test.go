@@ -51,6 +51,33 @@ func findRollupPayload(t *testing.T, payloads []QueryRollupPayload, sourceScope 
 	return QueryRollupPayload{}
 }
 
+func TestRollupAggregatorRecordsIndependentSourceDimensions(t *testing.T) {
+	aggregator := NewRollupAggregator(time.Minute)
+
+	aggregator.RecordWithSource(
+		1,
+		2,
+		SourceContext{ScopeKey: "asn:45102", Country: "cn", ASN: 45102, Operator: "China Telecom"},
+		"www.example.com",
+		"A",
+		"NOERROR",
+		[]string{"203.0.113.10"},
+		time.Millisecond,
+	)
+
+	payloads := aggregator.Drain()
+	payload := findRollupPayload(t, payloads, "asn:45102")
+	if payload.SourceCountry != "CN" {
+		t.Fatalf("expected source country CN, got %+v", payload)
+	}
+	if payload.SourceASN != 45102 {
+		t.Fatalf("expected source ASN 45102, got %+v", payload)
+	}
+	if payload.SourceOperator != "cn-telecom" {
+		t.Fatalf("expected normalized source operator, got %+v", payload)
+	}
+}
+
 func TestRollupAggregatorCollapsesExcessBuckets(t *testing.T) {
 	aggregator := NewRollupAggregator(time.Minute)
 

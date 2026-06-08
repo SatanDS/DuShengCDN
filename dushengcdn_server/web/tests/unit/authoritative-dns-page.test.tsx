@@ -137,6 +137,12 @@ describe('Authoritative DNS page', () => {
                     { key: 'country:DE', label: 'country:DE', count: 20 },
                     { key: 'global', label: 'global', count: 28 },
                   ],
+                  source_country_breakdown: [
+                    { key: 'HK', label: 'HK', count: 80 },
+                    { key: 'DE', label: 'DE', count: 20 },
+                  ],
+                  source_asn_breakdown: [],
+                  source_operator_breakdown: [],
                   trend_points: [
                     {
                       bucket_started_at: '2026-05-31T07:00:00Z',
@@ -1398,6 +1404,9 @@ describe('Authoritative DNS page', () => {
                   zone_breakdown: null,
                   route_breakdown: null,
                   source_scope_breakdown: null,
+                  source_country_breakdown: null,
+                  source_asn_breakdown: null,
+                  source_operator_breakdown: null,
                   trend_points: null,
                   snapshot_consistency: {
                     status: 'no_online_workers',

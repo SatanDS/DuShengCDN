@@ -277,6 +277,9 @@ export interface DNSObservabilitySummary {
   zone_breakdown: DNSObservabilityCounterItem[];
   route_breakdown: DNSObservabilityCounterItem[];
   source_scope_breakdown: DNSObservabilityCounterItem[];
+  source_country_breakdown: DNSObservabilityCounterItem[];
+  source_asn_breakdown: DNSObservabilityCounterItem[];
+  source_operator_breakdown: DNSObservabilityCounterItem[];
   trend_points: DNSObservabilityTrendPoint[];
   snapshot_consistency: DNSWorkerSnapshotConsistency;
   worker_health: DNSWorkerHealthSummary;

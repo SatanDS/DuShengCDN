@@ -73,6 +73,9 @@ type QueryRollupPayload struct {
 	ZoneID          uint             `json:"zone_id"`
 	ProxyRouteID    uint             `json:"proxy_route_id"`
 	SourceScope     string           `json:"source_scope"`
+	SourceCountry   string           `json:"source_country"`
+	SourceASN       uint32           `json:"source_asn"`
+	SourceOperator  string           `json:"source_operator"`
 	QName           string           `json:"qname"`
 	QType           string           `json:"qtype"`
 	RCode           string           `json:"rcode"`
