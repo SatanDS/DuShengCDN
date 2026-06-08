@@ -3247,6 +3247,86 @@ func TestDNSWorkerHeartbeatUpdateFailureClearsWaitingButKeepsMessage(t *testing.
 	}
 }
 
+func TestDNSWorkerHeartbeatUpdateAckClearsRequestedTag(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	dispatchAt := time.Now()
+	if err := model.DB.Model(&model.DNSWorker{}).
+		Where("id = ?", worker.ID).
+		Updates(map[string]any{
+			"update_requested":        true,
+			"update_channel":          string(ReleaseChannelStable),
+			"update_tag":              "v1.0.1",
+			"update_dispatch_mode":    "worker_heartbeat",
+			"update_dispatch_message": "waiting for worker heartbeat",
+			"update_dispatched_at":    dispatchAt,
+		}).Error; err != nil {
+		t.Fatalf("seed pending heartbeat update: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:         "v1.0.1",
+		Status:          dnsWorkerStatusOnline,
+		UpdateSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateTag != "" || heartbeat.Worker.UpdateDispatchMode != "worker_heartbeat_ack" {
+		t.Fatalf("expected requested tag heartbeat to clear pending update, got %+v", heartbeat.Worker)
+	}
+	if heartbeat.Settings.UpdateNow {
+		t.Fatalf("expected cleared heartbeat update not to be delivered again, got %+v", heartbeat.Settings)
+	}
+}
+
+func TestDNSWorkerHeartbeatUpdateAckClearsManualStableAfterDelay(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	oldDispatchAt := time.Now().Add(-dnsWorkerAgentUpdateAckDelay - time.Second)
+	if err := model.DB.Model(&model.DNSWorker{}).
+		Where("id = ?", worker.ID).
+		Updates(map[string]any{
+			"update_requested":        true,
+			"update_channel":          string(ReleaseChannelStable),
+			"update_tag":              "",
+			"update_dispatch_mode":    "worker_heartbeat",
+			"update_dispatch_message": "waiting for worker heartbeat",
+			"update_dispatched_at":    oldDispatchAt,
+		}).Error; err != nil {
+		t.Fatalf("seed pending heartbeat update: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:         "v1.0.0",
+		Status:          dnsWorkerStatusOnline,
+		UpdateSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateDispatchMode != "worker_heartbeat_ack" {
+		t.Fatalf("expected delayed heartbeat ack to clear manual stable update, got %+v", heartbeat.Worker)
+	}
+	if heartbeat.Settings.UpdateNow {
+		t.Fatalf("expected cleared heartbeat update not to be delivered again, got %+v", heartbeat.Settings)
+	}
+}
+
 func TestAgentDNSWorkerUpdateResultClearsPendingUpdate(t *testing.T) {
 	setupServiceTestDB(t)
 

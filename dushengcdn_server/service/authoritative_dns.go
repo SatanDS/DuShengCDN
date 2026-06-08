@@ -1668,6 +1668,7 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	uninstallNow := worker.UninstallRequested
 	applyDNSWorkerHeartbeatUpdateResult(worker, input.UpdateResult, now)
 	applyLegacyAgentDNSWorkerUpdateAck(worker, input, now)
+	applyDNSWorkerHeartbeatUpdateAck(worker, input, now)
 	updateNow := worker.UpdateRequested && input.UpdateSupported && shouldDeliverDNSWorkerHeartbeatUpdate(worker)
 	updateChannel := normalizeReleaseChannel(worker.UpdateChannel)
 	updateTag := strings.TrimSpace(worker.UpdateTag)
@@ -1795,6 +1796,33 @@ func applyLegacyAgentDNSWorkerUpdateAck(worker *model.DNSWorker, input DNSWorker
 	worker.UpdateTag = ""
 	worker.UpdateDispatchMode = "agent_heartbeat_ack"
 	worker.UpdateDispatchMessage = "DNS Worker heartbeat was received after the Agent update task was dispatched; the pending update has been marked complete for compatibility with older Agents."
+	worker.UpdateDispatchedAt = &now
+}
+
+func applyDNSWorkerHeartbeatUpdateAck(worker *model.DNSWorker, input DNSWorkerHeartbeatInput, now time.Time) {
+	if worker == nil || !worker.UpdateRequested || worker.UpdateDispatchedAt == nil {
+		return
+	}
+	mode := strings.TrimSpace(worker.UpdateDispatchMode)
+	if mode != "worker_heartbeat" {
+		return
+	}
+	workerVersion := strings.TrimSpace(input.Version)
+	updateTag := strings.TrimSpace(worker.UpdateTag)
+	switch {
+	case updateTag != "" && workerVersion == updateTag:
+	case updateTag == "" && now.Sub(*worker.UpdateDispatchedAt) >= dnsWorkerAgentUpdateAckDelay:
+	default:
+		return
+	}
+	worker.UpdateRequested = false
+	worker.UpdateTag = ""
+	worker.UpdateDispatchMode = "worker_heartbeat_ack"
+	if updateTag != "" {
+		worker.UpdateDispatchMessage = "DNS Worker reported the requested version; the heartbeat update wait has been marked complete."
+	} else {
+		worker.UpdateDispatchMessage = "DNS Worker kept heartbeating after the heartbeat update task was dispatched; the pending update has been marked complete."
+	}
 	worker.UpdateDispatchedAt = &now
 }
 
