@@ -164,12 +164,19 @@ func configureDatabasePool(db *gorm.DB) error {
 }
 
 func autoMigrateAll(db *gorm.DB) error {
-	for _, item := range registeredModels() {
-		if err := db.AutoMigrate(item); err != nil {
+	models, err := buildDBModels()
+	if err != nil {
+		return err
+	}
+	for _, item := range models {
+		if isShardedObservabilityTable(item.tableName) {
+			continue
+		}
+		if err := db.AutoMigrate(item.value); err != nil {
 			return err
 		}
 	}
-	return nil
+	return autoMigrateObservabilityShardTables(db)
 }
 
 func isDatabaseEmpty(db *gorm.DB) (bool, error) {
