@@ -95,9 +95,23 @@ func AgentHeartbeat(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/agent/config-versions/active [get]
 func AgentGetActiveConfig(c *gin.Context) {
-	config, err := service.GetActiveConfigForAgent()
+	authNode, ok := c.Get("agent_node")
+	if !ok {
+		if legacy, _ := c.Get("legacy_agent_token"); legacy == true {
+			config, err := service.GetActiveConfigForAgent()
+			if err != nil {
+				respondFailure(c, err.Error())
+				return
+			}
+			respondSuccess(c, config)
+			return
+		}
+		respondUnauthorized(c, "Agent Token 无效")
+		return
+	}
+	config, err := service.GetActiveConfigForAgentNode(authNode.(*model.Node))
 	if err != nil {
-		respondFailure(c, "当前没有激活版本")
+		respondFailure(c, err.Error())
 		return
 	}
 	respondSuccess(c, config)

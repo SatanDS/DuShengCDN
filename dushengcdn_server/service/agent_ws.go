@@ -1,6 +1,7 @@
 package service
 
 import (
+	"dushengcdn/model"
 	"encoding/json"
 	"log/slog"
 	"sync"
@@ -256,6 +257,61 @@ func BroadcastAgentWSActiveConfig(activeConfig *ActiveConfigMeta) AgentWSBroadca
 		result.FailedNodes = append(result.FailedNodes, client.NodeID())
 	}
 	slog.Debug("agent ws broadcast active config",
+		"version", result.Version,
+		"checksum", result.Checksum,
+		"client_count", result.ClientCount,
+		"success_count", result.SuccessCount,
+		"failed_nodes", result.FailedNodes,
+	)
+	return result
+}
+
+func BroadcastAgentWSActiveConfigForVersion(version *model.ConfigVersion) AgentWSBroadcastResult {
+	result := AgentWSBroadcastResult{}
+	if version == nil {
+		slog.Debug("agent ws pool broadcast skipped because active config version is nil")
+		return result
+	}
+	result.Version = version.Version
+	result.Checksum = version.Checksum
+
+	defaultAgentWSHub.mu.RLock()
+	clients := make([]*AgentWSClient, 0, len(defaultAgentWSHub.clients))
+	for _, client := range defaultAgentWSHub.clients {
+		clients = append(clients, client)
+	}
+	defaultAgentWSHub.mu.RUnlock()
+
+	result.ClientCount = len(clients)
+	for _, client := range clients {
+		nodeID := client.NodeID()
+		node, err := model.GetNodeByNodeID(nodeID)
+		if err != nil {
+			slog.Debug("agent ws pool broadcast skipped node lookup failure", "node_id", nodeID, "error", err)
+			result.FailedNodes = append(result.FailedNodes, nodeID)
+			continue
+		}
+		poolName := normalizeNodePoolName(node.PoolName)
+		artifact, err := model.GetConfigVersionArtifact(version.ID, poolName)
+		if err != nil {
+			slog.Debug("agent ws pool broadcast skipped missing artifact", "node_id", nodeID, "pool", poolName, "error", err)
+			result.FailedNodes = append(result.FailedNodes, nodeID)
+			continue
+		}
+		message := AgentWSOutboundMessage{
+			Type: AgentWSMessageTypeActiveConfig,
+			Payload: &ActiveConfigMeta{
+				Version:  version.Version,
+				Checksum: artifact.Checksum,
+			},
+		}
+		if client.Send(message) {
+			result.SuccessCount++
+			continue
+		}
+		result.FailedNodes = append(result.FailedNodes, nodeID)
+	}
+	slog.Debug("agent ws broadcast active pool config",
 		"version", result.Version,
 		"checksum", result.Checksum,
 		"client_count", result.ClientCount,

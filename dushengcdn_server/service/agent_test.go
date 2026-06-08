@@ -236,6 +236,119 @@ func TestGetActiveConfigForAgentUsesTenMinutePoWSessionDefault(t *testing.T) {
 	t.Fatal("expected agent config to include pow_config.json support file")
 }
 
+func TestAgentTokenPoolUsesPoolArtifactChecksum(t *testing.T) {
+	setupServiceTestDB(t)
+
+	version := seedAgentTestActiveConfigVersionWithArtifacts(t, "20260609-001", "checksum-global", map[string]string{
+		"default": "checksum-default",
+		"edge-a":  "checksum-edge-a",
+		"edge-b":  "checksum-edge-b",
+	})
+
+	nodes := []*model.Node{
+		{
+			NodeID:       "node-pool-edge-a",
+			Name:         "edge-a",
+			IP:           "10.0.0.31",
+			PoolName:     "edge-a",
+			AgentToken:   "token-edge-a",
+			AgentVersion: "v0.6.0",
+			NginxVersion: "1.27.1.2",
+			Status:       NodeStatusOnline,
+		},
+		{
+			NodeID:       "node-pool-edge-b",
+			Name:         "edge-b",
+			IP:           "10.0.0.32",
+			PoolName:     "edge-b",
+			AgentToken:   "token-edge-b",
+			AgentVersion: "v0.6.0",
+			NginxVersion: "1.27.1.2",
+			Status:       NodeStatusOnline,
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("failed to insert node %s: %v", node.NodeID, err)
+		}
+	}
+
+	authNode, err := AuthenticateAgentToken(" token-edge-a ")
+	if err != nil {
+		t.Fatalf("AuthenticateAgentToken failed: %v", err)
+	}
+	if authNode.PoolName != "edge-a" {
+		t.Fatalf("expected token to authenticate edge-a pool node, got %+v", authNode)
+	}
+
+	config, err := GetActiveConfigForAgentNode(authNode)
+	if err != nil {
+		t.Fatalf("GetActiveConfigForAgentNode failed: %v", err)
+	}
+	if config.Version != version.Version {
+		t.Fatalf("expected active version %s, got %s", version.Version, config.Version)
+	}
+	if config.Checksum != "checksum-edge-a" {
+		t.Fatalf("expected pool artifact checksum, got %s", config.Checksum)
+	}
+	if config.Checksum == version.Checksum || config.Checksum == "checksum-edge-b" {
+		t.Fatalf("expected edge-a checksum, got global/other pool checksum %s", config.Checksum)
+	}
+
+	resp, err := HeartbeatNode(authNode, AgentNodePayload{
+		NodeID:          authNode.NodeID,
+		Name:            authNode.Name,
+		IP:              authNode.IP,
+		AgentVersion:    authNode.AgentVersion,
+		NginxVersion:    authNode.NginxVersion,
+		CurrentVersion:  version.Version,
+		CurrentChecksum: "checksum-edge-a",
+	})
+	if err != nil {
+		t.Fatalf("HeartbeatNode failed: %v", err)
+	}
+	if resp.ActiveConfig == nil {
+		t.Fatal("expected active config summary in heartbeat response")
+	}
+	if resp.ActiveConfig.Checksum != "checksum-edge-a" {
+		t.Fatalf("expected heartbeat to return pool artifact checksum, got %+v", resp.ActiveConfig)
+	}
+}
+
+func seedAgentTestActiveConfigVersionWithArtifacts(t *testing.T, versionName string, globalChecksum string, artifacts map[string]string) *model.ConfigVersion {
+	t.Helper()
+	version := &model.ConfigVersion{
+		Version:          versionName,
+		SnapshotJSON:     "{}",
+		MainConfig:       "worker_processes auto;",
+		RenderedConfig:   "global rendered config",
+		SupportFilesJSON: "[]",
+		Checksum:         globalChecksum,
+		IsActive:         true,
+		CreatedBy:        "root",
+	}
+	if err := model.DB.Create(version).Error; err != nil {
+		t.Fatalf("failed to seed active config version: %v", err)
+	}
+	for poolName, checksum := range artifacts {
+		normalizedPoolName := normalizeNodePoolName(poolName)
+		artifact := &model.ConfigVersionArtifact{
+			ConfigVersionID:     version.ID,
+			PoolName:            normalizedPoolName,
+			Checksum:            checksum,
+			MainConfigChecksum:  "main-checksum",
+			RouteConfigChecksum: "route-checksum",
+			RenderedConfig:      "rendered config for " + normalizedPoolName,
+			SupportFilesJSON:    "[]",
+			RouteCount:          1,
+		}
+		if err := model.DB.Create(artifact).Error; err != nil {
+			t.Fatalf("failed to seed config artifact for pool %s: %v", normalizedPoolName, err)
+		}
+	}
+	return version
+}
+
 func supportFilesByPath(files []SupportFile) map[string]string {
 	result := make(map[string]string, len(files))
 	for _, file := range files {

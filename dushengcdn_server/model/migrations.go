@@ -1,13 +1,16 @@
 package model
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -2385,6 +2388,141 @@ func validateDatabaseSchemaV41(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func migrateV42(db *gorm.DB, backend string) error {
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return backfillLegacyConfigVersionArtifacts(db)
+}
+
+func validateDatabaseSchemaV42(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV41(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasTable(&ConfigVersionArtifact{}) {
+		return errors.New("table config_version_artifacts is missing")
+	}
+	for _, column := range []string{
+		"config_version_id",
+		"pool_name",
+		"checksum",
+		"main_config_checksum",
+		"route_config_checksum",
+		"rendered_config",
+		"support_files_json",
+		"route_count",
+	} {
+		if !db.Migrator().HasColumn(&ConfigVersionArtifact{}, column) {
+			return fmt.Errorf("column config_version_artifacts.%s is missing", column)
+		}
+	}
+	if !db.Migrator().HasColumn(&Node{}, "current_checksum") {
+		return errors.New("column nodes.current_checksum is missing")
+	}
+	_ = backend
+	return nil
+}
+
+func backfillLegacyConfigVersionArtifacts(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&ConfigVersion{}) || !db.Migrator().HasTable(&ConfigVersionArtifact{}) {
+		return nil
+	}
+	var versions []ConfigVersion
+	if err := db.Order("id asc").Find(&versions).Error; err != nil {
+		return err
+	}
+	if len(versions) == 0 {
+		return nil
+	}
+	poolNames, err := legacyConfigVersionArtifactPoolNames(db)
+	if err != nil {
+		return err
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		for _, version := range versions {
+			var count int64
+			if err := tx.Model(&ConfigVersionArtifact{}).Where("config_version_id = ?", version.ID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				continue
+			}
+			supportFilesJSON := strings.TrimSpace(version.SupportFilesJSON)
+			if supportFilesJSON == "" {
+				supportFilesJSON = "[]"
+			}
+			routeCount := len(legacySnapshotRouteDomains(version.SnapshotJSON))
+			mainChecksum := checksumMigrationString(version.MainConfig)
+			routeChecksum := checksumMigrationString(version.RenderedConfig)
+			for _, poolName := range poolNames {
+				artifact := &ConfigVersionArtifact{
+					ConfigVersionID:     version.ID,
+					PoolName:            poolName,
+					Checksum:            version.Checksum,
+					MainConfigChecksum:  mainChecksum,
+					RouteConfigChecksum: routeChecksum,
+					RenderedConfig:      version.RenderedConfig,
+					SupportFilesJSON:    supportFilesJSON,
+					RouteCount:          routeCount,
+				}
+				if err := tx.Create(artifact).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func legacyConfigVersionArtifactPoolNames(db *gorm.DB) ([]string, error) {
+	poolSet := map[string]struct{}{"default": {}}
+	if db.Migrator().HasTable(&Node{}) && db.Migrator().HasColumn(&Node{}, "pool_name") {
+		var nodes []Node
+		if err := db.Select("pool_name").Find(&nodes).Error; err != nil {
+			return nil, err
+		}
+		for _, node := range nodes {
+			poolSet[normalizeMigrationPoolName(node.PoolName)] = struct{}{}
+		}
+	}
+	poolNames := make([]string, 0, len(poolSet))
+	for poolName := range poolSet {
+		if poolName != "" {
+			poolNames = append(poolNames, poolName)
+		}
+	}
+	sort.Strings(poolNames)
+	return poolNames, nil
+}
+
+func normalizeMigrationPoolName(raw string) string {
+	poolName := strings.ToLower(strings.TrimSpace(raw))
+	if poolName == "" {
+		return "default"
+	}
+	if len(poolName) > 64 {
+		return poolName[:64]
+	}
+	return poolName
+}
+
+func checksumMigrationString(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+func legacySnapshotRouteDomains(snapshotJSON string) []string {
+	var snapshot struct {
+		Routes []struct {
+			Domain string `json:"domain"`
+		} `json:"routes"`
+	}
+	if strings.TrimSpace(snapshotJSON) == "" || json.Unmarshal([]byte(snapshotJSON), &snapshot) != nil {
+		return nil
+	}
+	return make([]string, len(snapshot.Routes))
+}
+
 func databaseSchemaMigrations() []databaseSchemaMigration {
 	return []databaseSchemaMigration{
 		{fromVersion: 1, toVersion: 2, migrate: migrateV2, validate: validateDatabaseSchemaV2},
@@ -2427,6 +2565,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 38, toVersion: 39, migrate: migrateV39, validate: validateDatabaseSchemaV39},
 		{fromVersion: 39, toVersion: 40, migrate: migrateV40, validate: validateDatabaseSchemaV40},
 		{fromVersion: 40, toVersion: 41, migrate: migrateV41, validate: validateDatabaseSchemaV41},
+		{fromVersion: 41, toVersion: 42, migrate: migrateV42, validate: validateDatabaseSchemaV42},
 	}
 }
 
@@ -2474,7 +2613,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV41(db, backend)
+		return validateDatabaseSchemaV42(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2490,7 +2629,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV41(db, backend)
+	return validateDatabaseSchemaV42(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2521,7 +2660,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV41(db, backend); err != nil {
+	if err := validateDatabaseSchemaV42(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

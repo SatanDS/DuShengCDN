@@ -27,6 +27,12 @@ export interface NodeItem {
   openresty_message: string;
   status: 'online' | 'offline' | 'pending';
   current_version: string;
+  current_checksum: string;
+  target_config_version: string;
+  target_config_checksum: string;
+  target_config_pool: string;
+  target_config_available: boolean;
+  config_in_sync: boolean;
   last_seen_at: string;
   last_error: string;
   latest_apply_result: 'success' | 'warning' | 'failed' | '';

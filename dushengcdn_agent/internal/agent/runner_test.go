@@ -356,6 +356,7 @@ func TestRunnerHeartbeatPayloadIncludesObservabilityExtensions(t *testing.T) {
 	if err := stateStore.Save(&state.Snapshot{
 		NodeID:           "node-observe",
 		CurrentVersion:   "20260314-001",
+		CurrentChecksum:  "checksum-observe",
 		LastError:        "sync failed",
 		OpenrestyStatus:  protocol.OpenrestyStatusUnhealthy,
 		OpenrestyMessage: "reload failed",
@@ -388,6 +389,9 @@ func TestRunnerHeartbeatPayloadIncludesObservabilityExtensions(t *testing.T) {
 	}
 
 	firstPayload := runner.nodePayload("node-observe")
+	if firstPayload.CurrentVersion != "20260314-001" || firstPayload.CurrentChecksum != "checksum-observe" {
+		t.Fatalf("expected payload to include current version/checksum, got version=%q checksum=%q", firstPayload.CurrentVersion, firstPayload.CurrentChecksum)
+	}
 	if firstPayload.Profile == nil {
 		t.Fatal("expected first heartbeat payload to include system profile")
 	}

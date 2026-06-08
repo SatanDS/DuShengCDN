@@ -39,6 +39,8 @@ import {
   getNodeStatusVariant,
   getOpenrestyStatusLabel,
   getOpenrestyStatusVariant,
+  hasLaggingConfig,
+  isTargetConfigAvailable,
   isMeaningfulTime,
   isWSConnectedLastSeen,
 } from '@/features/nodes/utils';
@@ -70,6 +72,10 @@ type NodePoolSummary = {
   latestHeartbeat: string | null;
   latestApplyResult: NodeItem['latest_apply_result'];
   currentVersions: string[];
+  targetConfigVersions: string[];
+  targetConfigChecksums: string[];
+  targetConfigPools: string[];
+  hasUnavailableTargetConfig: boolean;
 };
 
 function getErrorMessage(error: unknown) {
@@ -102,10 +108,6 @@ function createEmptyNodeForPool(poolName: string): Partial<NodeItem> {
   };
 }
 
-function hasLaggingVersion(node: NodeItem, activeVersion: string) {
-  return Boolean(activeVersion) && node.current_version !== activeVersion;
-}
-
 function shouldShowNode(
   node: NodeItem,
   riskFilter: NodeRiskFilter,
@@ -117,7 +119,7 @@ function shouldShowNode(
     case 'unhealthy':
       return node.openresty_status === 'unhealthy';
     case 'lagging':
-      return hasLaggingVersion(node, activeVersion);
+      return hasLaggingConfig(node, activeVersion);
     default:
       return true;
   }
@@ -187,13 +189,35 @@ function buildPoolSummaries(nodes: NodeItem[], activeVersion: string) {
             .filter((version) => version.trim() !== ''),
         ),
       );
+      const targetConfigVersions = Array.from(
+        new Set(
+          poolNodes
+            .map((node) => node.target_config_version ?? '')
+            .filter((version) => version.trim() !== ''),
+        ),
+      );
+      const targetConfigChecksums = Array.from(
+        new Set(
+          poolNodes
+            .map((node) => node.target_config_checksum ?? '')
+            .filter((checksum) => checksum.trim() !== ''),
+        ),
+      );
+      const targetConfigPools = Array.from(
+        new Set(
+          poolNodes
+            .map((node) => node.target_config_pool ?? '')
+            .filter((pool) => pool.trim() !== ''),
+        ),
+      );
       const sortedNodes = poolNodes
         .slice()
         .sort((left, right) => left.name.localeCompare(right.name));
       return {
         name,
         nodes: sortedNodes,
-        onlineCount: poolNodes.filter((node) => node.status === 'online').length,
+        onlineCount: poolNodes.filter((node) => node.status === 'online')
+          .length,
         schedulableCount: poolNodes.filter(
           (node) => node.scheduling_enabled && !node.drain_mode,
         ).length,
@@ -202,14 +226,55 @@ function buildPoolSummaries(nodes: NodeItem[], activeVersion: string) {
           (node) => node.openresty_status === 'unhealthy',
         ).length,
         laggingCount: poolNodes.filter((node) =>
-          hasLaggingVersion(node, activeVersion),
+          hasLaggingConfig(node, activeVersion),
         ).length,
         publicIPs,
         latestHeartbeat: getLatestHeartbeat(poolNodes),
         latestApplyResult: getLatestApplyResult(poolNodes),
         currentVersions,
+        targetConfigVersions,
+        targetConfigChecksums,
+        targetConfigPools,
+        hasUnavailableTargetConfig: poolNodes.some(
+          (node) => !isTargetConfigAvailable(node),
+        ),
       } satisfies NodePoolSummary;
     });
+}
+
+function formatListValue(values: string[], fallback: string) {
+  return values.slice(0, 3).join('、') || fallback;
+}
+
+function formatChecksumList(values: string[]) {
+  return values
+    .slice(0, 2)
+    .map((value) => (value.length > 16 ? `${value.slice(0, 16)}...` : value))
+    .join('、');
+}
+
+function TargetConfigSummary({ pool }: { pool: NodePoolSummary }) {
+  return (
+    <div className="mt-3 space-y-1 border-t border-[var(--border-default)] pt-3 text-xs text-[var(--foreground-secondary)]">
+      <p>
+        目标版本：
+        {formatListValue(pool.targetConfigVersions, '暂无池级目标')}
+      </p>
+      <p>
+        目标池：
+        {formatListValue(pool.targetConfigPools, pool.name)}
+      </p>
+      <p className="break-all">
+        目标校验：
+        {formatChecksumList(pool.targetConfigChecksums) || '暂无'}
+      </p>
+      {pool.hasUnavailableTargetConfig ? (
+        <p className="text-[var(--status-warning-foreground)]">
+          目标配置缺失，请重新发布配置。
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function getPoolHealthBadge(pool: NodePoolSummary) {
@@ -270,30 +335,29 @@ function NodeStack({ nodes }: { nodes: NodeItem[] }) {
 }
 
 function NodeVersionStack({ nodes }: { nodes: NodeItem[] }) {
-  const versions = nodes
-    .map((node) => ({
-      id: node.id,
-      name: node.name || node.node_id,
-      label: `${node.agent_version || 'unknown'} / ${
-        node.nginx_version || 'unknown'
-      }`,
-    }));
+  const versions = nodes.map((node) => ({
+    id: node.id,
+    name: node.name || node.node_id,
+    label: `${node.agent_version || 'unknown'} / ${
+      node.nginx_version || 'unknown'
+    }`,
+  }));
 
   if (versions.length === 0) {
     return <span>unknown</span>;
   }
 
   return (
-    <div className="scrollbar-none max-h-28 min-w-0 max-w-full space-y-2 overflow-y-auto pr-1">
+    <div className="scrollbar-none max-h-28 max-w-full min-w-0 space-y-2 overflow-y-auto px-px">
       {versions.map((item) => (
         <div
           key={`${item.id}-${item.label}`}
-          className="min-w-0 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2"
+          className="node-version-chip min-w-0 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2"
         >
           <p className="truncate text-xs font-medium text-[var(--foreground-primary)]">
             {item.name}
           </p>
-          <p className="mt-1 min-w-0 break-all text-xs text-[var(--foreground-secondary)]">
+          <p className="mt-1 min-w-0 text-xs break-all text-[var(--foreground-secondary)]">
             {item.label}
           </p>
         </div>
@@ -330,7 +394,11 @@ function PoolCreateModal({
       size="sm"
       footer={
         <div className="flex flex-wrap justify-end gap-3">
-          <SecondaryButton type="button" onClick={onClose} disabled={isSubmitting}>
+          <SecondaryButton
+            type="button"
+            onClick={onClose}
+            disabled={isSubmitting}
+          >
             取消
           </SecondaryButton>
           <PrimaryButton
@@ -375,7 +443,9 @@ export function NodesPage() {
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
   const confirmDialog = useConfirmDialog();
-  const [editingNode, setEditingNode] = useState<Partial<NodeItem> | null>(null);
+  const [editingNode, setEditingNode] = useState<Partial<NodeItem> | null>(
+    null,
+  );
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isPoolCreateOpen, setIsPoolCreateOpen] = useState(false);
 
@@ -505,13 +575,11 @@ export function NodesPage() {
       case 'unhealthy':
         return '当前仅展示包含代理服务异常节点的边缘池。';
       case 'lagging':
-        return activeVersion
-          ? `当前仅展示未追平激活版本 ${activeVersion} 的边缘池。`
-          : '当前没有激活版本，无法筛选配置落后节点。';
+        return '当前仅展示未追平池级目标配置的边缘池；旧数据会按全局激活版本判断。';
       default:
         return '列表每 5 秒自动刷新一次。';
     }
-  }, [activeVersion, riskFilter]);
+  }, [riskFilter]);
 
   const handleReset = () => {
     setFeedback(null);
@@ -674,7 +742,9 @@ export function NodesPage() {
               <SecondaryButton
                 type="button"
                 onClick={() =>
-                  void queryClient.invalidateQueries({ queryKey: nodesQueryKey })
+                  void queryClient.invalidateQueries({
+                    queryKey: nodesQueryKey,
+                  })
                 }
               >
                 立即刷新
@@ -698,12 +768,23 @@ export function NodesPage() {
                 {renderRiskFilters()}
                 {selectedPoolSummary ? (
                   <div className="grid gap-3 md:grid-cols-4">
-                    <MetricTile label="节点数" value={selectedPoolSummary.nodes.length} />
-                    <MetricTile label="可调度" value={selectedPoolSummary.schedulableCount} />
-                    <MetricTile label="公网 IP" value={selectedPoolSummary.publicIPs.length} />
+                    <MetricTile
+                      label="节点数"
+                      value={selectedPoolSummary.nodes.length}
+                    />
+                    <MetricTile
+                      label="可调度"
+                      value={selectedPoolSummary.schedulableCount}
+                    />
+                    <MetricTile
+                      label="公网 IP"
+                      value={selectedPoolSummary.publicIPs.length}
+                    />
                     <MetricTile
                       label="最近心跳"
-                      value={formatHeartbeat(selectedPoolSummary.latestHeartbeat)}
+                      value={formatHeartbeat(
+                        selectedPoolSummary.latestHeartbeat,
+                      )}
                     />
                   </div>
                 ) : null}
@@ -719,7 +800,9 @@ export function NodesPage() {
                           Agent / 代理服务版本
                         </th>
                         <th className="px-3 py-3 font-medium">运行健康</th>
-                        <th className="px-3 py-3 font-medium">当前版本</th>
+                        <th className="px-3 py-3 font-medium">
+                          当前 / 目标配置
+                        </th>
                         <th className="px-3 py-3 font-medium">最近应用</th>
                         <th className="px-3 py-3 font-medium">最近心跳</th>
                         <th className="px-3 py-3 font-medium">操作</th>
@@ -737,7 +820,8 @@ export function NodesPage() {
                                 IP：{node.ip || '未回填'}
                               </p>
                               <p className="text-xs text-[var(--foreground-secondary)]">
-                                公网 IP：{node.public_ips.join(' / ') || '未配置'}
+                                公网 IP：
+                                {node.public_ips.join(' / ') || '未配置'}
                               </p>
                               <p className="text-xs text-[var(--foreground-secondary)]">
                                 位置：{node.geo_name || '未配置地图点位'}
@@ -762,7 +846,9 @@ export function NodesPage() {
                                     : '暂停调度'
                                 }
                                 variant={
-                                  node.scheduling_enabled ? 'success' : 'warning'
+                                  node.scheduling_enabled
+                                    ? 'success'
+                                    : 'warning'
                                 }
                               />
                               {node.drain_mode ? (
@@ -786,21 +872,54 @@ export function NodesPage() {
                           </td>
                           <td className="px-3 py-4 text-[var(--foreground-secondary)]">
                             {node.current_version || '未应用'}
+                            {node.current_checksum ? (
+                              <span className="mt-1 block text-xs break-all">
+                                当前校验：{node.current_checksum}
+                              </span>
+                            ) : null}
+                            {node.target_config_version ||
+                            node.target_config_checksum ||
+                            node.target_config_pool ? (
+                              <span className="mt-2 block text-xs">
+                                目标：
+                                {node.target_config_version ||
+                                  '暂无版本'} ·{' '}
+                                {node.target_config_pool ||
+                                  normalizePoolName(node.pool_name)}
+                              </span>
+                            ) : null}
+                            {node.target_config_checksum ? (
+                              <span className="mt-1 block text-xs break-all">
+                                目标校验：{node.target_config_checksum}
+                              </span>
+                            ) : null}
+                            {!isTargetConfigAvailable(node) ? (
+                              <span className="mt-2 block text-xs text-[var(--status-warning-foreground)]">
+                                目标配置缺失，请重新发布配置。
+                              </span>
+                            ) : null}
+                            {hasLaggingConfig(node, activeVersion) ? (
+                              <span className="mt-2 block text-xs text-[var(--status-warning-foreground)]">
+                                配置落后
+                              </span>
+                            ) : null}
                           </td>
                           <td className="px-3 py-4">
                             <StatusBadge
                               label={getApplyLabel(node.latest_apply_result)}
-                              variant={getApplyVariant(node.latest_apply_result)}
+                              variant={getApplyVariant(
+                                node.latest_apply_result,
+                              )}
                             />
                           </td>
                           <td className="px-3 py-4 text-[var(--foreground-secondary)]">
                             {isWSConnectedLastSeen(node.last_seen_at)
                               ? 'WS 已连接'
                               : isMeaningfulTime(node.last_seen_at)
-                              ? `${formatRelativeTime(
-                                  node.last_seen_at,
-                                )} · ${formatDateTime(node.last_seen_at)}`
-                              : '暂无'}
+                                ? `${formatRelativeTime(
+                                    node.last_seen_at,
+                                  )} · ${formatDateTime(node.last_seen_at)}`
+                                : '暂无'}
                           </td>
                           <td className="px-3 py-4">
                             <div className="flex flex-wrap gap-2">
@@ -845,7 +964,9 @@ export function NodesPage() {
               <SecondaryButton
                 type="button"
                 onClick={() =>
-                  void queryClient.invalidateQueries({ queryKey: nodesQueryKey })
+                  void queryClient.invalidateQueries({
+                    queryKey: nodesQueryKey,
+                  })
                 }
               >
                 立即刷新
@@ -884,7 +1005,9 @@ export function NodesPage() {
                           Agent / 代理服务版本
                         </th>
                         <th className="px-3 py-3 font-medium">运行健康</th>
-                        <th className="px-3 py-3 font-medium">当前版本</th>
+                        <th className="px-3 py-3 font-medium">
+                          当前 / 目标配置
+                        </th>
                         <th className="px-3 py-3 font-medium">最近应用</th>
                         <th className="px-3 py-3 font-medium">最近心跳</th>
                         <th className="px-3 py-3 font-medium">操作</th>
@@ -901,8 +1024,8 @@ export function NodesPage() {
                                   {pool.name}
                                 </p>
                                 <p className="text-xs text-[var(--foreground-secondary)]">
-                                  {pool.nodes.length} 个节点 · {pool.publicIPs.length}{' '}
-                                  个公网 IP
+                                  {pool.nodes.length} 个节点 ·{' '}
+                                  {pool.publicIPs.length} 个公网 IP
                                 </p>
                                 <p className="text-xs text-[var(--foreground-secondary)]">
                                   在线 {pool.onlineCount} / 可调度{' '}
@@ -947,18 +1070,20 @@ export function NodesPage() {
                               />
                             </td>
                             <td className="px-3 py-4 text-[var(--foreground-secondary)]">
-                              {pool.currentVersions.slice(0, 3).join('、') ||
-                                '未应用'}
+                              {formatListValue(pool.currentVersions, '未应用')}
                               {pool.laggingCount > 0 ? (
                                 <span className="mt-2 block text-xs text-[var(--status-warning-foreground)]">
                                   {pool.laggingCount} 个节点配置落后
                                 </span>
                               ) : null}
+                              <TargetConfigSummary pool={pool} />
                             </td>
                             <td className="px-3 py-4">
                               <StatusBadge
                                 label={getApplyLabel(pool.latestApplyResult)}
-                                variant={getApplyVariant(pool.latestApplyResult)}
+                                variant={getApplyVariant(
+                                  pool.latestApplyResult,
+                                )}
                               />
                             </td>
                             <td className="px-3 py-4 text-[var(--foreground-secondary)]">
@@ -1036,7 +1161,13 @@ export function NodesPage() {
   );
 }
 
-function MetricTile({ label, value }: { label: string; value: string | number }) {
+function MetricTile({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
       <p className="text-xs text-[var(--foreground-secondary)]">{label}</p>

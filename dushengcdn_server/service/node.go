@@ -243,7 +243,7 @@ func RequestNodeForceSync(id uint) (*NodeView, error) {
 	if err != nil {
 		return nil, err
 	}
-	activeConfig, err := GetActiveConfigMetaForAgent()
+	activeConfig, err := GetActiveConfigMetaForAgentNode(node)
 	if err != nil {
 		return nil, errors.New("无法获取当前激活的配置版本：" + err.Error())
 	}
@@ -394,6 +394,7 @@ func buildNodeView(node *model.Node) *NodeView {
 		OpenrestyMessage:          strings.TrimSpace(node.OpenrestyMessage),
 		Status:                    status,
 		CurrentVersion:            node.CurrentVersion,
+		CurrentChecksum:           node.CurrentChecksum,
 		LastSeenAt:                nodeViewLastSeenAt(node),
 		LastError:                 node.LastError,
 		CreatedAt:                 node.CreatedAt,
@@ -404,7 +405,34 @@ func buildNodeView(node *model.Node) *NodeView {
 	if view.UpdateChannel == "" {
 		view.UpdateChannel = ReleaseChannelStable.String()
 	}
+	applyNodeViewTargetConfig(view, node)
 	return view
+}
+
+func applyNodeViewTargetConfig(view *NodeView, node *model.Node) {
+	if view == nil || node == nil {
+		return
+	}
+	poolName := normalizeNodePoolName(node.PoolName)
+	if poolName == "" {
+		poolName = normalizeNodePoolName("default")
+	}
+	view.TargetConfigPool = poolName
+	version, artifact, err := getActiveConfigVersionArtifactForNode(node)
+	if err != nil {
+		view.TargetConfigAvailable = false
+		view.ConfigInSync = strings.TrimSpace(node.CurrentVersion) == ""
+		return
+	}
+	view.TargetConfigAvailable = true
+	view.TargetConfigVersion = version.Version
+	view.TargetConfigChecksum = artifact.Checksum
+	currentChecksum := strings.TrimSpace(node.CurrentChecksum)
+	if currentChecksum != "" {
+		view.ConfigInSync = currentChecksum == artifact.Checksum
+		return
+	}
+	view.ConfigInSync = strings.TrimSpace(node.CurrentVersion) == version.Version
 }
 
 func nodeViewLastSeenAt(node *model.Node) any {
@@ -773,6 +801,7 @@ func normalizeAgentNodePayload(payload AgentNodePayload) AgentNodePayload {
 	payload.AgentVersion = strings.TrimSpace(payload.AgentVersion)
 	payload.NginxVersion = strings.TrimSpace(payload.NginxVersion)
 	payload.CurrentVersion = strings.TrimSpace(payload.CurrentVersion)
+	payload.CurrentChecksum = strings.TrimSpace(payload.CurrentChecksum)
 	payload.LastError = truncateForDatabase(payload.LastError, 16000)
 	payload.OpenrestyStatus = normalizeOpenrestyStatus(payload.OpenrestyStatus)
 	payload.OpenrestyMessage = truncateForDatabase(payload.OpenrestyMessage, 16000)
@@ -805,6 +834,7 @@ func applyNodeRuntime(node *model.Node, payload AgentNodePayload, preserveName b
 	node.OpenrestyMessage = truncateForDatabase(payload.OpenrestyMessage, 16000)
 	node.Status = NodeStatusOnline
 	node.CurrentVersion = strings.TrimSpace(payload.CurrentVersion)
+	node.CurrentChecksum = strings.TrimSpace(payload.CurrentChecksum)
 	node.LastSeenAt = time.Now()
 	node.LastError = truncateForDatabase(payload.LastError, 16000)
 	if !node.GeoManualOverride {

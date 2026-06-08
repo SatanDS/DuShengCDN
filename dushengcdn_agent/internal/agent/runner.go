@@ -1110,6 +1110,7 @@ func (r *Runner) nodePayloadWithContext(ctx context.Context, nodeID string) prot
 		AgentVersion:           r.Config.AgentVersion,
 		NginxVersion:           r.Config.NginxVersion,
 		CurrentVersion:         snapshot.CurrentVersion,
+		CurrentChecksum:        snapshot.CurrentChecksum,
 		LastError:              snapshot.LastError,
 		OpenrestyStatus:        openrestyStatus,
 		OpenrestyMessage:       snapshot.OpenrestyMessage,

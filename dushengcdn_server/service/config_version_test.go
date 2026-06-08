@@ -11,9 +11,11 @@ import (
 func TestCleanupConfigVersionsDeletesOnlyOldInactiveRows(t *testing.T) {
 	setupServiceTestDB(t)
 
+	seededVersionIDs := map[string]uint{}
 	for i := 1; i <= 5; i++ {
+		versionNumber := fmt.Sprintf("2026060500000%d", i)
 		version := &model.ConfigVersion{
-			Version:          fmt.Sprintf("2026060500000%d", i),
+			Version:          versionNumber,
 			SnapshotJSON:     "{}",
 			MainConfig:       "main",
 			RenderedConfig:   "rendered",
@@ -24,6 +26,20 @@ func TestCleanupConfigVersionsDeletesOnlyOldInactiveRows(t *testing.T) {
 		}
 		if err := model.DB.Create(version).Error; err != nil {
 			t.Fatalf("seed config version %d: %v", i, err)
+		}
+		seededVersionIDs[versionNumber] = version.ID
+		artifact := &model.ConfigVersionArtifact{
+			ConfigVersionID:     version.ID,
+			PoolName:            "default",
+			Checksum:            version.Checksum,
+			MainConfigChecksum:  fmt.Sprintf("main-checksum-%d", i),
+			RouteConfigChecksum: fmt.Sprintf("route-checksum-%d", i),
+			RenderedConfig:      "server {}",
+			SupportFilesJSON:    "[]",
+			RouteCount:          1,
+		}
+		if err := model.DB.Create(artifact).Error; err != nil {
+			t.Fatalf("seed config version artifact %d: %v", i, err)
 		}
 	}
 
@@ -56,6 +72,293 @@ func TestCleanupConfigVersionsDeletesOnlyOldInactiveRows(t *testing.T) {
 		if _, ok := remaining[version]; !ok {
 			t.Fatalf("expected recent version %s to be preserved, got %#v", version, remaining)
 		}
+	}
+
+	var artifactCount int64
+	if err := model.DB.Model(&model.ConfigVersionArtifact{}).Count(&artifactCount).Error; err != nil {
+		t.Fatalf("count remaining config version artifacts: %v", err)
+	}
+	if artifactCount != 4 {
+		t.Fatalf("expected artifacts for remaining versions only, got %d", artifactCount)
+	}
+	var deletedArtifactCount int64
+	if err := model.DB.Model(&model.ConfigVersionArtifact{}).
+		Where("config_version_id = ?", seededVersionIDs["20260605000002"]).
+		Count(&deletedArtifactCount).Error; err != nil {
+		t.Fatalf("count deleted config version artifacts: %v", err)
+	}
+	if deletedArtifactCount != 0 {
+		t.Fatalf("expected deleted version artifacts to be removed, got %d", deletedArtifactCount)
+	}
+}
+
+func TestPublishConfigVersionCreatesArtifactsPerNodePool(t *testing.T) {
+	setupServiceTestDB(t)
+
+	for _, input := range []NodeInput{
+		{Name: "default-edge", PoolName: "default"},
+		{Name: "hk-edge", PoolName: "hk"},
+		{Name: "eu-edge", PoolName: "eu"},
+		{Name: "idle-edge", PoolName: "idle"},
+	} {
+		if _, err := CreateNode(input); err != nil {
+			t.Fatalf("CreateNode(%s) failed: %v", input.Name, err)
+		}
+	}
+
+	gslbPolicy := defaultGSLBPolicy("hk", 1, "weighted", 60)
+	gslbPolicy.Pools = []ProxyRouteGSLBPoolPolicy{
+		{Name: "hk", Weight: 100, Enabled: true},
+		{Name: "eu", Weight: 100, Enabled: true},
+		{Name: "disabled", Weight: 100, Enabled: false},
+	}
+	seedConfigVersionArtifactTestRoute(t, &model.ProxyRoute{
+		SiteName:                   "app-hk",
+		Domain:                     "app-hk.example.com",
+		Domains:                    mustJSON(t, []string{"app-hk.example.com"}),
+		OriginURL:                  "https://origin-hk.internal",
+		Upstreams:                  mustJSON(t, []string{"https://origin-hk.internal"}),
+		NodePool:                   "hk",
+		Enabled:                    true,
+		CustomHeaders:              "[]",
+		CacheRules:                 "[]",
+		PoWConfig:                  "{}",
+		WAFMode:                    proxyRouteWAFModeBlock,
+		WAFConfig:                  "{}",
+		CCMode:                     proxyRouteCCModeBlock,
+		CCConfig:                   "{}",
+		RegionRestrictionMode:      proxyRouteRegionModeBlock,
+		RegionRestrictionCountries: "[]",
+		DNSRecordType:              "A",
+		DNSTargetCount:             1,
+		DNSScheduleMode:            "healthy",
+		DNSTTL:                     1,
+		DNSProviderMode:            DNSProviderModeCloudflare,
+		GSLBEnabled:                true,
+		GSLBPolicy:                 mustJSON(t, gslbPolicy),
+		DDOSProtectionMode:         DDOSProtectionModeOff,
+		DDOSProtectionProvider:     DDOSProtectionProviderCloudflare,
+	})
+	seedConfigVersionArtifactTestRoute(t, &model.ProxyRoute{
+		SiteName:                   "ddos",
+		Domain:                     "ddos.example.com",
+		Domains:                    mustJSON(t, []string{"ddos.example.com"}),
+		OriginURL:                  "https://origin-default.internal",
+		Upstreams:                  mustJSON(t, []string{"https://origin-default.internal"}),
+		NodePool:                   "default",
+		Enabled:                    true,
+		CustomHeaders:              "[]",
+		CacheRules:                 "[]",
+		PoWConfig:                  "{}",
+		WAFMode:                    proxyRouteWAFModeBlock,
+		WAFConfig:                  "{}",
+		CCMode:                     proxyRouteCCModeBlock,
+		CCConfig:                   "{}",
+		RegionRestrictionMode:      proxyRouteRegionModeBlock,
+		RegionRestrictionCountries: "[]",
+		DNSRecordType:              "A",
+		DNSTargetCount:             1,
+		DNSScheduleMode:            "healthy",
+		DNSTTL:                     1,
+		DNSProviderMode:            DNSProviderModeCloudflare,
+		GSLBPolicy:                 "{}",
+		DDOSProtectionMode:         DDOSProtectionModeAuto,
+		DDOSProtectionProvider:     DDOSProtectionProviderCustom,
+		DDOSProtectionTarget:       "eu",
+	})
+
+	release, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	artifacts, err := model.ListConfigVersionArtifacts(release.Version.ID)
+	if err != nil {
+		t.Fatalf("ListConfigVersionArtifacts failed: %v", err)
+	}
+	byPool := map[string]*model.ConfigVersionArtifact{}
+	for _, artifact := range artifacts {
+		byPool[artifact.PoolName] = artifact
+	}
+	for _, poolName := range []string{"default", "hk", "eu", "idle"} {
+		if byPool[poolName] == nil {
+			t.Fatalf("expected artifact for pool %s, got %#v", poolName, byPool)
+		}
+		if byPool[poolName].Checksum == "" || byPool[poolName].MainConfigChecksum == "" || byPool[poolName].RouteConfigChecksum == "" {
+			t.Fatalf("expected artifact checksums for pool %s, got %+v", poolName, byPool[poolName])
+		}
+	}
+	if _, ok := byPool["disabled"]; ok {
+		t.Fatalf("did not expect artifact for disabled GSLB pool, got %#v", byPool)
+	}
+	if byPool["hk"].RouteCount != 1 {
+		t.Fatalf("expected hk artifact to contain one route, got %d", byPool["hk"].RouteCount)
+	}
+	if byPool["eu"].RouteCount != 2 {
+		t.Fatalf("expected eu artifact to include GSLB and DDoS target routes, got %d", byPool["eu"].RouteCount)
+	}
+	if byPool["idle"].RouteCount != 0 {
+		t.Fatalf("expected idle pool artifact to be empty, got %d", byPool["idle"].RouteCount)
+	}
+	if !strings.Contains(byPool["hk"].RenderedConfig, "app-hk.example.com") || strings.Contains(byPool["hk"].RenderedConfig, "ddos.example.com") {
+		t.Fatalf("expected hk artifact to contain only hk route config, got %s", byPool["hk"].RenderedConfig)
+	}
+	if !strings.Contains(byPool["eu"].RenderedConfig, "app-hk.example.com") || !strings.Contains(byPool["eu"].RenderedConfig, "ddos.example.com") {
+		t.Fatalf("expected eu artifact to contain GSLB and DDoS route config, got %s", byPool["eu"].RenderedConfig)
+	}
+	if strings.Contains(byPool["idle"].RenderedConfig, "app-hk.example.com") || strings.Contains(byPool["idle"].RenderedConfig, "ddos.example.com") {
+		t.Fatalf("expected idle artifact route config to be empty, got %s", byPool["idle"].RenderedConfig)
+	}
+	if byPool["hk"].Checksum == byPool["idle"].Checksum {
+		t.Fatalf("expected route-bearing and empty pool artifacts to have different checksums")
+	}
+}
+
+func TestPublishConfigVersionDetectsPoolOnlyArtifactChanges(t *testing.T) {
+	setupServiceTestDB(t)
+
+	if _, err := CreateNode(NodeInput{Name: "default-edge", PoolName: "default"}); err != nil {
+		t.Fatalf("CreateNode default failed: %v", err)
+	}
+	if _, err := CreateNode(NodeInput{Name: "hk-edge", PoolName: "hk"}); err != nil {
+		t.Fatalf("CreateNode hk failed: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:                   "pool-only",
+		Domain:                     "pool-only.example.com",
+		Domains:                    mustJSON(t, []string{"pool-only.example.com"}),
+		OriginURL:                  "https://origin.internal",
+		Upstreams:                  mustJSON(t, []string{"https://origin.internal"}),
+		NodePool:                   "default",
+		Enabled:                    true,
+		CustomHeaders:              "[]",
+		CacheRules:                 "[]",
+		PoWConfig:                  "{}",
+		WAFMode:                    proxyRouteWAFModeBlock,
+		WAFConfig:                  "{}",
+		CCMode:                     proxyRouteCCModeBlock,
+		CCConfig:                   "{}",
+		RegionRestrictionMode:      proxyRouteRegionModeBlock,
+		RegionRestrictionCountries: "[]",
+		DNSRecordType:              "A",
+		DNSTargetCount:             1,
+		DNSScheduleMode:            "healthy",
+		DNSTTL:                     1,
+		DNSProviderMode:            DNSProviderModeCloudflare,
+		GSLBPolicy:                 "{}",
+		DDOSProtectionMode:         DDOSProtectionModeOff,
+		DDOSProtectionProvider:     DDOSProtectionProviderCloudflare,
+	}
+	seedConfigVersionArtifactTestRoute(t, route)
+	firstRelease, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("initial PublishConfigVersion failed: %v", err)
+	}
+	route.NodePool = "hk"
+	if err := route.Update(); err != nil {
+		t.Fatalf("move route pool: %v", err)
+	}
+
+	changed, err := HasConfigChanges()
+	if err != nil {
+		t.Fatalf("HasConfigChanges failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected pool-only artifact change to be publishable")
+	}
+	diff, err := DiffConfigVersion()
+	if err != nil {
+		t.Fatalf("DiffConfigVersion failed: %v", err)
+	}
+	if !diff.RuntimeConfigChanged {
+		t.Fatalf("expected pool-only artifact change to mark runtime config changed, got %+v", diff)
+	}
+	secondRelease, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("pool-only PublishConfigVersion failed: %v", err)
+	}
+	if firstRelease.Version.Checksum != secondRelease.Version.Checksum {
+		t.Fatal("expected global runtime checksum to remain tied to rendered all-route config")
+	}
+	defaultArtifact, err := model.GetConfigVersionArtifact(secondRelease.Version.ID, "default")
+	if err != nil {
+		t.Fatalf("load default artifact: %v", err)
+	}
+	hkArtifact, err := model.GetConfigVersionArtifact(secondRelease.Version.ID, "hk")
+	if err != nil {
+		t.Fatalf("load hk artifact: %v", err)
+	}
+	if defaultArtifact.Checksum == hkArtifact.Checksum {
+		t.Fatal("expected pool artifact checksums to differ after moving route pools")
+	}
+	if defaultArtifact.RouteCount != 0 || hkArtifact.RouteCount != 1 {
+		t.Fatalf("unexpected route counts after pool move: default=%d hk=%d", defaultArtifact.RouteCount, hkArtifact.RouteCount)
+	}
+}
+
+func TestHistoricalActiveConfigBackfillsPoolArtifacts(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:       "legacy-hk-node",
+		Name:         "legacy-hk-node",
+		IP:           "10.0.0.50",
+		PoolName:     "hk",
+		AgentToken:   "legacy-hk-token",
+		AgentVersion: "v0.5.0",
+		Status:       NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	version := &model.ConfigVersion{
+		Version:          "20260609-legacy",
+		SnapshotJSON:     `{"routes":[{"domain":"legacy.example.com"}]}`,
+		MainConfig:       "worker_processes auto;",
+		RenderedConfig:   "server { server_name legacy.example.com; }",
+		SupportFilesJSON: "[]",
+		Checksum:         "legacy-global-checksum",
+		IsActive:         true,
+		CreatedBy:        "root",
+	}
+	if err := model.DB.Create(version).Error; err != nil {
+		t.Fatalf("seed legacy active config version: %v", err)
+	}
+
+	config, err := GetActiveConfigForAgentNode(node)
+	if err != nil {
+		t.Fatalf("GetActiveConfigForAgentNode should backfill historical pool artifact: %v", err)
+	}
+	if config.Checksum != version.Checksum || config.RenderedConfig != version.RenderedConfig {
+		t.Fatalf("expected historical pool artifact to reuse global config, got %+v", config)
+	}
+	artifact, err := model.GetConfigVersionArtifact(version.ID, "hk")
+	if err != nil {
+		t.Fatalf("expected hk compatibility artifact: %v", err)
+	}
+	if artifact.Checksum != version.Checksum || artifact.RouteCount != 1 {
+		t.Fatalf("unexpected compatibility artifact: %+v", artifact)
+	}
+}
+
+func seedConfigVersionArtifactTestRoute(t *testing.T, route *model.ProxyRoute) {
+	t.Helper()
+	if route.DomainCertIDs == "" {
+		route.DomainCertIDs = "[]"
+	}
+	if route.DNSRecordIDs == "" {
+		route.DNSRecordIDs = "{}"
+	}
+	if route.GSLBPolicy == "" {
+		route.GSLBPolicy = "{}"
+	}
+	if route.DDOSProtectionMode == "" {
+		route.DDOSProtectionMode = DDOSProtectionModeOff
+	}
+	if route.DDOSProtectionProvider == "" {
+		route.DDOSProtectionProvider = DDOSProtectionProviderCloudflare
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert proxy route %s: %v", route.Domain, err)
 	}
 }
 

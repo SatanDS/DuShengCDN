@@ -16,6 +16,10 @@ func (ConfigVersion) TableName() string {
 	return "config_versions"
 }
 
+func (ConfigVersionArtifact) TableName() string {
+	return "config_version_artifacts"
+}
+
 func (DNSQueryRollup) TableName() string {
 	return "dns_query_rollups"
 }

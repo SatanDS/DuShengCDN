@@ -70,6 +70,28 @@ export function getApplyLabel(result: NodeItem['latest_apply_result']) {
   return '暂无';
 }
 
+export function hasTargetConfigFields(node: NodeItem) {
+  return (
+    'target_config_available' in node ||
+    'config_in_sync' in node ||
+    'target_config_version' in node ||
+    'target_config_checksum' in node ||
+    'target_config_pool' in node
+  );
+}
+
+export function isTargetConfigAvailable(node: NodeItem) {
+  return node.target_config_available !== false;
+}
+
+export function hasLaggingConfig(node: NodeItem, activeVersion: string) {
+  if (typeof node.config_in_sync === 'boolean') {
+    return node.config_in_sync === false;
+  }
+
+  return Boolean(activeVersion) && node.current_version !== activeVersion;
+}
+
 export function getUpdateMode(node: NodeItem) {
   if (node.update_requested) {
     if (node.update_channel === 'preview') {
@@ -86,7 +108,9 @@ export function getUpdateMode(node: NodeItem) {
   return { label: '手动', variant: 'info' as const };
 }
 
-export function getOpenrestyStatusVariant(status: NodeItem['openresty_status']) {
+export function getOpenrestyStatusVariant(
+  status: NodeItem['openresty_status'],
+) {
   if (status === 'healthy') {
     return 'success';
   }
@@ -196,12 +220,15 @@ export function buildNodeInstallCommand(serverUrl: string, agentToken: string) {
   ].join('\n');
 }
 
-export function buildNodeDockerInstallCommand(serverUrl: string, agentToken: string) {
+export function buildNodeDockerInstallCommand(
+  serverUrl: string,
+  agentToken: string,
+) {
   return [
     `docker run -d --name dushengcdn-agent --restart unless-stopped \\`,
     `  -p 80:80 -p 443:443 \\`,
     `  -e DUSHENGCDN_SERVER_URL=${serverUrl} \\`,
     `  -e DUSHENGCDN_AGENT_TOKEN=${agentToken} \\`,
-    `  ghcr.io/satands/dushengcdn-agent:latest`
+    `  ghcr.io/satands/dushengcdn-agent:latest`,
   ].join('\n');
 }

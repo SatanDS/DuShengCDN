@@ -78,6 +78,7 @@ type NodePayload struct {
 	AgentVersion           string                        `json:"agent_version"`
 	NginxVersion           string                        `json:"nginx_version"`
 	CurrentVersion         string                        `json:"current_version"`
+	CurrentChecksum        string                        `json:"current_checksum,omitempty"`
 	LastError              string                        `json:"last_error"`
 	OpenrestyStatus        string                        `json:"openresty_status"`
 	OpenrestyMessage       string                        `json:"openresty_message"`

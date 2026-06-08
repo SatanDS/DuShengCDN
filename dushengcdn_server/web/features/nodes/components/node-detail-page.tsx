@@ -35,6 +35,7 @@ import {
 import { NodeEditorModal } from '@/features/nodes/components/node-editor-modal';
 import type {
   NodeAgentReleaseInfo,
+  NodeItem,
   NodeObservability,
 } from '@/features/nodes/types';
 import {
@@ -69,6 +70,9 @@ import {
   getServerUrl,
   stripServerUrlProtocol,
   getUpdateMode,
+  hasLaggingConfig,
+  hasTargetConfigFields,
+  isTargetConfigAvailable,
   isMeaningfulTime,
   type DeploymentProtocol,
 } from '@/features/nodes/utils';
@@ -122,13 +126,29 @@ function formatTrendHour(value: string) {
 }
 
 function optionsToMap(options: OptionItem[] | undefined) {
-  return (options ?? []).reduce<Record<string, string>>(
-    (result, item) => {
-      result[item.key] = item.value;
-      return result;
-    },
-    {},
-  );
+  return (options ?? []).reduce<Record<string, string>>((result, item) => {
+    result[item.key] = item.value;
+    return result;
+  }, {});
+}
+
+function normalizePoolName(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || 'default';
+}
+
+function getNodeTargetConfigValue(
+  node: NodeItem,
+  field: 'target_config_version' | 'target_config_checksum',
+  activeConfigVersion: ConfigVersionSummary | null,
+) {
+  const nodeValue = node[field]?.trim() ?? '';
+  if (nodeValue || hasTargetConfigFields(node)) {
+    return nodeValue;
+  }
+  return field === 'target_config_version'
+    ? (activeConfigVersion?.version ?? '')
+    : (activeConfigVersion?.checksum ?? '');
 }
 
 function parseTrafficMap(value?: string | null) {
@@ -444,7 +464,9 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
       });
       setHealthEventCleanupModalOpen(false);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['node-observability', nodeId] }),
+        queryClient.invalidateQueries({
+          queryKey: ['node-observability', nodeId],
+        }),
         queryClient.invalidateQueries({ queryKey: ['dashboard', 'overview'] }),
       ]);
     },
@@ -636,9 +658,39 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     latestMetricSnapshot?.storage_used_bytes,
     latestMetricSnapshot?.storage_total_bytes,
   );
-  const isTargetVersionApplied =
-    activeConfigVersion !== null &&
-    activeConfigVersion.version === node.current_version;
+  const targetConfigVersion = getNodeTargetConfigValue(
+    node,
+    'target_config_version',
+    activeConfigVersion,
+  );
+  const targetConfigChecksum = getNodeTargetConfigValue(
+    node,
+    'target_config_checksum',
+    activeConfigVersion,
+  );
+  const targetConfigPool =
+    node.target_config_pool?.trim() || normalizePoolName(node.pool_name);
+  const targetConfigSnapshot =
+    targetConfigVersion && activeConfigVersion?.version === targetConfigVersion
+      ? activeConfigVersion
+      : ((configVersionsQuery.data ?? []).find(
+          (item) => item.version === targetConfigVersion,
+        ) ?? null);
+  const hasTargetConfig = Boolean(
+    targetConfigVersion || targetConfigChecksum || hasTargetConfigFields(node),
+  );
+  const targetConfigAvailable = isTargetConfigAvailable(node);
+  const isTargetVersionApplied = !hasLaggingConfig(
+    node,
+    activeConfigVersion?.version ?? '',
+  );
+  const forceSyncDisabled =
+    forceSyncMutation.isPending || !targetConfigAvailable;
+  const forceSyncLabel = !targetConfigAvailable
+    ? '需重新发布配置'
+    : forceSyncMutation.isPending
+      ? '同步中...'
+      : '同步';
 
   const handleOpenAgentUpdateModal = () => {
     setAgentUpdateFeedback(null);
@@ -717,9 +769,9 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   setFeedback(null);
                   forceSyncMutation.mutate();
                 }}
-                disabled={forceSyncMutation.isPending}
+                disabled={forceSyncDisabled}
               >
-                {forceSyncMutation.isPending ? '同步中...' : '同步'}
+                {forceSyncLabel}
               </SecondaryButton>
               <PrimaryButton
                 type="button"
@@ -911,9 +963,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                 )}
               </AppCard>
 
-              <AppCard
-                title="实时资源"
-              >
+              <AppCard title="实时资源">
                 {observabilityQuery.isLoading ? (
                   <LoadingState />
                 ) : observabilityQuery.isError ? (
@@ -972,9 +1022,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                 )}
               </AppCard>
 
-              <AppCard
-                title="网络流量"
-              >
+              <AppCard title="网络流量">
                 {observabilityQuery.isLoading ? (
                   <LoadingState />
                 ) : observabilityQuery.isError ? (
@@ -1100,7 +1148,9 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                         </p>
                         <p className="mt-3 text-2xl font-semibold text-[var(--foreground-primary)]">
                           {trafficSummary
-                            ? trafficSummary.upstream_error_count.toLocaleString('zh-CN')
+                            ? trafficSummary.upstream_error_count.toLocaleString(
+                                'zh-CN',
+                              )
                             : '—'}
                         </p>
                         <p className="mt-2 text-sm text-[var(--foreground-secondary)]">
@@ -1479,6 +1529,11 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                   <p>节点程序版本：{node.agent_version || 'unknown'}</p>
                   <p>代理服务内核：{node.nginx_version || 'unknown'}</p>
                   <p>当前配置：{node.current_version || '未应用'}</p>
+                  <p className="break-all">
+                    当前校验：{node.current_checksum || '暂无'}
+                  </p>
+                  <p>目标池：{targetConfigPool}</p>
+                  <p>目标配置：{targetConfigVersion || '暂无'}</p>
                 </div>
               </AppCard>
 
@@ -1506,26 +1561,26 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
             <AppCard
               title="当前目标版本"
-              description="展示当前全局激活配置版本。"
+              description="展示当前节点所属池的目标配置。"
               action={
-                activeConfigVersion ? (
+                targetConfigSnapshot ? (
                   <SecondaryButton
                     type="button"
                     onClick={() => setIsTargetSnapshotOpen(true)}
                   >
-                    查看目标快照
+                    查看全局版本快照
                   </SecondaryButton>
                 ) : null
               }
             >
-              {configVersionsQuery.isLoading ? (
+              {configVersionsQuery.isLoading && !hasTargetConfigFields(node) ? (
                 <LoadingState />
-              ) : configVersionsQuery.isError ? (
-                <InlineMessage
-                  tone="danger"
-                  message={getErrorMessage(configVersionsQuery.error)}
+              ) : configVersionsQuery.isError && !hasTargetConfigFields(node) ? (
+                <ErrorState
+                  title="目标配置读取失败"
+                  description={getErrorMessage(configVersionsQuery.error)}
                 />
-              ) : activeConfigVersion ? (
+              ) : hasTargetConfig ? (
                 <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
                   <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                     <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
@@ -1542,10 +1597,20 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                       />
                     </div>
                     <p className="mt-3 text-sm text-[var(--foreground-secondary)]">
-                      {isTargetVersionApplied
-                        ? '当前节点已应用全局激活配置。'
-                        : '当前节点版本落后于全局激活配置，可结合应用记录定位原因。'}
+                      {!targetConfigAvailable
+                        ? '目标配置不可用，请重新发布配置后再同步节点。'
+                        : isTargetVersionApplied
+                          ? '当前节点已应用池级目标配置。'
+                          : '当前节点配置落后于池级目标，可结合应用记录定位原因。'}
                     </p>
+                    {!targetConfigAvailable ? (
+                      <div className="mt-3">
+                        <InlineMessage
+                          tone="warning"
+                          message="目标配置缺失，请重新发布配置。"
+                        />
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-3">
@@ -1554,7 +1619,15 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                         目标版本
                       </p>
                       <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                        {activeConfigVersion.version}
+                        {targetConfigVersion || '暂无'}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                        目标池
+                      </p>
+                      <p className="mt-2 text-sm text-[var(--foreground-primary)]">
+                        {targetConfigPool}
                       </p>
                     </div>
                     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
@@ -1562,23 +1635,48 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                         目标校验值
                       </p>
                       <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
-                        {activeConfigVersion.checksum}
+                        {targetConfigChecksum || '暂无'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2 lg:col-start-2">
+                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
+                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
+                        当前校验值
+                      </p>
+                      <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
+                        {node.current_checksum ||
+                          node.latest_apply_checksum ||
+                          '暂无'}
                       </p>
                     </div>
                     <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
                       <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        激活时间
+                        快照状态
                       </p>
                       <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                        {formatDateTime(activeConfigVersion.created_at)}
+                        {targetConfigSnapshot
+                          ? formatDateTime(targetConfigSnapshot.created_at)
+                          : configVersionsQuery.isLoading
+                            ? '加载全局版本快照中...'
+                            : '未找到全局版本快照'}
                       </p>
                     </div>
                   </div>
+                  {configVersionsQuery.isError ? (
+                    <div className="lg:col-start-2">
+                      <InlineMessage
+                        tone="danger"
+                        message={getErrorMessage(configVersionsQuery.error)}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <InlineMessage
                   tone="info"
-                  message="当前还没有全局激活配置版本，无法展示目标快照。"
+                  message="当前还没有池级目标配置，无法展示目标快照。"
                 />
               )}
             </AppCard>
@@ -1731,7 +1829,9 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
                   {nodeInstallCommand ? (
                     <div>
-                      <p className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">脚本部署 (Linux / macOS)</p>
+                      <p className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
+                        脚本部署 (Linux / macOS)
+                      </p>
                       <CodeBlock className="whitespace-pre-wrap">
                         {nodeInstallCommand}
                       </CodeBlock>
@@ -1740,7 +1840,9 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
                   {nodeDockerInstallCommand ? (
                     <div>
-                      <p className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">Docker 部署</p>
+                      <p className="mb-2 text-sm font-medium text-[var(--foreground-primary)]">
+                        Docker 部署
+                      </p>
                       <CodeBlock className="whitespace-pre-wrap">
                         {nodeDockerInstallCommand}
                       </CodeBlock>
@@ -1883,7 +1985,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
       </div>
 
       <ConfigVersionSnapshotModal
-        version={isTargetSnapshotOpen ? activeConfigVersion : null}
+        version={isTargetSnapshotOpen ? targetConfigSnapshot : null}
         onClose={() => setIsTargetSnapshotOpen(false)}
       />
 
@@ -1938,8 +2040,12 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
           />
         ) : (
           <div className="space-y-3 text-sm text-[var(--foreground-secondary)]">
-            <p>该操作会删除当前节点已记录的全部健康事件，包括活动中与已恢复事件。</p>
-            <p>这不会影响节点后续继续上报新的健康事件，但现有时间线与相关摘要会立即刷新。</p>
+            <p>
+              该操作会删除当前节点已记录的全部健康事件，包括活动中与已恢复事件。
+            </p>
+            <p>
+              这不会影响节点后续继续上报新的健康事件，但现有时间线与相关摘要会立即刷新。
+            </p>
           </div>
         )}
       </AppModal>

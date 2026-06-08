@@ -693,3 +693,66 @@ func TestSyncOnceSkipsFetchWhenHeartbeatChecksumMatches(t *testing.T) {
 		t.Fatal("expected no apply log when no config change is needed")
 	}
 }
+
+func TestSyncOnceSameChecksumDifferentVersionSkipsFetchApplyAndUpdatesVersion(t *testing.T) {
+	client := &fakeClient{
+		config: protocol.ActiveConfigResponse{
+			Version:        "20260309-010",
+			Checksum:       "checksum-9",
+			MainConfig:     "worker_processes auto;",
+			RouteConfig:    "server { listen 89; }",
+			RenderedConfig: "server { listen 89; }",
+			CreatedAt:      time.Now().Format(time.RFC3339),
+		},
+	}
+	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	nodeID, err := stateStore.EnsureNodeID()
+	if err != nil {
+		t.Fatalf("EnsureNodeID failed: %v", err)
+	}
+	if err = stateStore.Save(&state.Snapshot{
+		NodeID:          nodeID,
+		CurrentVersion:  "20260309-009",
+		CurrentChecksum: "checksum-9",
+		BlockedVersion:  "20260309-008",
+		BlockedChecksum: "checksum-8",
+		BlockedReason:   "older apply failed",
+		LastError:       "older apply failed",
+	}); err != nil {
+		t.Fatalf("failed to seed state: %v", err)
+	}
+
+	manager := &fakeManager{currentChecksum: "checksum-9"}
+	service := New(client, manager, stateStore)
+	if err = service.SyncOnce(context.Background(), &protocol.ActiveConfigMeta{
+		Version:  "20260309-010",
+		Checksum: "checksum-9",
+	}); err != nil {
+		t.Fatalf("SyncOnce failed: %v", err)
+	}
+	if client.fetchCalls != 0 {
+		t.Fatalf("expected same-checksum version change to skip fetch, got %d", client.fetchCalls)
+	}
+	if len(manager.applyMainContents) != 0 {
+		t.Fatal("expected same-checksum version change to skip apply")
+	}
+	if len(manager.ensureCalls) != 0 {
+		t.Fatal("expected periodic same-checksum version change not to reload runtime")
+	}
+	if len(client.reports) != 0 {
+		t.Fatal("expected no apply report when no config apply occurred")
+	}
+	snapshot, err := stateStore.Load()
+	if err != nil {
+		t.Fatalf("failed to load state: %v", err)
+	}
+	if snapshot.CurrentVersion != "20260309-010" || snapshot.CurrentChecksum != "checksum-9" {
+		t.Fatalf("expected snapshot to record new version with existing checksum, got %+v", snapshot)
+	}
+	if snapshot.BlockedVersion != "" || snapshot.BlockedChecksum != "" || snapshot.BlockedReason != "" {
+		t.Fatalf("expected stale blocked target to be cleared, got %+v", snapshot)
+	}
+	if snapshot.LastError != "" {
+		t.Fatalf("expected last error to be cleared, got %q", snapshot.LastError)
+	}
+}

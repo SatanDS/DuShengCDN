@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -747,6 +748,7 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 		"commercial_license_activations",
 		"commercial_license_revocations",
 		"commercial_licenses",
+		"config_version_artifacts",
 		"config_versions",
 		"dns_accounts",
 		"dns_query_rollups",
@@ -801,6 +803,18 @@ func TestObfuscatedBuildSensitiveColumnNamesAreStable(t *testing.T) {
 			"checksum",
 			"is_active",
 			"created_by",
+			"created_at",
+		},
+		&ConfigVersionArtifact{}: {
+			"id",
+			"config_version_id",
+			"pool_name",
+			"checksum",
+			"main_config_checksum",
+			"route_config_checksum",
+			"rendered_config",
+			"support_files_json",
+			"route_count",
 			"created_at",
 		},
 		&GSLBSchedulingState{}: {
@@ -3268,6 +3282,86 @@ func TestEnsureDatabaseSchemaUpToDateAddsDNSRollupSourceDimensions(t *testing.T)
 		if !db.Migrator().HasColumn(&DNSQueryRollup{}, column) {
 			t.Fatalf("expected dns_query_rollups.%s column to exist", column)
 		}
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
+func TestEnsureDatabaseSchemaUpToDateAddsConfigVersionArtifacts(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "config-version-artifacts.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateAll(db); err != nil {
+		t.Fatalf("auto migrate current schema: %v", err)
+	}
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := db.Create(&Node{
+		NodeID:       "hk-node",
+		Name:         "hk-node",
+		PoolName:     "hk",
+		AgentVersion: "v0.5.0",
+		Status:       "online",
+	}).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	if db.Migrator().HasTable(&ConfigVersionArtifact{}) {
+		if err := db.Migrator().DropTable(&ConfigVersionArtifact{}); err != nil {
+			t.Fatalf("drop config_version_artifacts: %v", err)
+		}
+	}
+	if db.Migrator().HasColumn(&Node{}, "current_checksum") {
+		if err := db.Migrator().DropColumn(&Node{}, "current_checksum"); err != nil {
+			t.Fatalf("drop nodes.current_checksum: %v", err)
+		}
+	}
+	configVersion := &ConfigVersion{
+		Version:          "20260609-legacy",
+		SnapshotJSON:     `{"routes":[{"domain":"legacy.example.com"}]}`,
+		MainConfig:       "worker_processes auto;",
+		RenderedConfig:   "server { server_name legacy.example.com; }",
+		SupportFilesJSON: "[]",
+		Checksum:         "legacy-checksum",
+		IsActive:         true,
+		CreatedBy:        "root",
+	}
+	if err := db.Create(configVersion).Error; err != nil {
+		t.Fatalf("seed config version: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 41); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	if !db.Migrator().HasTable(&ConfigVersionArtifact{}) {
+		t.Fatal("expected config_version_artifacts table to exist")
+	}
+	if !db.Migrator().HasColumn(&Node{}, "current_checksum") {
+		t.Fatal("expected nodes.current_checksum column to exist")
+	}
+	var artifacts []ConfigVersionArtifact
+	if err := db.Where("config_version_id = ?", configVersion.ID).Order("pool_name asc").Find(&artifacts).Error; err != nil {
+		t.Fatalf("query config artifacts: %v", err)
+	}
+	artifactPools := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactPools = append(artifactPools, artifact.PoolName)
+		if artifact.Checksum != "legacy-checksum" || artifact.RenderedConfig != configVersion.RenderedConfig {
+			t.Fatalf("unexpected compatibility artifact: %+v", artifact)
+		}
+	}
+	if !reflect.DeepEqual(artifactPools, []string{"default", "hk"}) {
+		t.Fatalf("unexpected compatibility artifact pools: %#v", artifactPools)
 	}
 	version, exists, err := loadDatabaseSchemaVersion(db)
 	if err != nil {

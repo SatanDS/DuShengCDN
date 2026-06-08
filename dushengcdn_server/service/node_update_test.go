@@ -707,6 +707,101 @@ func TestListNodeViewsIncludesLatestApplyLogsForMultipleNodes(t *testing.T) {
 	}
 }
 
+func TestListNodeViewsReportsConfigSyncByPoolArtifactChecksum(t *testing.T) {
+	setupServiceTestDB(t)
+
+	version := seedAgentTestActiveConfigVersionWithArtifacts(t, "20260609-002", "checksum-global", map[string]string{
+		"default": "checksum-default",
+		"edge-a":  "checksum-edge-a",
+		"edge-b":  "checksum-edge-b",
+	})
+
+	nodes := []*model.Node{
+		{
+			NodeID:          "node-checksum-stale",
+			Name:            "checksum-stale",
+			IP:              "10.0.0.41",
+			PoolName:        "edge-a",
+			AgentToken:      "token-checksum-stale",
+			AgentVersion:    "v0.6.0",
+			NginxVersion:    "1.27.1.2",
+			Status:          NodeStatusOnline,
+			CurrentVersion:  version.Version,
+			CurrentChecksum: "checksum-old",
+			LastSeenAt:      time.Now(),
+		},
+		{
+			NodeID:          "node-checksum-sync",
+			Name:            "checksum-sync",
+			IP:              "10.0.0.42",
+			PoolName:        "edge-a",
+			AgentToken:      "token-checksum-sync",
+			AgentVersion:    "v0.6.0",
+			NginxVersion:    "1.27.1.2",
+			Status:          NodeStatusOnline,
+			CurrentVersion:  version.Version,
+			CurrentChecksum: "checksum-edge-a",
+			LastSeenAt:      time.Now(),
+		},
+		{
+			NodeID:         "node-legacy-version-sync",
+			Name:           "legacy-version-sync",
+			IP:             "10.0.0.43",
+			PoolName:       "edge-a",
+			AgentToken:     "token-legacy-version-sync",
+			AgentVersion:   "v0.5.0",
+			NginxVersion:   "1.27.1.2",
+			Status:         NodeStatusOnline,
+			CurrentVersion: version.Version,
+			LastSeenAt:     time.Now(),
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("failed to insert node %s: %v", node.NodeID, err)
+		}
+	}
+
+	views, err := ListNodeViews()
+	if err != nil {
+		t.Fatalf("ListNodeViews failed: %v", err)
+	}
+	viewsByNodeID := map[string]*NodeView{}
+	for _, view := range views {
+		viewsByNodeID[view.NodeID] = view
+	}
+
+	stale := viewsByNodeID["node-checksum-stale"]
+	if stale == nil {
+		t.Fatal("expected stale checksum node view")
+	}
+	if !stale.TargetConfigAvailable || stale.TargetConfigVersion != version.Version || stale.TargetConfigChecksum != "checksum-edge-a" || stale.TargetConfigPool != "edge-a" {
+		t.Fatalf("unexpected target config for stale node: %+v", stale)
+	}
+	if stale.ConfigInSync {
+		t.Fatalf("expected checksum mismatch to report config_in_sync=false, got %+v", stale)
+	}
+
+	synced := viewsByNodeID["node-checksum-sync"]
+	if synced == nil {
+		t.Fatal("expected synced checksum node view")
+	}
+	if !synced.ConfigInSync || synced.TargetConfigChecksum != "checksum-edge-a" {
+		t.Fatalf("expected matching checksum to report config_in_sync=true, got %+v", synced)
+	}
+
+	legacy := viewsByNodeID["node-legacy-version-sync"]
+	if legacy == nil {
+		t.Fatal("expected legacy version-only node view")
+	}
+	if legacy.CurrentChecksum != "" {
+		t.Fatalf("expected legacy agent node to have no current checksum, got %+v", legacy)
+	}
+	if !legacy.ConfigInSync || legacy.TargetConfigVersion != version.Version || legacy.TargetConfigChecksum != "checksum-edge-a" {
+		t.Fatalf("expected legacy agent to fall back to version sync, got %+v", legacy)
+	}
+}
+
 func TestCollectNodeHeartbeatChangesOnlyReturnsChangedFields(t *testing.T) {
 	now := time.Now()
 	before := &model.Node{

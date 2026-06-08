@@ -33,6 +33,7 @@ type Node struct {
 	OpenrestyMessage          string    `json:"openresty_message" gorm:"type:text"`
 	Status                    string    `json:"status" gorm:"size:16;not null;default:'offline'"`
 	CurrentVersion            string    `json:"current_version" gorm:"size:32"`
+	CurrentChecksum           string    `json:"current_checksum" gorm:"size:64;not null;default:''"`
 	LastSeenAt                time.Time `json:"last_seen_at"`
 	LastError                 string    `json:"last_error" gorm:"type:text"`
 	CreatedAt                 time.Time `json:"created_at"`

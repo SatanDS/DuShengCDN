@@ -40,6 +40,7 @@ func registeredModels() []any {
 		&DNSWorkerNodeProbe{},
 		&DNSQueryRollup{},
 		&ConfigVersion{},
+		&ConfigVersionArtifact{},
 		&Node{},
 		&NodeSystemProfile{},
 		&ApplyLog{},

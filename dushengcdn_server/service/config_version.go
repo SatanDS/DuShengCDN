@@ -74,6 +74,7 @@ type snapshotRoute struct {
 	OriginURL                  string                        `json:"origin_url"`
 	OriginHost                 string                        `json:"origin_host,omitempty"`
 	Upstreams                  []string                      `json:"upstreams,omitempty"`
+	NodePool                   string                        `json:"node_pool,omitempty"`
 	Enabled                    bool                          `json:"enabled"`
 	EnableHTTPS                bool                          `json:"enable_https"`
 	CertID                     *uint                         `json:"cert_id,omitempty"`
@@ -191,7 +192,19 @@ type configBundle struct {
 	RouteConfig       string
 	SupportFiles      []SupportFile
 	Checksum          string
+	Artifacts         []configVersionArtifactBundle
 	ChangedOptionKeys []string
+}
+
+type configVersionArtifactBundle struct {
+	PoolName            string
+	RouteConfig         string
+	SupportFiles        []SupportFile
+	Checksum            string
+	MainConfigChecksum  string
+	RouteConfigChecksum string
+	SupportFilesJSON    string
+	RouteCount          int
 }
 
 const (
@@ -339,7 +352,11 @@ func DiffConfigVersion() (*ConfigDiffResult, error) {
 		}
 	}
 	result.MainConfigChanged = activeVersion.MainConfig != bundle.MainConfig
-	result.RuntimeConfigChanged = activeVersion.Checksum != bundle.Checksum
+	runtimeConfigChanged, err := configBundleRuntimeChanged(activeVersion, bundle)
+	if err != nil {
+		return nil, err
+	}
+	result.RuntimeConfigChanged = runtimeConfigChanged
 	result.ChangedOptionDetails = diffOpenRestyOptionDetails(activeSnapshot.OpenRestyConfig, bundle.OpenRestyConfig)
 	result.ChangedOptionKeys = extractOptionDiffKeys(result.ChangedOptionDetails)
 	result.SnapshotChanged = snapshotRoutesStateChanged(activeSnapshot.Routes, bundle.SnapshotRoutes) || len(result.ChangedOptionDetails) > 0
@@ -365,7 +382,7 @@ func HasConfigChanges() (bool, error) {
 		}
 		return false, err
 	}
-	return activeVersion.Checksum != bundle.Checksum, nil
+	return configBundleRuntimeChanged(activeVersion, bundle)
 }
 
 func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) {
@@ -377,8 +394,14 @@ func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) 
 		return nil, errors.New("没有可发布的启用规则")
 	}
 	activeVersion, err := model.GetActiveConfigVersion()
-	if !force && err == nil && activeVersion.Checksum == bundle.Checksum {
-		return nil, errors.New("当前运行配置没有变更，无需重复发布")
+	if err == nil {
+		changed, compareErr := configBundleRuntimeChanged(activeVersion, bundle)
+		if compareErr != nil {
+			return nil, compareErr
+		}
+		if !force && !changed {
+			return nil, errors.New("当前运行配置没有变更，无需重复发布")
+		}
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -408,6 +431,9 @@ func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) 
 		if err := tx.Create(record).Error; err != nil {
 			return err
 		}
+		if err := createConfigVersionArtifacts(tx, record.ID, bundle.Artifacts); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -416,10 +442,7 @@ func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) 
 		}
 		return nil, err
 	}
-	BroadcastAgentWSActiveConfig(&ActiveConfigMeta{
-		Version:  record.Version,
-		Checksum: record.Checksum,
-	})
+	BroadcastAgentWSActiveConfigForVersion(record)
 	return &ReleaseResult{
 		Version: record,
 		Routes:  bundle.Routes,
@@ -429,6 +452,9 @@ func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) 
 func ActivateConfigVersion(id uint) (*model.ConfigVersion, error) {
 	version, err := model.GetConfigVersionByID(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureConfigVersionArtifacts(version); err != nil {
 		return nil, err
 	}
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
@@ -444,11 +470,112 @@ func ActivateConfigVersion(id uint) (*model.ConfigVersion, error) {
 		return nil, err
 	}
 	version.IsActive = true
-	BroadcastAgentWSActiveConfig(&ActiveConfigMeta{
-		Version:  version.Version,
-		Checksum: version.Checksum,
-	})
+	BroadcastAgentWSActiveConfigForVersion(version)
 	return version, nil
+}
+
+func ensureConfigVersionArtifacts(version *model.ConfigVersion) error {
+	return ensureConfigVersionArtifactsForPools(version, nil)
+}
+
+func ensureConfigVersionArtifactsForPools(version *model.ConfigVersion, requestedPools []string) error {
+	if version == nil {
+		return nil
+	}
+	existing, err := model.ListConfigVersionArtifacts(version.ID)
+	if err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		return nil
+	}
+	pools, err := compatibilityArtifactPools(requestedPools)
+	if err != nil {
+		return err
+	}
+	var supportFiles []SupportFile
+	if strings.TrimSpace(version.SupportFilesJSON) != "" {
+		if err := json.Unmarshal([]byte(version.SupportFilesJSON), &supportFiles); err != nil {
+			return err
+		}
+	}
+	supportFilesJSON, err := json.Marshal(supportFiles)
+	if err != nil {
+		return err
+	}
+	mainConfigChecksum := checksum(version.MainConfig)
+	routeConfigChecksum := checksum(version.RenderedConfig)
+	routeCount := len(versionRoutesFromSnapshot(version.SnapshotJSON))
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		for _, poolName := range pools {
+			record := &model.ConfigVersionArtifact{
+				ConfigVersionID:     version.ID,
+				PoolName:            poolName,
+				Checksum:            version.Checksum,
+				MainConfigChecksum:  mainConfigChecksum,
+				RouteConfigChecksum: routeConfigChecksum,
+				RenderedConfig:      version.RenderedConfig,
+				SupportFilesJSON:    string(supportFilesJSON),
+				RouteCount:          routeCount,
+			}
+			if err := tx.Where("config_version_id = ? AND pool_name = ?", version.ID, poolName).FirstOrCreate(record).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func compatibilityArtifactPools(requestedPools []string) ([]string, error) {
+	poolSet := map[string]struct{}{
+		normalizeNodePoolName("default"): {},
+	}
+	for _, raw := range requestedPools {
+		poolSet[normalizeNodePoolName(raw)] = struct{}{}
+	}
+	nodes, err := model.ListNodes()
+	if err != nil {
+		return nil, err
+	}
+	for _, node := range nodes {
+		poolSet[normalizeNodePoolName(node.PoolName)] = struct{}{}
+	}
+	pools := make([]string, 0, len(poolSet))
+	for poolName := range poolSet {
+		if poolName != "" {
+			pools = append(pools, poolName)
+		}
+	}
+	sort.Strings(pools)
+	return pools, nil
+}
+
+func versionRoutesFromSnapshot(snapshotJSON string) []snapshotRoute {
+	snapshot, err := parseSnapshotDocument(snapshotJSON)
+	if err != nil || snapshot == nil {
+		return []snapshotRoute{}
+	}
+	return snapshot.Routes
+}
+
+func createConfigVersionArtifacts(tx *gorm.DB, versionID uint, bundles []configVersionArtifactBundle) error {
+	if len(bundles) == 0 {
+		return nil
+	}
+	records := make([]*model.ConfigVersionArtifact, 0, len(bundles))
+	for _, bundle := range bundles {
+		records = append(records, &model.ConfigVersionArtifact{
+			ConfigVersionID:     versionID,
+			PoolName:            normalizeNodePoolName(bundle.PoolName),
+			Checksum:            bundle.Checksum,
+			MainConfigChecksum:  bundle.MainConfigChecksum,
+			RouteConfigChecksum: bundle.RouteConfigChecksum,
+			RenderedConfig:      bundle.RouteConfig,
+			SupportFilesJSON:    bundle.SupportFilesJSON,
+			RouteCount:          bundle.RouteCount,
+		})
+	}
+	return tx.Create(&records).Error
 }
 
 func CleanupConfigVersions(keepCount int) (int64, error) {
@@ -466,11 +593,27 @@ func CleanupConfigVersions(keepCount int) (int64, error) {
 	if len(keepIDs) < keepCount {
 		return 0, nil
 	}
-	result := model.DB.
+	var deleteIDs []uint
+	if err := model.DB.Model(&model.ConfigVersion{}).
+		Select("id").
 		Where("is_active = ?", false).
 		Where("id NOT IN ?", keepIDs).
-		Delete(&model.ConfigVersion{})
-	return result.RowsAffected, result.Error
+		Pluck("id", &deleteIDs).Error; err != nil {
+		return 0, err
+	}
+	if len(deleteIDs) == 0 {
+		return 0, nil
+	}
+	var deleted int64
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("config_version_id IN ?", deleteIDs).Delete(&model.ConfigVersionArtifact{}).Error; err != nil {
+			return err
+		}
+		result := tx.Where("id IN ?", deleteIDs).Delete(&model.ConfigVersion{})
+		deleted = result.RowsAffected
+		return result.Error
+	})
+	return deleted, err
 }
 
 func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
@@ -527,6 +670,10 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 	supportFiles = append(supportFiles, SupportFile{Path: "region_config.json", Content: regionConfigJSON})
 	supportFiles = append(supportFiles, SupportFile{Path: "waf_config.json", Content: wafConfigJSON})
 	supportFiles = append(supportFiles, SupportFile{Path: "cc_config.json", Content: ccConfigJSON})
+	artifacts, err := buildConfigVersionArtifacts(routes, openRestyConfig, mainConfig, routeConfigContext)
+	if err != nil {
+		return nil, err
+	}
 	return &configBundle{
 		Routes:            routes,
 		SnapshotRoutes:    snapshotRoutes,
@@ -536,8 +683,143 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 		RouteConfig:       routeConfig,
 		SupportFiles:      supportFiles,
 		Checksum:          checksumBundle(mainConfig, routeConfig, supportFiles),
+		Artifacts:         artifacts,
 		ChangedOptionKeys: openRestyOptionKeys(),
 	}, nil
+}
+
+func buildConfigVersionArtifacts(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot, mainConfig string, context proxyRouteTLSCertificateLoader) ([]configVersionArtifactBundle, error) {
+	poolRoutes, err := buildConfigVersionArtifactRouteMap(routes)
+	if err != nil {
+		return nil, err
+	}
+	poolNames := make([]string, 0, len(poolRoutes))
+	for poolName := range poolRoutes {
+		poolNames = append(poolNames, poolName)
+	}
+	sort.Strings(poolNames)
+	result := make([]configVersionArtifactBundle, 0, len(poolNames))
+	for _, poolName := range poolNames {
+		routesForPool := poolRoutes[poolName]
+		routeConfig, supportFiles, err := renderRouteConfigWithContext(routesForPool, cfg, context)
+		if err != nil {
+			return nil, err
+		}
+		accessSupportFiles, err := renderPoolAccessSupportFiles(routesForPool)
+		if err != nil {
+			return nil, err
+		}
+		supportFiles = append(supportFiles, accessSupportFiles...)
+		supportFilesJSON, err := json.Marshal(supportFiles)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, configVersionArtifactBundle{
+			PoolName:            poolName,
+			RouteConfig:         routeConfig,
+			SupportFiles:        supportFiles,
+			Checksum:            checksumBundle(mainConfig, routeConfig, supportFiles),
+			MainConfigChecksum:  checksum(mainConfig),
+			RouteConfigChecksum: checksum(routeConfig),
+			SupportFilesJSON:    string(supportFilesJSON),
+			RouteCount:          len(routesForPool),
+		})
+	}
+	return result, nil
+}
+
+func renderPoolAccessSupportFiles(routes []*model.ProxyRoute) ([]SupportFile, error) {
+	powConfigJSON, powSupportFiles, err := renderPowConfigBundle(routes)
+	if err != nil {
+		return nil, err
+	}
+	regionConfigJSON, regionSupportFiles, err := renderRegionConfigBundle(routes)
+	if err != nil {
+		return nil, err
+	}
+	wafConfigJSON, wafSupportFiles, err := renderWAFConfigBundle(routes)
+	if err != nil {
+		return nil, err
+	}
+	ccConfigJSON, ccSupportFiles, err := renderCCConfigBundle(routes)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]SupportFile, 0, len(powSupportFiles)+len(regionSupportFiles)+len(wafSupportFiles)+len(ccSupportFiles)+4)
+	files = append(files, powSupportFiles...)
+	files = append(files, regionSupportFiles...)
+	files = append(files, wafSupportFiles...)
+	files = append(files, ccSupportFiles...)
+	files = append(files, SupportFile{Path: "pow_config.json", Content: powConfigJSON})
+	files = append(files, SupportFile{Path: "region_config.json", Content: regionConfigJSON})
+	files = append(files, SupportFile{Path: "waf_config.json", Content: wafConfigJSON})
+	files = append(files, SupportFile{Path: "cc_config.json", Content: ccConfigJSON})
+	return files, nil
+}
+
+func buildConfigVersionArtifactRouteMap(routes []*model.ProxyRoute) (map[string][]*model.ProxyRoute, error) {
+	poolRoutes := map[string][]*model.ProxyRoute{normalizeNodePoolName("default"): {}}
+	nodes, err := model.ListNodes()
+	if err != nil {
+		return nil, err
+	}
+	for _, node := range nodes {
+		poolName := normalizeNodePoolName(node.PoolName)
+		if poolName != "" {
+			if _, ok := poolRoutes[poolName]; !ok {
+				poolRoutes[poolName] = []*model.ProxyRoute{}
+			}
+		}
+	}
+	for _, route := range routes {
+		poolNames, err := configVersionRouteTargetPools(route)
+		if err != nil {
+			return nil, err
+		}
+		for _, poolName := range poolNames {
+			if poolName == "" {
+				continue
+			}
+			poolRoutes[poolName] = append(poolRoutes[poolName], route)
+		}
+	}
+	return poolRoutes, nil
+}
+
+func configVersionRouteTargetPools(route *model.ProxyRoute) ([]string, error) {
+	if route == nil {
+		return []string{normalizeNodePoolName("default")}, nil
+	}
+	seen := make(map[string]struct{})
+	addPool := func(raw string) {
+		poolName := normalizeNodePoolName(raw)
+		if poolName == "" {
+			poolName = normalizeNodePoolName("default")
+		}
+		seen[poolName] = struct{}{}
+	}
+	addPool(route.NodePool)
+	if normalizeDDOSProtectionMode(route.DDOSProtectionMode) == DDOSProtectionModeAuto &&
+		normalizeDDOSProtectionProvider(route.DDOSProtectionProvider) == DDOSProtectionProviderCustom {
+		addPool(route.DDOSProtectionTarget)
+	}
+	if route.GSLBEnabled && strings.TrimSpace(route.GSLBPolicy) != "" {
+		policy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
+		if err != nil {
+			return nil, err
+		}
+		for _, pool := range policy.Pools {
+			if pool.Enabled {
+				addPool(pool.Name)
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for poolName := range seen {
+		result = append(result, poolName)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func buildSnapshotRoutes(routes []*model.ProxyRoute) ([]snapshotRoute, error) {
@@ -603,6 +885,7 @@ func buildSnapshotRoutesWithContext(
 			OriginURL:                  route.OriginURL,
 			OriginHost:                 route.OriginHost,
 			Upstreams:                  upstreams,
+			NodePool:                   normalizeNodePoolName(route.NodePool),
 			Enabled:                    route.Enabled,
 			EnableHTTPS:                route.EnableHTTPS,
 			CertID:                     route.CertID,
@@ -704,6 +987,7 @@ func normalizeSnapshotRoutes(routes []snapshotRoute) []snapshotRoute {
 				normalizedDomains[0],
 			)
 		}
+		routes[index].NodePool = normalizeNodePoolName(routes[index].NodePool)
 		normalizedHeaders, err := normalizeCustomHeaders(routes[index].CustomHeaders)
 		if err == nil {
 			routes[index].CustomHeaders = normalizedHeaders
@@ -815,7 +1099,7 @@ func flattenSnapshotRoutesByDomain(routes []snapshotRoute) map[string]snapshotRo
 }
 
 func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
-	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPassword != right.BasicAuthPassword || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
+	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || normalizeNodePoolName(left.NodePool) != normalizeNodePoolName(right.NodePool) || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPassword != right.BasicAuthPassword || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
 		return false
 	}
 	if len(left.Domains) != len(right.Domains) {
@@ -1628,6 +1912,78 @@ func checksumBundle(mainConfig string, routeConfig string, supportFiles []Suppor
 		builder.WriteString("\n")
 	}
 	return checksum(builder.String())
+}
+
+func configBundleRuntimeChanged(activeVersion *model.ConfigVersion, bundle *configBundle) (bool, error) {
+	if activeVersion == nil || bundle == nil {
+		return true, nil
+	}
+	if activeVersion.Checksum != bundle.Checksum {
+		return true, nil
+	}
+	activeManifest, err := activeConfigVersionArtifactManifestChecksum(activeVersion)
+	if err != nil {
+		return false, err
+	}
+	currentManifest := configVersionArtifactBundleManifestChecksum(bundle.Artifacts)
+	return activeManifest != currentManifest, nil
+}
+
+func activeConfigVersionArtifactManifestChecksum(version *model.ConfigVersion) (string, error) {
+	if version == nil {
+		return "", nil
+	}
+	if err := ensureConfigVersionArtifactsForPools(version, nil); err != nil {
+		return "", err
+	}
+	artifacts, err := model.ListConfigVersionArtifacts(version.ID)
+	if err != nil {
+		return "", err
+	}
+	items := make([]configVersionArtifactManifestItem, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		items = append(items, configVersionArtifactManifestItem{
+			PoolName:            normalizeNodePoolName(artifact.PoolName),
+			Checksum:            strings.TrimSpace(artifact.Checksum),
+			MainConfigChecksum:  strings.TrimSpace(artifact.MainConfigChecksum),
+			RouteConfigChecksum: strings.TrimSpace(artifact.RouteConfigChecksum),
+			RouteCount:          artifact.RouteCount,
+		})
+	}
+	return checksumConfigVersionArtifactManifest(items), nil
+}
+
+func configVersionArtifactBundleManifestChecksum(bundles []configVersionArtifactBundle) string {
+	items := make([]configVersionArtifactManifestItem, 0, len(bundles))
+	for _, bundle := range bundles {
+		items = append(items, configVersionArtifactManifestItem{
+			PoolName:            normalizeNodePoolName(bundle.PoolName),
+			Checksum:            strings.TrimSpace(bundle.Checksum),
+			MainConfigChecksum:  strings.TrimSpace(bundle.MainConfigChecksum),
+			RouteConfigChecksum: strings.TrimSpace(bundle.RouteConfigChecksum),
+			RouteCount:          bundle.RouteCount,
+		})
+	}
+	return checksumConfigVersionArtifactManifest(items)
+}
+
+type configVersionArtifactManifestItem struct {
+	PoolName            string `json:"pool_name"`
+	Checksum            string `json:"checksum"`
+	MainConfigChecksum  string `json:"main_config_checksum"`
+	RouteConfigChecksum string `json:"route_config_checksum"`
+	RouteCount          int    `json:"route_count"`
+}
+
+func checksumConfigVersionArtifactManifest(items []configVersionArtifactManifestItem) string {
+	sort.Slice(items, func(i int, j int) bool {
+		return items[i].PoolName < items[j].PoolName
+	})
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return checksum("")
+	}
+	return checksum(string(raw))
 }
 
 func nextVersionNumber(now time.Time) (string, error) {

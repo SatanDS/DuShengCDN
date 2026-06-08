@@ -5,6 +5,7 @@ import (
 	"dushengcdn/model"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ type AgentNodePayload struct {
 	AgentVersion           string                             `json:"agent_version"`
 	NginxVersion           string                             `json:"nginx_version"`
 	CurrentVersion         string                             `json:"current_version"`
+	CurrentChecksum        string                             `json:"current_checksum"`
 	LastError              string                             `json:"last_error"`
 	OpenrestyStatus        string                             `json:"openresty_status"`
 	OpenrestyMessage       string                             `json:"openresty_message"`
@@ -171,6 +173,12 @@ type NodeView struct {
 	OpenrestyMessage          string     `json:"openresty_message"`
 	Status                    string     `json:"status"`
 	CurrentVersion            string     `json:"current_version"`
+	CurrentChecksum           string     `json:"current_checksum"`
+	TargetConfigVersion       string     `json:"target_config_version"`
+	TargetConfigChecksum      string     `json:"target_config_checksum"`
+	TargetConfigPool          string     `json:"target_config_pool"`
+	TargetConfigAvailable     bool       `json:"target_config_available"`
+	ConfigInSync              bool       `json:"config_in_sync"`
 	LastSeenAt                any        `json:"last_seen_at"`
 	LastError                 string     `json:"last_error"`
 	LatestApplyResult         string     `json:"latest_apply_result"`
@@ -216,7 +224,7 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 	}
 	refreshAgentTokenCache(node)
 	persistHeartbeatObservability(node.NodeID, payload, node.LastSeenAt)
-	activeConfig, err := GetActiveConfigMetaForAgent()
+	activeConfig, err := GetActiveConfigMetaForAgentNode(node)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -362,6 +370,17 @@ func GetActiveConfigMetaForAgent() (*ActiveConfigMeta, error) {
 	}, nil
 }
 
+func GetActiveConfigMetaForAgentNode(node *model.Node) (*ActiveConfigMeta, error) {
+	version, artifact, err := getActiveConfigVersionArtifactForNode(node)
+	if err != nil {
+		return nil, err
+	}
+	return &ActiveConfigMeta{
+		Version:  version.Version,
+		Checksum: artifact.Checksum,
+	}, nil
+}
+
 func GetActiveConfigForAgent() (*AgentConfigResponse, error) {
 	version, err := model.GetActiveConfigVersion()
 	if err != nil {
@@ -385,6 +404,61 @@ func GetActiveConfigForAgent() (*AgentConfigResponse, error) {
 		SupportFiles:   supportFiles,
 		CreatedAt:      version.CreatedAt,
 	}, nil
+}
+
+func GetActiveConfigForAgentNode(node *model.Node) (*AgentConfigResponse, error) {
+	version, artifact, err := getActiveConfigVersionArtifactForNode(node)
+	if err != nil {
+		slog.Error("agent requested active pool config but it is unavailable", "error", err)
+		return nil, err
+	}
+	var supportFiles []SupportFile
+	if strings.TrimSpace(artifact.SupportFilesJSON) != "" {
+		if err = json.Unmarshal([]byte(artifact.SupportFilesJSON), &supportFiles); err != nil {
+			return nil, err
+		}
+	}
+	supportFiles = filterAgentSupportFiles(supportFiles)
+	slog.Debug("agent fetched active pool config", "version", version.Version, "pool", artifact.PoolName, "checksum", artifact.Checksum)
+	return &AgentConfigResponse{
+		Version:        version.Version,
+		Checksum:       artifact.Checksum,
+		MainConfig:     version.MainConfig,
+		RouteConfig:    artifact.RenderedConfig,
+		RenderedConfig: artifact.RenderedConfig,
+		SupportFiles:   supportFiles,
+		CreatedAt:      version.CreatedAt,
+	}, nil
+}
+
+func getActiveConfigVersionArtifactForNode(node *model.Node) (*model.ConfigVersion, *model.ConfigVersionArtifact, error) {
+	version, err := model.GetActiveConfigVersion()
+	if err != nil {
+		return nil, nil, err
+	}
+	poolName := normalizeNodePoolName("default")
+	if node != nil {
+		poolName = normalizeNodePoolName(node.PoolName)
+	}
+	if poolName == "" {
+		poolName = normalizeNodePoolName("default")
+	}
+	artifact, err := model.GetConfigVersionArtifact(version.ID, poolName)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if ensureErr := ensureConfigVersionArtifactsForPools(version, []string{poolName}); ensureErr != nil {
+				return nil, nil, ensureErr
+			}
+			artifact, err = model.GetConfigVersionArtifact(version.ID, poolName)
+		}
+	}
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, fmt.Errorf("当前激活版本没有节点池 %s 的配置包，请重新发布配置", poolName)
+		}
+		return nil, nil, err
+	}
+	return version, artifact, nil
 }
 
 func filterAgentSupportFiles(files []SupportFile) []SupportFile {
@@ -445,6 +519,7 @@ func ReportApplyLog(payload ApplyLogPayload) (*model.ApplyLog, error) {
 		node.LastSeenAt = now
 		if payload.Result == ApplyResultOK {
 			node.CurrentVersion = payload.Version
+			node.CurrentChecksum = payload.Checksum
 			node.LastError = ""
 		} else {
 			node.LastError = payload.Message
@@ -452,7 +527,7 @@ func ReportApplyLog(payload ApplyLogPayload) (*model.ApplyLog, error) {
 		if err := tx.Create(log).Error; err != nil {
 			return err
 		}
-		return tx.Model(node).Select("status", "last_seen_at", "current_version", "last_error").Updates(node).Error
+		return tx.Model(node).Select("status", "last_seen_at", "current_version", "current_checksum", "last_error").Updates(node).Error
 	})
 	if err != nil {
 		return nil, err
@@ -653,6 +728,7 @@ func collectNodeHeartbeatChanges(previous *model.Node, current *model.Node) map[
 	appendIfChanged("openresty_message", previous.OpenrestyMessage, current.OpenrestyMessage)
 	appendIfChanged("status", previous.Status, current.Status)
 	appendIfChanged("current_version", previous.CurrentVersion, current.CurrentVersion)
+	appendIfChanged("current_checksum", previous.CurrentChecksum, current.CurrentChecksum)
 	appendIfChanged("last_error", previous.LastError, current.LastError)
 	appendIfChanged("update_requested", previous.UpdateRequested, current.UpdateRequested)
 	appendIfChanged("update_channel", previous.UpdateChannel, current.UpdateChannel)
