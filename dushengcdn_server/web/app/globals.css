@@ -1919,45 +1919,47 @@ button {
 .dashboard-overview-glass .dashboard-glass-surface,
 .dashboard-overview-glass [class~='bg-[var(--surface-elevated)]'],
 .dashboard-overview-glass [class~='bg-[var(--surface-muted)]'] {
+  background-color: transparent;
   background:
     linear-gradient(
       135deg,
-      rgba(255, 255, 255, 0.18),
-      rgba(255, 255, 255, 0.052)
+      rgba(255, 255, 255, 0.1),
+      rgba(255, 255, 255, 0.018)
     ),
-    rgba(255, 255, 255, 0.08);
+    rgba(255, 255, 255, 0.026);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.052),
-    0 18px 48px rgba(36, 42, 86, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.035),
+    0 18px 48px rgba(36, 42, 86, 0.055),
     0 0 0 1px rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(28px) saturate(1.42);
-  -webkit-backdrop-filter: blur(28px) saturate(1.42);
+  backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
 }
 
 .dashboard-overview-glass .dashboard-liquid-card::before,
 .dashboard-overview-stage::before {
-  opacity: 0.34;
+  opacity: 0.14;
 }
 
 .dashboard-overview-glass .dashboard-liquid-card::after,
 .dashboard-overview-stage::after {
-  opacity: 0.38;
+  opacity: 0.18;
 }
 
 .dashboard-overview-glass .dashboard-liquid-card > header,
 .dashboard-overview-stage > div:first-child {
+  background-color: transparent;
   background:
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.105),
-      rgba(255, 255, 255, 0.018)
+      rgba(255, 255, 255, 0.06),
+      rgba(255, 255, 255, 0.008)
     ),
-    rgba(255, 255, 255, 0.025);
+    rgba(255, 255, 255, 0.012);
 }
 
 .dashboard-overview-glass .dashboard-liquid-card > div {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.008), transparent);
 }
 
 :root[data-theme='dark'] .dashboard-overview-glass .dashboard-liquid-card,
@@ -1971,17 +1973,18 @@ button {
 :root[data-theme='dark']
   .dashboard-overview-glass
   [class~='bg-[var(--surface-muted)]'] {
+  background-color: transparent;
   background:
     linear-gradient(
       135deg,
-      rgba(255, 255, 255, 0.13),
-      rgba(255, 255, 255, 0.035)
+      rgba(255, 255, 255, 0.085),
+      rgba(255, 255, 255, 0.014)
     ),
-    rgba(19, 15, 35, 0.28);
+    rgba(19, 15, 35, 0.12);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
-    0 18px 48px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.13),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.028),
+    0 18px 48px rgba(0, 0, 0, 0.12),
     0 0 0 1px rgba(255, 255, 255, 0.045);
 }
 
@@ -1990,13 +1993,31 @@ button {
   .dashboard-liquid-card
   > header,
 :root[data-theme='dark'] .dashboard-overview-stage > div:first-child {
+  background-color: transparent;
   background:
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.08),
-      rgba(255, 255, 255, 0.012)
+      rgba(255, 255, 255, 0.052),
+      rgba(255, 255, 255, 0.006)
     ),
-    rgba(255, 255, 255, 0.018);
+    rgba(255, 255, 255, 0.008);
+}
+
+.dashboard-portal .dashboard-overview-glass .dashboard-liquid-card,
+.dashboard-portal .dashboard-overview-stage,
+.dashboard-portal .dashboard-overview-map-panel,
+.dashboard-portal .dashboard-overview-metric-card,
+.dashboard-portal .dashboard-overview-glass .dashboard-glass-surface,
+.dashboard-portal
+  .dashboard-overview-glass
+  [class*='bg-[var(--surface-card)]'],
+.dashboard-portal
+  .dashboard-overview-glass
+  [class*='bg-[var(--surface-elevated)]'],
+.dashboard-portal
+  .dashboard-overview-glass
+  [class*='bg-[var(--surface-muted)]'] {
+  background-color: transparent !important;
 }
 
 .sidebar-brand-panel {
