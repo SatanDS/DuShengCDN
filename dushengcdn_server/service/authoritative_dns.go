@@ -1672,6 +1672,9 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	updateNow := worker.UpdateRequested && input.UpdateSupported && shouldDeliverDNSWorkerHeartbeatUpdate(worker)
 	updateChannel := normalizeReleaseChannel(worker.UpdateChannel)
 	updateTag := strings.TrimSpace(worker.UpdateTag)
+	if updateNow {
+		markDNSWorkerHeartbeatUpdateDelivered(worker, now)
+	}
 	worker.Status = normalizeDNSWorkerStatus(input.Status)
 	worker.Version = strings.TrimSpace(input.Version)
 	worker.LastSnapshotVersion = strings.TrimSpace(input.LastSnapshotVersion)
@@ -1745,6 +1748,15 @@ func shouldDeliverDNSWorkerHeartbeatUpdate(worker *model.DNSWorker) bool {
 	return mode == "" || mode == "worker_heartbeat"
 }
 
+func markDNSWorkerHeartbeatUpdateDelivered(worker *model.DNSWorker, now time.Time) {
+	if worker == nil {
+		return
+	}
+	worker.UpdateDispatchMode = "worker_heartbeat_sent"
+	worker.UpdateDispatchMessage = "DNS Worker update task was returned in heartbeat; waiting for update result or follow-up heartbeat."
+	worker.UpdateDispatchedAt = &now
+}
+
 func applyDNSWorkerHeartbeatUpdateResult(worker *model.DNSWorker, result *DNSWorkerUpdateResultInput, now time.Time) {
 	if worker == nil || result == nil || !worker.UpdateRequested {
 		return
@@ -1804,7 +1816,7 @@ func applyDNSWorkerHeartbeatUpdateAck(worker *model.DNSWorker, input DNSWorkerHe
 		return
 	}
 	mode := strings.TrimSpace(worker.UpdateDispatchMode)
-	if mode != "worker_heartbeat" {
+	if mode != "worker_heartbeat" && mode != "worker_heartbeat_sent" {
 		return
 	}
 	workerVersion := strings.TrimSpace(input.Version)

@@ -2992,17 +2992,28 @@ func TestDNSWorkerManualUpdateRequestIsDeliveredOnHeartbeat(t *testing.T) {
 	if !heartbeat.Settings.UpdateNow || heartbeat.Settings.UpdateRepo == "" || heartbeat.Settings.UpdateChannel != string(ReleaseChannelPreview) {
 		t.Fatalf("expected heartbeat to deliver update settings, got %+v", heartbeat.Settings)
 	}
-	if !heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateChannel != string(ReleaseChannelPreview) {
+	if !heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateChannel != string(ReleaseChannelPreview) || heartbeat.Worker.UpdateDispatchMode != "worker_heartbeat_sent" {
 		t.Fatalf("expected heartbeat view to keep pending update until success is reported, got %+v", heartbeat.Worker)
 	}
 	if !heartbeat.Worker.UpdateSupported || heartbeat.Worker.LastUpdateSupportedAt == nil {
 		t.Fatalf("expected heartbeat view to record update support, got %+v", heartbeat.Worker)
 	}
+	secondHeartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:         "v1.0.0",
+		Status:          dnsWorkerStatusOnline,
+		UpdateSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat second: %v", err)
+	}
+	if secondHeartbeat.Settings.UpdateNow {
+		t.Fatalf("expected fallback heartbeat update to be delivered only once, got %+v", secondHeartbeat.Settings)
+	}
 	reloaded, err := model.GetDNSWorkerByID(worker.ID)
 	if err != nil {
 		t.Fatalf("GetDNSWorkerByID: %v", err)
 	}
-	if !reloaded.UpdateRequested || reloaded.UpdateChannel != string(ReleaseChannelPreview) || reloaded.UpdateTag != "" {
+	if !reloaded.UpdateRequested || reloaded.UpdateChannel != string(ReleaseChannelPreview) || reloaded.UpdateTag != "" || reloaded.UpdateDispatchMode != "worker_heartbeat_sent" {
 		t.Fatalf("expected pending update to remain in database until success is reported, got %+v", reloaded)
 	}
 	if !reloaded.UpdateSupported || reloaded.LastUpdateSupportedAt == nil {
@@ -3261,7 +3272,7 @@ func TestDNSWorkerHeartbeatUpdateAckClearsRequestedTag(t *testing.T) {
 			"update_requested":        true,
 			"update_channel":          string(ReleaseChannelStable),
 			"update_tag":              "v1.0.1",
-			"update_dispatch_mode":    "worker_heartbeat",
+			"update_dispatch_mode":    "worker_heartbeat_sent",
 			"update_dispatch_message": "waiting for worker heartbeat",
 			"update_dispatched_at":    dispatchAt,
 		}).Error; err != nil {
@@ -3301,7 +3312,7 @@ func TestDNSWorkerHeartbeatUpdateAckClearsManualStableAfterDelay(t *testing.T) {
 			"update_requested":        true,
 			"update_channel":          string(ReleaseChannelStable),
 			"update_tag":              "",
-			"update_dispatch_mode":    "worker_heartbeat",
+			"update_dispatch_mode":    "worker_heartbeat_sent",
 			"update_dispatch_message": "waiting for worker heartbeat",
 			"update_dispatched_at":    oldDispatchAt,
 		}).Error; err != nil {
