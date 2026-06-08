@@ -24,6 +24,7 @@ type databaseSchemaMigration struct {
 }
 
 func autoMigrateSchemaMetadata(db *gorm.DB) error {
+	db = migrationSession(db)
 	for _, item := range schemaMetadataModels() {
 		if err := db.AutoMigrate(item); err != nil {
 			return err
@@ -2389,6 +2390,7 @@ func validateDatabaseSchemaV41(db *gorm.DB, backend string) error {
 }
 
 func migrateV42(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
@@ -2424,9 +2426,11 @@ func validateDatabaseSchemaV42(db *gorm.DB, backend string) error {
 }
 
 func backfillLegacyConfigVersionArtifacts(db *gorm.DB) error {
+	db = migrationSession(db)
 	if db == nil || !db.Migrator().HasTable(&ConfigVersion{}) || !db.Migrator().HasTable(&ConfigVersionArtifact{}) {
 		return nil
 	}
+	db = db.Session(&gorm.Session{SkipDefaultTransaction: true})
 	var versions []ConfigVersion
 	if err := db.Order("id asc").Find(&versions).Error; err != nil {
 		return err
@@ -2438,40 +2442,38 @@ func backfillLegacyConfigVersionArtifacts(db *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		for _, version := range versions {
-			var count int64
-			if err := tx.Model(&ConfigVersionArtifact{}).Where("config_version_id = ?", version.ID).Count(&count).Error; err != nil {
+	for _, version := range versions {
+		var count int64
+		if err := db.Model(&ConfigVersionArtifact{}).Where("config_version_id = ?", version.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		supportFilesJSON := strings.TrimSpace(version.SupportFilesJSON)
+		if supportFilesJSON == "" {
+			supportFilesJSON = "[]"
+		}
+		routeCount := len(legacySnapshotRouteDomains(version.SnapshotJSON))
+		mainChecksum := checksumMigrationString(version.MainConfig)
+		routeChecksum := checksumMigrationString(version.RenderedConfig)
+		for _, poolName := range poolNames {
+			artifact := &ConfigVersionArtifact{
+				ConfigVersionID:     version.ID,
+				PoolName:            poolName,
+				Checksum:            version.Checksum,
+				MainConfigChecksum:  mainChecksum,
+				RouteConfigChecksum: routeChecksum,
+				RenderedConfig:      version.RenderedConfig,
+				SupportFilesJSON:    supportFilesJSON,
+				RouteCount:          routeCount,
+			}
+			if err := db.Create(artifact).Error; err != nil {
 				return err
 			}
-			if count > 0 {
-				continue
-			}
-			supportFilesJSON := strings.TrimSpace(version.SupportFilesJSON)
-			if supportFilesJSON == "" {
-				supportFilesJSON = "[]"
-			}
-			routeCount := len(legacySnapshotRouteDomains(version.SnapshotJSON))
-			mainChecksum := checksumMigrationString(version.MainConfig)
-			routeChecksum := checksumMigrationString(version.RenderedConfig)
-			for _, poolName := range poolNames {
-				artifact := &ConfigVersionArtifact{
-					ConfigVersionID:     version.ID,
-					PoolName:            poolName,
-					Checksum:            version.Checksum,
-					MainConfigChecksum:  mainChecksum,
-					RouteConfigChecksum: routeChecksum,
-					RenderedConfig:      version.RenderedConfig,
-					SupportFilesJSON:    supportFilesJSON,
-					RouteCount:          routeCount,
-				}
-				if err := tx.Create(artifact).Error; err != nil {
-					return err
-				}
-			}
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func legacyConfigVersionArtifactPoolNames(db *gorm.DB) ([]string, error) {

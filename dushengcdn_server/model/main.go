@@ -163,7 +163,15 @@ func configureDatabasePool(db *gorm.DB) error {
 	return nil
 }
 
+func migrationSession(db *gorm.DB) *gorm.DB {
+	if db == nil {
+		return nil
+	}
+	return db.Session(&gorm.Session{DisableNestedTransaction: true})
+}
+
 func autoMigrateAll(db *gorm.DB) error {
+	db = migrationSession(db)
 	models, err := buildDBModels()
 	if err != nil {
 		return err
@@ -353,7 +361,7 @@ func InitDB() (err error) {
 	if err = registerSharding(db, backend); err != nil {
 		return err
 	}
-	if err = ensureDatabaseSchemaUpToDate(db, backend); err != nil {
+	if err = ensureDatabaseSchemaUpToDate(migrationSession(db), backend); err != nil {
 		return err
 	}
 	return createRootAccountIfNeed()
