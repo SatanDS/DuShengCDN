@@ -80,7 +80,7 @@ func (r *Runner) runUpdate(settings WorkerSettings) error {
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, cleanScript)
 	} else {
-		cmd = exec.CommandContext(ctx, "/bin/sh", cleanScript)
+		cmd = exec.CommandContext(ctx, "bash", cleanScript)
 	}
 	cmd.Env = append(os.Environ(),
 		"DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL="+normalizeWorkerUpdateChannel(settings.UpdateChannel),

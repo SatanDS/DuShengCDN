@@ -3736,17 +3736,15 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 
 func authoritativeDNSSnapshotVersion(snapshot *AuthoritativeDNSSnapshot) (string, error) {
 	payload := struct {
-		GSLBProbeSchedulingEnabled bool                                           `json:"gslb_probe_scheduling_enabled"`
-		Zones                      []AuthoritativeDNSSnapshotZone                 `json:"zones"`
-		Routes                     []authoritativeDNSSnapshotVersionRoute         `json:"routes"`
-		Nodes                      []authoritativeDNSSnapshotVersionNode          `json:"nodes"`
-		SchedulingStates           []authoritativeDNSSnapshotVersionScheduleState `json:"scheduling_states,omitempty"`
+		GSLBProbeSchedulingEnabled bool                                   `json:"gslb_probe_scheduling_enabled"`
+		Zones                      []AuthoritativeDNSSnapshotZone         `json:"zones"`
+		Routes                     []authoritativeDNSSnapshotVersionRoute `json:"routes"`
+		Nodes                      []authoritativeDNSSnapshotVersionNode  `json:"nodes"`
 	}{
 		GSLBProbeSchedulingEnabled: snapshot.GSLBProbeSchedulingEnabled,
 		Zones:                      snapshot.Zones,
 		Routes:                     authoritativeDNSSnapshotVersionRoutes(snapshot.Routes),
 		Nodes:                      authoritativeDNSSnapshotVersionNodes(snapshot.Nodes),
-		SchedulingStates:           authoritativeDNSSnapshotVersionSchedulingStates(snapshot.SchedulingStates),
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -3848,36 +3846,6 @@ func authoritativeDNSSnapshotVersionNodes(nodes []AuthoritativeDNSSnapshotNode) 
 			return result[i].NodeID < result[j].NodeID
 		}
 		return result[i].Name < result[j].Name
-	})
-	return result
-}
-
-type authoritativeDNSSnapshotVersionScheduleState struct {
-	RouteID         uint     `json:"route_id"`
-	RecordType      string   `json:"record_type"`
-	ScopeKey        string   `json:"scope_key"`
-	SelectedTargets []string `json:"selected_targets"`
-}
-
-func authoritativeDNSSnapshotVersionSchedulingStates(states []AuthoritativeDNSSnapshotSchedulingState) []authoritativeDNSSnapshotVersionScheduleState {
-	result := make([]authoritativeDNSSnapshotVersionScheduleState, 0, len(states))
-	for _, state := range states {
-		result = append(result, authoritativeDNSSnapshotVersionScheduleState{
-			RouteID:         state.RouteID,
-			RecordType:      normalizeDNSRecordType(state.RecordType),
-			ScopeKey:        normalizeDNSSourceScope(state.ScopeKey),
-			SelectedTargets: append([]string(nil), state.SelectedTargets...),
-		})
-		sort.Strings(result[len(result)-1].SelectedTargets)
-	}
-	sort.SliceStable(result, func(i, j int) bool {
-		if result[i].RouteID != result[j].RouteID {
-			return result[i].RouteID < result[j].RouteID
-		}
-		if result[i].RecordType != result[j].RecordType {
-			return result[i].RecordType < result[j].RecordType
-		}
-		return result[i].ScopeKey < result[j].ScopeKey
 	})
 	return result
 }

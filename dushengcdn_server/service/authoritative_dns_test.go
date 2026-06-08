@@ -997,8 +997,8 @@ func TestAuthoritativeDNSSnapshotVersionIgnoresRuntimeTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot version after selected target change: %v", err)
 	}
-	if changed == left {
-		t.Fatalf("expected selected target change to affect snapshot version, got %s", changed)
+	if changed != left {
+		t.Fatalf("expected scheduling state changes not to affect snapshot version, got %s and %s", left, changed)
 	}
 }
 

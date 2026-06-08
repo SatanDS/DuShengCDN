@@ -6,7 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -159,6 +161,48 @@ func TestRunnerSendsPendingUpdateResultOnce(t *testing.T) {
 	}
 	if secondResult != nil {
 		t.Fatalf("expected second heartbeat not to repeat update result, got %+v", secondResult)
+	}
+}
+
+func TestRunnerRunUpdateUsesBashScriptsOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell selection is only relevant on Unix")
+	}
+	installDir := t.TempDir()
+	scriptPath := filepath.Join(installDir, "update-dns-worker.sh")
+	outputPath := filepath.Join(installDir, "update-output.txt")
+	script := "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s:%s:%s' \"$DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL\" \"$DUSHENGCDN_RELEASE_REPO\" \"$DUSHENGCDN_DNS_WORKER_UPDATE_TAG\" > \"$DUSHENGCDN_DNS_WORKER_TEST_OUTPUT\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatalf("write update script: %v", err)
+	}
+	runner := &Runner{Config: &Config{
+		InstallDir:        installDir,
+		UpdateScriptPath:  scriptPath,
+		UpdateEnabled:     true,
+		ServerURL:         "https://example.com",
+		Token:             "dns-worker-token",
+		ListenAddr:        "127.0.0.1:0",
+		HeartbeatInterval: time.Hour,
+		RequestTimeout:    time.Second,
+		Version:           "test-version",
+	}}
+	t.Setenv("DUSHENGCDN_DNS_WORKER_TEST_OUTPUT", outputPath)
+	t.Cleanup(func() {
+		_ = os.Remove(outputPath)
+	})
+	if err := runner.runUpdate(WorkerSettings{
+		UpdateRepo:    "SatanDS/SatanDS-DuShengCDN-releases",
+		UpdateChannel: "stable",
+		UpdateTag:     "v1.0.1",
+	}); err != nil {
+		t.Fatalf("runUpdate: %v", err)
+	}
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read update output: %v", err)
+	}
+	if got := string(raw); got != "stable:SatanDS/SatanDS-DuShengCDN-releases:v1.0.1" {
+		t.Fatalf("unexpected update script environment: %q", got)
 	}
 }
 
