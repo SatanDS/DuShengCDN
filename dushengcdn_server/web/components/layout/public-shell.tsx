@@ -13,6 +13,8 @@ interface PublicShellProps {
   children: ReactNode;
 }
 
+const showPublicShowcase = false;
+
 const mapleLeaves = [
   {
     size: '9rem',
@@ -71,284 +73,83 @@ const mapleLeaves = [
   },
 ];
 
-const fallingLeaves = [
-  {
-    left: '6%',
-    size: '3.8rem',
-    driftX: '11rem',
-    midX: '-2rem',
-    endX: '5rem',
-    rotate: '-24deg',
-    duration: '18s',
-    delay: '-12s',
-    opacity: '0.68',
-  },
-  {
-    left: '16%',
-    size: '2.5rem',
-    driftX: '-7rem',
-    midX: '4rem',
-    endX: '-10rem',
-    rotate: '36deg',
-    duration: '22s',
-    delay: '-5s',
-    opacity: '0.46',
-  },
-  {
-    left: '27%',
-    size: '4.5rem',
-    driftX: '8rem',
-    midX: '-5rem',
-    endX: '-3rem',
-    rotate: '14deg',
-    duration: '26s',
-    delay: '-18s',
-    opacity: '0.58',
-  },
-  {
-    left: '42%',
-    size: '2.9rem',
-    driftX: '-10rem',
-    midX: '5rem',
-    endX: '-4rem',
-    rotate: '-12deg',
-    duration: '19s',
-    delay: '-7s',
-    opacity: '0.5',
-  },
-  {
-    left: '53%',
-    size: '5.2rem',
-    driftX: '12rem',
-    midX: '-3rem',
-    endX: '7rem',
-    rotate: '28deg',
-    duration: '24s',
-    delay: '-16s',
-    opacity: '0.56',
-  },
-  {
-    left: '67%',
-    size: '3.2rem',
-    driftX: '-9rem',
-    midX: '6rem',
-    endX: '-12rem',
-    rotate: '-38deg',
-    duration: '21s',
-    delay: '-10s',
-    opacity: '0.48',
-  },
-  {
-    left: '78%',
-    size: '4rem',
-    driftX: '7rem',
-    midX: '-6rem',
-    endX: '12rem',
-    rotate: '8deg',
-    duration: '27s',
-    delay: '-21s',
-    opacity: '0.52',
-  },
-  {
-    left: '91%',
-    size: '2.7rem',
-    driftX: '-12rem',
-    midX: '3rem',
-    endX: '-5rem',
-    rotate: '44deg',
-    duration: '20s',
-    delay: '-3s',
-    opacity: '0.44',
-  },
-  {
-    left: '2%',
-    size: '2.1rem',
-    driftX: '8rem',
-    midX: '-3rem',
-    endX: '10rem',
-    rotate: '18deg',
-    duration: '17s',
-    delay: '-2s',
-    opacity: '0.4',
-  },
-  {
-    left: '11%',
-    size: '3rem',
-    driftX: '-6rem',
-    midX: '6rem',
-    endX: '-8rem',
-    rotate: '-46deg',
-    duration: '25s',
-    delay: '-22s',
-    opacity: '0.5',
-  },
-  {
-    left: '22%',
-    size: '2.2rem',
-    driftX: '10rem',
-    midX: '-4rem',
-    endX: '2rem',
-    rotate: '52deg',
-    duration: '16s',
-    delay: '-9s',
-    opacity: '0.42',
-  },
-  {
-    left: '34%',
-    size: '3.4rem',
-    driftX: '-8rem',
-    midX: '7rem',
-    endX: '-11rem',
-    rotate: '-18deg',
-    duration: '23s',
-    delay: '-14s',
-    opacity: '0.48',
-  },
-  {
-    left: '47%',
-    size: '2.4rem',
-    driftX: '6rem',
-    midX: '-7rem',
-    endX: '9rem',
-    rotate: '34deg',
-    duration: '18s',
-    delay: '-1s',
-    opacity: '0.38',
-  },
-  {
-    left: '59%',
-    size: '3.7rem',
-    driftX: '-11rem',
-    midX: '4rem',
-    endX: '-6rem',
-    rotate: '-52deg',
-    duration: '28s',
-    delay: '-24s',
-    opacity: '0.5',
-  },
-  {
-    left: '72%',
-    size: '2.6rem',
-    driftX: '9rem',
-    midX: '-5rem',
-    endX: '13rem',
-    rotate: '22deg',
-    duration: '19s',
-    delay: '-6s',
-    opacity: '0.42',
-  },
-  {
-    left: '84%',
-    size: '3.3rem',
-    driftX: '-7rem',
-    midX: '8rem',
-    endX: '-9rem',
-    rotate: '-8deg',
-    duration: '24s',
-    delay: '-17s',
-    opacity: '0.47',
-  },
-  {
-    left: '96%',
-    size: '2.2rem',
-    driftX: '-14rem',
-    midX: '2rem',
-    endX: '-16rem',
-    rotate: '58deg',
-    duration: '21s',
-    delay: '-13s',
-    opacity: '0.36',
-  },
-  {
-    left: '64%',
-    size: '2rem',
-    driftX: '5rem',
-    midX: '-8rem',
-    endX: '3rem',
-    rotate: '-30deg',
-    duration: '15s',
-    delay: '-11s',
-    opacity: '0.34',
-  },
-];
-
 const cdnEntryPoints = [
-  { label: '域名资产', detail: '证书 / 启用状态' },
-  { label: '网站配置', detail: '域名 / 反代' },
-  { label: '源站', detail: '回源地址复用' },
-  { label: '节点和 IP 池', detail: '边缘节点编排' },
-  { label: '本地自建解析', detail: 'DNS 响应端' },
-  { label: '发布版本', detail: '配置快照' },
-  { label: '观测计量', detail: '日志 / 带宽' },
+  { label: '授权开通', detail: '站点 / 面板 / Agent' },
+  { label: '域名接入', detail: '证书 / HTTPS / 回源' },
+  { label: '节点编排', detail: '边缘池 / 公网 IP' },
+  { label: '智能解析', detail: 'DNS / 自动选路' },
+  { label: '缓存策略', detail: '规则 / 压缩 / 限流' },
+  { label: '安全防护', detail: '访问控制 / 证书' },
+  { label: '运营计量', detail: '日志 / 带宽 / P95' },
 ];
 
 const cdnSignals = [
-  { value: 'TLS', label: '证书绑定状态', tone: 'pink' },
-  { value: 'DNS', label: '解析与自动选 IP', tone: 'blue' },
-  { value: 'P95', label: '带宽计量窗口', tone: 'violet' },
+  { value: 'License', label: '授权后可独立部署运营', tone: 'pink' },
+  { value: 'Edge', label: '节点池与域名策略统一下发', tone: 'blue' },
+  { value: 'Metering', label: '带宽、日志、客户用量可核算', tone: 'violet' },
 ];
 
 const cdnRails = [
   {
-    title: '网站配置',
-    meta: '域名 / HTTPS / 反向代理',
-    copy: '集中维护域名、证书、HTTPS 跳转、源站、负载均衡、缓存、防护与认证策略。',
+    title: '授权即交付完整 CDN 控制台',
+    meta: 'License / Console / Branding',
+    copy: '不是单个模板页面，而是一套可运营的 CDN 管理系统：控制台、节点 Agent、域名接入、证书和发布链路一起交付。',
   },
   {
-    title: '节点和 IP 池',
-    meta: '边缘池 / 节点 / 公网 IP',
-    copy: '用边缘池管理节点和公网 IP，为反向代理、智能解析和故障切换提供可选目标。',
+    title: '面向客户售卖 CDN 功能',
+    meta: 'Tenant / Plan / Metering',
+    copy: '授权方可以用自己的品牌对外提供域名加速、反向代理、HTTPS、智能解析、缓存和流量计量能力。',
   },
   {
-    title: '发布与应用',
-    meta: '配置版本 / 应用记录',
-    copy: '发布前预览域名差异和渲染结果，发布后跟踪节点应用记录与配置校验。',
+    title: '从接入到发布有完整闭环',
+    meta: 'Deploy / Observe / Iterate',
+    copy: '配置版本、节点应用记录、访问日志、回源流量和证书状态串起来，方便后续运维、核算和扩容。',
   },
 ];
 
 const deliveryFlow = [
   {
     step: '01',
-    title: '域名资产接入',
-    copy: '先录入可复用域名资产，绑定默认证书，确认启用状态和后续站点归属。',
+    title: '授权与环境初始化',
+    copy: '确认授权范围、部署方式和品牌信息，初始化控制台、后端服务、数据库与节点通信基础配置。',
   },
   {
     step: '02',
-    title: '站点策略编排',
-    copy: '在网站配置里组织反代源站、缓存规则、流量限制、负载均衡和访问防护。',
+    title: '节点池与域名接入',
+    copy: '接入边缘节点、公网 IP、源站和业务域名，把 TLS 证书、反代策略与智能解析绑定到同一套资产模型。',
   },
   {
     step: '03',
-    title: '发布到边缘节点',
-    copy: '生成配置版本并下发到 Agent 节点，通过应用记录确认每个节点是否生效。',
+    title: '策略发布与客户开通',
+    copy: '按客户或业务创建站点配置，生成版本后下发到 Agent 节点，让域名、缓存、安全和回源策略同时生效。',
   },
   {
     step: '04',
-    title: '观测计量回看',
-    copy: '用访问明细、缓存命中、回源流量、状态码分布和带宽 P95 继续调优策略。',
+    title: '运营计量与续费',
+    copy: '用带宽、访问日志、缓存命中、节点流量和证书状态做运营看板，为套餐、续费和扩容提供依据。',
   },
 ];
 
 const cdnCapabilities = [
   {
-    title: '反向代理与缓存',
+    title: '反向代理与缓存策略',
     tag: 'Proxy',
-    copy: '按站点维护源站、缓存规则、压缩、超时和代理缓冲参数，适配不同业务域名。',
+    copy: '按站点维护源站、缓存规则、压缩、超时、代理缓冲、回源行为和访问限制，适配不同客户域名。',
   },
   {
-    title: '智能解析',
+    title: '智能解析与节点选路',
     tag: 'DNS',
-    copy: '支持 Cloudflare 同步和本地自建解析，结合节点池权重与在线状态自动选择 IP。',
+    copy: '支持 Cloudflare 同步和本地自建解析，结合节点池权重、在线状态和 IP 池做自动选路。',
   },
   {
-    title: 'HTTPS 证书',
+    title: 'HTTPS 证书生命周期',
     tag: 'TLS',
-    copy: '统一管理证书导入、申请、绑定和到期状态，让站点 HTTPS 配置和域名资产联动。',
+    copy: '统一管理证书导入、申请、绑定、默认配置和到期状态，让授权客户的 HTTPS 接入更可控。',
   },
   {
-    title: '访问观测',
-    tag: 'Logs',
-    copy: '聚合访问日志、节点流量、回源流量、缓存命中、TOP URL/IP 与地区分布。',
+    title: '运营观测与计量',
+    tag: 'Ops',
+    copy: '聚合访问日志、节点流量、回源流量、缓存命中、TOP URL/IP、地区分布和 P95 带宽窗口。',
   },
 ];
 
@@ -378,32 +179,6 @@ function MapleBackdrop() {
   );
 }
 
-function RealMapleRain() {
-  return (
-    <div className="public-real-maple-rain" aria-hidden="true">
-      {fallingLeaves.map((leaf) => (
-        <span
-          className="public-real-maple-leaf"
-          key={`${leaf.left}-${leaf.delay}`}
-          style={
-            {
-              '--fall-left': leaf.left,
-              '--fall-size': leaf.size,
-              '--fall-drift-x': leaf.driftX,
-              '--fall-mid-x': leaf.midX,
-              '--fall-end-x': leaf.endX,
-              '--fall-rotate': leaf.rotate,
-              '--fall-duration': leaf.duration,
-              '--fall-delay': leaf.delay,
-              '--fall-opacity': leaf.opacity,
-            } as CSSProperties
-          }
-        />
-      ))}
-    </div>
-  );
-}
-
 function PublicCdnShowcase() {
   return (
     <section
@@ -416,11 +191,10 @@ function PublicCdnShowcase() {
           <span>DuSheng CDN</span>
         </div>
         <div className="public-showcase-heading">
-          <h2 id="public-portal-showcase-title">把 CDN 管理链路放到首屏之后</h2>
+          <h2 id="public-portal-showcase-title">可授权运营的 CDN 站点能力</h2>
           <p>
-            基于项目后台已经具备的域名资产、网站配置、源站、节点和 IP
-            池、DNS、证书、发布版本与观测计量，向下滚动后直接展示 DuSheng CDN
-            的核心工作流。
+            面向需要自有品牌 CDN
+            面板、节点调度、域名加速和运营计量的团队，提供可部署、可授权、可继续扩展的完整站点能力。
           </p>
         </div>
       </div>
@@ -428,10 +202,12 @@ function PublicCdnShowcase() {
       <div className="public-cdn-console">
         <div className="public-console-topline">
           <div>
-            <span className="public-console-label">Console Preview</span>
-            <h3>DuSheng CDN 管理视图</h3>
+            <span className="public-console-label">License Console</span>
+            <h3>授权、开通、计量，放在同一条运营链路里</h3>
           </div>
-          <div className="public-search-pill">搜索域名 / 节点 / 证书</div>
+          <div className="public-search-pill">
+            授权码 / 域名 / 节点 / 客户套餐
+          </div>
         </div>
 
         <div className="public-category-strip" aria-label="DuShengCDN 功能导航">
@@ -445,12 +221,22 @@ function PublicCdnShowcase() {
 
         <div className="public-content-rack">
           <div className="public-feature-screen">
-            <div className="public-feature-screen-leaf">
-              <MapleMark className="h-16 w-16" aria-hidden="true" />
+            <div className="public-edge-map" aria-hidden="true">
+              <span className="public-edge-route is-primary" />
+              <span className="public-edge-route is-secondary" />
+              <span className="public-edge-route is-tertiary" />
+              <span className="public-edge-node is-origin" />
+              <span className="public-edge-node is-node-a" />
+              <span className="public-edge-node is-node-b" />
+              <span className="public-edge-node is-node-c" />
+              <span className="public-edge-node is-client" />
+              <span className="public-edge-packet is-one" />
+              <span className="public-edge-packet is-two" />
+              <span className="public-edge-packet is-three" />
             </div>
             <div>
-              <span>正在下发</span>
-              <h4>站点配置同步到边缘节点</h4>
+              <span>授权运行中</span>
+              <h4>域名、证书、缓存和节点策略同步到边缘网络</h4>
             </div>
           </div>
 
@@ -482,8 +268,8 @@ function PublicCdnShowcase() {
 
       <div className="public-scroll-band">
         <div className="public-scroll-heading">
-          <span>Delivery Flow</span>
-          <h3>从域名接入到边缘发布</h3>
+          <span>License Delivery</span>
+          <h3>从授权部署到客户续费</h3>
         </div>
         <div className="public-flow-grid">
           {deliveryFlow.map((item) => (
@@ -499,10 +285,9 @@ function PublicCdnShowcase() {
       <div className="public-capability-layout">
         <div className="public-capability-copy">
           <span>DuSheng CDN</span>
-          <h3>后台能力围绕 CDN 运维链路排布</h3>
+          <h3>卖的是能落地运营的 CDN 系统能力</h3>
           <p>
-            这一屏不做纯宣传，而是把项目实际页面里的管理对象，落到 CDN
-            后台每天需要处理的接入、发布、解析、证书、缓存和观测上。
+            页面展示不再只像功能清单，而是把授权方真正关心的“能不能部署、能不能开客户、能不能计量、能不能持续运维”放到前台。
           </p>
         </div>
         <div className="public-capability-grid">
@@ -531,7 +316,6 @@ export function PublicShell({ children }: PublicShellProps) {
   return (
     <div className="public-portal relative min-h-screen overflow-hidden px-4 py-6 text-[var(--foreground-primary)] sm:px-6 lg:px-8">
       <MapleBackdrop />
-      <RealMapleRain />
 
       <header className="pointer-events-none fixed inset-0 z-20">
         {isLoginPage ? (
@@ -600,7 +384,7 @@ export function PublicShell({ children }: PublicShellProps) {
         </section>
       </main>
 
-      {isLoginPage ? <PublicCdnShowcase /> : null}
+      {isLoginPage && showPublicShowcase ? <PublicCdnShowcase /> : null}
     </div>
   );
 }
