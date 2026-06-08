@@ -46,7 +46,7 @@ function HeroMetric({
   return (
     <div
       className={cn(
-        'dashboard-glass-surface rounded-[24px] border px-5 py-5',
+        'dashboard-overview-metric-card dashboard-glass-surface rounded-[24px] border px-5 py-5',
         isDark
           ? 'border-white/12'
           : 'border-white/45 shadow-[0_18px_40px_rgba(148,163,184,0.12)]',
@@ -202,7 +202,7 @@ export function WorldStage({
   return (
     <section
       className={cn(
-        'dashboard-liquid-card overflow-hidden rounded-[32px] border transition-colors',
+        'dashboard-overview-stage dashboard-liquid-card overflow-hidden rounded-[32px] border transition-colors',
         isDark
           ? 'border-white/12 shadow-[0_32px_80px_rgba(2,6,23,0.28)]'
           : 'border-white/45 shadow-[0_32px_80px_rgba(148,163,184,0.16)]',
@@ -240,7 +240,7 @@ export function WorldStage({
         <div className="space-y-5">
           <div
             className={cn(
-              'dashboard-glass-surface relative min-h-[420px] overflow-hidden rounded-[28px] border py-5 md:min-h-[540px] md:py-6 lg:min-h-[600px]',
+              'dashboard-overview-map-panel dashboard-glass-surface relative min-h-[420px] overflow-hidden rounded-[28px] border py-5 md:min-h-[540px] md:py-6 lg:min-h-[600px]',
               isDark ? 'border-white/10' : 'border-white/45',
             )}
           >

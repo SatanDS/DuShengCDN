@@ -201,7 +201,7 @@ export function DashboardOverview() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="dashboard-overview-glass space-y-6">
       <WorldStage
         summary={overview.summary}
         traffic={overview.traffic}

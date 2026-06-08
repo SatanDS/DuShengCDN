@@ -1912,6 +1912,93 @@ button {
     inset 0 -1px 0 rgba(255, 255, 255, 0.035);
 }
 
+.dashboard-overview-glass .dashboard-liquid-card,
+.dashboard-overview-stage,
+.dashboard-overview-map-panel,
+.dashboard-overview-metric-card,
+.dashboard-overview-glass .dashboard-glass-surface,
+.dashboard-overview-glass [class~='bg-[var(--surface-elevated)]'],
+.dashboard-overview-glass [class~='bg-[var(--surface-muted)]'] {
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.18),
+      rgba(255, 255, 255, 0.052)
+    ),
+    rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.052),
+    0 18px 48px rgba(36, 42, 86, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(28px) saturate(1.42);
+  -webkit-backdrop-filter: blur(28px) saturate(1.42);
+}
+
+.dashboard-overview-glass .dashboard-liquid-card::before,
+.dashboard-overview-stage::before {
+  opacity: 0.34;
+}
+
+.dashboard-overview-glass .dashboard-liquid-card::after,
+.dashboard-overview-stage::after {
+  opacity: 0.38;
+}
+
+.dashboard-overview-glass .dashboard-liquid-card > header,
+.dashboard-overview-stage > div:first-child {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.105),
+      rgba(255, 255, 255, 0.018)
+    ),
+    rgba(255, 255, 255, 0.025);
+}
+
+.dashboard-overview-glass .dashboard-liquid-card > div {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent);
+}
+
+:root[data-theme='dark'] .dashboard-overview-glass .dashboard-liquid-card,
+:root[data-theme='dark'] .dashboard-overview-stage,
+:root[data-theme='dark'] .dashboard-overview-map-panel,
+:root[data-theme='dark'] .dashboard-overview-metric-card,
+:root[data-theme='dark'] .dashboard-overview-glass .dashboard-glass-surface,
+:root[data-theme='dark']
+  .dashboard-overview-glass
+  [class~='bg-[var(--surface-elevated)]'],
+:root[data-theme='dark']
+  .dashboard-overview-glass
+  [class~='bg-[var(--surface-muted)]'] {
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.13),
+      rgba(255, 255, 255, 0.035)
+    ),
+    rgba(19, 15, 35, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
+    0 18px 48px rgba(0, 0, 0, 0.18),
+    0 0 0 1px rgba(255, 255, 255, 0.045);
+}
+
+:root[data-theme='dark']
+  .dashboard-overview-glass
+  .dashboard-liquid-card
+  > header,
+:root[data-theme='dark'] .dashboard-overview-stage > div:first-child {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.08),
+      rgba(255, 255, 255, 0.012)
+    ),
+    rgba(255, 255, 255, 0.018);
+}
+
 .sidebar-brand-panel {
   background:
     linear-gradient(
