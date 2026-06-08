@@ -257,6 +257,16 @@ func GetDNSWorkerByID(id uint) (*DNSWorker, error) {
 	return worker, err
 }
 
+func GetDNSWorkerByWorkerID(workerID string) (*DNSWorker, error) {
+	workerID = strings.TrimSpace(workerID)
+	if workerID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	worker := &DNSWorker{}
+	err := DB.Where("worker_id = ?", workerID).First(worker).Error
+	return worker, err
+}
+
 func GetDNSWorkerByToken(token string) (*DNSWorker, error) {
 	worker := &DNSWorker{}
 	err := DB.Where("token = ?", token).First(worker).Error

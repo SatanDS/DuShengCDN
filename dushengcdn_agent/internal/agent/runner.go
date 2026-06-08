@@ -83,6 +83,7 @@ type Runner struct {
 	websocketUpgradeEnabled bool
 	dnsProbeTargets         []protocol.DNSProbeTarget
 	dnsProbeResults         []protocol.DNSProbeReport
+	dnsWorkerUpdateResults  []protocol.DNSWorkerUpdateResult
 }
 
 func (r *Runner) Run(ctx context.Context) error {
@@ -168,6 +169,7 @@ func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, start
 	payload, ackWindows := r.prepareHeartbeatPayload(ctx, nodeID)
 	heartbeatResult, err := r.HeartbeatService.Heartbeat(ctx, payload)
 	if err != nil {
+		r.restoreDNSWorkerUpdateResults(payload.DNSWorkerUpdateResults)
 		return false, err
 	}
 	r.ackObservabilityWindows(ackWindows)
@@ -281,6 +283,7 @@ func (r *Runner) sendWebSocketStatus(ctx context.Context, nodeID string, conn pr
 	r.refreshOpenrestyHealth(ctx)
 	payload, ackWindows := r.prepareHeartbeatPayload(ctx, nodeID)
 	if err := conn.SendStatus(payload); err != nil {
+		r.restoreDNSWorkerUpdateResults(payload.DNSWorkerUpdateResults)
 		return err
 	}
 	r.ackObservabilityWindows(ackWindows)
@@ -387,12 +390,14 @@ func (r *Runner) handleDNSWorkerUpdate(ctx context.Context, request protocol.DNS
 			"worker_name", strings.TrimSpace(request.WorkerName),
 			"error", err,
 		)
+		r.recordDNSWorkerUpdateResult(request, false, err.Error())
 		return
 	}
 	slog.Info("agent dns worker update completed",
 		"worker_id", strings.TrimSpace(request.WorkerID),
 		"worker_name", strings.TrimSpace(request.WorkerName),
 	)
+	r.recordDNSWorkerUpdateResult(request, true, "DNS Worker installer completed")
 }
 
 func (r *Runner) handleDNSWorkerUpdates(ctx context.Context, requests []protocol.DNSWorkerUpdateRequest) {
@@ -474,7 +479,7 @@ func buildDNSWorkerUpdateScript(envFile string, installDir string, repo string, 
 		"SNAPSHOT_PATH=\"${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-}\"",
 		"if [ -z \"$SNAPSHOT_PATH\" ]; then SNAPSHOT_PATH=" + shellQuote(filepath.ToSlash(filepath.Join(installDir, "data/dns-worker-snapshot.json"))) + "; fi",
 		"PROFILE=\"${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}\"",
-		"curl -fsSL " + shellQuote("https://github.com/"+repo+"/releases/"+releaseSelector+"/install-dns-worker.sh") + " | bash -s --" +
+		"curl -fL --retry 10 --retry-all-errors --retry-delay 3 --connect-timeout 20 " + shellQuote("https://github.com/"+repo+"/releases/"+releaseSelector+"/install-dns-worker.sh") + " | bash -s --" +
 			" --server-url \"$SERVER_URL\"" +
 			" --token \"$TOKEN\"" +
 			" --install-dir " + shellQuote(installDir) +
@@ -484,6 +489,27 @@ func buildDNSWorkerUpdateScript(envFile string, installDir string, repo string, 
 			" --release-channel " + shellQuote(channel) +
 			tagArg,
 	}, "\n")
+}
+
+func (r *Runner) recordDNSWorkerUpdateResult(request protocol.DNSWorkerUpdateRequest, success bool, message string) {
+	if r == nil {
+		return
+	}
+	result := protocol.DNSWorkerUpdateResult{
+		WorkerID:       strings.TrimSpace(request.WorkerID),
+		WorkerName:     strings.TrimSpace(request.WorkerName),
+		Repo:           strings.TrimSpace(request.Repo),
+		Channel:        strings.TrimSpace(request.Channel),
+		TagName:        strings.TrimSpace(request.TagName),
+		InstallDir:     strings.TrimSpace(request.InstallDir),
+		Success:        success,
+		Message:        trimString(message, 4000),
+		ReportedAtUnix: time.Now().Unix(),
+	}
+	if result.WorkerID == "" && result.WorkerName == "" {
+		return
+	}
+	r.dnsWorkerUpdateResults = append(r.dnsWorkerUpdateResults, result)
 }
 
 func safeDNSWorkerInstallDir(path string) (string, error) {
@@ -554,6 +580,14 @@ func trimCommandOutput(output []byte, limit int) string {
 		return text
 	}
 	return text[len(text)-limit:]
+}
+
+func trimString(value string, limit int) string {
+	text := strings.TrimSpace(value)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	return text[:limit]
 }
 
 type webSocketBackoff struct {
@@ -832,6 +866,22 @@ func (r *Runner) consumeDNSProbeResults() []protocol.DNSProbeReport {
 	return results
 }
 
+func (r *Runner) consumeDNSWorkerUpdateResults() []protocol.DNSWorkerUpdateResult {
+	if len(r.dnsWorkerUpdateResults) == 0 {
+		return nil
+	}
+	results := r.dnsWorkerUpdateResults
+	r.dnsWorkerUpdateResults = nil
+	return results
+}
+
+func (r *Runner) restoreDNSWorkerUpdateResults(results []protocol.DNSWorkerUpdateResult) {
+	if len(results) == 0 {
+		return
+	}
+	r.dnsWorkerUpdateResults = append(results, r.dnsWorkerUpdateResults...)
+}
+
 func normalizeDNSProbeTargets(targets []protocol.DNSProbeTarget) []protocol.DNSProbeTarget {
 	result := make([]protocol.DNSProbeTarget, 0, len(targets))
 	seen := map[string]struct{}{}
@@ -1052,22 +1102,24 @@ func (r *Runner) nodePayloadWithContext(ctx context.Context, nodeID string) prot
 	metricSnapshot := observability.BuildSnapshot(r.Config, r.StateStore, managedOpenRestyMetrics)
 	healthEvents := observability.BuildHealthEvents(snapshot)
 	dnsProbeResults := r.consumeDNSProbeResults()
+	dnsWorkerUpdateResults := r.consumeDNSWorkerUpdateResults()
 	return protocol.NodePayload{
-		NodeID:           nodeID,
-		Name:             r.Config.NodeName,
-		IP:               r.Config.NodeIP,
-		AgentVersion:     r.Config.AgentVersion,
-		NginxVersion:     r.Config.NginxVersion,
-		CurrentVersion:   snapshot.CurrentVersion,
-		LastError:        snapshot.LastError,
-		OpenrestyStatus:  openrestyStatus,
-		OpenrestyMessage: snapshot.OpenrestyMessage,
-		Profile:          profile,
-		Snapshot:         metricSnapshot,
-		TrafficReport:    trafficReport,
-		AccessLogs:       accessLogs,
-		HealthEvents:     healthEvents,
-		DNSProbeResults:  dnsProbeResults,
+		NodeID:                 nodeID,
+		Name:                   r.Config.NodeName,
+		IP:                     r.Config.NodeIP,
+		AgentVersion:           r.Config.AgentVersion,
+		NginxVersion:           r.Config.NginxVersion,
+		CurrentVersion:         snapshot.CurrentVersion,
+		LastError:              snapshot.LastError,
+		OpenrestyStatus:        openrestyStatus,
+		OpenrestyMessage:       snapshot.OpenrestyMessage,
+		Profile:                profile,
+		Snapshot:               metricSnapshot,
+		TrafficReport:          trafficReport,
+		AccessLogs:             accessLogs,
+		HealthEvents:           healthEvents,
+		DNSProbeResults:        dnsProbeResults,
+		DNSWorkerUpdateResults: dnsWorkerUpdateResults,
 	}
 }
 

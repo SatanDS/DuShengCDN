@@ -50,6 +50,7 @@ const (
 	defaultDNSMaxRollupWindowMinutes = 1440
 	defaultDNSMaxHeartbeatRollups    = 5000
 	defaultDNSMaxRollupTargetSummary = 64
+	dnsWorkerAgentUpdateAckDelay     = 2 * time.Minute
 )
 
 var dnsLookupNS = net.LookupNS
@@ -102,8 +103,18 @@ type DNSWorkerHeartbeatInput struct {
 	OperatorCIDRLastError    string                                    `json:"operator_cidr_last_error"`
 	UpdateSupported          bool                                      `json:"update_supported"`
 	UninstallSupported       bool                                      `json:"uninstall_supported"`
+	UpdateResult             *DNSWorkerUpdateResultInput               `json:"update_result,omitempty"`
 	Rollups                  []DNSQueryRollupInput                     `json:"rollups"`
 	SchedulingStates         []AuthoritativeDNSSnapshotSchedulingState `json:"scheduling_states,omitempty"`
+}
+
+type DNSWorkerUpdateResultInput struct {
+	Success        bool   `json:"success"`
+	Message        string `json:"message,omitempty"`
+	Repo           string `json:"repo,omitempty"`
+	Channel        string `json:"channel,omitempty"`
+	TagName        string `json:"tag_name,omitempty"`
+	ReportedAtUnix int64  `json:"reported_at_unix"`
 }
 
 type DNSWorkerSettings struct {
@@ -1655,7 +1666,9 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	}
 	now := time.Now()
 	uninstallNow := worker.UninstallRequested
-	updateNow := worker.UpdateRequested && input.UpdateSupported
+	applyDNSWorkerHeartbeatUpdateResult(worker, input.UpdateResult, now)
+	applyLegacyAgentDNSWorkerUpdateAck(worker, input, now)
+	updateNow := worker.UpdateRequested && input.UpdateSupported && shouldDeliverDNSWorkerHeartbeatUpdate(worker)
 	updateChannel := normalizeReleaseChannel(worker.UpdateChannel)
 	updateTag := strings.TrimSpace(worker.UpdateTag)
 	worker.Status = normalizeDNSWorkerStatus(input.Status)
@@ -1721,6 +1734,68 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 			UpdateTag:     updateTag,
 		},
 	}, nil
+}
+
+func shouldDeliverDNSWorkerHeartbeatUpdate(worker *model.DNSWorker) bool {
+	if worker == nil || !worker.UpdateRequested {
+		return false
+	}
+	mode := strings.TrimSpace(worker.UpdateDispatchMode)
+	return mode == "" || mode == "worker_heartbeat"
+}
+
+func applyDNSWorkerHeartbeatUpdateResult(worker *model.DNSWorker, result *DNSWorkerUpdateResultInput, now time.Time) {
+	if worker == nil || result == nil || !worker.UpdateRequested {
+		return
+	}
+	if isStaleDNSWorkerUpdateResult(worker, result) {
+		return
+	}
+	worker.UpdateDispatchMode = "worker_result"
+	message := truncateForDatabase(strings.TrimSpace(result.Message), 16000)
+	worker.UpdateRequested = false
+	worker.UpdateTag = ""
+	if result.Success {
+		if message == "" {
+			message = "DNS Worker update completed successfully."
+		} else {
+			message = "DNS Worker update completed successfully: " + message
+		}
+	} else {
+		if message == "" {
+			message = "DNS Worker update failed."
+		} else {
+			message = "DNS Worker update failed: " + message
+		}
+	}
+	worker.UpdateDispatchMessage = truncateForDatabase(message, 16000)
+	worker.UpdateDispatchedAt = &now
+}
+
+func isStaleDNSWorkerUpdateResult(worker *model.DNSWorker, result *DNSWorkerUpdateResultInput) bool {
+	if worker == nil || worker.UpdateDispatchedAt == nil || result == nil || result.ReportedAtUnix <= 0 {
+		return false
+	}
+	reportedAt := time.Unix(result.ReportedAtUnix, 0)
+	return reportedAt.Add(time.Second).Before(*worker.UpdateDispatchedAt)
+}
+
+func applyLegacyAgentDNSWorkerUpdateAck(worker *model.DNSWorker, input DNSWorkerHeartbeatInput, now time.Time) {
+	if worker == nil || !worker.UpdateRequested || !input.UpdateSupported || worker.UpdateDispatchedAt == nil {
+		return
+	}
+	mode := strings.TrimSpace(worker.UpdateDispatchMode)
+	if mode != "agent_ws" && mode != "agent_heartbeat" && mode != "agent_heartbeat_sent" && mode != "agent_result" {
+		return
+	}
+	if now.Sub(*worker.UpdateDispatchedAt) < dnsWorkerAgentUpdateAckDelay {
+		return
+	}
+	worker.UpdateRequested = false
+	worker.UpdateTag = ""
+	worker.UpdateDispatchMode = "agent_heartbeat_ack"
+	worker.UpdateDispatchMessage = "DNS Worker heartbeat was received after the Agent update task was dispatched; the pending update has been marked complete for compatibility with older Agents."
+	worker.UpdateDispatchedAt = &now
 }
 
 func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnapshot, error) {

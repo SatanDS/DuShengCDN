@@ -72,22 +72,23 @@ const (
 )
 
 type NodePayload struct {
-	NodeID                string                        `json:"node_id"`
-	Name                  string                        `json:"name"`
-	IP                    string                        `json:"ip"`
-	AgentVersion          string                        `json:"agent_version"`
-	NginxVersion          string                        `json:"nginx_version"`
-	CurrentVersion        string                        `json:"current_version"`
-	LastError             string                        `json:"last_error"`
-	OpenrestyStatus       string                        `json:"openresty_status"`
-	OpenrestyMessage      string                        `json:"openresty_message"`
-	Profile               *NodeSystemProfile            `json:"profile,omitempty"`
-	Snapshot              *NodeMetricSnapshot           `json:"snapshot,omitempty"`
-	TrafficReport         *NodeTrafficReport            `json:"traffic_report,omitempty"`
-	AccessLogs            []NodeAccessLog               `json:"access_logs,omitempty"`
-	BufferedObservability []BufferedObservabilityRecord `json:"buffered_observability,omitempty"`
-	HealthEvents          []NodeHealthEvent             `json:"health_events"`
-	DNSProbeResults       []DNSProbeReport              `json:"dns_probe_results,omitempty"`
+	NodeID                 string                        `json:"node_id"`
+	Name                   string                        `json:"name"`
+	IP                     string                        `json:"ip"`
+	AgentVersion           string                        `json:"agent_version"`
+	NginxVersion           string                        `json:"nginx_version"`
+	CurrentVersion         string                        `json:"current_version"`
+	LastError              string                        `json:"last_error"`
+	OpenrestyStatus        string                        `json:"openresty_status"`
+	OpenrestyMessage       string                        `json:"openresty_message"`
+	Profile                *NodeSystemProfile            `json:"profile,omitempty"`
+	Snapshot               *NodeMetricSnapshot           `json:"snapshot,omitempty"`
+	TrafficReport          *NodeTrafficReport            `json:"traffic_report,omitempty"`
+	AccessLogs             []NodeAccessLog               `json:"access_logs,omitempty"`
+	BufferedObservability  []BufferedObservabilityRecord `json:"buffered_observability,omitempty"`
+	HealthEvents           []NodeHealthEvent             `json:"health_events"`
+	DNSProbeResults        []DNSProbeReport              `json:"dns_probe_results,omitempty"`
+	DNSWorkerUpdateResults []DNSWorkerUpdateResult       `json:"dns_worker_update_results,omitempty"`
 }
 
 type DNSProbeTarget struct {
@@ -182,6 +183,18 @@ type DNSWorkerUpdateRequest struct {
 	Channel    string `json:"channel"`
 	TagName    string `json:"tag_name,omitempty"`
 	InstallDir string `json:"install_dir,omitempty"`
+}
+
+type DNSWorkerUpdateResult struct {
+	WorkerID       string `json:"worker_id"`
+	WorkerName     string `json:"worker_name,omitempty"`
+	Repo           string `json:"repo,omitempty"`
+	Channel        string `json:"channel,omitempty"`
+	TagName        string `json:"tag_name,omitempty"`
+	InstallDir     string `json:"install_dir,omitempty"`
+	Success        bool   `json:"success"`
+	Message        string `json:"message,omitempty"`
+	ReportedAtUnix int64  `json:"reported_at_unix"`
 }
 
 type NodeAccessLog struct {

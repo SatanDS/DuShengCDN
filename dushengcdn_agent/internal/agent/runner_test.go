@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -808,6 +809,82 @@ func TestRunnerHandlesDNSWorkerUpdateRequest(t *testing.T) {
 	}
 	if captured.WorkerID != "dns-worker-1" || captured.Channel != "stable" {
 		t.Fatalf("unexpected captured request: %+v", captured)
+	}
+}
+
+func TestRunnerReportsDNSWorkerUpdateResultOnce(t *testing.T) {
+	runner := &Runner{
+		Config: &config.Config{
+			NodeName:     "edge",
+			NodeIP:       "127.0.0.1",
+			AgentVersion: "v1.0.0",
+			NginxVersion: "test",
+		},
+		StateStore: state.NewStore(filepath.Join(t.TempDir(), "agent-state.json")),
+	}
+	if err := runner.StateStore.Save(&state.Snapshot{}); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	runner.recordDNSWorkerUpdateResult(protocol.DNSWorkerUpdateRequest{
+		WorkerID:   "dns-worker-1",
+		WorkerName: "ns1",
+		Repo:       "SatanDS/SatanDS-DuShengCDN-releases",
+		Channel:    "stable",
+	}, true, "installer completed")
+
+	first := runner.nodePayload("node-1")
+	if len(first.DNSWorkerUpdateResults) != 1 {
+		t.Fatalf("expected one dns worker update result, got %+v", first.DNSWorkerUpdateResults)
+	}
+	result := first.DNSWorkerUpdateResults[0]
+	if result.WorkerID != "dns-worker-1" || !result.Success || !strings.Contains(result.Message, "completed") {
+		t.Fatalf("unexpected dns worker update result: %+v", result)
+	}
+	second := runner.nodePayload("node-1")
+	if len(second.DNSWorkerUpdateResults) != 0 {
+		t.Fatalf("expected dns worker update result to be consumed once, got %+v", second.DNSWorkerUpdateResults)
+	}
+}
+
+func TestRunnerRestoresDNSWorkerUpdateResultAfterHeartbeatFailure(t *testing.T) {
+	stateStore := state.NewStore(filepath.Join(t.TempDir(), "agent-state.json"))
+	if err := stateStore.Save(&state.Snapshot{}); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	heartbeatService := &fakeHeartbeatService{
+		heartbeatErrs: []error{errors.New("temporary network error"), nil},
+		heartbeatResults: []*protocol.HeartbeatResult{
+			nil,
+			{},
+		},
+	}
+	runner := &Runner{
+		Config: &config.Config{
+			NodeName:     "edge",
+			NodeIP:       "127.0.0.1",
+			AgentVersion: "v1.0.0",
+			NginxVersion: "test",
+		},
+		StateStore:       stateStore,
+		HeartbeatService: heartbeatService,
+		SyncService:      &fakeSyncService{},
+	}
+	runner.recordDNSWorkerUpdateResult(protocol.DNSWorkerUpdateRequest{WorkerID: "dns-worker-1"}, true, "installer completed")
+
+	if _, err := runner.performHeartbeatCycle(context.Background(), "node-1", false); err == nil {
+		t.Fatal("expected first heartbeat to fail")
+	}
+	if _, err := runner.performHeartbeatCycle(context.Background(), "node-1", false); err != nil {
+		t.Fatalf("expected second heartbeat to succeed: %v", err)
+	}
+	if len(heartbeatService.heartbeatPayloads) != 2 {
+		t.Fatalf("expected two heartbeat payloads, got %d", len(heartbeatService.heartbeatPayloads))
+	}
+	for i, payload := range heartbeatService.heartbeatPayloads {
+		if len(payload.DNSWorkerUpdateResults) != 1 || payload.DNSWorkerUpdateResults[0].WorkerID != "dns-worker-1" {
+			t.Fatalf("expected heartbeat %d to carry restored update result, got %+v", i+1, payload.DNSWorkerUpdateResults)
+		}
 	}
 }
 

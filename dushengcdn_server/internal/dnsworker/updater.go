@@ -2,6 +2,7 @@ package dnsworker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -32,7 +33,10 @@ func (r *Runner) maybeStartUpdate(settings WorkerSettings) {
 		defer dnsWorkerUpdateRunning.Store(false)
 		if err := r.runUpdate(settings); err != nil {
 			slog.Error("dns worker update failed", "error", err)
+			r.savePendingUpdateResult(settings, false, err.Error())
+			return
 		}
+		r.savePendingUpdateResult(settings, true, "DNS Worker update command completed")
 	}()
 }
 
@@ -151,4 +155,72 @@ func normalizeWorkerUpdateChannel(channel string) string {
 		return "preview"
 	}
 	return "stable"
+}
+
+func (r *Runner) updateResultPath() string {
+	if r == nil || r.Config == nil {
+		return ""
+	}
+	installDir := strings.TrimSpace(r.Config.InstallDir)
+	if installDir == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Clean(installDir), "data", "update-result.json")
+}
+
+func (r *Runner) savePendingUpdateResult(settings WorkerSettings, success bool, message string) {
+	path := r.updateResultPath()
+	if path == "" {
+		return
+	}
+	result := UpdateResultPayload{
+		Success:        success,
+		Message:        strings.TrimSpace(message),
+		Repo:           strings.TrimSpace(settings.UpdateRepo),
+		Channel:        normalizeWorkerUpdateChannel(settings.UpdateChannel),
+		TagName:        strings.TrimSpace(settings.UpdateTag),
+		ReportedAtUnix: time.Now().Unix(),
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		slog.Warn("marshal dns worker update result failed", "error", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		slog.Warn("create dns worker update result directory failed", "path", path, "error", err)
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+		slog.Warn("write dns worker update result failed", "path", path, "error", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		slog.Warn("commit dns worker update result failed", "path", path, "error", err)
+	}
+}
+
+func (r *Runner) loadPendingUpdateResult() *UpdateResultPayload {
+	path := r.updateResultPath()
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var result UpdateResultPayload
+	if err := json.Unmarshal(raw, &result); err != nil {
+		slog.Warn("decode dns worker update result failed", "path", path, "error", err)
+		return nil
+	}
+	return &result
+}
+
+func (r *Runner) clearPendingUpdateResult() {
+	path := r.updateResultPath()
+	if path != "" {
+		_ = os.Remove(path)
+	}
 }

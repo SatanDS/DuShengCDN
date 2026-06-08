@@ -126,6 +126,7 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 	if r.SourceResolver != nil {
 		sourceStatus = r.SourceResolver.Status()
 	}
+	updateResult := r.loadPendingUpdateResult()
 	response, err := r.Client.SendHeartbeat(ctx, HeartbeatInput{
 		Version:                  r.Config.Version,
 		Status:                   status,
@@ -146,6 +147,7 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		OperatorCIDRLastError:    sourceStatus.OperatorCIDRLastError,
 		UpdateSupported:          r.Config.UpdateEnabled,
 		UninstallSupported:       r.uninstallSupported(),
+		UpdateResult:             updateResult,
 		Rollups:                  rollups,
 		SchedulingStates:         schedulingStates,
 	})
@@ -158,6 +160,9 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 			"error", err,
 		)
 		return err
+	}
+	if updateResult != nil {
+		r.clearPendingUpdateResult()
 	}
 	if response != nil {
 		r.maybeStartUpdate(response.Settings)

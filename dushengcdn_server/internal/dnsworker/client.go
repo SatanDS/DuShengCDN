@@ -44,8 +44,18 @@ type HeartbeatInput struct {
 	OperatorCIDRLastError    string                    `json:"operator_cidr_last_error"`
 	UpdateSupported          bool                      `json:"update_supported"`
 	UninstallSupported       bool                      `json:"uninstall_supported"`
+	UpdateResult             *UpdateResultPayload      `json:"update_result,omitempty"`
 	Rollups                  []QueryRollupPayload      `json:"rollups"`
 	SchedulingStates         []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
+}
+
+type UpdateResultPayload struct {
+	Success        bool   `json:"success"`
+	Message        string `json:"message,omitempty"`
+	Repo           string `json:"repo,omitempty"`
+	Channel        string `json:"channel,omitempty"`
+	TagName        string `json:"tag_name,omitempty"`
+	ReportedAtUnix int64  `json:"reported_at_unix"`
 }
 
 type HeartbeatResponse struct {

@@ -3044,6 +3044,211 @@ func TestDNSWorkerManualUpdateRequestWaitsForSupportedHeartbeat(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerHeartbeatUpdateResultClearsPendingUpdate(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if _, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{}); err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:         "v1.0.0",
+		Status:          dnsWorkerStatusOnline,
+		UpdateSupported: true,
+		UpdateResult: &DNSWorkerUpdateResultInput{
+			Success: true,
+			Message: "installer completed",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if heartbeat.Settings.UpdateNow {
+		t.Fatalf("expected completed update result to avoid another update delivery, got %+v", heartbeat.Settings)
+	}
+	if heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateTag != "" || heartbeat.Worker.UpdateDispatchMode != "worker_result" {
+		t.Fatalf("expected update request to be cleared in heartbeat view, got %+v", heartbeat.Worker)
+	}
+	if !strings.Contains(heartbeat.Worker.UpdateDispatchMessage, "completed") {
+		t.Fatalf("expected completion message, got %q", heartbeat.Worker.UpdateDispatchMessage)
+	}
+	reloaded, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if reloaded.UpdateRequested || reloaded.UpdateTag != "" {
+		t.Fatalf("expected update request to be cleared in database, got %+v", reloaded)
+	}
+}
+
+func TestDNSWorkerHeartbeatUpdateFailureClearsWaitingButKeepsMessage(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if _, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{}); err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:         "v1.0.0",
+		Status:          dnsWorkerStatusOnline,
+		UpdateSupported: true,
+		UpdateResult: &DNSWorkerUpdateResultInput{
+			Success: false,
+			Message: "github returned 504",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if heartbeat.Worker.UpdateRequested {
+		t.Fatalf("expected failed update attempt to clear waiting state, got %+v", heartbeat.Worker)
+	}
+	if !strings.Contains(heartbeat.Worker.UpdateDispatchMessage, "failed") || !strings.Contains(heartbeat.Worker.UpdateDispatchMessage, "504") {
+		t.Fatalf("expected failure message to be kept, got %q", heartbeat.Worker.UpdateDispatchMessage)
+	}
+}
+
+func TestAgentDNSWorkerUpdateResultClearsPendingUpdate(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:          "node-dns-worker-host",
+		Name:            "edge-dns-host",
+		IP:              "8.8.4.4",
+		PublicIPs:       `["8.8.4.4"]`,
+		AgentToken:      "agent-token",
+		AgentVersion:    "v1.0.0",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+	wsClient := RegisterAgentWSClient(node.NodeID)
+	defer UnregisterAgentWSClient(wsClient)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-agent", PublicAddress: "8.8.4.4:53"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if _, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{}); err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	select {
+	case <-wsClient.Messages():
+	case <-time.After(time.Second):
+		t.Fatal("expected dns worker update websocket message")
+	}
+
+	freshNode, err := model.GetNodeByNodeID(node.NodeID)
+	if err != nil {
+		t.Fatalf("GetNodeByNodeID: %v", err)
+	}
+	if _, err := HeartbeatNode(freshNode, AgentNodePayload{
+		IP:             "8.8.4.4",
+		AgentVersion:   "v1.0.1",
+		CurrentVersion: "v1.0.1",
+		DNSWorkerUpdateResults: []AgentDNSWorkerUpdateResult{{
+			WorkerID: worker.WorkerID,
+			Success:  true,
+			Message:  "installer completed",
+		}},
+	}); err != nil {
+		t.Fatalf("HeartbeatNode: %v", err)
+	}
+	reloaded, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if reloaded.UpdateRequested || reloaded.UpdateTag != "" || reloaded.UpdateDispatchMode != "agent_result" {
+		t.Fatalf("expected agent update result to clear pending update, got %+v", reloaded)
+	}
+	if !strings.Contains(reloaded.UpdateDispatchMessage, "completed") {
+		t.Fatalf("expected completion message, got %q", reloaded.UpdateDispatchMessage)
+	}
+}
+
+func TestAgentDNSWorkerUpdateAckWaitsBeforeCompatibilityClear(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:          "node-dns-worker-host",
+		Name:            "edge-dns-host",
+		IP:              "8.8.4.4",
+		PublicIPs:       `["8.8.4.4"]`,
+		AgentToken:      "agent-token",
+		AgentVersion:    "v1.0.0",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+	wsClient := RegisterAgentWSClient(node.NodeID)
+	defer UnregisterAgentWSClient(wsClient)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-agent", PublicAddress: "8.8.4.4:53"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if _, err := RequestAuthoritativeDNSWorkerUpdate(worker.ID, DNSWorkerUpdateInput{}); err != nil {
+		t.Fatalf("RequestAuthoritativeDNSWorkerUpdate: %v", err)
+	}
+	select {
+	case <-wsClient.Messages():
+	case <-time.After(time.Second):
+		t.Fatal("expected dns worker update websocket message")
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:         "v1.0.0",
+		Status:          dnsWorkerStatusOnline,
+		UpdateSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if !heartbeat.Worker.UpdateRequested {
+		t.Fatalf("expected immediate heartbeat after agent dispatch to stay pending, got %+v", heartbeat.Worker)
+	}
+	oldDispatchAt := time.Now().Add(-dnsWorkerAgentUpdateAckDelay - time.Second)
+	if err := model.DB.Model(&model.DNSWorker{}).Where("id = ?", worker.ID).Update("update_dispatched_at", oldDispatchAt).Error; err != nil {
+		t.Fatalf("backdate update_dispatched_at: %v", err)
+	}
+	authenticated, err = AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	heartbeat, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Version:         "v1.0.0",
+		Status:          dnsWorkerStatusOnline,
+		UpdateSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat second: %v", err)
+	}
+	if heartbeat.Worker.UpdateRequested || heartbeat.Worker.UpdateDispatchMode != "agent_heartbeat_ack" {
+		t.Fatalf("expected delayed heartbeat ack to clear pending update, got %+v", heartbeat.Worker)
+	}
+}
+
 func TestDeleteDNSWorkerDeliversUninstallOnHeartbeatAndRemovesRecord(t *testing.T) {
 	setupServiceTestDB(t)
 

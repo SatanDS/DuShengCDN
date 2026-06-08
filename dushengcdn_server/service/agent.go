@@ -26,22 +26,23 @@ const (
 )
 
 type AgentNodePayload struct {
-	NodeID                string                             `json:"node_id"`
-	Name                  string                             `json:"name"`
-	IP                    string                             `json:"ip"`
-	AgentVersion          string                             `json:"agent_version"`
-	NginxVersion          string                             `json:"nginx_version"`
-	CurrentVersion        string                             `json:"current_version"`
-	LastError             string                             `json:"last_error"`
-	OpenrestyStatus       string                             `json:"openresty_status"`
-	OpenrestyMessage      string                             `json:"openresty_message"`
-	Profile               *AgentNodeSystemProfile            `json:"profile,omitempty"`
-	Snapshot              *AgentNodeMetricSnapshot           `json:"snapshot,omitempty"`
-	TrafficReport         *AgentNodeTrafficReport            `json:"traffic_report,omitempty"`
-	AccessLogs            []AgentNodeAccessLog               `json:"access_logs,omitempty"`
-	BufferedObservability []AgentBufferedObservabilityRecord `json:"buffered_observability,omitempty"`
-	HealthEvents          []AgentNodeHealthEvent             `json:"health_events"`
-	DNSProbeResults       []AgentDNSProbeReport              `json:"dns_probe_results,omitempty"`
+	NodeID                 string                             `json:"node_id"`
+	Name                   string                             `json:"name"`
+	IP                     string                             `json:"ip"`
+	AgentVersion           string                             `json:"agent_version"`
+	NginxVersion           string                             `json:"nginx_version"`
+	CurrentVersion         string                             `json:"current_version"`
+	LastError              string                             `json:"last_error"`
+	OpenrestyStatus        string                             `json:"openresty_status"`
+	OpenrestyMessage       string                             `json:"openresty_message"`
+	Profile                *AgentNodeSystemProfile            `json:"profile,omitempty"`
+	Snapshot               *AgentNodeMetricSnapshot           `json:"snapshot,omitempty"`
+	TrafficReport          *AgentNodeTrafficReport            `json:"traffic_report,omitempty"`
+	AccessLogs             []AgentNodeAccessLog               `json:"access_logs,omitempty"`
+	BufferedObservability  []AgentBufferedObservabilityRecord `json:"buffered_observability,omitempty"`
+	HealthEvents           []AgentNodeHealthEvent             `json:"health_events"`
+	DNSProbeResults        []AgentDNSProbeReport              `json:"dns_probe_results,omitempty"`
+	DNSWorkerUpdateResults []AgentDNSWorkerUpdateResult       `json:"dns_worker_update_results,omitempty"`
 }
 
 type ApplyLogPayload struct {
@@ -117,6 +118,18 @@ type AgentDNSWorkerUpdateRequest struct {
 	Channel    string `json:"channel"`
 	TagName    string `json:"tag_name,omitempty"`
 	InstallDir string `json:"install_dir,omitempty"`
+}
+
+type AgentDNSWorkerUpdateResult struct {
+	WorkerID       string `json:"worker_id"`
+	WorkerName     string `json:"worker_name,omitempty"`
+	Repo           string `json:"repo,omitempty"`
+	Channel        string `json:"channel,omitempty"`
+	TagName        string `json:"tag_name,omitempty"`
+	InstallDir     string `json:"install_dir,omitempty"`
+	Success        bool   `json:"success"`
+	Message        string `json:"message,omitempty"`
+	ReportedAtUnix int64  `json:"reported_at_unix"`
 }
 
 type ActiveConfigMeta struct {
@@ -198,6 +211,9 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 			return nil, err
 		}
 	}
+	if err := recordAgentDNSWorkerUpdateResults(node, payload.DNSWorkerUpdateResults); err != nil {
+		return nil, err
+	}
 	refreshAgentTokenCache(node)
 	persistHeartbeatObservability(node.NodeID, payload, node.LastSeenAt)
 	activeConfig, err := GetActiveConfigMetaForAgent()
@@ -210,6 +226,78 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 		ActiveConfig:     activeConfig,
 		DNSWorkerUpdates: pendingAgentDNSWorkerUpdatesForNode(node),
 	}, nil
+}
+
+func recordAgentDNSWorkerUpdateResults(node *model.Node, results []AgentDNSWorkerUpdateResult) error {
+	if len(results) == 0 {
+		return nil
+	}
+	now := time.Now()
+	for _, result := range results {
+		workerID := strings.TrimSpace(result.WorkerID)
+		if workerID == "" {
+			continue
+		}
+		worker, err := model.GetDNSWorkerByWorkerID(workerID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				slog.Debug("agent dns worker update result ignored for unknown worker", "worker_id", workerID)
+				continue
+			}
+			return err
+		}
+		if worker.UpdateDispatchedNodeID != "" && node != nil && worker.UpdateDispatchedNodeID != node.NodeID {
+			slog.Debug("agent dns worker update result ignored for mismatched node", "worker_id", workerID, "node_id", node.NodeID, "expected_node_id", worker.UpdateDispatchedNodeID)
+			continue
+		}
+		mode := strings.TrimSpace(worker.UpdateDispatchMode)
+		if mode != "agent_ws" && mode != "agent_heartbeat" && mode != "agent_heartbeat_sent" {
+			slog.Debug("agent dns worker update result ignored for non-agent update mode", "worker_id", workerID, "mode", mode)
+			continue
+		}
+		if isStaleAgentDNSWorkerUpdateResult(worker, result) {
+			slog.Debug("agent dns worker update result ignored because it predates the current request", "worker_id", workerID)
+			continue
+		}
+		if worker.UpdateRequested {
+			worker.UpdateDispatchMode = "agent_result"
+			worker.UpdateDispatchMessage = truncateForDatabase(strings.TrimSpace(result.Message), 16000)
+			worker.UpdateDispatchedAt = &now
+			worker.UpdateRequested = false
+			worker.UpdateTag = ""
+			if result.Success {
+				if worker.UpdateDispatchMessage == "" {
+					worker.UpdateDispatchMessage = "DNS Worker update completed successfully."
+				} else {
+					worker.UpdateDispatchMessage = "DNS Worker update completed successfully: " + worker.UpdateDispatchMessage
+				}
+			} else {
+				if worker.UpdateDispatchMessage == "" {
+					worker.UpdateDispatchMessage = "DNS Worker update failed."
+				} else {
+					worker.UpdateDispatchMessage = "DNS Worker update failed: " + worker.UpdateDispatchMessage
+				}
+			}
+			if err := model.DB.Model(worker).Select(
+				"update_requested",
+				"update_tag",
+				"update_dispatch_mode",
+				"update_dispatch_message",
+				"update_dispatched_at",
+			).Updates(worker).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func isStaleAgentDNSWorkerUpdateResult(worker *model.DNSWorker, result AgentDNSWorkerUpdateResult) bool {
+	if worker == nil || worker.UpdateDispatchedAt == nil || result.ReportedAtUnix <= 0 {
+		return false
+	}
+	reportedAt := time.Unix(result.ReportedAtUnix, 0)
+	return reportedAt.Add(time.Second).Before(*worker.UpdateDispatchedAt)
 }
 
 func buildAgentSettings(node *model.Node, updateNow bool, updateChannel string, updateTag string, restartOpenrestyNow bool) *AgentSettings {
