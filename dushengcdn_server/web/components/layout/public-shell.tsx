@@ -365,7 +365,7 @@ export function PublicShell({ children }: PublicShellProps) {
               className="h-auto w-full object-contain"
             />
           </div>
-          <h1 className="public-hero-title mt-6 max-w-3xl text-3xl font-semibold tracking-normal text-balance text-[var(--foreground-primary)] sm:mt-8 sm:text-5xl lg:text-6xl">
+          <h1 className="mt-6 max-w-3xl text-3xl font-semibold tracking-normal text-balance text-[var(--foreground-primary)] sm:mt-8 sm:text-5xl lg:text-6xl">
             Welcome to Dusheng CDN
           </h1>
           <div className="brand-gradient-bar mt-6 h-1 w-32 rounded-full" />

@@ -318,24 +318,6 @@ button {
   filter: drop-shadow(0 22px 52px rgba(217, 0, 146, 0.2));
 }
 
-.public-hero-title {
-  position: relative;
-  font-family:
-    Inter, 'SF Pro Display', 'Segoe UI', ui-sans-serif, system-ui, sans-serif;
-  font-weight: 780;
-  line-height: 1.02;
-  letter-spacing: 0;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 42%, #e9e2ff 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  text-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.36),
-    0 18px 46px rgba(16, 10, 36, 0.22),
-    0 0 34px rgba(255, 255, 255, 0.12);
-  -webkit-text-fill-color: transparent;
-}
-
 .public-login-trigger {
   display: inline-flex;
   align-items: center;
