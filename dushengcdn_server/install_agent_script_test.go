@@ -46,6 +46,18 @@ func TestServiceNameValidationExistsInInstallerScripts(t *testing.T) {
 		})
 	}
 }
+func TestInstallAgentFallsBackToVerifiedOpenRestySourceOnDebianNext(t *testing.T) {
+	agentScript := readScript(t, "scripts/install-agent.sh")
+	requireScriptContains(t, agentScript, `is_debian_next_apt_release() {`)
+	requireScriptContains(t, agentScript, `install_openresty_from_source() {`)
+	requireScriptContains(t, agentScript, `verify_openresty_source_signature "$archive" "$signature"`)
+	requireScriptContains(t, agentScript, `DUSHENGCDN_OPENRESTY_VERSION:-1.31.1.1`)
+	requireScriptContains(t, agentScript, `DUSHENGCDN_OPENRESTY_PGP_FINGERPRINT:-25451EB088460026195BD62CB550E09EA0E98066`)
+	requireScriptContains(t, agentScript, `OpenResty apt repository signature is not accepted by this Debian release; falling back to verified source build.`)
+	if strings.Contains(agentScript, `source_line="deb [trusted=yes`) {
+		t.Fatal("OpenResty apt fallback must not bypass apt signature verification in the apt source line")
+	}
+}
 
 func readInstallAgentScript(t *testing.T) string {
 	t.Helper()

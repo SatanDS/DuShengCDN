@@ -258,6 +258,7 @@ find_openresty_path() {
   local candidates=(
     "/usr/bin/openresty"
     "/usr/local/bin/openresty"
+    "/usr/local/openresty/bin/openresty"
     "/usr/local/openresty/nginx/sbin/openresty"
     "/opt/openresty/nginx/sbin/openresty"
     "/opt/homebrew/bin/openresty"
@@ -459,6 +460,27 @@ install_source_build_dependencies_linux() {
   fi
 }
 
+install_openresty_source_build_dependencies_linux() {
+  if command -v apt-get >/dev/null 2>&1; then
+    run_as_root apt-get update
+    if ! run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg tar perl make build-essential libssl-dev zlib1g-dev libpcre2-dev; then
+      run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg tar perl make build-essential libssl-dev zlib1g-dev libpcre3-dev
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    run_as_root dnf install -y ca-certificates curl gnupg2 tar perl gcc make openssl-devel zlib-devel pcre2-devel
+  elif command -v yum >/dev/null 2>&1; then
+    run_as_root yum install -y ca-certificates curl gnupg2 tar perl gcc make openssl-devel zlib-devel pcre-devel
+  elif command -v apk >/dev/null 2>&1; then
+    run_as_root apk add --no-cache ca-certificates curl gnupg tar perl gcc musl-dev make openssl-dev zlib-dev pcre2-dev
+  elif command -v zypper >/dev/null 2>&1; then
+    run_as_root zypper --non-interactive install ca-certificates curl gpg2 tar perl gcc make libopenssl-devel zlib-devel pcre2-devel
+  elif command -v pacman >/dev/null 2>&1; then
+    run_as_root pacman -Sy --needed --noconfirm ca-certificates curl gnupg tar perl gcc make openssl zlib pcre2
+  else
+    die "no supported package manager found. Install OpenResty manually or pass --openresty-path."
+  fi
+}
+
 ensure_curl() {
   if command -v curl >/dev/null 2>&1; then
     return
@@ -613,6 +635,170 @@ apt_repository_base_url() {
   fi
 }
 
+is_debian_next_apt_release() {
+  local codename="$1"
+  [[ "$codename" == "trixie" || "$codename" == "testing" || "$codename" == "sid" ]]
+}
+
+openresty_source_jobs() {
+  local jobs="${DUSHENGCDN_OPENRESTY_BUILD_JOBS:-}"
+  if [[ "$jobs" =~ ^[0-9]+$ && "$jobs" -gt 0 ]]; then
+    echo "$jobs"
+    return
+  fi
+  if command -v nproc >/dev/null 2>&1; then
+    jobs="$(nproc)"
+  else
+    jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+  fi
+  if ! [[ "$jobs" =~ ^[0-9]+$ ]] || [[ "$jobs" -lt 1 ]]; then
+    jobs=2
+  fi
+  if [[ "$jobs" -gt 4 ]]; then
+    jobs=4
+  fi
+  echo "$jobs"
+}
+
+import_openresty_release_key() {
+  local keyring="$1"
+  local fingerprint="${DUSHENGCDN_OPENRESTY_PGP_FINGERPRINT:-25451EB088460026195BD62CB550E09EA0E98066}"
+  local key_url="${DUSHENGCDN_OPENRESTY_PGP_KEY_URL:-https://openresty.org/package/pubkey.gpg}"
+  local key_tmp
+  local keyservers=(
+    "${DUSHENGCDN_OPENRESTY_PGP_KEYSERVER:-}"
+    "hkps://keys.openpgp.org"
+    "hkps://keyserver.ubuntu.com"
+    "hkp://keyserver.ubuntu.com:80"
+  )
+  local keyserver
+
+  key_tmp="$(mktemp "/tmp/dushengcdn-openresty-key.XXXXXX.gpg")"
+  if curl --fail --location --show-error --silent --connect-timeout 20 --retry 2 --retry-delay 2 --retry-max-time 120 -o "$key_tmp" "$key_url" &&
+    gpg --batch --no-default-keyring --keyring "$keyring" --import "$key_tmp" >/dev/null 2>&1 &&
+    gpg --batch --no-default-keyring --keyring "$keyring" --fingerprint "$fingerprint" >/dev/null 2>&1; then
+    rm -f "$key_tmp"
+    return 0
+  fi
+  rm -f "$key_tmp"
+
+  for keyserver in "${keyservers[@]}"; do
+    [[ -n "$keyserver" ]] || continue
+    if gpg --batch --no-default-keyring --keyring "$keyring" --keyserver "$keyserver" --recv-keys "$fingerprint" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+verify_openresty_source_signature() {
+  local archive="$1"
+  local signature="$2"
+  local expected_fingerprint="${DUSHENGCDN_OPENRESTY_PGP_FINGERPRINT:-25451EB088460026195BD62CB550E09EA0E98066}"
+  local keyring verify_output fingerprint
+
+  if [[ "${DUSHENGCDN_OPENRESTY_SKIP_PGP_VERIFY:-false}" == "true" ]]; then
+    log "Skipping OpenResty source PGP verification because DUSHENGCDN_OPENRESTY_SKIP_PGP_VERIFY=true."
+    return 0
+  fi
+
+  keyring="$(mktemp "/tmp/dushengcdn-openresty-keyring.XXXXXX.gpg")"
+  if ! import_openresty_release_key "$keyring"; then
+    rm -f "$keyring"
+    die "failed to import OpenResty release PGP key ${expected_fingerprint}; install OpenResty manually or set DUSHENGCDN_OPENRESTY_SKIP_PGP_VERIFY=true only if you trust the download path."
+  fi
+
+  verify_output="$(gpg --batch --no-default-keyring --keyring "$keyring" --status-fd 1 --verify "$signature" "$archive" 2>/dev/null || true)"
+  fingerprint="$(printf '%s\n' "$verify_output" | awk '/^\[GNUPG:\] VALIDSIG / { print $3; exit }')"
+  rm -f "$keyring"
+
+  if [[ "$fingerprint" != "$expected_fingerprint" ]]; then
+    die "OpenResty source PGP verification failed or signer mismatch."
+  fi
+  log "OpenResty source PGP signature verified."
+}
+
+install_openresty_from_source() {
+  local version="${DUSHENGCDN_OPENRESTY_VERSION:-1.31.1.1}"
+  local prefix="${DUSHENGCDN_OPENRESTY_PREFIX:-/usr/local/openresty}"
+  local source_name="openresty-${version}"
+  local archive signature workdir source_dir jobs default_bases url base
+  local urls=()
+
+  case "$prefix" in
+    /*) ;;
+    *) die "DUSHENGCDN_OPENRESTY_PREFIX must be an absolute path." ;;
+  esac
+  case "$prefix" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var)
+      die "refusing to install OpenResty directly into unsafe prefix: ${prefix}"
+      ;;
+  esac
+
+  install_openresty_source_build_dependencies_linux
+
+  workdir="$(mktemp -d "/tmp/dushengcdn-openresty-build.XXXXXX")"
+  archive="${workdir}/${source_name}.tar.gz"
+  signature="${archive}.asc"
+  default_bases="https://openresty.org/download"
+
+  if [[ -n "${DUSHENGCDN_OPENRESTY_DOWNLOAD_URL:-}" ]]; then
+    urls+=("$DUSHENGCDN_OPENRESTY_DOWNLOAD_URL")
+  fi
+  for base in ${DUSHENGCDN_OPENRESTY_DOWNLOAD_BASE_URLS:-$default_bases}; do
+    urls+=("${base%/}/${source_name}.tar.gz")
+  done
+
+  log "Installing OpenResty ${version} from verified source..."
+  for url in "${urls[@]}"; do
+    rm -f "$archive" "$signature"
+    log "Downloading OpenResty source from ${url}..."
+    if curl --fail --location --show-error --silent --connect-timeout 20 --retry 2 --retry-delay 2 --retry-max-time 300 -o "$archive" "$url" &&
+      curl --fail --location --show-error --silent --connect-timeout 20 --retry 2 --retry-delay 2 --retry-max-time 300 -o "$signature" "${url}.asc" &&
+      tar -tzf "$archive" >/dev/null 2>&1; then
+      verify_openresty_source_signature "$archive" "$signature"
+      break
+    fi
+    log "OpenResty source download failed or archive is invalid; trying next source if available."
+  done
+
+  if [[ ! -s "$archive" || ! -s "$signature" ]]; then
+    rm -rf -- "$workdir"
+    die "failed to download OpenResty source. Install OpenResty manually or pass --openresty-path."
+  fi
+
+  tar -xzf "$archive" -C "$workdir"
+  source_dir="${workdir}/${source_name}"
+  if [[ ! -d "$source_dir" ]]; then
+    rm -rf -- "$workdir"
+    die "OpenResty source archive did not contain ${source_name}."
+  fi
+
+  jobs="$(openresty_source_jobs)"
+  log "Building OpenResty source with ${jobs} parallel job(s)..."
+  if ! (
+    cd "$source_dir"
+    ./configure -j"$jobs" \
+      --prefix="$prefix" \
+      --with-pcre-jit \
+      --with-http_ssl_module \
+      --with-http_v2_module \
+      --with-stream \
+      --with-stream_ssl_module \
+      --with-stream_ssl_preread_module
+    make -j"$jobs"
+  ); then
+    rm -rf -- "$workdir"
+    die "OpenResty source build failed."
+  fi
+  if ! run_as_root make -C "$source_dir" install; then
+    rm -rf -- "$workdir"
+    die "OpenResty source installation failed."
+  fi
+  rm -rf -- "$workdir"
+}
+
 install_openresty_with_apt() {
   load_os_release
 
@@ -677,9 +863,21 @@ install_openresty_with_apt() {
   source_line="deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/openresty.gpg] ${repo_base} ${codename} ${component}"
   echo "$source_line" | run_as_root tee /etc/apt/sources.list.d/openresty.list >/dev/null
   if ! run_as_root apt-get update; then
+    run_as_root rm -f /etc/apt/sources.list.d/openresty.list
+    if [[ "$distro" == "debian" ]] && is_debian_next_apt_release "$detected_codename"; then
+      log "OpenResty apt repository signature is not accepted by this Debian release; falling back to verified source build."
+      install_openresty_from_source
+      return
+    fi
     die "apt update failed after enabling the signed OpenResty repository. Refusing unauthenticated packages; install OpenResty manually or pass --openresty-path."
   fi
   if ! with_service_autostart_disabled run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y openresty; then
+    run_as_root rm -f /etc/apt/sources.list.d/openresty.list
+    if [[ "$distro" == "debian" ]] && is_debian_next_apt_release "$detected_codename"; then
+      log "OpenResty apt package installation failed on this Debian release; falling back to verified source build."
+      install_openresty_from_source
+      return
+    fi
     die "OpenResty package installation failed."
   fi
   disable_default_openresty_service
