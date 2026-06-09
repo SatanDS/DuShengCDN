@@ -53,6 +53,8 @@ func TestInstallAgentFallsBackToVerifiedOpenRestySourceOnDebianNext(t *testing.T
 	requireScriptContains(t, agentScript, `verify_openresty_source_signature "$archive" "$signature"`)
 	requireScriptContains(t, agentScript, `DUSHENGCDN_OPENRESTY_VERSION:-1.31.1.1`)
 	requireScriptContains(t, agentScript, `DUSHENGCDN_OPENRESTY_PGP_FINGERPRINT:-25451EB088460026195BD62CB550E09EA0E98066`)
+	requireScriptContains(t, agentScript, `primary_fingerprint="$(printf '%s\n' "$verify_output" | awk '/^\[GNUPG:\] VALIDSIG / { print $NF; exit }')"`)
+	requireScriptContains(t, agentScript, `"$fingerprint" != "$expected_fingerprint" && "$primary_fingerprint" != "$expected_fingerprint"`)
 	requireScriptContains(t, agentScript, `--with-http_stub_status_module`)
 	requireScriptContains(t, agentScript, `OpenResty apt repository signature is not accepted by this Debian release; falling back to verified source build.`)
 	if strings.Contains(agentScript, `source_line="deb [trusted=yes`) {

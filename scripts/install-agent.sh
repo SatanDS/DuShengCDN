@@ -684,7 +684,8 @@ import_openresty_release_key() {
 
   for keyserver in "${keyservers[@]}"; do
     [[ -n "$keyserver" ]] || continue
-    if gpg --batch --no-default-keyring --keyring "$keyring" --keyserver "$keyserver" --recv-keys "$fingerprint" >/dev/null 2>&1; then
+    if gpg --batch --no-default-keyring --keyring "$keyring" --keyserver "$keyserver" --recv-keys "$fingerprint" >/dev/null 2>&1 &&
+      gpg --batch --no-default-keyring --keyring "$keyring" --fingerprint "$fingerprint" >/dev/null 2>&1; then
       return 0
     fi
   done
@@ -696,7 +697,7 @@ verify_openresty_source_signature() {
   local archive="$1"
   local signature="$2"
   local expected_fingerprint="${DUSHENGCDN_OPENRESTY_PGP_FINGERPRINT:-25451EB088460026195BD62CB550E09EA0E98066}"
-  local keyring verify_output fingerprint
+  local keyring verify_output fingerprint primary_fingerprint
 
   if [[ "${DUSHENGCDN_OPENRESTY_SKIP_PGP_VERIFY:-false}" == "true" ]]; then
     log "Skipping OpenResty source PGP verification because DUSHENGCDN_OPENRESTY_SKIP_PGP_VERIFY=true."
@@ -711,9 +712,10 @@ verify_openresty_source_signature() {
 
   verify_output="$(gpg --batch --no-default-keyring --keyring "$keyring" --status-fd 1 --verify "$signature" "$archive" 2>/dev/null || true)"
   fingerprint="$(printf '%s\n' "$verify_output" | awk '/^\[GNUPG:\] VALIDSIG / { print $3; exit }')"
+  primary_fingerprint="$(printf '%s\n' "$verify_output" | awk '/^\[GNUPG:\] VALIDSIG / { print $NF; exit }')"
   rm -f "$keyring"
 
-  if [[ "$fingerprint" != "$expected_fingerprint" ]]; then
+  if [[ "$fingerprint" != "$expected_fingerprint" && "$primary_fingerprint" != "$expected_fingerprint" ]]; then
     die "OpenResty source PGP verification failed or signer mismatch."
   fi
   log "OpenResty source PGP signature verified."
