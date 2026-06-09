@@ -1150,9 +1150,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getByText(/最新版本 snapshot-b/)).toBeInTheDocument();
     expect(screen.getByText(/能访问面板/)).toBeInTheDocument();
     expect(screen.getByText(/响应端密钥是否仍有效/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/重启响应端重新拉取配置/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/重启响应端重新拉取配置/)).toBeInTheDocument();
     expect(screen.getByText('重新拉取解析配置')).toBeInTheDocument();
     expect(screen.getByText('snapshot-a')).toBeInTheDocument();
     expect(screen.getAllByText('snapshot-b').length).toBeGreaterThan(0);
@@ -1235,9 +1233,7 @@ describe('Authoritative DNS page', () => {
     expect(screen.getAllByText('德国').length).toBeGreaterThan(0);
     expect(screen.getByText(/snapshot-d/)).toBeInTheDocument();
     expect(screen.getByText('eu-hot')).toBeInTheDocument();
-    expect(
-      screen.getAllByText('节点压力超过上限').length,
-    ).toBeGreaterThan(0);
+    expect(screen.getAllByText('节点压力超过上限').length).toBeGreaterThan(0);
     await user.clear(screen.getByPlaceholderText('HK'));
     await user.type(
       screen.getByPlaceholderText('203.0.113.10'),
@@ -1667,12 +1663,8 @@ describe('Authoritative DNS page', () => {
     expect(
       await screen.findByText(/DNS 响应端已经能拉取解析配置/),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/只能回答基础记录和静态记录/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/业务域名需要到网站详情/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/只能回答基础记录和静态记录/)).toBeInTheDocument();
+    expect(screen.getByText(/业务域名需要到网站详情/)).toBeInTheDocument();
     expect(screen.getByText('暂无本地自建解析站点')).toBeInTheDocument();
   });
 
@@ -1806,7 +1798,9 @@ describe('Authoritative DNS page', () => {
     await user.click(createRecordButton);
     const dialog = await screen.findByRole('dialog', { name: '新增 DNS 记录' });
     expect(within(dialog).getByText('IP 地址')).toBeInTheDocument();
-    expect(within(dialog).getByText(/数字越小越优先/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/仅 MX、SRV、HTTPS 和 SVCB/),
+    ).toBeInTheDocument();
 
     const nameInput = within(dialog).getByPlaceholderText('@');
     await user.clear(nameInput);

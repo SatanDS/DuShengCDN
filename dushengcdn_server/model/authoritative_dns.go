@@ -8,16 +8,21 @@ import (
 )
 
 type DNSZone struct {
-	ID          uint      `json:"id" gorm:"primaryKey"`
-	Name        string    `json:"name" gorm:"uniqueIndex;size:255;not null"`
-	SOAEmail    string    `json:"soa_email" gorm:"size:255;not null;default:''"`
-	PrimaryNS   string    `json:"primary_ns" gorm:"size:255;not null;default:''"`
-	NameServers string    `json:"name_servers" gorm:"type:text;not null;default:'[]'"`
-	DefaultTTL  int       `json:"default_ttl" gorm:"not null;default:300"`
-	Serial      uint64    `json:"serial" gorm:"not null;default:1"`
-	Enabled     bool      `json:"enabled" gorm:"not null;default:true"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                      uint      `json:"id" gorm:"primaryKey"`
+	Name                    string    `json:"name" gorm:"uniqueIndex;size:255;not null"`
+	SOAEmail                string    `json:"soa_email" gorm:"size:255;not null;default:''"`
+	PrimaryNS               string    `json:"primary_ns" gorm:"size:255;not null;default:''"`
+	NameServers             string    `json:"name_servers" gorm:"type:text;not null;default:'[]'"`
+	DefaultTTL              int       `json:"default_ttl" gorm:"not null;default:300"`
+	Serial                  uint64    `json:"serial" gorm:"not null;default:1"`
+	DNSSECEnabled           bool      `json:"dnssec_enabled" gorm:"column:dnssec_enabled;not null;default:false"`
+	DNSSECDenialMode        string    `json:"dnssec_denial_mode" gorm:"column:dnssec_denial_mode;size:16;not null;default:'nsec'"`
+	DNSSECNSEC3Salt         string    `json:"dnssec_nsec3_salt" gorm:"column:dnssec_nsec3_salt;size:64;not null;default:''"`
+	DNSSECNSEC3Iterations   int       `json:"dnssec_nsec3_iterations" gorm:"column:dnssec_nsec3_iterations;not null;default:0"`
+	DNSSECSignatureValidity int       `json:"dnssec_signature_validity" gorm:"column:dnssec_signature_validity;not null;default:604800"`
+	Enabled                 bool      `json:"enabled" gorm:"not null;default:true"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
 }
 
 type DNSRecord struct {
@@ -44,6 +49,9 @@ type DNSWorker struct {
 	Name                     string     `json:"name" gorm:"size:128;not null"`
 	Remark                   string     `json:"remark" gorm:"size:255;not null;default:''"`
 	Token                    string     `json:"-" gorm:"size:128;index;not null"`
+	TokenHash                string     `json:"-" gorm:"column:token_hash;size:64;index;not null;default:''"`
+	TokenPrefix              string     `json:"token_prefix" gorm:"column:token_prefix;size:16;index;not null;default:''"`
+	TokenRevokedAt           *time.Time `json:"token_revoked_at" gorm:"column:token_revoked_at"`
 	PublicAddress            string     `json:"public_address" gorm:"size:255"`
 	Version                  string     `json:"version" gorm:"size:64"`
 	Status                   string     `json:"status" gorm:"size:16;not null;default:'offline'"`
@@ -85,6 +93,31 @@ type DNSWorker struct {
 	LastProbeResult          string     `json:"last_probe_result" gorm:"type:text;not null;default:'[]'"`
 	CreatedAt                time.Time  `json:"created_at"`
 	UpdatedAt                time.Time  `json:"updated_at"`
+}
+
+type DNSZoneWorkerAssignment struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	ZoneID    uint      `json:"zone_id" gorm:"column:zone_id;uniqueIndex:idx_dns_zone_worker_assignments_zone_worker;index;not null"`
+	WorkerID  uint      `json:"worker_id" gorm:"column:worker_id;uniqueIndex:idx_dns_zone_worker_assignments_zone_worker;index;not null"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type DNSSECKey struct {
+	ID                  uint       `json:"id" gorm:"primaryKey"`
+	ZoneID              uint       `json:"zone_id" gorm:"column:zone_id;index;not null"`
+	Role                string     `json:"role" gorm:"column:role;size:16;index;not null"`
+	Flags               uint16     `json:"flags" gorm:"column:flags;not null"`
+	Algorithm           uint8      `json:"algorithm" gorm:"column:algorithm;not null"`
+	PublicKey           string     `json:"public_key" gorm:"column:public_key;type:text;not null"`
+	EncryptedPrivateKey string     `json:"-" gorm:"column:encrypted_private_key;type:text;not null"`
+	KeyTag              uint16     `json:"key_tag" gorm:"column:key_tag;index;not null"`
+	DSDigestSHA256      string     `json:"ds_digest_sha256" gorm:"column:ds_digest_sha256;size:128;not null;default:''"`
+	Status              string     `json:"status" gorm:"column:status;size:16;index;not null;default:'active'"`
+	ActivatedAt         *time.Time `json:"activated_at" gorm:"column:activated_at"`
+	RetiredAt           *time.Time `json:"retired_at" gorm:"column:retired_at"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 type DNSQueryRollup struct {
@@ -144,6 +177,29 @@ func (zone *DNSZone) Update() error {
 
 func (zone *DNSZone) Delete() error {
 	return DB.Delete(zone).Error
+}
+
+func ListDNSSECKeysByZoneID(zoneID uint) ([]*DNSSECKey, error) {
+	keys := []*DNSSECKey{}
+	err := DB.Where("zone_id = ?", zoneID).Order("role asc").Order("id asc").Find(&keys).Error
+	return keys, err
+}
+
+func ListDNSSECKeysByZoneIDs(zoneIDs []uint) ([]*DNSSECKey, error) {
+	if len(zoneIDs) == 0 {
+		return []*DNSSECKey{}, nil
+	}
+	keys := []*DNSSECKey{}
+	err := DB.Where("zone_id IN ?", zoneIDs).Order("zone_id asc").Order("role asc").Order("id asc").Find(&keys).Error
+	return keys, err
+}
+
+func (key *DNSSECKey) Insert() error {
+	return DB.Create(key).Error
+}
+
+func (key *DNSSECKey) Update() error {
+	return DB.Save(key).Error
 }
 
 func ListDNSRecordsByZoneID(zoneID uint) (records []*DNSRecord, err error) {
@@ -273,6 +329,16 @@ func GetDNSWorkerByToken(token string) (*DNSWorker, error) {
 	return worker, err
 }
 
+func ListDNSWorkersByTokenPrefix(prefix string) ([]*DNSWorker, error) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return []*DNSWorker{}, nil
+	}
+	var workers []*DNSWorker
+	err := DB.Where("token_prefix = ?", prefix).Find(&workers).Error
+	return workers, err
+}
+
 func (worker *DNSWorker) Insert() error {
 	return DB.Create(worker).Error
 }
@@ -287,6 +353,45 @@ func (worker *DNSWorker) UpdateProbeResult() error {
 
 func (worker *DNSWorker) Delete() error {
 	return DB.Delete(worker).Error
+}
+
+func ListDNSZoneWorkerAssignments(zoneID uint) ([]*DNSZoneWorkerAssignment, error) {
+	var assignments []*DNSZoneWorkerAssignment
+	err := DB.Where("zone_id = ?", zoneID).Order("worker_id asc").Find(&assignments).Error
+	return assignments, err
+}
+
+func ListDNSZoneWorkerAssignmentsByWorkerID(workerID uint) ([]*DNSZoneWorkerAssignment, error) {
+	var assignments []*DNSZoneWorkerAssignment
+	err := DB.Where("worker_id = ?", workerID).Order("zone_id asc").Find(&assignments).Error
+	return assignments, err
+}
+
+func ListDNSZoneWorkerAssignmentsByZoneIDs(zoneIDs []uint) ([]*DNSZoneWorkerAssignment, error) {
+	if len(zoneIDs) == 0 {
+		return []*DNSZoneWorkerAssignment{}, nil
+	}
+	var assignments []*DNSZoneWorkerAssignment
+	err := DB.Where("zone_id IN ?", zoneIDs).Order("zone_id asc").Order("worker_id asc").Find(&assignments).Error
+	return assignments, err
+}
+
+func ReplaceDNSZoneWorkerAssignments(zoneID uint, workerIDs []uint) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("zone_id = ?", zoneID).Delete(&DNSZoneWorkerAssignment{}).Error; err != nil {
+			return err
+		}
+		for _, workerID := range workerIDs {
+			if workerID == 0 {
+				continue
+			}
+			assignment := &DNSZoneWorkerAssignment{ZoneID: zoneID, WorkerID: workerID}
+			if err := tx.Create(assignment).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (rollup *DNSQueryRollup) Insert() error {

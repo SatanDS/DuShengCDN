@@ -49,7 +49,7 @@ func normalizeDomainList(values []string) []string {
 func normalizeRecordType(raw string) string {
 	recordType := strings.ToUpper(strings.TrimSpace(raw))
 	switch recordType {
-	case "A", "AAAA", "CNAME", "TXT", "MX", "NS", "SOA":
+	case "A", "AAAA", "CNAME", "TXT", "MX", "NS", "SOA", "CAA", "SRV", "HTTPS", "SVCB", "TLSA", "DNSKEY", "RRSIG", "NSEC", "NSEC3", "NSEC3PARAM":
 		return recordType
 	default:
 		return "A"
@@ -138,6 +138,7 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 	policy.Strategy = normalizeStrategy(firstNonEmpty(policy.Strategy, route.ScheduleMode))
 	policy.TargetCount = normalizeTargetCount(firstPositive(policy.TargetCount, route.TargetCount))
 	policy.TTL = normalizeAuthoritativeTTL(firstPositive(policy.TTL, route.TTL))
+	policy.SourcePoolFallbackMode = normalizeSourcePoolFallbackMode(policy.SourcePoolFallbackMode)
 	policy.LoadThresholds = normalizeLoadThresholds(policy.LoadThresholds)
 	policy.Debounce = normalizeDebounce(policy.Debounce)
 	if len(policy.Pools) == 0 {
@@ -179,6 +180,15 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 		}
 	}
 	return policy
+}
+
+func normalizeSourcePoolFallbackMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "fallback_to_global":
+		return "fallback_to_global"
+	default:
+		return "strict"
+	}
 }
 
 func normalizeNodeIDList(values []string) []string {
@@ -231,6 +241,35 @@ func normalizeDebounce(input GSLBDebounce) GSLBDebounce {
 		input.RecoveryThreshold = 1
 	}
 	return input
+}
+
+func normalizeDNSSECDenialMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "nsec3":
+		return "nsec3"
+	default:
+		return "nsec"
+	}
+}
+
+func normalizeDNSSECSignatureValidity(value int) int {
+	if value <= 0 {
+		return 7 * 24 * 3600
+	}
+	if value < 3600 {
+		return 3600
+	}
+	return value
+}
+
+func normalizeDNSSECNSEC3Iterations(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > 50 {
+		return 50
+	}
+	return value
 }
 
 func normalizeCountryList(values []string) []string {

@@ -2425,6 +2425,73 @@ func validateDatabaseSchemaV42(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func migrateV43(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return backfillDNSWorkerTokenHashes(db)
+}
+
+func validateDatabaseSchemaV43(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV42(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{"token_hash", "token_prefix", "token_revoked_at"} {
+		if !db.Migrator().HasColumn(&DNSWorker{}, column) {
+			return fmt.Errorf("column dns_workers.%s is missing", column)
+		}
+	}
+	for _, column := range []string{"dnssec_enabled", "dnssec_denial_mode", "dnssec_nsec3_salt", "dnssec_nsec3_iterations", "dnssec_signature_validity"} {
+		if !db.Migrator().HasColumn(&DNSZone{}, column) {
+			return fmt.Errorf("column dns_zones.%s is missing", column)
+		}
+	}
+	if !db.Migrator().HasTable(&DNSSECKey{}) {
+		return errors.New("table dnssec_keys is missing")
+	}
+	for _, column := range []string{"unhealthy_count", "recovery_count"} {
+		if !db.Migrator().HasColumn(&GSLBSchedulingState{}, column) {
+			return fmt.Errorf("column gslb_scheduling_states.%s is missing", column)
+		}
+	}
+	if !db.Migrator().HasTable(&DNSZoneWorkerAssignment{}) {
+		return errors.New("table dns_zone_worker_assignments is missing")
+	}
+	_ = backend
+	return nil
+}
+
+func backfillDNSWorkerTokenHashes(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&DNSWorker{}) {
+		return nil
+	}
+	var workers []DNSWorker
+	if err := db.Find(&workers).Error; err != nil {
+		return err
+	}
+	for i := range workers {
+		token := strings.TrimSpace(workers[i].Token)
+		if token == "" || strings.TrimSpace(workers[i].TokenHash) != "" {
+			continue
+		}
+		sum := sha256.Sum256([]byte(token))
+		tokenHash := hex.EncodeToString(sum[:])
+		tokenPrefix := token
+		if len(tokenPrefix) > 12 {
+			tokenPrefix = tokenPrefix[:12]
+		}
+		if err := db.Model(&workers[i]).Updates(map[string]any{
+			"token":        "",
+			"token_hash":   tokenHash,
+			"token_prefix": tokenPrefix,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func backfillLegacyConfigVersionArtifacts(db *gorm.DB) error {
 	db = migrationSession(db)
 	if db == nil || !db.Migrator().HasTable(&ConfigVersion{}) || !db.Migrator().HasTable(&ConfigVersionArtifact{}) {
@@ -2568,6 +2635,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 39, toVersion: 40, migrate: migrateV40, validate: validateDatabaseSchemaV40},
 		{fromVersion: 40, toVersion: 41, migrate: migrateV41, validate: validateDatabaseSchemaV41},
 		{fromVersion: 41, toVersion: 42, migrate: migrateV42, validate: validateDatabaseSchemaV42},
+		{fromVersion: 42, toVersion: 43, migrate: migrateV43, validate: validateDatabaseSchemaV43},
 	}
 }
 
@@ -2615,7 +2683,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV42(db, backend)
+		return validateDatabaseSchemaV43(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2631,7 +2699,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV42(db, backend)
+	return validateDatabaseSchemaV43(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2662,7 +2730,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV42(db, backend); err != nil {
+	if err := validateDatabaseSchemaV43(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

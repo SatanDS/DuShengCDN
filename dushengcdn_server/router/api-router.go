@@ -9,6 +9,12 @@ import (
 
 func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
+	workerAPIRateLimit := middleware.DNSWorkerAPIRateLimit()
+	apiRouter.GET("/dns-snapshot", workerAPIRateLimit, controller.GetDNSSnapshot)
+	apiRouter.POST("/dns-worker-heartbeat", workerAPIRateLimit, controller.DNSWorkerHeartbeat)
+	apiRouter.GET("/dns-source-databases/manifest", workerAPIRateLimit, controller.GetDNSSourceDatabaseManifest)
+	apiRouter.GET("/dns-source-databases/files/:kind/:name", workerAPIRateLimit, controller.DownloadDNSSourceDatabaseFile)
+
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	{
 		apiRouter.GET("/status", controller.GetStatus)
@@ -173,6 +179,14 @@ func SetApiRouter(router *gin.Engine) {
 			dnsZoneRoute.POST("/", controller.CreateDNSZone)
 			dnsZoneRoute.POST("/:id/update", controller.UpdateDNSZone)
 			dnsZoneRoute.POST("/:id/delete", controller.DeleteDNSZone)
+			dnsZoneRoute.GET("/:id/workers", controller.GetDNSZoneWorkers)
+			dnsZoneRoute.POST("/:id/workers", controller.UpdateDNSZoneWorkers)
+			dnsZoneRoute.GET("/:id/dnssec", controller.GetDNSZoneDNSSEC)
+			dnsZoneRoute.POST("/:id/dnssec/enable", controller.EnableDNSZoneDNSSEC)
+			dnsZoneRoute.POST("/:id/dnssec/disable", controller.DisableDNSZoneDNSSEC)
+			dnsZoneRoute.POST("/:id/dnssec/rotate-zsk", controller.RotateDNSZoneDNSSECZSK)
+			dnsZoneRoute.POST("/:id/dnssec/rotate-ksk", controller.RotateDNSZoneDNSSECKSK)
+			dnsZoneRoute.GET("/:id/dnssec/ds", controller.GetDNSZoneDNSSECDS)
 			dnsZoneRoute.GET("/:id/delegation-check", controller.CheckDNSZoneDelegation)
 			dnsZoneRoute.GET("/:id/records", controller.GetDNSZoneRecords)
 			dnsZoneRoute.POST("/:id/records", controller.CreateDNSZoneRecord)
@@ -193,6 +207,8 @@ func SetApiRouter(router *gin.Engine) {
 			dnsWorkerAdminRoute.POST("/simulate", controller.SimulateDNSGSLB)
 			dnsWorkerAdminRoute.POST("/", controller.CreateDNSWorker)
 			dnsWorkerAdminRoute.POST("/:id/update-info", controller.UpdateDNSWorker)
+			dnsWorkerAdminRoute.POST("/:id/rotate-token", controller.RotateDNSWorkerToken)
+			dnsWorkerAdminRoute.POST("/:id/revoke-token", controller.RevokeDNSWorkerToken)
 			dnsWorkerAdminRoute.POST("/:id/probe", controller.ProbeDNSWorker)
 			dnsWorkerAdminRoute.POST("/:id/update", controller.RequestDNSWorkerUpdate)
 			dnsWorkerAdminRoute.POST("/:id/delete", controller.DeleteDNSWorker)
@@ -203,10 +219,6 @@ func SetApiRouter(router *gin.Engine) {
 			dnsSourceDatabaseAdminRoute.GET("/status", controller.GetDNSSourceDatabaseMirrorStatus)
 			dnsSourceDatabaseAdminRoute.POST("/refresh", controller.RefreshDNSSourceDatabaseMirror)
 		}
-		apiRouter.GET("/dns-snapshot", controller.GetDNSSnapshot)
-		apiRouter.POST("/dns-worker-heartbeat", controller.DNSWorkerHeartbeat)
-		apiRouter.GET("/dns-source-databases/manifest", controller.GetDNSSourceDatabaseManifest)
-		apiRouter.GET("/dns-source-databases/files/:kind/:name", controller.DownloadDNSSourceDatabaseFile)
 		configVersionRoute := apiRouter.Group("/config-versions")
 		configVersionRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{

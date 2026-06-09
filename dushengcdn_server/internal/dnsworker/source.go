@@ -24,7 +24,13 @@ type SourceResolver struct {
 	operatorCIDRs            *OperatorCIDRMatcher
 	operatorCIDRDatabasePath string
 	operatorCIDRLastError    string
+	ecsConfigured            bool
+	ecsEnabled               bool
+	ecsIPv4Prefix            int
+	ecsIPv6Prefix            int
 }
+
+type SourceResolverOption func(*SourceResolver)
 
 type SourceLookup interface {
 	Resolve(request *dns.Msg, remoteAddr net.Addr) SourceContext
@@ -55,10 +61,30 @@ type geoRecord struct {
 	Organization           string `maxminddb:"organization"`
 }
 
+func WithECS(enabled bool, ipv4Prefix int, ipv6Prefix int) SourceResolverOption {
+	return func(r *SourceResolver) {
+		r.ecsConfigured = true
+		r.ecsEnabled = enabled
+		r.ecsIPv4Prefix = normalizePrefix(ipv4Prefix, 32, DefaultECSIPv4Prefix)
+		r.ecsIPv6Prefix = normalizePrefix(ipv6Prefix, 128, DefaultECSIPv6Prefix)
+	}
+}
+
 func NewSourceResolver(mmdbPath string, extraPaths ...string) (*SourceResolver, error) {
 	resolver := &SourceResolver{
-		databasePath: strings.TrimSpace(mmdbPath),
+		databasePath:  strings.TrimSpace(mmdbPath),
+		ecsEnabled:    true,
+		ecsIPv4Prefix: DefaultECSIPv4Prefix,
+		ecsIPv6Prefix: DefaultECSIPv6Prefix,
 	}
+	filteredExtraPaths := make([]string, 0, len(extraPaths))
+	for _, item := range extraPaths {
+		if strings.HasPrefix(item, "ecs:") {
+			continue
+		}
+		filteredExtraPaths = append(filteredExtraPaths, item)
+	}
+	extraPaths = filteredExtraPaths
 	if len(extraPaths) > 0 {
 		resolver.asnDatabasePath = strings.TrimSpace(extraPaths[0])
 	}
@@ -142,7 +168,7 @@ func (r *SourceResolver) Status() SourceResolverStatus {
 }
 
 func (r *SourceResolver) Resolve(request *dns.Msg, remoteAddr net.Addr) SourceContext {
-	sourceIP := clientSubnetIP(request)
+	sourceIP := clientSubnetIPWithPolicy(request, ecsEnabled(r), ecsIPv4Prefix(r), ecsIPv6Prefix(r))
 	if sourceIP == nil {
 		sourceIP = remoteIP(remoteAddr)
 	}
@@ -258,6 +284,13 @@ func classifySourceOperatorValue(value string) string {
 }
 
 func clientSubnetIP(request *dns.Msg) net.IP {
+	return clientSubnetIPWithPolicy(request, true, DefaultECSIPv4Prefix, DefaultECSIPv6Prefix)
+}
+
+func clientSubnetIPWithPolicy(request *dns.Msg, enabled bool, ipv4Prefix int, ipv6Prefix int) net.IP {
+	if !enabled {
+		return nil
+	}
 	if request == nil {
 		return nil
 	}
@@ -270,9 +303,80 @@ func clientSubnetIP(request *dns.Msg) net.IP {
 		if !ok || subnet.Address == nil {
 			continue
 		}
-		return subnet.Address
+		return normalizeECSAddress(subnet.Address, subnet.Family, subnet.SourceNetmask, ipv4Prefix, ipv6Prefix)
 	}
 	return nil
+}
+
+func normalizeECSAddress(ip net.IP, family uint16, sourcePrefix uint8, ipv4Prefix int, ipv6Prefix int) net.IP {
+	if ip == nil {
+		return nil
+	}
+	switch family {
+	case 1:
+		ipv4 := ip.To4()
+		if ipv4 == nil {
+			return nil
+		}
+		prefix := minInt(int(sourcePrefix), normalizePrefix(ipv4Prefix, 32, DefaultECSIPv4Prefix))
+		if prefix < 0 {
+			prefix = 0
+		}
+		return ipv4.Mask(net.CIDRMask(prefix, 32))
+	case 2:
+		if ip.To4() != nil {
+			return nil
+		}
+		ipv6 := ip.To16()
+		if ipv6 == nil {
+			return nil
+		}
+		prefix := minInt(int(sourcePrefix), normalizePrefix(ipv6Prefix, 128, DefaultECSIPv6Prefix))
+		if prefix < 0 {
+			prefix = 0
+		}
+		return ipv6.Mask(net.CIDRMask(prefix, 128))
+	default:
+		return nil
+	}
+}
+
+func ecsIPv4Prefix(r *SourceResolver) int {
+	if r == nil || !r.ecsConfigured {
+		return DefaultECSIPv4Prefix
+	}
+	return normalizePrefix(r.ecsIPv4Prefix, 32, DefaultECSIPv4Prefix)
+}
+
+func ecsIPv6Prefix(r *SourceResolver) int {
+	if r == nil || !r.ecsConfigured {
+		return DefaultECSIPv6Prefix
+	}
+	return normalizePrefix(r.ecsIPv6Prefix, 128, DefaultECSIPv6Prefix)
+}
+
+func ecsEnabled(r *SourceResolver) bool {
+	if r == nil || !r.ecsConfigured {
+		return true
+	}
+	return r.ecsEnabled
+}
+
+func normalizePrefix(value int, max int, fallback int) int {
+	if value < 0 {
+		return fallback
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func minInt(left int, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func remoteIP(remoteAddr net.Addr) net.IP {

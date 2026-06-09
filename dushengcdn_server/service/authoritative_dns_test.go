@@ -186,6 +186,239 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDNSWorkerTokenHashRotateRevokeAndLegacyFallback(t *testing.T) {
+	setupServiceTestDB(t)
+
+	workerView, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if workerView.Token == "" || workerView.TokenPrefix == "" {
+		t.Fatalf("expected created worker to return one-time token metadata: %+v", workerView)
+	}
+	createdToken := workerView.Token
+
+	workerModel, err := model.GetDNSWorkerByID(workerView.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if workerModel.Token != "" || workerModel.TokenHash == "" || workerModel.TokenPrefix != dnsWorkerTokenPrefix(createdToken) {
+		t.Fatalf("expected token to be stored as hash/prefix only, got %+v", workerModel)
+	}
+	if workerModel.TokenHash != dnsWorkerTokenHash(createdToken) {
+		t.Fatal("stored token hash does not match issued token")
+	}
+
+	authenticated, err := AuthenticateDNSWorkerToken(" " + createdToken + " ")
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken hashed token: %v", err)
+	}
+	if authenticated.ID != workerView.ID {
+		t.Fatalf("expected token to authenticate worker %d, got %d", workerView.ID, authenticated.ID)
+	}
+
+	rotated, err := RotateAuthoritativeDNSWorkerToken(workerView.ID)
+	if err != nil {
+		t.Fatalf("RotateAuthoritativeDNSWorkerToken: %v", err)
+	}
+	if rotated.Token == "" || rotated.Token == createdToken || rotated.TokenPrefix != dnsWorkerTokenPrefix(rotated.Token) {
+		t.Fatalf("unexpected rotated token view: %+v", rotated)
+	}
+	if _, err := AuthenticateDNSWorkerToken(createdToken); err == nil {
+		t.Fatal("expected original token to stop authenticating after rotation")
+	}
+	if _, err := AuthenticateDNSWorkerToken(rotated.Token); err != nil {
+		t.Fatalf("expected rotated token to authenticate: %v", err)
+	}
+
+	revoked, err := RevokeAuthoritativeDNSWorkerToken(workerView.ID)
+	if err != nil {
+		t.Fatalf("RevokeAuthoritativeDNSWorkerToken: %v", err)
+	}
+	if revoked.Token != "" || revoked.TokenPrefix != "" || revoked.TokenRevokedAt == nil {
+		t.Fatalf("unexpected revoked token view: %+v", revoked)
+	}
+	if _, err := AuthenticateDNSWorkerToken(rotated.Token); err == nil {
+		t.Fatal("expected revoked token to be rejected")
+	}
+
+	legacyToken := "legacy-plaintext-token"
+	legacyWorker := &model.DNSWorker{
+		WorkerID:      "dns-legacy-token",
+		Name:          "legacy",
+		Token:         legacyToken,
+		TokenHash:     "",
+		TokenPrefix:   "",
+		PublicAddress: "ns-legacy.example.net",
+		Status:        dnsWorkerStatusOffline,
+	}
+	if err := legacyWorker.Insert(); err != nil {
+		t.Fatalf("insert legacy worker: %v", err)
+	}
+	authenticated, err = AuthenticateDNSWorkerToken(" " + legacyToken + " ")
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken legacy token: %v", err)
+	}
+	if authenticated.ID != legacyWorker.ID {
+		t.Fatalf("expected legacy token to authenticate worker %d, got %d", legacyWorker.ID, authenticated.ID)
+	}
+	reloadedLegacy, err := model.GetDNSWorkerByID(legacyWorker.ID)
+	if err != nil {
+		t.Fatalf("reload legacy worker: %v", err)
+	}
+	if reloadedLegacy.Token != "" ||
+		reloadedLegacy.TokenHash != dnsWorkerTokenHash(legacyToken) ||
+		reloadedLegacy.TokenPrefix != dnsWorkerTokenPrefix(legacyToken) {
+		t.Fatalf("expected legacy token to be migrated to hash/prefix, got %+v", reloadedLegacy)
+	}
+}
+
+func TestAuthoritativeDNSSECEnableCreatesEncryptedKeysAndSnapshot(t *testing.T) {
+	setupServiceTestDB(t)
+	t.Setenv("DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY", "test-dnssec-secret")
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	view, err := EnableAuthoritativeDNSSEC(zone.ID, DNSSECEnableInput{})
+	if err != nil {
+		t.Fatalf("EnableAuthoritativeDNSSEC: %v", err)
+	}
+	if !view.Enabled || view.DenialMode != "nsec" || len(view.Keys) != 2 || len(view.DSRecords) != 1 {
+		t.Fatalf("unexpected DNSSEC view: %+v", view)
+	}
+
+	keys, err := model.ListDNSSECKeysByZoneID(zone.ID)
+	if err != nil {
+		t.Fatalf("ListDNSSECKeysByZoneID: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("expected two DNSSEC keys, got %+v", keys)
+	}
+	for _, key := range keys {
+		if key.EncryptedPrivateKey == "" || strings.Contains(key.EncryptedPrivateKey, "Private-key-format") {
+			t.Fatalf("expected encrypted private key envelope, got %+v", key)
+		}
+		if key.PublicKey == "" || key.KeyTag == 0 {
+			t.Fatalf("expected public DNSSEC key metadata, got %+v", key)
+		}
+	}
+
+	snapshot, err := GetAuthoritativeDNSSnapshot(nil)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+	if len(snapshot.Zones) != 1 || !snapshot.Zones[0].DNSSEC.Enabled || len(snapshot.Zones[0].DNSSECKeys) != 2 {
+		t.Fatalf("expected DNSSEC keys in snapshot, got %+v", snapshot.Zones)
+	}
+	for _, key := range snapshot.Zones[0].DNSSECKeys {
+		if key.EncryptedPrivateKey == "" || strings.Contains(key.EncryptedPrivateKey, "Private-key-format") {
+			t.Fatalf("snapshot leaked plaintext DNSSEC key: %+v", key)
+		}
+	}
+}
+
+func TestAuthoritativeDNSSnapshotFiltersZonesRoutesAndStatesForAssignedWorker(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	assignedZone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "assigned.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone assigned: %v", err)
+	}
+	openZone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "open.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone open: %v", err)
+	}
+	otherZone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "other.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone other: %v", err)
+	}
+	for _, zone := range []*DNSZoneView{assignedZone, openZone, otherZone} {
+		if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.10"}); err != nil {
+			t.Fatalf("CreateAuthoritativeDNSRecord %s: %v", zone.Name, err)
+		}
+	}
+
+	workerA, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-a"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker A: %v", err)
+	}
+	workerB, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-b"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker B: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(assignedZone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{workerA.ID}}); err != nil {
+		t.Fatalf("assign worker A: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(otherZone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{workerB.ID}}); err != nil {
+		t.Fatalf("assign worker B: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:          "node-hk",
+		Name:            "hk",
+		IP:              "8.8.4.4",
+		PoolName:        "hk",
+		PublicIPs:       `["8.8.4.4"]`,
+		Weight:          100,
+		AgentToken:      "token-hk-assigned",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	assignedRoute := seedAuthoritativeSnapshotFilterRoute(t, assignedZone.ID, "www.assigned.example.com")
+	openRoute := seedAuthoritativeSnapshotFilterRoute(t, openZone.ID, "www.open.example.com")
+	otherRoute := seedAuthoritativeSnapshotFilterRoute(t, otherZone.ID, "www.other.example.com")
+	for _, route := range []*model.ProxyRoute{assignedRoute, openRoute, otherRoute} {
+		changedAt := now.Add(-time.Duration(route.ID) * time.Second)
+		if err := model.DB.Create(&model.GSLBSchedulingState{
+			ProxyRouteID:    route.ID,
+			DNSRecordType:   "A",
+			ScopeKey:        "global",
+			SelectedTargets: `["8.8.4.4"]`,
+			DesiredTargets:  `["8.8.4.4"]`,
+			LastChangedAt:   &changedAt,
+			LastEvaluatedAt: &changedAt,
+		}).Error; err != nil {
+			t.Fatalf("insert scheduling state for route %d: %v", route.ID, err)
+		}
+	}
+
+	workerModel, err := model.GetDNSWorkerByID(workerA.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	snapshot, err := GetAuthoritativeDNSSnapshot(workerModel)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+
+	gotZones := snapshotZoneNames(snapshot.Zones)
+	if !sameStringSet(gotZones, []string{"assigned.example.com", "open.example.com"}) {
+		t.Fatalf("expected assigned plus unassigned zones, got %v", gotZones)
+	}
+	gotRoutes := snapshotRouteDomains(snapshot.Routes)
+	if !sameStringSet(gotRoutes, []string{"www.assigned.example.com", "www.open.example.com"}) {
+		t.Fatalf("expected routes only for allowed zones, got %v", gotRoutes)
+	}
+	gotStateRoutes := snapshotStateRouteIDs(snapshot.SchedulingStates)
+	if !sameUintSet(gotStateRoutes, []uint{assignedRoute.ID, openRoute.ID}) {
+		t.Fatalf("expected scheduling states only for allowed routes, got %v", gotStateRoutes)
+	}
+}
+
 func TestAuthoritativeDNSRejectsWritesAndSnapshotWhenLicenseExpires(t *testing.T) {
 	setupServiceTestDB(t)
 	withCommercialLicenseTestConfig(t, true, "", true)
@@ -1111,6 +1344,38 @@ func TestCreateAuthoritativeDNSRecordRejectsDynamicRouteConflict(t *testing.T) {
 	}
 }
 
+func TestCreateAuthoritativeDNSRecordRejectsStaticCNAMEConflictsAndDuplicates(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.10"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord A: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.10"}); err == nil {
+		t.Fatal("expected exact duplicate A record to be rejected")
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.11"}); err != nil {
+		t.Fatalf("expected same-name A record with different value to be allowed: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "CNAME", Value: "alias.example.com"}); err == nil {
+		t.Fatal("expected CNAME to be rejected when same-name A records exist")
+	}
+
+	cname, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "alias", Type: "CNAME", Value: "target.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord CNAME: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "alias", Type: "TXT", Value: "metadata"}); err == nil {
+		t.Fatal("expected non-CNAME record to be rejected when same-name CNAME exists")
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "alias", Type: "CNAME", Value: cname.Value}); err == nil {
+		t.Fatal("expected duplicate CNAME to be rejected")
+	}
+}
+
 func TestCreateAuthoritativeDNSRecordRejectsWildcardDynamicRouteConflict(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -1147,6 +1412,84 @@ func TestCreateAuthoritativeDNSRecordRejectsWildcardDynamicRouteConflict(t *test
 	}
 	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "deep.api.example.com", Type: "A", Value: "203.0.113.11"}); err != nil {
 		t.Fatalf("expected deep subdomain to stay outside single-level wildcard conflict: %v", err)
+	}
+}
+
+func TestAuthoritativeDNSAdvancedStaticRecordsNormalizeAndRejectInvalidRDATA(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		input     DNSRecordInput
+		wantName  string
+		wantType  string
+		wantValue string
+		wantPrio  int
+	}{
+		{
+			name:      "CAA",
+			input:     DNSRecordInput{Name: "@", Type: "caa", Value: `0 issue "letsencrypt.org"`},
+			wantName:  "example.com",
+			wantType:  "CAA",
+			wantValue: `0 issue "letsencrypt.org"`,
+		},
+		{
+			name:      "SRV",
+			input:     DNSRecordInput{Name: "_sip._tcp.example.com", Type: "srv", Value: "5 5060 sip.example.com", Priority: 10},
+			wantName:  "_sip._tcp.example.com",
+			wantType:  "SRV",
+			wantValue: "5 5060 sip.example.com",
+			wantPrio:  10,
+		},
+		{
+			name:      "HTTPS",
+			input:     DNSRecordInput{Name: "svc", Type: "https", Value: `. alpn=h2 ipv4hint=192.0.2.1`, Priority: 1},
+			wantName:  "svc.example.com",
+			wantType:  "HTTPS",
+			wantValue: `. alpn=h2 ipv4hint=192.0.2.1`,
+			wantPrio:  1,
+		},
+		{
+			name:      "SVCB",
+			input:     DNSRecordInput{Name: "_dns", Type: "svcb", Value: `resolver.example.com alpn=dot port=853`, Priority: 2},
+			wantName:  "_dns.example.com",
+			wantType:  "SVCB",
+			wantValue: `resolver.example.com alpn=dot port=853`,
+			wantPrio:  2,
+		},
+		{
+			name:      "TLSA",
+			input:     DNSRecordInput{Name: "_443._tcp.example.com", Type: "tlsa", Value: "3 1 1 c22be239f483c08957bc106219cc2d3ac1a308dfbbdd0a365f17b9351234cf00"},
+			wantName:  "_443._tcp.example.com",
+			wantType:  "TLSA",
+			wantValue: "3 1 1 c22be239f483c08957bc106219cc2d3ac1a308dfbbdd0a365f17b9351234cf00",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record, err := CreateAuthoritativeDNSRecord(zone.ID, tt.input)
+			if err != nil {
+				t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+			}
+			if record.Name != tt.wantName ||
+				record.Type != tt.wantType ||
+				record.Value != tt.wantValue ||
+				record.Priority != tt.wantPrio {
+				t.Fatalf("unexpected normalized record: %+v", record)
+			}
+		})
+	}
+
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "bad", Type: "CAA", Value: `0 issue`}); err == nil {
+		t.Fatal("expected invalid CAA RDATA to be rejected")
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "bad-svc", Type: "HTTPS", Value: `. ipv4hint=not-an-ip`, Priority: 1}); err == nil {
+		t.Fatal("expected invalid HTTPS RDATA to be rejected")
 	}
 }
 
@@ -5395,6 +5738,81 @@ func TestAuthoritativeDNSGSLBSourceMatchPriorityIncludesASNAndOperator(t *testin
 	}
 }
 
+func TestAuthoritativeDNSGSLBSourcePoolFallbackModeStrictVsGlobal(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now().UTC()
+	nodes := []*model.Node{
+		{
+			NodeID:            "node-global",
+			Name:              "global",
+			IP:                "8.8.4.4",
+			PoolName:          "global",
+			PublicIPs:         `["8.8.4.4"]`,
+			Weight:            100,
+			SchedulingEnabled: true,
+			AgentVersion:      "dev",
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now,
+		},
+	}
+	policy, err := normalizeGSLBPolicy(ProxyRouteGSLBPolicy{
+		Strategy:    "weighted",
+		TargetCount: 1,
+		TTL:         30,
+		Pools: []ProxyRouteGSLBPoolPolicy{
+			{Name: "global", Weight: 100, Enabled: true},
+			{Name: "de", Weight: 100, Countries: []string{"DE"}, Enabled: true},
+		},
+	}, "global", 1, "weighted", 30)
+	if err != nil {
+		t.Fatalf("normalize GSLB policy: %v", err)
+	}
+	route := &model.ProxyRoute{
+		ID:              77,
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		NodePool:        "global",
+		DNSRecordType:   "A",
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+	}
+	options := gslbDNSSchedulingOptions{
+		Data: &gslbDNSSchedulingData{
+			Nodes:         nodes,
+			MetricsByNode: map[string]*model.NodeMetricSnapshot{},
+		},
+	}
+	source := GSLBSourceContext{Country: "DE"}
+
+	policy.SourcePoolFallbackMode = gslbSourcePoolFallbackStrict
+	route.GSLBPolicy = mustJSON(t, policy)
+	strictSelection, err := selectGSLBDNSTargetsWithOptions(route, "A", source, options)
+	if err == nil {
+		t.Fatalf("expected strict source pool mode to fail without DE targets, got %+v", strictSelection)
+	}
+	if strictSelection.ScopeKey != "country:DE" {
+		t.Fatalf("expected strict mode to keep source scope, got %s", strictSelection.ScopeKey)
+	}
+
+	policy.SourcePoolFallbackMode = gslbSourcePoolFallbackGlobal
+	route.GSLBPolicy = mustJSON(t, policy)
+	fallbackSelection, err := selectGSLBDNSTargetsWithOptions(route, "A", source, options)
+	if err != nil {
+		t.Fatalf("expected fallback_to_global to use global pool: %v", err)
+	}
+	if len(fallbackSelection.Targets) != 1 || fallbackSelection.Targets[0] != "8.8.4.4" {
+		t.Fatalf("unexpected fallback targets: %+v", fallbackSelection)
+	}
+	if fallbackSelection.ScopeKey != "country:DE" {
+		t.Fatalf("expected fallback selection to retain source scope for debounce, got %s", fallbackSelection.ScopeKey)
+	}
+}
+
 func TestSimulateAuthoritativeDNSGSLBMatchesSourceCountryAndLoad(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -6501,6 +6919,81 @@ func mustJSON(t *testing.T, value any) string {
 		t.Fatalf("marshal json: %v", err)
 	}
 	return string(raw)
+}
+
+func seedAuthoritativeSnapshotFilterRoute(t *testing.T, zoneID uint, domain string) *model.ProxyRoute {
+	t.Helper()
+	policy := defaultGSLBPolicy("hk", 1, "weighted", 30)
+	route := &model.ProxyRoute{
+		SiteName:        domain,
+		Domain:          domain,
+		Domains:         mustJSON(t, []string{domain}),
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "hk",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zoneID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     true,
+		GSLBPolicy:      mustJSON(t, policy),
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert authoritative snapshot route %s: %v", domain, err)
+	}
+	return route
+}
+
+func snapshotZoneNames(zones []AuthoritativeDNSSnapshotZone) []string {
+	names := make([]string, 0, len(zones))
+	for _, zone := range zones {
+		names = append(names, zone.Name)
+	}
+	return names
+}
+
+func snapshotRouteDomains(routes []AuthoritativeDNSSnapshotRoute) []string {
+	domains := make([]string, 0, len(routes))
+	for _, route := range routes {
+		if len(route.Domains) > 0 {
+			domains = append(domains, route.Domains[0])
+		}
+	}
+	return domains
+}
+
+func snapshotStateRouteIDs(states []AuthoritativeDNSSnapshotSchedulingState) []uint {
+	routeIDs := make([]uint, 0, len(states))
+	for _, state := range states {
+		routeIDs = append(routeIDs, state.RouteID)
+	}
+	return routeIDs
+}
+
+func sameUintSet(left []uint, right []uint) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[uint]int, len(left))
+	for _, value := range left {
+		counts[value]++
+	}
+	for _, value := range right {
+		if counts[value] == 0 {
+			return false
+		}
+		counts[value]--
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func ptrUint(value uint) *uint {

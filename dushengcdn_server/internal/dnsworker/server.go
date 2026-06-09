@@ -19,6 +19,7 @@ type DNSServer struct {
 	Resolver   SourceLookup
 	ListenAddr string
 	Limiter    *QueryRateLimiter
+	RRLimiter  *ResponseRateLimiter
 	UDPSize    int
 	udpServer  *dns.Server
 	tcpServer  *dns.Server
@@ -29,6 +30,10 @@ func NewDNSServer(store *SnapshotStore, scheduler *Scheduler, rollups *RollupAgg
 }
 
 func NewDNSServerWithLimits(store *SnapshotStore, scheduler *Scheduler, rollups *RollupAggregator, resolver SourceLookup, listenAddr string, queryRateLimit int, udpSize int) *DNSServer {
+	return NewDNSServerWithProtection(store, scheduler, rollups, resolver, listenAddr, queryRateLimit, DefaultResponseRateLimit, udpSize)
+}
+
+func NewDNSServerWithProtection(store *SnapshotStore, scheduler *Scheduler, rollups *RollupAggregator, resolver SourceLookup, listenAddr string, queryRateLimit int, responseRateLimit int, udpSize int) *DNSServer {
 	if scheduler == nil {
 		scheduler = NewScheduler()
 	}
@@ -54,6 +59,7 @@ func NewDNSServerWithLimits(store *SnapshotStore, scheduler *Scheduler, rollups 
 		Resolver:   resolver,
 		ListenAddr: listenAddr,
 		Limiter:    NewQueryRateLimiter(queryRateLimit),
+		RRLimiter:  NewResponseRateLimiter(responseRateLimit),
 		UDPSize:    udpSize,
 	}
 	mux := dns.NewServeMux()
@@ -132,6 +138,15 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	sourceScope := "global"
 	source := SourceContext{ScopeKey: "global"}
 	defer func() {
+		if s.RRLimiter != nil && !s.RRLimiter.Allow(remoteAddr, qname, rcodeLabel) {
+			response.Answer = nil
+			response.Ns = nil
+			response.Extra = nil
+			response.Authoritative = false
+			response.Rcode = dns.RcodeRefused
+			rcodeLabel = "REFUSED"
+			targets = nil
+		}
 		if s.Rollups != nil {
 			rollupSource := source
 			rollupSource.ScopeKey = sourceScope
@@ -156,8 +171,9 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	}
 	zone := findBestZone(qname, index.zonesByName)
 	if zone == nil {
-		response.Rcode = dns.RcodeNameError
-		rcodeLabel = "NXDOMAIN"
+		response.Authoritative = false
+		response.Rcode = dns.RcodeRefused
+		rcodeLabel = "REFUSED"
 		return response
 	}
 	zoneID = zone.ID
@@ -187,6 +203,26 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 			targets = recordValues(records)
 		} else {
 			targets = append([]string(nil), zone.NameServers...)
+		}
+	case dns.TypeDNSKEY:
+		if qname == zone.Name && zone.DNSSEC.Enabled {
+			response.Answer = append(response.Answer, dnssecDNSKEYRecords(zone)...)
+		}
+	case dns.TypeNSEC3PARAM:
+		if qname == zone.Name && zone.DNSSEC.Enabled && normalizeDNSSECDenialMode(zone.DNSSEC.DenialMode) == "nsec3" {
+			response.Answer = append(response.Answer, dnssecNSEC3PARAMRecord(zone))
+		}
+	case dns.TypeNSEC:
+		if zone.DNSSEC.Enabled && normalizeDNSSECDenialMode(zone.DNSSEC.DenialMode) != "nsec3" && nameExists(zone.ID, qname, index.namesByZone) {
+			response.Answer = append(response.Answer, dnssecNSECForName(zone, qname, index))
+		}
+	case dns.TypeNSEC3:
+		if zone.DNSSEC.Enabled && normalizeDNSSECDenialMode(zone.DNSSEC.DenialMode) == "nsec3" {
+			response.Answer = append(response.Answer, dnssecNSEC3ForName(zone, qname, index))
+		}
+	case dns.TypeRRSIG:
+		if zone.DNSSEC.Enabled {
+			response.Answer = append(response.Answer, dnssecCoveredRRsets(zone, index, qname)...)
 		}
 	case dns.TypeA, dns.TypeAAAA:
 		route := matchRoute(qname, qtype, routesForQName(index, qname))
@@ -225,12 +261,28 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	if len(response.Answer) == 0 {
 		if nameExists(zone.ID, qname, index.namesByZone) {
 			rcodeLabel = "NODATA"
+			signDNSSECResponse(response, request, zone, index)
 			return response
 		}
 		response.Rcode = dns.RcodeNameError
 		rcodeLabel = "NXDOMAIN"
 	}
+	signDNSSECResponse(response, request, zone, index)
 	return response
+}
+
+func qnameFromRequest(request *dns.Msg) string {
+	if request == nil || len(request.Question) == 0 {
+		return ""
+	}
+	return normalizeDomain(request.Question[0].Name)
+}
+
+func dnsRcodeLabel(rcode int) string {
+	if label := dns.RcodeToString[rcode]; label != "" {
+		return label
+	}
+	return fmt.Sprintf("RCODE%d", rcode)
 }
 
 func (s *DNSServer) truncateUDPResponse(request *dns.Msg, response *dns.Msg) *dns.Msg {
@@ -444,9 +496,23 @@ func recordToRR(zone *SnapshotZone, record SnapshotRecord) dns.RR {
 		return &dns.NS{Hdr: header, Ns: dnsName(record.Value)}
 	case "SOA":
 		return soaRecord(zone)
+	case "CAA", "SRV", "HTTPS", "SVCB", "TLSA":
+		header.Rrtype = dns.StringToType[normalizeRecordType(record.Type)]
+		if rr, err := dns.NewRR(fmt.Sprintf("%s %d IN %s %s", dnsName(record.Name), ttl, normalizeRecordType(record.Type), advancedRecordRDATA(record))); err == nil {
+			return rr
+		}
+		return nil
 	default:
 		return nil
 	}
+}
+
+func advancedRecordRDATA(record SnapshotRecord) string {
+	switch normalizeRecordType(record.Type) {
+	case "SRV", "HTTPS", "SVCB":
+		return fmt.Sprintf("%d %s", record.Priority, strings.TrimSpace(record.Value))
+	}
+	return strings.TrimSpace(record.Value)
 }
 
 func addressRecords(qname string, recordType string, targets []string, ttl int) []dns.RR {

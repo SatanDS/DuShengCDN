@@ -12,6 +12,9 @@ const (
 	DefaultZoneTTL           = 300
 	DefaultQueryRateLimit    = 200
 	DefaultUDPResponseSize   = 1232
+	DefaultResponseRateLimit = 50
+	DefaultECSIPv4Prefix     = 24
+	DefaultECSIPv6Prefix     = 56
 
 	WorkerStatusOnline  = "online"
 	WorkerStatusOffline = "offline"
@@ -28,14 +31,35 @@ type Snapshot struct {
 }
 
 type SnapshotZone struct {
-	ID          uint             `json:"id"`
-	Name        string           `json:"name"`
-	SOAEmail    string           `json:"soa_email"`
-	PrimaryNS   string           `json:"primary_ns"`
-	NameServers []string         `json:"name_servers"`
-	DefaultTTL  int              `json:"default_ttl"`
-	Serial      uint64           `json:"serial"`
-	Records     []SnapshotRecord `json:"records"`
+	ID          uint                 `json:"id"`
+	Name        string               `json:"name"`
+	SOAEmail    string               `json:"soa_email"`
+	PrimaryNS   string               `json:"primary_ns"`
+	NameServers []string             `json:"name_servers"`
+	DefaultTTL  int                  `json:"default_ttl"`
+	Serial      uint64               `json:"serial"`
+	DNSSEC      SnapshotDNSSECPolicy `json:"dnssec"`
+	DNSSECKeys  []SnapshotDNSSECKey  `json:"dnssec_keys,omitempty"`
+	Records     []SnapshotRecord     `json:"records"`
+}
+
+type SnapshotDNSSECPolicy struct {
+	Enabled                  bool   `json:"enabled"`
+	DenialMode               string `json:"denial_mode"`
+	NSEC3Salt                string `json:"nsec3_salt,omitempty"`
+	NSEC3Iterations          int    `json:"nsec3_iterations"`
+	SignatureValiditySeconds int    `json:"signature_validity_seconds"`
+}
+
+type SnapshotDNSSECKey struct {
+	ID                  uint   `json:"id"`
+	Role                string `json:"role"`
+	Flags               uint16 `json:"flags"`
+	Algorithm           uint8  `json:"algorithm"`
+	PublicKey           string `json:"public_key"`
+	EncryptedPrivateKey string `json:"encrypted_private_key"`
+	KeyTag              uint16 `json:"key_tag"`
+	Status              string `json:"status"`
 }
 
 type SnapshotRecord struct {
@@ -95,6 +119,8 @@ type SnapshotSchedulingState struct {
 	ScopeKey        string     `json:"scope_key"`
 	SelectedTargets []string   `json:"selected_targets"`
 	DesiredTargets  []string   `json:"desired_targets"`
+	UnhealthyCount  int        `json:"unhealthy_count,omitempty"`
+	RecoveryCount   int        `json:"recovery_count,omitempty"`
 	LastChangedAt   *time.Time `json:"last_changed_at,omitempty"`
 }
 
@@ -128,14 +154,15 @@ type GSLBDebounce struct {
 }
 
 type GSLBPolicy struct {
-	Mode           string               `json:"mode"`
-	Strategy       string               `json:"strategy"`
-	Pools          []GSLBPoolPolicy     `json:"pools"`
-	TargetCount    int                  `json:"target_count"`
-	TTL            int                  `json:"ttl"`
-	SourceIP       GSLBSourceIPProvider `json:"source_ip"`
-	LoadThresholds GSLBLoadThresholds   `json:"load_thresholds"`
-	Debounce       GSLBDebounce         `json:"debounce"`
+	Mode                   string               `json:"mode"`
+	Strategy               string               `json:"strategy"`
+	Pools                  []GSLBPoolPolicy     `json:"pools"`
+	TargetCount            int                  `json:"target_count"`
+	TTL                    int                  `json:"ttl"`
+	SourceIP               GSLBSourceIPProvider `json:"source_ip"`
+	SourcePoolFallbackMode string               `json:"source_pool_fallback_mode"`
+	LoadThresholds         GSLBLoadThresholds   `json:"load_thresholds"`
+	Debounce               GSLBDebounce         `json:"debounce"`
 }
 
 type SourceContext struct {

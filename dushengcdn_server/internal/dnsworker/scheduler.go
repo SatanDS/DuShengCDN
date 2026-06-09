@@ -21,9 +21,11 @@ type Scheduler struct {
 }
 
 type debounceState struct {
-	Targets       []string
-	Desired       []string
-	LastChangedAt time.Time
+	Targets        []string
+	Desired        []string
+	UnhealthyCount int
+	RecoveryCount  int
+	LastChangedAt  time.Time
 }
 
 type targetCandidate struct {
@@ -100,6 +102,8 @@ func (s *Scheduler) SnapshotStates(snapshot *Snapshot) []SnapshotSchedulingState
 			ScopeKey:        scopeKey,
 			SelectedTargets: append([]string(nil), state.Targets...),
 			DesiredTargets:  append([]string(nil), state.Desired...),
+			UnhealthyCount:  state.UnhealthyCount,
+			RecoveryCount:   state.RecoveryCount,
 			LastChangedAt:   &lastChangedAt,
 		})
 	}
@@ -140,9 +144,11 @@ func (s *Scheduler) LoadSnapshotStates(snapshot *Snapshot) {
 			continue
 		}
 		snapshotStates[schedulerStateKey(item.RouteID, recordType, scopeKey)] = debounceState{
-			Targets:       targets,
-			Desired:       desired,
-			LastChangedAt: lastChangedAt.UTC(),
+			Targets:        targets,
+			Desired:        desired,
+			UnhealthyCount: normalizeDebounceCounter(item.UnhealthyCount),
+			RecoveryCount:  normalizeDebounceCounter(item.RecoveryCount),
+			LastChangedAt:  lastChangedAt.UTC(),
 		}
 	}
 	s.mu.Lock()
@@ -223,24 +229,56 @@ func (s *Scheduler) applyDebounce(routeID uint, recordType string, scopeKey stri
 	}
 	now := s.now()
 	cooldown := time.Duration(policy.Debounce.CooldownSeconds) * time.Second
+	unhealthyThreshold := normalizeDebounceThreshold(policy.Debounce.UnhealthyThreshold)
+	recoveryThreshold := normalizeDebounceThreshold(policy.Debounce.RecoveryThreshold)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.states[key]
 	selected := desired
-	if len(state.Targets) > 0 &&
-		!sameStringSet(state.Targets, desired) &&
-		allTargetsEligible(state.Targets, eligible) &&
-		!state.LastChangedAt.IsZero() &&
-		now.Sub(state.LastChangedAt) < cooldown {
-		selected = append([]string(nil), state.Targets...)
+	reasonChanged := len(state.Targets) == 0 || !sameStringSet(state.Targets, desired)
+	if !reasonChanged {
+		state.UnhealthyCount = 0
+		state.RecoveryCount = 0
+	} else if len(state.Targets) > 0 {
+		previousEligible := allTargetsEligible(state.Targets, eligible)
+		if previousEligible {
+			state.UnhealthyCount = 0
+			state.RecoveryCount++
+			if state.RecoveryCount < recoveryThreshold ||
+				(!state.LastChangedAt.IsZero() && now.Sub(state.LastChangedAt) < cooldown) {
+				selected = append([]string(nil), state.Targets...)
+			}
+		} else {
+			state.RecoveryCount = 0
+			state.UnhealthyCount++
+			if state.UnhealthyCount < unhealthyThreshold {
+				selected = append([]string(nil), state.Targets...)
+			}
+		}
 	}
 	if state.LastChangedAt.IsZero() || !sameStringSet(state.Targets, selected) {
 		state.LastChangedAt = now
+		state.UnhealthyCount = 0
+		state.RecoveryCount = 0
 	}
 	state.Targets = append([]string(nil), selected...)
 	state.Desired = append([]string(nil), desired...)
 	s.states[key] = state
 	return selected
+}
+
+func normalizeDebounceThreshold(value int) int {
+	if value <= 0 {
+		return 1
+	}
+	return value
+}
+
+func normalizeDebounceCounter(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func schedulerStateKey(routeID uint, recordType string, scopeKey string) string {
@@ -278,6 +316,18 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 		return nil
 	}
 	pools := matchPoolsForSource(policy.Pools, source)
+	candidates := candidatesForPools(snapshot, recordType, policy, pools)
+	if len(candidates) == 0 && normalizeSourcePoolFallbackMode(policy.SourcePoolFallbackMode) == "fallback_to_global" {
+		if matchedHasSourceCondition(pools) {
+			if fallbackCandidates := candidatesForPools(snapshot, recordType, policy, globalPoolsForFallback(policy.Pools)); len(fallbackCandidates) > 0 {
+				return fallbackCandidates
+			}
+		}
+	}
+	return candidates
+}
+
+func candidatesForPools(snapshot *Snapshot, recordType string, policy GSLBPolicy, pools map[string]GSLBPoolPolicy) []targetCandidate {
 	candidates := make([]targetCandidate, 0)
 	seen := map[string]struct{}{}
 	for _, node := range snapshot.Nodes {
@@ -341,6 +391,34 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 	}
 	sortCandidates(candidates, policy.Strategy)
 	return candidates
+}
+
+func matchedHasSourceCondition(pools map[string]GSLBPoolPolicy) bool {
+	for _, pool := range pools {
+		if len(pool.SourceCIDRs) > 0 || len(pool.ASNs) > 0 || len(pool.Operators) > 0 || len(pool.Countries) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func globalPoolsForFallback(pools []GSLBPoolPolicy) map[string]GSLBPoolPolicy {
+	global := map[string]GSLBPoolPolicy{}
+	all := map[string]GSLBPoolPolicy{}
+	for _, pool := range pools {
+		name := normalizeNodePoolName(pool.Name)
+		if name == "" || !pool.Enabled {
+			continue
+		}
+		all[name] = pool
+		if len(pool.SourceCIDRs) == 0 && len(pool.ASNs) == 0 && len(pool.Operators) == 0 && len(pool.Countries) == 0 {
+			global[name] = pool
+		}
+	}
+	if len(global) > 0 {
+		return global
+	}
+	return all
 }
 
 func poolAllowsNode(pool GSLBPoolPolicy, nodeID string) bool {

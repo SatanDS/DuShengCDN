@@ -30,6 +30,101 @@ func TestResolveStaticRecordsAndGeneratedSOA(t *testing.T) {
 	}
 }
 
+func TestResolveAdvancedStaticRecords(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Zones[0].Records = append(snapshot.Zones[0].Records,
+		SnapshotRecord{ID: 10, Name: "example.com", Type: "CAA", Value: `0 issue "letsencrypt.org"`, TTL: 120},
+		SnapshotRecord{ID: 11, Name: "_sip._tcp.example.com", Type: "SRV", Value: "5 5060 sip.example.com", TTL: 120, Priority: 10},
+		SnapshotRecord{ID: 12, Name: "svc.example.com", Type: "HTTPS", Value: `. alpn=h2 ipv4hint=192.0.2.1`, TTL: 120, Priority: 1},
+		SnapshotRecord{ID: 13, Name: "_dns.example.com", Type: "SVCB", Value: `resolver.example.com alpn=dot port=853`, TTL: 120, Priority: 2},
+		SnapshotRecord{ID: 14, Name: "_443._tcp.example.com", Type: "TLSA", Value: "3 1 1 c22be239f483c08957bc106219cc2d3ac1a308dfbbdd0a365f17b9351234cf00", TTL: 120},
+	)
+	server := testServer(t, snapshot)
+
+	caaResponse := server.Resolve(testQuery("example.com", dns.TypeCAA, ""), nil)
+	if caaResponse.Rcode != dns.RcodeSuccess || len(caaResponse.Answer) != 1 {
+		t.Fatalf("expected CAA answer, rcode=%s answer=%v", dns.RcodeToString[caaResponse.Rcode], caaResponse.Answer)
+	}
+	caa := caaResponse.Answer[0].(*dns.CAA)
+	if caa.Flag != 0 || caa.Tag != "issue" || caa.Value != "letsencrypt.org" {
+		t.Fatalf("unexpected CAA answer: %+v", caa)
+	}
+
+	srvResponse := server.Resolve(testQuery("_sip._tcp.example.com", dns.TypeSRV, ""), nil)
+	if srvResponse.Rcode != dns.RcodeSuccess || len(srvResponse.Answer) != 1 {
+		t.Fatalf("expected SRV answer, rcode=%s answer=%v", dns.RcodeToString[srvResponse.Rcode], srvResponse.Answer)
+	}
+	srv := srvResponse.Answer[0].(*dns.SRV)
+	if srv.Priority != 10 || srv.Weight != 5 || srv.Port != 5060 || srv.Target != "sip.example.com." {
+		t.Fatalf("unexpected SRV answer: %+v", srv)
+	}
+
+	httpsResponse := server.Resolve(testQuery("svc.example.com", dns.TypeHTTPS, ""), nil)
+	if httpsResponse.Rcode != dns.RcodeSuccess || len(httpsResponse.Answer) != 1 {
+		t.Fatalf("expected HTTPS answer, rcode=%s answer=%v", dns.RcodeToString[httpsResponse.Rcode], httpsResponse.Answer)
+	}
+	https := httpsResponse.Answer[0].(*dns.HTTPS)
+	if https.Priority != 1 || https.Target != "." || len(https.Value) == 0 {
+		t.Fatalf("unexpected HTTPS answer: %+v", https)
+	}
+
+	svcbResponse := server.Resolve(testQuery("_dns.example.com", dns.TypeSVCB, ""), nil)
+	if svcbResponse.Rcode != dns.RcodeSuccess || len(svcbResponse.Answer) != 1 {
+		t.Fatalf("expected SVCB answer, rcode=%s answer=%v", dns.RcodeToString[svcbResponse.Rcode], svcbResponse.Answer)
+	}
+	svcb := svcbResponse.Answer[0].(*dns.SVCB)
+	if svcb.Priority != 2 || svcb.Target != "resolver.example.com." || len(svcb.Value) == 0 {
+		t.Fatalf("unexpected SVCB answer: %+v", svcb)
+	}
+
+	tlsaResponse := server.Resolve(testQuery("_443._tcp.example.com", dns.TypeTLSA, ""), nil)
+	if tlsaResponse.Rcode != dns.RcodeSuccess || len(tlsaResponse.Answer) != 1 {
+		t.Fatalf("expected TLSA answer, rcode=%s answer=%v", dns.RcodeToString[tlsaResponse.Rcode], tlsaResponse.Answer)
+	}
+	tlsa := tlsaResponse.Answer[0].(*dns.TLSA)
+	if tlsa.Usage != 3 || tlsa.Selector != 1 || tlsa.MatchingType != 1 || !strings.EqualFold(tlsa.Certificate, "c22be239f483c08957bc106219cc2d3ac1a308dfbbdd0a365f17b9351234cf00") {
+		t.Fatalf("unexpected TLSA answer: %+v", tlsa)
+	}
+}
+
+func TestResolveDNSSECSignsPositiveAndDNSKEYResponses(t *testing.T) {
+	t.Setenv("DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY", "test-dnssec-secret")
+	snapshot := baseSnapshot()
+	addTestDNSSECKeys(t, &snapshot.Zones[0])
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQueryWithDO("www.example.com", dns.TypeA), nil)
+	if response.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected NOERROR, got %s", dns.RcodeToString[response.Rcode])
+	}
+	if countRRType(response.Answer, dns.TypeA) != 1 || countRRSIGCovered(response.Answer, dns.TypeA) != 1 {
+		t.Fatalf("expected signed A answer, got %v", response.Answer)
+	}
+
+	dnskeyResponse := server.Resolve(testQueryWithDO("example.com", dns.TypeDNSKEY), nil)
+	if dnskeyResponse.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected DNSKEY NOERROR, got %s", dns.RcodeToString[dnskeyResponse.Rcode])
+	}
+	if countRRType(dnskeyResponse.Answer, dns.TypeDNSKEY) != 2 || countRRSIGCovered(dnskeyResponse.Answer, dns.TypeDNSKEY) == 0 {
+		t.Fatalf("expected DNSKEY set with RRSIG, got %v", dnskeyResponse.Answer)
+	}
+}
+
+func TestResolveDNSSECAddsNSECDenialProof(t *testing.T) {
+	t.Setenv("DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY", "test-dnssec-secret")
+	snapshot := baseSnapshot()
+	addTestDNSSECKeys(t, &snapshot.Zones[0])
+	server := testServer(t, snapshot)
+
+	response := server.Resolve(testQueryWithDO("missing.example.com", dns.TypeA), nil)
+	if response.Rcode != dns.RcodeNameError {
+		t.Fatalf("expected NXDOMAIN, got %s", dns.RcodeToString[response.Rcode])
+	}
+	if countRRType(response.Ns, dns.TypeNSEC) == 0 || countRRSIGCovered(response.Ns, dns.TypeNSEC) == 0 {
+		t.Fatalf("expected signed NSEC denial proof, got %v", response.Ns)
+	}
+}
+
 func TestResolveNXDOMAINAndNODATA(t *testing.T) {
 	server := testServer(t, baseSnapshot())
 
@@ -127,6 +222,71 @@ func TestResolveDynamicRouteMatchesSingleLevelWildcardDomain(t *testing.T) {
 	response = server.Resolve(testQuery("deep.api.example.com", dns.TypeA, ""), nil)
 	if response.Rcode != dns.RcodeNameError {
 		t.Fatalf("expected single-level wildcard not to match deep subdomain, got %s", dns.RcodeToString[response.Rcode])
+	}
+}
+
+func TestResolveGSLBSourcePoolFallbackModeStrictVsGlobal(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           32,
+			Domains:      []string{"cdn.example.com"},
+			ZoneID:       1,
+			NodePool:     "global",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "global", Weight: 100, Enabled: true},
+					{Name: "de", Weight: 100, Countries: []string{"DE"}, Enabled: true},
+				},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{
+		testNode("global-node", "global", "8.8.4.4", 100, 1),
+	}
+	server := testServer(t, snapshot)
+	server.Scheduler = NewScheduler()
+
+	strictResponse := server.Resolve(testQuery("cdn.example.com", dns.TypeA, ""), nil)
+	if strictResponse.Rcode != dns.RcodeSuccess || len(strictResponse.Answer) != 1 {
+		t.Fatalf("expected strict global source to use global pool, rcode=%s answer=%v", dns.RcodeToString[strictResponse.Rcode], strictResponse.Answer)
+	}
+	if got := strictResponse.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("expected global target, got %s", got)
+	}
+
+	strictSelected, _, strictScope, err := server.Scheduler.Select(snapshot, &snapshot.Routes[0], "A", SourceContext{Country: "DE"}, true)
+	if err == nil {
+		t.Fatalf("expected strict DE source without DE targets to fail, selected=%v", strictSelected)
+	}
+	if strictScope != "country:DE" {
+		t.Fatalf("expected strict mode to retain DE source scope, got %s", strictScope)
+	}
+
+	fallbackSnapshot := baseSnapshot()
+	fallbackSnapshot.Routes = append([]SnapshotRoute(nil), snapshot.Routes...)
+	fallbackSnapshot.Nodes = append([]SnapshotNode(nil), snapshot.Nodes...)
+	fallbackSnapshot.Routes[0].GSLBPolicy.SourcePoolFallbackMode = "fallback_to_global"
+	fallbackServer := testServer(t, fallbackSnapshot)
+	fallbackServer.Scheduler = NewScheduler()
+
+	fallbackSelected, _, fallbackScope, err := fallbackServer.Scheduler.Select(fallbackSnapshot, &fallbackSnapshot.Routes[0], "A", SourceContext{Country: "DE"}, true)
+	if err != nil {
+		t.Fatalf("expected fallback_to_global DE source to use global pool: %v", err)
+	}
+	if len(fallbackSelected) != 1 || fallbackSelected[0] != "8.8.4.4" {
+		t.Fatalf("expected fallback global target, got %v", fallbackSelected)
+	}
+	if fallbackScope != "country:DE" {
+		t.Fatalf("expected fallback mode to retain DE source scope, got %s", fallbackScope)
 	}
 }
 
@@ -635,6 +795,56 @@ func TestResolveGSLBMatchesECSCountryPools(t *testing.T) {
 	}
 }
 
+func TestResolveUnmanagedNameReturnsNonAuthoritativeRefused(t *testing.T) {
+	server := testServer(t, baseSnapshot())
+
+	response := server.Resolve(testQuery("not-hosted.example.net", dns.TypeA, ""), &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 53000})
+	if response.Rcode != dns.RcodeRefused {
+		t.Fatalf("expected REFUSED for unmanaged name, got %s", dns.RcodeToString[response.Rcode])
+	}
+	if response.Authoritative {
+		t.Fatal("expected unmanaged name response to be non-authoritative")
+	}
+	if len(response.Ns) != 0 {
+		t.Fatalf("expected unmanaged response without authority SOA, got %+v", response.Ns)
+	}
+}
+
+func TestResolveManagedMissingNameStillReturnsAuthoritativeNXDOMAIN(t *testing.T) {
+	server := testServer(t, baseSnapshot())
+
+	response := server.Resolve(testQuery("missing.example.com", dns.TypeA, ""), &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 53000})
+	if response.Rcode != dns.RcodeNameError {
+		t.Fatalf("expected NXDOMAIN for managed missing name, got %s", dns.RcodeToString[response.Rcode])
+	}
+	if !response.Authoritative {
+		t.Fatal("expected managed missing name response to be authoritative")
+	}
+	if len(response.Ns) == 0 {
+		t.Fatal("expected managed NXDOMAIN to include SOA authority")
+	}
+}
+
+func TestSourceResolverNormalizesAndCanDisableECS(t *testing.T) {
+	request := testQuery("cdn.example.com", dns.TypeA, "203.0.113.77")
+	remote := &net.UDPAddr{IP: net.ParseIP("198.51.100.25"), Port: 53000}
+	resolver, err := NewSourceResolver("")
+	if err != nil {
+		t.Fatalf("NewSourceResolver: %v", err)
+	}
+	WithECS(true, 24, 56)(resolver)
+	source := resolver.Resolve(request, remote)
+	if source.IP != "203.0.113.0" {
+		t.Fatalf("expected ECS to be normalized to /24, got %+v", source)
+	}
+
+	WithECS(false, 24, 56)(resolver)
+	source = resolver.Resolve(request, remote)
+	if source.IP != "198.51.100.25" {
+		t.Fatalf("expected disabled ECS to use remote IP, got %+v", source)
+	}
+}
+
 func TestResolveGSLBMatchesSourceCIDRBeforeCountry(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.Routes = []SnapshotRoute{
@@ -1088,6 +1298,25 @@ func TestRateLimitsQueriesPerSourceIP(t *testing.T) {
 	}
 }
 
+func TestResponseRateLimitsRepeatedAbnormalResponses(t *testing.T) {
+	server := testServerWithProtection(t, baseSnapshot(), DefaultSnapshotMaxAge, 0, 2, DefaultUDPResponseSize)
+	remote := &net.UDPAddr{IP: net.ParseIP("192.0.2.57"), Port: 53000}
+
+	for i := 0; i < 2; i++ {
+		response := server.Resolve(testQuery("missing.example.com", dns.TypeA, ""), remote)
+		if response.Rcode != dns.RcodeNameError {
+			t.Fatalf("expected allowed NXDOMAIN %d, got %s", i+1, dns.RcodeToString[response.Rcode])
+		}
+	}
+	response := server.Resolve(testQuery("missing.example.com", dns.TypeA, ""), remote)
+	if response.Rcode != dns.RcodeRefused {
+		t.Fatalf("expected abnormal response rate limit REFUSED, got %s", dns.RcodeToString[response.Rcode])
+	}
+	if response.Authoritative {
+		t.Fatal("expected response-rate-limited answer to be non-authoritative")
+	}
+}
+
 func TestUDPResponseTruncationUsesEDNSAndServerLimit(t *testing.T) {
 	server := testServerWithLimits(t, largeTXTRecordSnapshot(), DefaultSnapshotMaxAge, 0, 700)
 	query := testQuery("large.example.com", dns.TypeTXT, "")
@@ -1122,11 +1351,16 @@ func testServerWithMaxAge(t *testing.T, snapshot *Snapshot, maxAge time.Duration
 
 func testServerWithLimits(t *testing.T, snapshot *Snapshot, maxAge time.Duration, queryRateLimit int, udpSize int) *DNSServer {
 	t.Helper()
+	return testServerWithProtection(t, snapshot, maxAge, queryRateLimit, DefaultResponseRateLimit, udpSize)
+}
+
+func testServerWithProtection(t *testing.T, snapshot *Snapshot, maxAge time.Duration, queryRateLimit int, responseRateLimit int, udpSize int) *DNSServer {
+	t.Helper()
 	store := NewSnapshotStore("", maxAge)
 	if err := store.Set(snapshot); err != nil {
 		t.Fatalf("set snapshot: %v", err)
 	}
-	return NewDNSServerWithLimits(store, NewScheduler(), NewRollupAggregator(time.Minute), &testSourceResolver{}, ":0", queryRateLimit, udpSize)
+	return NewDNSServerWithProtection(store, NewScheduler(), NewRollupAggregator(time.Minute), &testSourceResolver{}, ":0", queryRateLimit, responseRateLimit, udpSize)
 }
 
 type testSourceResolver struct {
@@ -1163,6 +1397,68 @@ func baseSnapshot() *Snapshot {
 			},
 		},
 	}
+}
+
+func addTestDNSSECKeys(t *testing.T, zone *SnapshotZone) {
+	t.Helper()
+	zone.DNSSEC = SnapshotDNSSECPolicy{
+		Enabled:                  true,
+		DenialMode:               "nsec",
+		SignatureValiditySeconds: 3600,
+	}
+	zone.DNSSECKeys = []SnapshotDNSSECKey{
+		testDNSSECKey(t, zone.Name, dnssecKeyRoleKSK, 257),
+		testDNSSECKey(t, zone.Name, dnssecKeyRoleZSK, 256),
+	}
+}
+
+func testDNSSECKey(t *testing.T, zoneName string, role string, flags uint16) SnapshotDNSSECKey {
+	t.Helper()
+	key := &dns.DNSKEY{
+		Hdr:       dns.RR_Header{Name: dnsName(zoneName), Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 120},
+		Flags:     flags,
+		Protocol:  3,
+		Algorithm: dns.ECDSAP256SHA256,
+	}
+	privateKey, err := key.Generate(256)
+	if err != nil {
+		t.Fatalf("Generate DNSSEC key: %v", err)
+	}
+	encrypted, err := encryptDNSSECPrivateKeyForWorkerSnapshot(key.PrivateKeyString(privateKey))
+	if err != nil {
+		t.Fatalf("encrypt DNSSEC private key: %v", err)
+	}
+	return SnapshotDNSSECKey{
+		ID:                  uint(flags),
+		Role:                role,
+		Flags:               flags,
+		Algorithm:           key.Algorithm,
+		PublicKey:           key.PublicKey,
+		EncryptedPrivateKey: encrypted,
+		KeyTag:              key.KeyTag(),
+		Status:              dnssecKeyStatusActive,
+	}
+}
+
+func countRRType(records []dns.RR, rrtype uint16) int {
+	count := 0
+	for _, record := range records {
+		if record != nil && record.Header().Rrtype == rrtype {
+			count++
+		}
+	}
+	return count
+}
+
+func countRRSIGCovered(records []dns.RR, covered uint16) int {
+	count := 0
+	for _, record := range records {
+		sig, ok := record.(*dns.RRSIG)
+		if ok && sig.TypeCovered == covered {
+			count++
+		}
+	}
+	return count
 }
 
 func largeTXTRecordSnapshot() *Snapshot {
@@ -1246,5 +1542,11 @@ func testQuery(name string, qtype uint16, ecs string) *dns.Msg {
 			Address:       net.ParseIP(ecs),
 		})
 	}
+	return msg
+}
+
+func testQueryWithDO(name string, qtype uint16) *dns.Msg {
+	msg := testQuery(name, qtype, "")
+	msg.SetEdns0(1232, true)
 	return msg
 }

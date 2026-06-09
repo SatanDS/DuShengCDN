@@ -146,7 +146,7 @@ func (s *SnapshotStore) Save(snapshot *Snapshot) error {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		s.setLastError(err)
 		return err
 	}
@@ -275,6 +275,20 @@ func normalizeSnapshot(input *Snapshot) *Snapshot {
 		out.Zones[i].PrimaryNS = normalizeDomain(out.Zones[i].PrimaryNS)
 		out.Zones[i].DefaultTTL = normalizeStaticTTL(out.Zones[i].DefaultTTL, DefaultZoneTTL)
 		out.Zones[i].NameServers = normalizeDomainList(out.Zones[i].NameServers)
+		out.Zones[i].DNSSEC.DenialMode = normalizeDNSSECDenialMode(out.Zones[i].DNSSEC.DenialMode)
+		out.Zones[i].DNSSEC.NSEC3Salt = strings.ToUpper(strings.TrimSpace(out.Zones[i].DNSSEC.NSEC3Salt))
+		out.Zones[i].DNSSEC.NSEC3Iterations = normalizeDNSSECNSEC3Iterations(out.Zones[i].DNSSEC.NSEC3Iterations)
+		out.Zones[i].DNSSEC.SignatureValiditySeconds = normalizeDNSSECSignatureValidity(out.Zones[i].DNSSEC.SignatureValiditySeconds)
+		out.Zones[i].DNSSECKeys = append([]SnapshotDNSSECKey(nil), out.Zones[i].DNSSECKeys...)
+		for j := range out.Zones[i].DNSSECKeys {
+			out.Zones[i].DNSSECKeys[j].Role = strings.ToLower(strings.TrimSpace(out.Zones[i].DNSSECKeys[j].Role))
+			out.Zones[i].DNSSECKeys[j].PublicKey = strings.TrimSpace(out.Zones[i].DNSSECKeys[j].PublicKey)
+			out.Zones[i].DNSSECKeys[j].EncryptedPrivateKey = strings.TrimSpace(out.Zones[i].DNSSECKeys[j].EncryptedPrivateKey)
+			out.Zones[i].DNSSECKeys[j].Status = strings.ToLower(strings.TrimSpace(out.Zones[i].DNSSECKeys[j].Status))
+			if out.Zones[i].DNSSECKeys[j].Status == "" {
+				out.Zones[i].DNSSECKeys[j].Status = dnssecKeyStatusActive
+			}
+		}
 		out.Zones[i].Records = append([]SnapshotRecord(nil), out.Zones[i].Records...)
 		for j := range out.Zones[i].Records {
 			out.Zones[i].Records[j].Name = normalizeRecordName(out.Zones[i].Name, out.Zones[i].Records[j].Name)

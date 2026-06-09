@@ -76,6 +76,7 @@ export interface ProxyRouteGSLBPolicy {
   pools: ProxyRouteGSLBPoolPolicy[];
   target_count: number;
   ttl: number;
+  source_pool_fallback_mode?: 'strict' | 'fallback_to_global';
   source_ip: {
     provider: 'none' | 'http';
     api_url: string;

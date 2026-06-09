@@ -114,6 +114,8 @@ func InitOptionMap() {
 	common.OptionMap["DownloadRateLimitDuration"] = strconv.FormatInt(common.DownloadRateLimitDuration, 10)
 	common.OptionMap["CriticalRateLimitNum"] = strconv.Itoa(common.CriticalRateLimitNum)
 	common.OptionMap["CriticalRateLimitDuration"] = strconv.FormatInt(common.CriticalRateLimitDuration, 10)
+	common.OptionMap["DNSWorkerAPIRateLimitNum"] = strconv.Itoa(common.DNSWorkerAPIRateLimitNum)
+	common.OptionMap["DNSWorkerAPIRateLimitDuration"] = strconv.FormatInt(common.DNSWorkerAPIRateLimitDuration, 10)
 	common.OptionMapRWMutex.Unlock()
 	options, _ := AllOption()
 	for _, option := range options {
@@ -447,6 +449,14 @@ func updateOptionMap(key string, value string) {
 	case "CriticalRateLimitDuration":
 		if v, err := strconv.ParseInt(value, 10, 64); err == nil && v > 0 {
 			common.CriticalRateLimitDuration = v
+		}
+	case "DNSWorkerAPIRateLimitNum":
+		if v, err := strconv.Atoi(value); err == nil && v > 0 {
+			common.DNSWorkerAPIRateLimitNum = v
+		}
+	case "DNSWorkerAPIRateLimitDuration":
+		if v, err := strconv.ParseInt(value, 10, 64); err == nil && v > 0 {
+			common.DNSWorkerAPIRateLimitDuration = v
 		}
 	}
 	common.OptionMapRWMutex.Unlock()

@@ -148,3 +148,7 @@ func DownloadRateLimit() func(c *gin.Context) {
 func UploadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.UploadRateLimitNum, common.UploadRateLimitDuration, "UP")
 }
+
+func DNSWorkerAPIRateLimit() func(c *gin.Context) {
+	return rateLimitFactory(common.DNSWorkerAPIRateLimitNum, common.DNSWorkerAPIRateLimitDuration, "DWK")
+}

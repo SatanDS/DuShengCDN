@@ -16,6 +16,8 @@ import type {
   DNSZoneDelegationCheck,
   DNSZoneItem,
   DNSZoneMutationPayload,
+  DNSZoneWorkerAssignment,
+  DNSZoneWorkerAssignmentPayload,
 } from '@/features/authoritative-dns/types';
 
 export function getDNSZones() {
@@ -52,6 +54,22 @@ export function checkDNSZoneDelegation(id: number) {
   ).then(normalizeDNSZoneDelegationCheck);
 }
 
+export function getDNSZoneWorkers(id: number) {
+  return apiRequest<DNSZoneWorkerAssignment>(`/dns-zones/${id}/workers`).then(
+    normalizeDNSZoneWorkerAssignment,
+  );
+}
+
+export function updateDNSZoneWorkers(
+  id: number,
+  payload: DNSZoneWorkerAssignmentPayload,
+) {
+  return apiRequest<DNSZoneWorkerAssignment>(`/dns-zones/${id}/workers`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then(normalizeDNSZoneWorkerAssignment);
+}
+
 export function getDNSZoneRecords(zoneId: number) {
   return apiRequest<DNSRecordItem[]>(`/dns-zones/${zoneId}/records`).then(
     normalizeDNSRecords,
@@ -82,9 +100,7 @@ export function deleteDNSRecord(id: number) {
 }
 
 export function getDNSWorkers() {
-  return apiRequest<DNSWorkerItem[]>('/dns-workers/').then(
-    normalizeDNSWorkers,
-  );
+  return apiRequest<DNSWorkerItem[]>('/dns-workers/').then(normalizeDNSWorkers);
 }
 
 export function getDNSObservability(hours = 24) {
@@ -130,6 +146,18 @@ export function requestDNSWorkerUpdate(id: number) {
   return apiRequest<DNSWorkerItem>(`/dns-workers/${id}/update`, {
     method: 'POST',
     body: JSON.stringify({ channel: 'stable' }),
+  }).then(normalizeDNSWorker);
+}
+
+export function rotateDNSWorkerToken(id: number) {
+  return apiRequest<DNSWorkerItem>(`/dns-workers/${id}/rotate-token`, {
+    method: 'POST',
+  }).then(normalizeDNSWorker);
+}
+
+export function revokeDNSWorkerToken(id: number) {
+  return apiRequest<DNSWorkerItem>(`/dns-workers/${id}/revoke-token`, {
+    method: 'POST',
   }).then(normalizeDNSWorker);
 }
 
@@ -182,6 +210,8 @@ function normalizeDNSWorker(worker: DNSWorkerItem) {
   return {
     ...worker,
     remark: worker.remark ?? '',
+    token_prefix: worker.token_prefix ?? '',
+    token_revoked_at: worker.token_revoked_at ?? null,
     last_probe_results: asArray(worker.last_probe_results),
     probe_status: worker.probe_status || 'unknown',
     last_remote_ip: worker.last_remote_ip ?? '',
@@ -218,6 +248,16 @@ function normalizeDNSWorkerProbe(probe: DNSWorkerProbe) {
   return {
     ...probe,
     results: asArray(probe.results),
+  };
+}
+
+function normalizeDNSZoneWorkerAssignment(
+  value: DNSZoneWorkerAssignment | null | undefined,
+) {
+  return {
+    zone_id: value?.zone_id ?? 0,
+    worker_ids: asArray(value?.worker_ids),
+    workers: normalizeDNSWorkers(value?.workers),
   };
 }
 
@@ -333,10 +373,12 @@ function normalizeDNSWorkerSnapshotConsistency(
   }
   return {
     ...consistency,
-    version_breakdown: asArray(consistency.version_breakdown).map((version) => ({
-      ...version,
-      workers: asArray(version.workers),
-    })),
+    version_breakdown: asArray(consistency.version_breakdown).map(
+      (version) => ({
+        ...version,
+        workers: asArray(version.workers),
+      }),
+    ),
     workers: asArray(consistency.workers).map((worker) => ({
       ...worker,
       last_rollup_count: worker.last_rollup_count ?? 0,

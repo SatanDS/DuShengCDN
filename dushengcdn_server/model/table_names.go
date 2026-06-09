@@ -36,6 +36,14 @@ func (DNSWorkerNodeProbe) TableName() string {
 	return "dns_worker_node_probes"
 }
 
+func (DNSSECKey) TableName() string {
+	return "dnssec_keys"
+}
+
+func (DNSZoneWorkerAssignment) TableName() string {
+	return "dns_zone_worker_assignments"
+}
+
 func (DNSZone) TableName() string {
 	return "dns_zones"
 }

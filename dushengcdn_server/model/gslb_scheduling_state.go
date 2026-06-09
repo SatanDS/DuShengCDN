@@ -9,6 +9,8 @@ type GSLBSchedulingState struct {
 	ScopeKey        string     `json:"scope_key" gorm:"column:scope_key;uniqueIndex:idx_gslb_state_route_type_scope;size:64;not null;default:'global'"`
 	SelectedTargets string     `json:"selected_targets" gorm:"column:selected_targets;type:text;not null;default:'[]'"`
 	DesiredTargets  string     `json:"desired_targets" gorm:"column:desired_targets;type:text;not null;default:'[]'"`
+	UnhealthyCount  int        `json:"unhealthy_count" gorm:"column:unhealthy_count;not null;default:0"`
+	RecoveryCount   int        `json:"recovery_count" gorm:"column:recovery_count;not null;default:0"`
 	LastReason      string     `json:"last_reason" gorm:"column:last_reason;type:text"`
 	LastChangedAt   *time.Time `json:"last_changed_at" gorm:"column:last_changed_at"`
 	LastEvaluatedAt *time.Time `json:"last_evaluated_at" gorm:"column:last_evaluated_at"`

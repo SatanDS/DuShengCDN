@@ -37,9 +37,12 @@ func NewRunner(cfg *Config) (*Runner, error) {
 			"error", err,
 		)
 	}
+	if sourceResolver != nil {
+		WithECS(cfg.ECSEnabled, cfg.ECSIPv4Prefix, cfg.ECSIPv6Prefix)(sourceResolver)
+	}
 	rollups := NewRollupAggregator(time.Minute)
 	client := NewAPIClient(cfg.ServerURL, cfg.Token, cfg.RequestTimeout)
-	server := NewDNSServerWithLimits(store, scheduler, rollups, sourceResolver, cfg.ListenAddr, cfg.QueryRateLimit, cfg.UDPResponseSize)
+	server := NewDNSServerWithProtection(store, scheduler, rollups, sourceResolver, cfg.ListenAddr, cfg.QueryRateLimit, cfg.ResponseRateLimit, cfg.UDPResponseSize)
 	return &Runner{
 		Config:         cfg,
 		Client:         client,

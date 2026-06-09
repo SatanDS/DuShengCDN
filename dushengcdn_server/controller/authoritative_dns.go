@@ -79,6 +79,118 @@ func DeleteDNSZone(c *gin.Context) {
 	respondSuccess(c, nil)
 }
 
+func GetDNSZoneWorkers(c *gin.Context) {
+	zoneID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	view, err := service.GetAuthoritativeDNSZoneWorkerAssignments(zoneID)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
+func UpdateDNSZoneWorkers(c *gin.Context) {
+	zoneID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	var input service.DNSZoneWorkerAssignmentInput
+	if !decodeJSONRequest(c, &input) {
+		return
+	}
+	view, err := service.UpdateAuthoritativeDNSZoneWorkerAssignments(zoneID, input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
+func GetDNSZoneDNSSEC(c *gin.Context) {
+	zoneID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	view, err := service.GetAuthoritativeDNSSEC(zoneID)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
+func EnableDNSZoneDNSSEC(c *gin.Context) {
+	zoneID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	var input service.DNSSECEnableInput
+	if !decodeJSONRequest(c, &input) {
+		return
+	}
+	view, err := service.EnableAuthoritativeDNSSEC(zoneID, input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
+func DisableDNSZoneDNSSEC(c *gin.Context) {
+	zoneID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	view, err := service.DisableAuthoritativeDNSSEC(zoneID)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
+func RotateDNSZoneDNSSECZSK(c *gin.Context) {
+	zoneID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	view, err := service.RotateAuthoritativeDNSSECZSK(zoneID)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
+func RotateDNSZoneDNSSECKSK(c *gin.Context) {
+	zoneID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	view, err := service.RotateAuthoritativeDNSSECKSK(zoneID)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, view)
+}
+
+func GetDNSZoneDNSSECDS(c *gin.Context) {
+	zoneID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	records, err := service.ListAuthoritativeDNSSECDS(zoneID)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, records)
+}
+
 func GetDNSZoneRecords(c *gin.Context) {
 	zoneID, ok := parseUintParam(c, "id")
 	if !ok {
@@ -199,6 +311,32 @@ func CreateDNSWorker(c *gin.Context) {
 		return
 	}
 	worker, err := service.CreateAuthoritativeDNSWorker(input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, worker)
+}
+
+func RotateDNSWorkerToken(c *gin.Context) {
+	id, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	worker, err := service.RotateAuthoritativeDNSWorkerToken(id)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, worker)
+}
+
+func RevokeDNSWorkerToken(c *gin.Context) {
+	id, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	worker, err := service.RevokeAuthoritativeDNSWorkerToken(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return

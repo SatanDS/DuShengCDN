@@ -82,6 +82,16 @@ type DNSWorkerInput struct {
 	Remark        string `json:"remark"`
 }
 
+type DNSZoneWorkerAssignmentInput struct {
+	WorkerIDs []uint `json:"worker_ids"`
+}
+
+type DNSZoneWorkerAssignmentView struct {
+	ZoneID    uint            `json:"zone_id"`
+	WorkerIDs []uint          `json:"worker_ids"`
+	Workers   []DNSWorkerView `json:"workers"`
+}
+
 type DNSWorkerHeartbeatInput struct {
 	Version                  string                                    `json:"version"`
 	Status                   string                                    `json:"status"`
@@ -144,18 +154,23 @@ type DNSQueryRollupInput struct {
 }
 
 type DNSZoneView struct {
-	ID          uint            `json:"id"`
-	Name        string          `json:"name"`
-	SOAEmail    string          `json:"soa_email"`
-	PrimaryNS   string          `json:"primary_ns"`
-	NameServers []string        `json:"name_servers"`
-	DefaultTTL  int             `json:"default_ttl"`
-	Serial      uint64          `json:"serial"`
-	Enabled     bool            `json:"enabled"`
-	RecordCount int64           `json:"record_count"`
-	Records     []DNSRecordView `json:"records,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID                      uint            `json:"id"`
+	Name                    string          `json:"name"`
+	SOAEmail                string          `json:"soa_email"`
+	PrimaryNS               string          `json:"primary_ns"`
+	NameServers             []string        `json:"name_servers"`
+	DefaultTTL              int             `json:"default_ttl"`
+	Serial                  uint64          `json:"serial"`
+	DNSSECEnabled           bool            `json:"dnssec_enabled"`
+	DNSSECDenialMode        string          `json:"dnssec_denial_mode"`
+	DNSSECNSEC3Salt         string          `json:"dnssec_nsec3_salt,omitempty"`
+	DNSSECNSEC3Iterations   int             `json:"dnssec_nsec3_iterations"`
+	DNSSECSignatureValidity int             `json:"dnssec_signature_validity"`
+	Enabled                 bool            `json:"enabled"`
+	RecordCount             int64           `json:"record_count"`
+	Records                 []DNSRecordView `json:"records,omitempty"`
+	CreatedAt               time.Time       `json:"created_at"`
+	UpdatedAt               time.Time       `json:"updated_at"`
 }
 
 type DNSRecordView struct {
@@ -177,6 +192,8 @@ type DNSWorkerView struct {
 	Name                     string                     `json:"name"`
 	Remark                   string                     `json:"remark"`
 	Token                    string                     `json:"token,omitempty"`
+	TokenPrefix              string                     `json:"token_prefix"`
+	TokenRevokedAt           *time.Time                 `json:"token_revoked_at"`
 	PublicAddress            string                     `json:"public_address"`
 	Version                  string                     `json:"version"`
 	Status                   string                     `json:"status"`
@@ -389,6 +406,8 @@ type DNSGSLBSchedulingStateView struct {
 	ScopeKey           string     `json:"scope_key"`
 	SelectedTargets    []string   `json:"selected_targets"`
 	DesiredTargets     []string   `json:"desired_targets"`
+	UnhealthyCount     int        `json:"unhealthy_count"`
+	RecoveryCount      int        `json:"recovery_count"`
 	LastReason         string     `json:"last_reason"`
 	LastChangedAt      *time.Time `json:"last_changed_at"`
 	LastEvaluatedAt    *time.Time `json:"last_evaluated_at"`
@@ -715,14 +734,35 @@ type AuthoritativeDNSSnapshot struct {
 }
 
 type AuthoritativeDNSSnapshotZone struct {
-	ID          uint                             `json:"id"`
-	Name        string                           `json:"name"`
-	SOAEmail    string                           `json:"soa_email"`
-	PrimaryNS   string                           `json:"primary_ns"`
-	NameServers []string                         `json:"name_servers"`
-	DefaultTTL  int                              `json:"default_ttl"`
-	Serial      uint64                           `json:"serial"`
-	Records     []AuthoritativeDNSSnapshotRecord `json:"records"`
+	ID          uint                                 `json:"id"`
+	Name        string                               `json:"name"`
+	SOAEmail    string                               `json:"soa_email"`
+	PrimaryNS   string                               `json:"primary_ns"`
+	NameServers []string                             `json:"name_servers"`
+	DefaultTTL  int                                  `json:"default_ttl"`
+	Serial      uint64                               `json:"serial"`
+	DNSSEC      AuthoritativeDNSSnapshotDNSSECPolicy `json:"dnssec"`
+	DNSSECKeys  []AuthoritativeDNSSnapshotDNSSECKey  `json:"dnssec_keys,omitempty"`
+	Records     []AuthoritativeDNSSnapshotRecord     `json:"records"`
+}
+
+type AuthoritativeDNSSnapshotDNSSECPolicy struct {
+	Enabled                  bool   `json:"enabled"`
+	DenialMode               string `json:"denial_mode"`
+	NSEC3Salt                string `json:"nsec3_salt,omitempty"`
+	NSEC3Iterations          int    `json:"nsec3_iterations"`
+	SignatureValiditySeconds int    `json:"signature_validity_seconds"`
+}
+
+type AuthoritativeDNSSnapshotDNSSECKey struct {
+	ID                  uint   `json:"id"`
+	Role                string `json:"role"`
+	Flags               uint16 `json:"flags"`
+	Algorithm           uint8  `json:"algorithm"`
+	PublicKey           string `json:"public_key"`
+	EncryptedPrivateKey string `json:"encrypted_private_key"`
+	KeyTag              uint16 `json:"key_tag"`
+	Status              string `json:"status"`
 }
 
 type AuthoritativeDNSSnapshotRecord struct {
@@ -782,6 +822,8 @@ type AuthoritativeDNSSnapshotSchedulingState struct {
 	ScopeKey        string     `json:"scope_key"`
 	SelectedTargets []string   `json:"selected_targets"`
 	DesiredTargets  []string   `json:"desired_targets"`
+	UnhealthyCount  int        `json:"unhealthy_count,omitempty"`
+	RecoveryCount   int        `json:"recovery_count,omitempty"`
 	LastChangedAt   *time.Time `json:"last_changed_at,omitempty"`
 }
 
@@ -901,6 +943,60 @@ func DeleteAuthoritativeDNSZone(id uint) error {
 	return zone.Delete()
 }
 
+func GetAuthoritativeDNSZoneWorkerAssignments(zoneID uint) (*DNSZoneWorkerAssignmentView, error) {
+	if _, err := model.GetDNSZoneByID(zoneID); err != nil {
+		return nil, err
+	}
+	assignments, err := model.ListDNSZoneWorkerAssignments(zoneID)
+	if err != nil {
+		return nil, err
+	}
+	workers, err := model.ListDNSWorkers()
+	if err != nil {
+		return nil, err
+	}
+	workerByID := make(map[uint]*model.DNSWorker, len(workers))
+	for _, worker := range workers {
+		if worker != nil {
+			workerByID[worker.ID] = worker
+		}
+	}
+	view := &DNSZoneWorkerAssignmentView{
+		ZoneID:    zoneID,
+		WorkerIDs: []uint{},
+		Workers:   []DNSWorkerView{},
+	}
+	for _, assignment := range assignments {
+		if assignment == nil || assignment.WorkerID == 0 {
+			continue
+		}
+		view.WorkerIDs = append(view.WorkerIDs, assignment.WorkerID)
+		if worker := workerByID[assignment.WorkerID]; worker != nil {
+			view.Workers = append(view.Workers, buildDNSWorkerView(worker, false))
+		}
+	}
+	return view, nil
+}
+
+func UpdateAuthoritativeDNSZoneWorkerAssignments(zoneID uint, input DNSZoneWorkerAssignmentInput) (*DNSZoneWorkerAssignmentView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
+	if _, err := model.GetDNSZoneByID(zoneID); err != nil {
+		return nil, err
+	}
+	workerIDs := normalizeUintIDs(input.WorkerIDs)
+	for _, workerID := range workerIDs {
+		if _, err := model.GetDNSWorkerByID(workerID); err != nil {
+			return nil, fmt.Errorf("DNS worker %d does not exist", workerID)
+		}
+	}
+	if err := model.ReplaceDNSZoneWorkerAssignments(zoneID, workerIDs); err != nil {
+		return nil, err
+	}
+	return GetAuthoritativeDNSZoneWorkerAssignments(zoneID)
+}
+
 func ListAuthoritativeDNSRecords(zoneID uint) ([]DNSRecordView, error) {
 	if _, err := model.GetDNSZoneByID(zoneID); err != nil {
 		return nil, err
@@ -933,6 +1029,9 @@ func CreateAuthoritativeDNSRecord(zoneID uint, input DNSRecordInput) (*DNSRecord
 	if err := validateAuthoritativeDNSRecordDynamicConflicts(record); err != nil {
 		return nil, err
 	}
+	if err := validateAuthoritativeDNSRecordStaticConflicts(record); err != nil {
+		return nil, err
+	}
 	if err := record.Insert(); err != nil {
 		return nil, err
 	}
@@ -961,6 +1060,9 @@ func UpdateAuthoritativeDNSRecord(id uint, input DNSRecordInput) (*DNSRecordView
 		return nil, err
 	}
 	if err := validateAuthoritativeDNSRecordDynamicConflicts(record); err != nil {
+		return nil, err
+	}
+	if err := validateAuthoritativeDNSRecordStaticConflicts(record); err != nil {
 		return nil, err
 	}
 	if err := record.Update(); err != nil {
@@ -1350,7 +1452,9 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 		WorkerID:      "dns-" + workerIDSeed,
 		Name:          name,
 		Remark:        remark,
-		Token:         token,
+		Token:         "",
+		TokenHash:     dnsWorkerTokenHash(token),
+		TokenPrefix:   dnsWorkerTokenPrefix(token),
 		PublicAddress: strings.TrimSpace(input.PublicAddress),
 		Status:        dnsWorkerStatusOffline,
 	}
@@ -1360,7 +1464,52 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 		}
 		return nil, err
 	}
-	return ptrDNSWorkerView(buildDNSWorkerView(worker, true)), nil
+	view := buildDNSWorkerView(worker, true)
+	view.Token = token
+	return ptrDNSWorkerView(view), nil
+}
+
+func RotateAuthoritativeDNSWorkerToken(id uint) (*DNSWorkerView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
+	worker, err := model.GetDNSWorkerByID(id)
+	if err != nil {
+		return nil, err
+	}
+	token, err := newRandomToken()
+	if err != nil {
+		return nil, err
+	}
+	worker.Token = ""
+	worker.TokenHash = dnsWorkerTokenHash(token)
+	worker.TokenPrefix = dnsWorkerTokenPrefix(token)
+	worker.TokenRevokedAt = nil
+	if err := model.DB.Model(worker).Select("token", "token_hash", "token_prefix", "token_revoked_at").Updates(worker).Error; err != nil {
+		return nil, err
+	}
+	view := buildDNSWorkerView(worker, true)
+	view.Token = token
+	return ptrDNSWorkerView(view), nil
+}
+
+func RevokeAuthoritativeDNSWorkerToken(id uint) (*DNSWorkerView, error) {
+	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
+		return nil, err
+	}
+	worker, err := model.GetDNSWorkerByID(id)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	worker.Token = ""
+	worker.TokenHash = ""
+	worker.TokenPrefix = ""
+	worker.TokenRevokedAt = &now
+	if err := model.DB.Model(worker).Select("token", "token_hash", "token_prefix", "token_revoked_at").Updates(worker).Error; err != nil {
+		return nil, err
+	}
+	return ptrDNSWorkerView(buildDNSWorkerView(worker, false)), nil
 }
 
 func UpdateAuthoritativeDNSWorker(id uint, input DNSWorkerMutationInput) (*DNSWorkerView, error) {
@@ -1647,14 +1796,32 @@ func AuthenticateDNSWorkerToken(token string) (*model.DNSWorker, error) {
 	if token == "" {
 		return nil, errors.New("missing DNS Worker Token")
 	}
-	worker, err := model.GetDNSWorkerByToken(token)
+	prefix := dnsWorkerTokenPrefix(token)
+	hash := dnsWorkerTokenHash(token)
+	workers, err := model.ListDNSWorkersByTokenPrefix(prefix)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("invalid DNS Worker Token")
-		}
 		return nil, err
 	}
-	return worker, nil
+	for _, worker := range workers {
+		if worker == nil || worker.TokenRevokedAt != nil || strings.TrimSpace(worker.TokenHash) == "" {
+			continue
+		}
+		if constantTimeTokenEqual(worker.TokenHash, hash) {
+			return worker, nil
+		}
+	}
+	legacyWorker, legacyErr := model.GetDNSWorkerByToken(token)
+	if legacyErr == nil && legacyWorker != nil && legacyWorker.TokenRevokedAt == nil {
+		legacyWorker.TokenHash = hash
+		legacyWorker.TokenPrefix = prefix
+		legacyWorker.Token = ""
+		_ = model.DB.Model(legacyWorker).Select("token", "token_hash", "token_prefix").Updates(legacyWorker).Error
+		return legacyWorker, nil
+	}
+	if legacyErr != nil && !errors.Is(legacyErr, gorm.ErrRecordNotFound) {
+		return nil, legacyErr
+	}
+	return nil, errors.New("invalid DNS Worker Token")
 }
 
 func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatInput) (*DNSWorkerHeartbeatView, error) {
@@ -1873,6 +2040,9 @@ func getAuthoritativeDNSSnapshotWithQueries(worker *model.DNSWorker, schedulingQ
 		Nodes:                      nodes,
 		SchedulingStates:           schedulingStates,
 	}
+	if worker != nil {
+		filterAuthoritativeDNSSnapshotForWorker(snapshot, worker)
+	}
 	version, err := authoritativeDNSSnapshotVersion(snapshot)
 	if err != nil {
 		return nil, err
@@ -1882,6 +2052,65 @@ func getAuthoritativeDNSSnapshotWithQueries(worker *model.DNSWorker, schedulingQ
 		_ = recordDNSWorkerSnapshotPull(worker, version)
 	}
 	return snapshot, nil
+}
+
+func filterAuthoritativeDNSSnapshotForWorker(snapshot *AuthoritativeDNSSnapshot, worker *model.DNSWorker) {
+	if snapshot == nil || worker == nil || worker.ID == 0 || len(snapshot.Zones) == 0 {
+		return
+	}
+	zoneIDs := make([]uint, 0, len(snapshot.Zones))
+	for _, zone := range snapshot.Zones {
+		if zone.ID != 0 {
+			zoneIDs = append(zoneIDs, zone.ID)
+		}
+	}
+	assignments, err := model.ListDNSZoneWorkerAssignmentsByZoneIDs(zoneIDs)
+	if err != nil || len(assignments) == 0 {
+		return
+	}
+	assignedByZone := make(map[uint]map[uint]struct{}, len(assignments))
+	for _, assignment := range assignments {
+		if assignment == nil || assignment.ZoneID == 0 || assignment.WorkerID == 0 {
+			continue
+		}
+		if _, ok := assignedByZone[assignment.ZoneID]; !ok {
+			assignedByZone[assignment.ZoneID] = map[uint]struct{}{}
+		}
+		assignedByZone[assignment.ZoneID][assignment.WorkerID] = struct{}{}
+	}
+	if len(assignedByZone) == 0 {
+		return
+	}
+	allowedZones := map[uint]struct{}{}
+	filteredZones := make([]AuthoritativeDNSSnapshotZone, 0, len(snapshot.Zones))
+	for _, zone := range snapshot.Zones {
+		assignmentsForZone := assignedByZone[zone.ID]
+		if len(assignmentsForZone) > 0 {
+			if _, ok := assignmentsForZone[worker.ID]; !ok {
+				continue
+			}
+		}
+		allowedZones[zone.ID] = struct{}{}
+		filteredZones = append(filteredZones, zone)
+	}
+	filteredRoutes := make([]AuthoritativeDNSSnapshotRoute, 0, len(snapshot.Routes))
+	allowedRouteIDs := map[uint]struct{}{}
+	for _, route := range snapshot.Routes {
+		if _, ok := allowedZones[route.ZoneID]; !ok {
+			continue
+		}
+		filteredRoutes = append(filteredRoutes, route)
+		allowedRouteIDs[route.ID] = struct{}{}
+	}
+	filteredStates := make([]AuthoritativeDNSSnapshotSchedulingState, 0, len(snapshot.SchedulingStates))
+	for _, state := range snapshot.SchedulingStates {
+		if _, ok := allowedRouteIDs[state.RouteID]; ok {
+			filteredStates = append(filteredStates, state)
+		}
+	}
+	snapshot.Zones = filteredZones
+	snapshot.Routes = filteredRoutes
+	snapshot.SchedulingStates = filteredStates
 }
 
 func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulationView, error) {
@@ -2390,10 +2619,11 @@ func filterDNSGSLBSimulationTargets(values []string, recordType string) ([]strin
 
 func convertWorkerGSLBPolicyToAuthoritative(policy dnsworker.GSLBPolicy) ProxyRouteGSLBPolicy {
 	result := ProxyRouteGSLBPolicy{
-		Mode:        policy.Mode,
-		Strategy:    policy.Strategy,
-		TargetCount: policy.TargetCount,
-		TTL:         policy.TTL,
+		Mode:                   policy.Mode,
+		Strategy:               policy.Strategy,
+		TargetCount:            policy.TargetCount,
+		TTL:                    policy.TTL,
+		SourcePoolFallbackMode: policy.SourcePoolFallbackMode,
 		SourceIP: ProxyRouteGSLBSourceIPProvider{
 			Provider: policy.SourceIP.Provider,
 			APIURL:   policy.SourceIP.APIURL,
@@ -2565,6 +2795,34 @@ func validateAuthoritativeDNSRecordDynamicConflicts(record *model.DNSRecord) err
 			if authoritativeDomainMatchesQName(domain, record.Name) {
 				return fmt.Errorf("静态 DNS 记录 %s %s 与网站配置「%s」的本地自建解析自动 %s 记录冲突。请到左侧「网站配置」打开该站点的「负载均衡」检查自动解析，或禁用该网站自动解析后再添加静态记录", record.Name, recordType, route.SiteName, routeType)
 			}
+		}
+	}
+	return nil
+}
+
+func validateAuthoritativeDNSRecordStaticConflicts(record *model.DNSRecord) error {
+	if record == nil || !record.Enabled {
+		return nil
+	}
+	var records []*model.DNSRecord
+	if err := model.DB.
+		Where("zone_id = ? AND name = ? AND enabled = ?", record.ZoneID, record.Name, true).
+		Order("id asc").
+		Find(&records).Error; err != nil {
+		return err
+	}
+	recordType := strings.ToUpper(strings.TrimSpace(record.Type))
+	recordValue := strings.TrimSpace(record.Value)
+	for _, existing := range records {
+		if existing == nil || existing.ID == record.ID {
+			continue
+		}
+		existingType := strings.ToUpper(strings.TrimSpace(existing.Type))
+		if recordType == "CNAME" || existingType == "CNAME" {
+			return fmt.Errorf("静态 DNS 记录 %s 存在 CNAME 独占冲突。CNAME 不能与同名其它记录共存", record.Name)
+		}
+		if existingType == recordType && strings.TrimSpace(existing.Value) == recordValue && existing.Priority == record.Priority {
+			return fmt.Errorf("静态 DNS 记录 %s %s 已存在相同记录值", record.Name, recordType)
 		}
 	}
 	return nil
@@ -3029,6 +3287,28 @@ func authoritativeDNSTargetPrecheckSources(policy ProxyRouteGSLBPolicy) []author
 				source: GSLBSourceContext{Country: country},
 			})
 		}
+		for _, value := range pool.ASNs {
+			if value == 0 {
+				continue
+			}
+			asn := strconv.FormatUint(uint64(value), 10)
+			appendSource(authoritativeDNSTargetPrecheckSource{
+				label:  "来源 ASN " + asn,
+				key:    "asn:" + asn,
+				source: GSLBSourceContext{ASN: value},
+			})
+		}
+		for _, value := range pool.Operators {
+			operator := normalizeGSLBOperator(value)
+			if operator == "" {
+				continue
+			}
+			appendSource(authoritativeDNSTargetPrecheckSource{
+				label:  "来源运营商 " + operator,
+				key:    "operator:" + operator,
+				source: GSLBSourceContext{Operator: operator},
+			})
+		}
 	}
 	sort.SliceStable(sources, func(i, j int) bool {
 		return sources[i].key < sources[j].key
@@ -3071,17 +3351,22 @@ func buildDNSZoneViewWithRecordCount(zone *model.DNSZone, includeRecords bool, r
 		return nil, errors.New("DNS zone is nil")
 	}
 	view := &DNSZoneView{
-		ID:          zone.ID,
-		Name:        zone.Name,
-		SOAEmail:    zone.SOAEmail,
-		PrimaryNS:   zone.PrimaryNS,
-		NameServers: decodeStoredStringList(zone.NameServers),
-		DefaultTTL:  normalizeDNSZoneTTL(zone.DefaultTTL),
-		Serial:      zone.Serial,
-		Enabled:     zone.Enabled,
-		RecordCount: recordCount,
-		CreatedAt:   zone.CreatedAt,
-		UpdatedAt:   zone.UpdatedAt,
+		ID:                      zone.ID,
+		Name:                    zone.Name,
+		SOAEmail:                zone.SOAEmail,
+		PrimaryNS:               zone.PrimaryNS,
+		NameServers:             decodeStoredStringList(zone.NameServers),
+		DefaultTTL:              normalizeDNSZoneTTL(zone.DefaultTTL),
+		Serial:                  zone.Serial,
+		DNSSECEnabled:           zone.DNSSECEnabled,
+		DNSSECDenialMode:        normalizeDNSSECDenialMode(zone.DNSSECDenialMode),
+		DNSSECNSEC3Salt:         strings.TrimSpace(zone.DNSSECNSEC3Salt),
+		DNSSECNSEC3Iterations:   normalizeDNSSECNSEC3Iterations(zone.DNSSECNSEC3Iterations),
+		DNSSECSignatureValidity: normalizeDNSSECSignatureValidity(zone.DNSSECSignatureValidity),
+		Enabled:                 zone.Enabled,
+		RecordCount:             recordCount,
+		CreatedAt:               zone.CreatedAt,
+		UpdatedAt:               zone.UpdatedAt,
 	}
 	if includeRecords {
 		records, err := model.ListDNSRecordsByZoneID(zone.ID)
@@ -3127,6 +3412,8 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		WorkerID:                 worker.WorkerID,
 		Name:                     worker.Name,
 		Remark:                   worker.Remark,
+		TokenPrefix:              worker.TokenPrefix,
+		TokenRevokedAt:           worker.TokenRevokedAt,
 		PublicAddress:            worker.PublicAddress,
 		Version:                  worker.Version,
 		Status:                   normalizeDNSWorkerStatus(worker.Status),
@@ -3177,6 +3464,40 @@ func buildDNSWorkerView(worker *model.DNSWorker, includeToken bool) DNSWorkerVie
 		view.Token = worker.Token
 	}
 	return view
+}
+
+func dnsWorkerTokenHash(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func dnsWorkerTokenPrefix(token string) string {
+	token = strings.TrimSpace(token)
+	if len(token) > 12 {
+		return token[:12]
+	}
+	return token
+}
+
+func normalizeUintIDs(values []uint) []uint {
+	result := make([]uint, 0, len(values))
+	seen := make(map[uint]struct{}, len(values))
+	for _, value := range values {
+		if value == 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
 }
 
 func resolveAuthoritativeMigrationZone(zoneIDRef *uint, domains []string) (*model.DNSZone, error) {
@@ -3289,6 +3610,8 @@ func buildDNSGSLBSchedulingStateView(state *model.GSLBSchedulingState, route *mo
 		ScopeKey:        normalizeDNSSourceScope(state.ScopeKey),
 		SelectedTargets: decodeGSLBTargetList(state.SelectedTargets),
 		DesiredTargets:  decodeGSLBTargetList(state.DesiredTargets),
+		UnhealthyCount:  normalizeDebounceCounter(state.UnhealthyCount),
+		RecoveryCount:   normalizeDebounceCounter(state.RecoveryCount),
 		LastReason:      state.LastReason,
 		LastChangedAt:   state.LastChangedAt,
 		LastEvaluatedAt: state.LastEvaluatedAt,
@@ -3340,10 +3663,12 @@ func snapshotDNSZones() ([]AuthoritativeDNSSnapshotZone, error) {
 
 type authoritativeDNSSnapshotZoneQueries struct {
 	ListDNSRecordsByZoneIDs func([]uint) ([]*model.DNSRecord, error)
+	ListDNSSECKeysByZoneIDs func([]uint) ([]*model.DNSSECKey, error)
 }
 
 var defaultAuthoritativeDNSSnapshotZoneQueries = authoritativeDNSSnapshotZoneQueries{
 	ListDNSRecordsByZoneIDs: model.ListDNSRecordsByZoneIDs,
+	ListDNSSECKeysByZoneIDs: model.ListDNSSECKeysByZoneIDs,
 }
 
 func snapshotDNSZonesWithQueries(queries authoritativeDNSSnapshotZoneQueries) ([]AuthoritativeDNSSnapshotZone, error) {
@@ -3372,6 +3697,21 @@ func snapshotDNSZonesWithQueries(queries authoritativeDNSSnapshotZoneQueries) ([
 		}
 		recordsByZoneID[record.ZoneID] = append(recordsByZoneID[record.ZoneID], record)
 	}
+	listDNSSECKeysByZoneIDs := queries.ListDNSSECKeysByZoneIDs
+	if listDNSSECKeysByZoneIDs == nil {
+		listDNSSECKeysByZoneIDs = model.ListDNSSECKeysByZoneIDs
+	}
+	dnssecKeys, err := listDNSSECKeysByZoneIDs(zoneIDs)
+	if err != nil {
+		return nil, err
+	}
+	dnssecKeysByZoneID := make(map[uint][]*model.DNSSECKey, len(zones))
+	for _, key := range dnssecKeys {
+		if key == nil {
+			continue
+		}
+		dnssecKeysByZoneID[key.ZoneID] = append(dnssecKeysByZoneID[key.ZoneID], key)
+	}
 	result := make([]AuthoritativeDNSSnapshotZone, 0, len(zones))
 	for _, zone := range zones {
 		records := recordsByZoneID[zone.ID]
@@ -3383,7 +3723,30 @@ func snapshotDNSZonesWithQueries(queries authoritativeDNSSnapshotZoneQueries) ([
 			NameServers: decodeStoredStringList(zone.NameServers),
 			DefaultTTL:  normalizeDNSZoneTTL(zone.DefaultTTL),
 			Serial:      zone.Serial,
-			Records:     make([]AuthoritativeDNSSnapshotRecord, 0, len(records)),
+			DNSSEC: AuthoritativeDNSSnapshotDNSSECPolicy{
+				Enabled:                  zone.DNSSECEnabled,
+				DenialMode:               normalizeDNSSECDenialMode(zone.DNSSECDenialMode),
+				NSEC3Salt:                strings.TrimSpace(zone.DNSSECNSEC3Salt),
+				NSEC3Iterations:          normalizeDNSSECNSEC3Iterations(zone.DNSSECNSEC3Iterations),
+				SignatureValiditySeconds: normalizeDNSSECSignatureValidity(zone.DNSSECSignatureValidity),
+			},
+			DNSSECKeys: make([]AuthoritativeDNSSnapshotDNSSECKey, 0, len(dnssecKeysByZoneID[zone.ID])),
+			Records:    make([]AuthoritativeDNSSnapshotRecord, 0, len(records)),
+		}
+		for _, key := range dnssecKeysByZoneID[zone.ID] {
+			if key == nil || normalizeDNSSECKeyStatus(key.Status) != dnssecKeyStatusActive {
+				continue
+			}
+			item.DNSSECKeys = append(item.DNSSECKeys, AuthoritativeDNSSnapshotDNSSECKey{
+				ID:                  key.ID,
+				Role:                normalizeDNSSECKeyRole(key.Role),
+				Flags:               key.Flags,
+				Algorithm:           key.Algorithm,
+				PublicKey:           key.PublicKey,
+				EncryptedPrivateKey: key.EncryptedPrivateKey,
+				KeyTag:              key.KeyTag,
+				Status:              normalizeDNSSECKeyStatus(key.Status),
+			})
 		}
 		for _, record := range records {
 			if record == nil || !record.Enabled {
@@ -3637,6 +4000,8 @@ func snapshotGSLBSchedulingStates(routes []AuthoritativeDNSSnapshotRoute) ([]Aut
 			ScopeKey:        normalizeDNSSourceScope(state.ScopeKey),
 			SelectedTargets: selectedTargets,
 			DesiredTargets:  desiredTargets,
+			UnhealthyCount:  normalizeDebounceCounter(state.UnhealthyCount),
+			RecoveryCount:   normalizeDebounceCounter(state.RecoveryCount),
 			LastChangedAt:   normalizeGSLBSchedulingStateChangedAt(state.LastChangedAt, now, state.LastEvaluatedAt, &state.UpdatedAt, &state.CreatedAt),
 		})
 	}
@@ -3665,7 +4030,27 @@ func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *d
 			NameServers: append([]string(nil), zone.NameServers...),
 			DefaultTTL:  zone.DefaultTTL,
 			Serial:      zone.Serial,
-			Records:     make([]dnsworker.SnapshotRecord, 0, len(zone.Records)),
+			DNSSEC: dnsworker.SnapshotDNSSECPolicy{
+				Enabled:                  zone.DNSSEC.Enabled,
+				DenialMode:               zone.DNSSEC.DenialMode,
+				NSEC3Salt:                zone.DNSSEC.NSEC3Salt,
+				NSEC3Iterations:          zone.DNSSEC.NSEC3Iterations,
+				SignatureValiditySeconds: zone.DNSSEC.SignatureValiditySeconds,
+			},
+			DNSSECKeys: make([]dnsworker.SnapshotDNSSECKey, 0, len(zone.DNSSECKeys)),
+			Records:    make([]dnsworker.SnapshotRecord, 0, len(zone.Records)),
+		}
+		for _, key := range zone.DNSSECKeys {
+			item.DNSSECKeys = append(item.DNSSECKeys, dnsworker.SnapshotDNSSECKey{
+				ID:                  key.ID,
+				Role:                key.Role,
+				Flags:               key.Flags,
+				Algorithm:           key.Algorithm,
+				PublicKey:           key.PublicKey,
+				EncryptedPrivateKey: key.EncryptedPrivateKey,
+				KeyTag:              key.KeyTag,
+				Status:              key.Status,
+			})
 		}
 		for _, record := range zone.Records {
 			item.Records = append(item.Records, dnsworker.SnapshotRecord{
@@ -3730,6 +4115,8 @@ func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *d
 			ScopeKey:        state.ScopeKey,
 			SelectedTargets: append([]string(nil), state.SelectedTargets...),
 			DesiredTargets:  append([]string(nil), state.DesiredTargets...),
+			UnhealthyCount:  state.UnhealthyCount,
+			RecoveryCount:   state.RecoveryCount,
 			LastChangedAt:   state.LastChangedAt,
 		})
 	}
@@ -3738,10 +4125,11 @@ func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *d
 
 func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnsworker.GSLBPolicy {
 	result := dnsworker.GSLBPolicy{
-		Mode:        policy.Mode,
-		Strategy:    policy.Strategy,
-		TargetCount: policy.TargetCount,
-		TTL:         policy.TTL,
+		Mode:                   policy.Mode,
+		Strategy:               policy.Strategy,
+		TargetCount:            policy.TargetCount,
+		TTL:                    policy.TTL,
+		SourcePoolFallbackMode: policy.SourcePoolFallbackMode,
 		SourceIP: dnsworker.GSLBSourceIPProvider{
 			Provider: policy.SourceIP.Provider,
 			APIURL:   policy.SourceIP.APIURL,
@@ -4072,6 +4460,8 @@ func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeD
 			},
 			selectedTargets: selectedTargets,
 			desiredTargets:  desiredTargets,
+			unhealthyCount:  normalizeDebounceCounter(input.UnhealthyCount),
+			recoveryCount:   normalizeDebounceCounter(input.RecoveryCount),
 			lastChangedAt:   *lastChangedAt,
 		})
 	}
@@ -4119,6 +4509,8 @@ func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeD
 			ScopeKey:        state.ScopeKey,
 			SelectedTargets: state.SelectedTargets,
 			DesiredTargets:  state.DesiredTargets,
+			UnhealthyCount:  state.UnhealthyCount,
+			RecoveryCount:   state.RecoveryCount,
 			LastReason:      state.LastReason,
 			LastChangedAt:   state.LastChangedAt,
 			LastEvaluatedAt: state.LastEvaluatedAt,
@@ -4135,6 +4527,8 @@ func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeD
 		DoUpdates: clause.AssignmentColumns([]string{
 			"selected_targets",
 			"desired_targets",
+			"unhealthy_count",
+			"recovery_count",
 			"last_reason",
 			"last_changed_at",
 			"last_evaluated_at",
@@ -4153,6 +4547,8 @@ type dnsWorkerSchedulingStateUpdate struct {
 	key             dnsWorkerSchedulingStateKey
 	selectedTargets []string
 	desiredTargets  []string
+	unhealthyCount  int
+	recoveryCount   int
 	lastChangedAt   time.Time
 }
 
@@ -4230,6 +4626,8 @@ func applyDNSWorkerSchedulingStateUpdate(state *model.GSLBSchedulingState, updat
 	state.ScopeKey = update.key.scopeKey
 	state.SelectedTargets = encodeGSLBTargetList(update.selectedTargets)
 	state.DesiredTargets = encodeGSLBTargetList(update.desiredTargets)
+	state.UnhealthyCount = normalizeDebounceCounter(update.unhealthyCount)
+	state.RecoveryCount = normalizeDebounceCounter(update.recoveryCount)
 	state.LastReason = "reported by DNS Worker heartbeat"
 	state.LastChangedAt = &changedAt
 	state.LastEvaluatedAt = &evaluated
@@ -6388,7 +6786,7 @@ func authoritativeDNSSnapshotMaxAge() time.Duration {
 func normalizeAuthoritativeDNSRecordType(raw string) (string, error) {
 	recordType := strings.ToUpper(strings.TrimSpace(raw))
 	switch recordType {
-	case "A", "AAAA", "CNAME", "TXT", "MX", "NS", "SOA":
+	case "A", "AAAA", "CNAME", "TXT", "MX", "NS", "SOA", "CAA", "SRV", "HTTPS", "SVCB", "TLSA":
 		return recordType, nil
 	default:
 		return "", errors.New("unsupported DNS record type")
@@ -6478,9 +6876,36 @@ func normalizeAuthoritativeDNSRecordValue(recordType string, raw string, priorit
 		return target, priority, nil
 	case "TXT", "SOA":
 		return value, priority, nil
+	case "CAA", "TLSA":
+		if err := validateAuthoritativeDNSPresentationRDATA(recordType, "example.com", value); err != nil {
+			return "", 0, err
+		}
+		return value, 0, nil
+	case "SRV", "HTTPS", "SVCB":
+		if priority < 0 {
+			priority = 0
+		}
+		rdata := fmt.Sprintf("%d %s", priority, value)
+		if err := validateAuthoritativeDNSPresentationRDATA(recordType, "example.com", rdata); err != nil {
+			return "", 0, err
+		}
+		return value, priority, nil
 	default:
 		return "", 0, errors.New("unsupported DNS record type")
 	}
+}
+
+func validateAuthoritativeDNSPresentationRDATA(recordType string, owner string, rdata string) error {
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+	owner = normalizeDNSRecordName(owner)
+	if owner == "" {
+		owner = "example.com"
+	}
+	_, err := dns.NewRR(fmt.Sprintf("%s. 300 IN %s %s", owner, recordType, strings.TrimSpace(rdata)))
+	if err != nil {
+		return fmt.Errorf("%s record value is invalid: %w", recordType, err)
+	}
+	return nil
 }
 
 func bumpDNSZoneSerial(zoneID uint) error {

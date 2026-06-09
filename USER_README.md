@@ -17,9 +17,13 @@ https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases
 - **完整版本发布**：每次发布都会生成完整配置版本。历史版本不可变，回滚通过重新激活旧版本完成。
 - **HTTPS 与证书管理**：支持上传证书，也支持托管证书流程；证书按域名绑定，适合一个站点包含多个域名的场景。
 - **缓存与运行时操作**：支持按 URL、后缀、路径前缀、路径包含、路径多片段等规则缓存，并可从面板下发缓存清理和预热。
-- **Cloudflare 与自建解析**：既可同步 Cloudflare A/AAAA 记录，也可部署 DNS Worker 自建权威 DNS。
-- **GSLB 智能调度**：自建解析模式下可按来源 IP/ECS、来源网段、国家/地区、ASN、运营商、节点池权重、节点健康和压力指标返回边缘 IP。
-- **可观测能力**：面板展示节点在线状态、应用记录、访问日志、缓存命中率、状态码分布、TOP URL/IP、节点流量和 DNS 响应端健康状态。
+- **Cloudflare 与自建权威 DNS**：既可同步 Cloudflare A/AAAA 记录，也可部署 DNS Worker 自建权威 DNS；非托管域名返回非权威 `REFUSED`，托管 Zone 内缺失记录才返回权威 `NXDOMAIN`。
+- **DNS Worker 安全与隔离**：Worker Token 以 hash + prefix 存储，支持轮换和撤销；快照、心跳使用专用 API 限流；Zone 可分配到指定 Worker，未分配 Zone 默认下发给所有 Worker。
+- **GSLB 条件分流**：自建解析模式下可按来源 IP/ECS、来源网段、国家/地区、ASN、运营商、节点池权重、节点健康和压力指标返回边缘 IP，并支持严格专属池或回退全局池策略。
+- **DNS 记录与语义校验**：静态记录支持 A/AAAA/CNAME/TXT/MX/NS/SOA/CAA/SRV/HTTPS/SVCB/TLSA，自动校验 CNAME 独占、重复记录和高级记录 RDATA 格式。
+- **DNSSEC 权威签名**：支持 Zone 级 DNSSEC 启停、KSK/ZSK 分离、默认 ECDSAP256SHA256、DS 导出、KSK/ZSK 手动轮换、NSEC/NSEC3 否定证明和 Worker 在线签名；私钥加密落库并仅在 Worker 内存中解密。
+- **DNS 防护与可观测**：支持 ECS 开关和前缀约束、DNS 查询限速、按来源/QNAME/RCODE 的异常响应限速，并在面板展示 DNS 响应端健康、查询统计和调度状态。
+- **可观测能力**：面板展示节点在线状态、应用记录、访问日志、缓存命中率、状态码分布、TOP URL/IP、节点流量、DNS 响应端健康状态和 GSLB 防抖状态。
 - **签名发布资产**：发布页中的程序文件和安装脚本都带同名 `.sha256` 与 `.sig`，安装和升级时会校验来源与完整性。
 - **商业授权**：商业 Server 需要有效授权并保持在线激活租约，支持授权到期、吊销和换机流程。
 

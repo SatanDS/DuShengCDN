@@ -276,6 +276,7 @@ type DNSAutomationValues = {
   gslb_max_cpu_percent: number;
   gslb_max_memory_percent: number;
   gslb_cooldown_seconds: number;
+  gslb_source_pool_fallback_mode: 'strict' | 'fallback_to_global';
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'auto';
   ddos_protection_provider: 'cloudflare' | 'custom';
@@ -312,6 +313,8 @@ const autoDNSRecordContentHint =
   '固定 IP 时可用逗号、空格或换行填写多个地址。开启自动选择或多节点智能解析后，由系统从节点公网 IP 池生成。';
 const ddosProtectionModeHint =
   '关闭时不做自动防护；自动时最近 5 分钟请求量或错误率超过阈值后暂停多节点智能解析，并临时切到所选防护目标，指标恢复后回到正常调度。';
+const gslbSourcePoolFallbackHint =
+  '严格匹配时，来源命中特定池但池内无可用 IP 会返回空结果；回退到全局时，会继续尝试未配置来源条件的全局节点池。';
 const gslbPoolActionButtonClassName = 'h-11 w-11 shrink-0 rounded-2xl px-0';
 const gslbPoolRemoveButtonClassName =
   'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] hover:border-[var(--status-danger-border)] hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger-foreground)] disabled:border-[var(--border-default)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--foreground-muted)]';
@@ -971,6 +974,10 @@ export function DNSAutomationSection({
         route.gslb_policy?.load_thresholds?.max_memory_percent || 0,
       gslb_cooldown_seconds:
         route.gslb_policy?.debounce?.cooldown_seconds || 60,
+      gslb_source_pool_fallback_mode:
+        route.gslb_policy?.source_pool_fallback_mode === 'fallback_to_global'
+          ? 'fallback_to_global'
+          : 'strict',
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
       ddos_protection_provider:
@@ -1007,6 +1014,10 @@ export function DNSAutomationSection({
         route.gslb_policy?.load_thresholds?.max_memory_percent || 0,
       gslb_cooldown_seconds:
         route.gslb_policy?.debounce?.cooldown_seconds || 60,
+      gslb_source_pool_fallback_mode:
+        route.gslb_policy?.source_pool_fallback_mode === 'fallback_to_global'
+          ? 'fallback_to_global'
+          : 'strict',
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
       ddos_protection_provider:
@@ -1143,6 +1154,8 @@ export function DNSAutomationSection({
                 strategy: values.dns_schedule_mode,
                 target_count: values.dns_target_count,
                 ttl: values.dns_ttl,
+                source_pool_fallback_mode:
+                  values.gslb_source_pool_fallback_mode,
                 pools:
                   gslbPools.length > 0
                     ? gslbPools
@@ -1854,6 +1867,19 @@ export function DNSAutomationSection({
                       );
                     }}
                   />
+                </ResourceField>
+
+                <ResourceField
+                  label="来源池无可用目标时"
+                  hint={gslbSourcePoolFallbackHint}
+                >
+                  <ResourceSelect
+                    disabled={!autoSyncEnabled}
+                    {...form.register('gslb_source_pool_fallback_mode')}
+                  >
+                    <option value="strict">严格匹配，返回空结果</option>
+                    <option value="fallback_to_global">回退到全局节点池</option>
+                  </ResourceSelect>
                 </ResourceField>
 
                 <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">

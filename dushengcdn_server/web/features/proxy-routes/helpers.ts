@@ -70,6 +70,7 @@ export function buildDefaultGSLBPolicy(
     ],
     target_count: 2,
     ttl: 60,
+    source_pool_fallback_mode: 'strict',
     source_ip: {
       provider: 'none',
       api_url: '',
@@ -97,7 +98,9 @@ export function getWebsiteConfigSection(
 ): WebsiteConfigSectionKey {
   const normalizedValue =
     value === 'limits' || value === 'pow' || value === 'waf' ? 'cc' : value;
-  return websiteConfigSections.some((section) => section.key === normalizedValue)
+  return websiteConfigSections.some(
+    (section) => section.key === normalizedValue,
+  )
     ? (normalizedValue as WebsiteConfigSectionKey)
     : 'domains';
 }

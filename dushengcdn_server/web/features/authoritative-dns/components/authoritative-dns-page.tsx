@@ -29,14 +29,18 @@ import {
   getDNSMigrationCandidates,
   getDNSObservability,
   getDNSWorkers,
+  getDNSZoneWorkers,
   getDNSZoneRecords,
   getDNSZones,
   probeDNSWorker,
   requestDNSWorkerUpdate,
+  revokeDNSWorkerToken,
+  rotateDNSWorkerToken,
   simulateDNSGSLB,
   updateDNSWorker,
   updateDNSRecord,
   updateDNSZone,
+  updateDNSZoneWorkers,
 } from '@/features/authoritative-dns/api/authoritative-dns';
 import type {
   AuthoritativeDNSMigrationCandidate,
@@ -61,6 +65,7 @@ import type {
   DNSZoneDelegationStatus,
   DNSZoneItem,
   DNSZoneMutationPayload,
+  DNSZoneWorkerAssignment,
 } from '@/features/authoritative-dns/types';
 import {
   getProxyRoutes,
@@ -204,6 +209,11 @@ const dnsRecordTypes: DNSRecordType[] = [
   'MX',
   'NS',
   'SOA',
+  'CAA',
+  'SRV',
+  'HTTPS',
+  'SVCB',
+  'TLSA',
 ];
 
 const gslbSimulationOperatorOptions = [
@@ -427,6 +437,10 @@ function isAddressRecordType(type: DNSRecordType) {
   return type === 'A' || type === 'AAAA';
 }
 
+function isPriorityRecordType(type: DNSRecordType) {
+  return type === 'MX' || type === 'SRV' || type === 'HTTPS' || type === 'SVCB';
+}
+
 function getRecordValueLabel(type: DNSRecordType) {
   switch (type) {
     case 'A':
@@ -443,6 +457,16 @@ function getRecordValueLabel(type: DNSRecordType) {
       return 'TXT 内容';
     case 'SOA':
       return 'SOA 内容';
+    case 'CAA':
+      return 'CAA 内容';
+    case 'SRV':
+      return 'SRV 目标';
+    case 'HTTPS':
+      return 'HTTPS 参数';
+    case 'SVCB':
+      return 'SVCB 参数';
+    case 'TLSA':
+      return 'TLSA 内容';
   }
 }
 
@@ -462,6 +486,16 @@ function getRecordValueHint(type: DNSRecordType) {
       return '填写域名基础信息，通常由系统自动生成即可。';
     case 'TXT':
       return '填写 TXT 文本内容。';
+    case 'CAA':
+      return '填写 CAA RDATA，例如 0 issue "letsencrypt.org"。';
+    case 'SRV':
+      return '填写权重、端口和目标，例如 5 443 sip.example.com；优先级在下方单独填写。';
+    case 'HTTPS':
+      return '填写 HTTPS SVCB 参数，例如 . alpn=h2,h3 ipv4hint=203.0.113.10；优先级在下方单独填写。';
+    case 'SVCB':
+      return '填写 SVCB 参数，例如 svc.example.com alpn=h2；优先级在下方单独填写。';
+    case 'TLSA':
+      return '填写 TLSA RDATA，例如 3 1 1 后接证书摘要。';
   }
 }
 
@@ -481,6 +515,16 @@ function getRecordValuePlaceholder(type: DNSRecordType) {
       return 'v=spf1 ...';
     case 'SOA':
       return 'ns1.example.com hostmaster.example.com ...';
+    case 'CAA':
+      return '0 issue "letsencrypt.org"';
+    case 'SRV':
+      return '5 443 sip.example.com';
+    case 'HTTPS':
+      return '. alpn=h2,h3';
+    case 'SVCB':
+      return 'svc.example.com alpn=h2';
+    case 'TLSA':
+      return '3 1 1 d2abde240d7cd3ee...';
   }
 }
 
@@ -972,6 +1016,9 @@ export function AuthoritativeDNSPage() {
   const [createdWorker, setCreatedWorker] = useState<DNSWorkerItem | null>(
     null,
   );
+  const [rotatedWorker, setRotatedWorker] = useState<DNSWorkerItem | null>(
+    null,
+  );
   const [workerProbeResults, setWorkerProbeResults] = useState<
     Record<number, DNSWorkerProbe>
   >({});
@@ -1075,6 +1122,11 @@ export function AuthoritativeDNSPage() {
   const selectedZoneRecordsQuery = useQuery({
     queryKey: ['authoritative-dns', 'zone-records', selectedZone?.id],
     queryFn: () => getDNSZoneRecords(selectedZone?.id ?? 0),
+    enabled: Boolean(selectedZone?.id),
+  });
+  const selectedZoneWorkersQuery = useQuery({
+    queryKey: ['authoritative-dns', 'zone-workers', selectedZone?.id],
+    queryFn: () => getDNSZoneWorkers(selectedZone?.id ?? 0),
     enabled: Boolean(selectedZone?.id),
   });
   const delegationCheckQuery = useQuery({
@@ -1209,6 +1261,57 @@ export function AuthoritativeDNSPage() {
           queryKey: ['authoritative-dns', 'observability'],
         }),
       ]);
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const updateZoneWorkersMutation = useMutation({
+    mutationFn: ({
+      zoneId,
+      workerIds,
+    }: {
+      zoneId: number;
+      workerIds: number[];
+    }) => updateDNSZoneWorkers(zoneId, { worker_ids: workerIds }),
+    onSuccess: async () => {
+      setFeedback({ tone: 'success', message: '托管域名响应端范围已保存。' });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'zone-workers'],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['authoritative-dns', 'zones'],
+        }),
+      ]);
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const rotateWorkerTokenMutation = useMutation({
+    mutationFn: rotateDNSWorkerToken,
+    onSuccess: async (worker) => {
+      setRotatedWorker(worker);
+      setFeedback({
+        tone: 'success',
+        message: 'DNS 响应端密钥已重新生成，请复制新的部署密钥。',
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['authoritative-dns', 'workers'],
+      });
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const revokeWorkerTokenMutation = useMutation({
+    mutationFn: revokeDNSWorkerToken,
+    onSuccess: async () => {
+      setFeedback({ tone: 'success', message: 'DNS 响应端密钥已吊销。' });
+      await queryClient.invalidateQueries({
+        queryKey: ['authoritative-dns', 'workers'],
+      });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -1567,6 +1670,32 @@ export function AuthoritativeDNSPage() {
     }
   };
 
+  const handleRotateWorkerToken = async (worker: DNSWorkerItem) => {
+    const confirmed = await confirmDialog({
+      title: '重新生成响应端密钥',
+      message: `确定要为“${getDNSWorkerDisplayName(worker)}”重新生成密钥吗？旧密钥会立即失效，已经部署的响应端需要更新为新密钥。`,
+      confirmLabel: '重新生成',
+      tone: 'danger',
+    });
+    if (confirmed) {
+      setFeedback(null);
+      rotateWorkerTokenMutation.mutate(worker.id);
+    }
+  };
+
+  const handleRevokeWorkerToken = async (worker: DNSWorkerItem) => {
+    const confirmed = await confirmDialog({
+      title: '吊销响应端密钥',
+      message: `确定要吊销“${getDNSWorkerDisplayName(worker)}”的当前密钥吗？吊销后该响应端不能继续拉取解析配置，直到重新生成并部署新密钥。`,
+      confirmLabel: '吊销密钥',
+      tone: 'danger',
+    });
+    if (confirmed) {
+      setFeedback(null);
+      revokeWorkerTokenMutation.mutate(worker.id);
+    }
+  };
+
   const handleProbeWorker = (worker: DNSWorkerItem) => {
     setFeedback(null);
     probeWorkerMutation.mutate(worker);
@@ -1769,10 +1898,25 @@ export function AuthoritativeDNSPage() {
                 ? getErrorMessage(delegationCheckQuery.error)
                 : ''
             }
+            workers={workers}
+            zoneWorkerAssignment={selectedZoneWorkersQuery.data ?? null}
+            zoneWorkerAssignmentLoading={selectedZoneWorkersQuery.isLoading}
+            zoneWorkerAssignmentError={
+              selectedZoneWorkersQuery.isError
+                ? getErrorMessage(selectedZoneWorkersQuery.error)
+                : ''
+            }
+            zoneWorkerAssignmentSaving={updateZoneWorkersMutation.isPending}
             onCheckDelegation={() => {
               setFeedback(null);
               void delegationCheckQuery.refetch();
             }}
+            onSaveZoneWorkers={(zone, workerIds) =>
+              updateZoneWorkersMutation.mutate({
+                zoneId: zone.id,
+                workerIds,
+              })
+            }
             onSelectZone={(zone) => setSelectedZoneId(zone.id)}
             onCreateZone={openCreateZone}
             onEditZone={openEditZone}
@@ -1790,12 +1934,24 @@ export function AuthoritativeDNSPage() {
             onCreateWorker={() => setIsWorkerModalOpen(true)}
             onProbeWorker={handleProbeWorker}
             busy={deleteWorkerMutation.isPending}
+            rotatingWorkerId={
+              rotateWorkerTokenMutation.isPending
+                ? (rotateWorkerTokenMutation.variables ?? null)
+                : null
+            }
+            revokingWorkerId={
+              revokeWorkerTokenMutation.isPending
+                ? (revokeWorkerTokenMutation.variables ?? null)
+                : null
+            }
             probingWorkerId={
               probeWorkerMutation.isPending
                 ? (probeWorkerMutation.variables?.id ?? null)
                 : null
             }
             probeResults={workerProbeResults}
+            onRotateToken={handleRotateWorkerToken}
+            onRevokeToken={handleRevokeWorkerToken}
           />
         ) : (
           <DNSMigrationGuidePanel
@@ -1901,7 +2057,19 @@ export function AuthoritativeDNSPage() {
         <WorkerTokenModal
           worker={createdWorker}
           serverUrl={serverUrl}
+          title="DNS 响应端密钥"
+          description={`响应端 ${getDNSWorkerDisplayName(createdWorker)} 已创建。密钥离开弹窗后不会再次显示。`}
           onClose={() => setCreatedWorker(null)}
+        />
+      ) : null}
+
+      {rotatedWorker ? (
+        <WorkerTokenModal
+          worker={rotatedWorker}
+          serverUrl={serverUrl}
+          title="新的 DNS 响应端密钥"
+          description={`响应端 ${getDNSWorkerDisplayName(rotatedWorker)} 的密钥已重新生成。旧密钥已失效，请复制新密钥并更新部署。`}
+          onClose={() => setRotatedWorker(null)}
         />
       ) : null}
 
@@ -1943,12 +2111,18 @@ function ZonesPanel({
   delegationCheck,
   delegationLoading,
   delegationError,
+  workers,
+  zoneWorkerAssignment,
+  zoneWorkerAssignmentLoading,
+  zoneWorkerAssignmentError,
+  zoneWorkerAssignmentSaving,
   busy,
   onSelectZone,
   onCreateZone,
   onEditZone,
   onDeleteZone,
   onCheckDelegation,
+  onSaveZoneWorkers,
   onCreateRecord,
   onEditRecord,
   onDeleteRecord,
@@ -1961,12 +2135,18 @@ function ZonesPanel({
   delegationCheck: DNSZoneDelegationCheck | null;
   delegationLoading: boolean;
   delegationError: string;
+  workers: DNSWorkerItem[];
+  zoneWorkerAssignment: DNSZoneWorkerAssignment | null;
+  zoneWorkerAssignmentLoading: boolean;
+  zoneWorkerAssignmentError: string;
+  zoneWorkerAssignmentSaving: boolean;
   busy: boolean;
   onSelectZone: (zone: DNSZoneItem) => void;
   onCreateZone: () => void;
   onEditZone: (zone: DNSZoneItem) => void;
   onDeleteZone: (zone: DNSZoneItem) => void;
   onCheckDelegation: () => void;
+  onSaveZoneWorkers: (zone: DNSZoneItem, workerIds: number[]) => void;
   onCreateRecord: (zone: DNSZoneItem) => void;
   onEditRecord: (zone: DNSZoneItem, record: DNSRecordItem) => void;
   onDeleteRecord: (record: DNSRecordItem) => void;
@@ -2101,6 +2281,18 @@ function ZonesPanel({
                 onCheck={onCheckDelegation}
               />
 
+              <ZoneWorkerAssignmentPanel
+                zone={selectedZone}
+                workers={workers}
+                assignment={zoneWorkerAssignment}
+                isLoading={zoneWorkerAssignmentLoading}
+                isSaving={zoneWorkerAssignmentSaving}
+                error={zoneWorkerAssignmentError}
+                onSave={(workerIds) =>
+                  onSaveZoneWorkers(selectedZone, workerIds)
+                }
+              />
+
               <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
@@ -2159,7 +2351,7 @@ function ZonesPanel({
                               </p>
                               <p className="text-xs text-[var(--foreground-muted)]">
                                 TTL {record.ttl} 秒
-                                {record.type === 'MX'
+                                {isPriorityRecordType(record.type)
                                   ? ` · 优先级 ${record.priority}`
                                   : ''}
                               </p>
@@ -2288,6 +2480,142 @@ function DelegationCheckPanel({
   );
 }
 
+function ZoneWorkerAssignmentPanel({
+  zone,
+  workers,
+  assignment,
+  isLoading,
+  isSaving,
+  error,
+  onSave,
+}: {
+  zone: DNSZoneItem;
+  workers: DNSWorkerItem[];
+  assignment: DNSZoneWorkerAssignment | null;
+  isLoading: boolean;
+  isSaving: boolean;
+  error: string;
+  onSave: (workerIds: number[]) => void;
+}) {
+  const assignmentForZone =
+    assignment && assignment.zone_id === zone.id ? assignment : null;
+  const assignedWorkerIds = assignmentForZone?.worker_ids ?? [];
+  const [selectedWorkerIds, setSelectedWorkerIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    setSelectedWorkerIds(assignedWorkerIds);
+  }, [assignmentForZone?.zone_id, assignedWorkerIds.join(',')]);
+
+  const selectedSet = new Set(selectedWorkerIds);
+  const allWorkersSelected =
+    selectedWorkerIds.length === 0 ||
+    (workers.length > 0 && selectedWorkerIds.length === workers.length);
+  const activeWorkers = allWorkersSelected
+    ? workers
+    : workers.filter((worker) => selectedSet.has(worker.id));
+
+  const setWorkerChecked = (workerId: number, checked: boolean) => {
+    setSelectedWorkerIds((current) => {
+      const currentAll =
+        current.length === 0 ||
+        (workers.length > 0 && current.length === workers.length);
+      const next = new Set(
+        currentAll ? workers.map((worker) => worker.id) : current,
+      );
+      if (checked) {
+        next.add(workerId);
+      } else {
+        next.delete(workerId);
+      }
+      return Array.from(next);
+    });
+  };
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-base font-semibold text-[var(--foreground-primary)]">
+              响应端范围
+            </h3>
+            <StatusBadge
+              label={
+                allWorkersSelected
+                  ? '全部响应端'
+                  : `${activeWorkers.length} 个响应端`
+              }
+              variant={allWorkersSelected ? 'info' : 'success'}
+            />
+          </div>
+          <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
+            限制该托管域名下发到哪些 DNS 响应端。留空表示所有响应端都可回答。
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <SecondaryButton
+            type="button"
+            disabled={isLoading || isSaving}
+            onClick={() => setSelectedWorkerIds([])}
+          >
+            使用全部
+          </SecondaryButton>
+          <PrimaryButton
+            type="button"
+            disabled={isLoading || isSaving}
+            onClick={() => onSave(allWorkersSelected ? [] : selectedWorkerIds)}
+          >
+            {isSaving ? '保存中...' : '保存范围'}
+          </PrimaryButton>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        {isLoading ? (
+          <LoadingState />
+        ) : error ? (
+          <InlineMessage tone="danger" message={error} />
+        ) : workers.length === 0 ? (
+          <EmptyState
+            title="暂无 DNS 响应端"
+            description="创建 DNS 响应端后，可按托管域名限制哪些响应端接收解析配置。"
+          />
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {workers.map((worker) => {
+              const checked = allWorkersSelected || selectedSet.has(worker.id);
+              return (
+                <label
+                  key={worker.id}
+                  className="flex min-h-14 items-start gap-3 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3 text-sm text-[var(--foreground-primary)]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={isSaving}
+                    onChange={(event) =>
+                      setWorkerChecked(worker.id, event.target.checked)
+                    }
+                    className="mt-1 h-4 w-4 shrink-0 accent-[var(--brand-primary)]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block font-medium break-all">
+                      {getDNSWorkerDisplayName(worker)}
+                    </span>
+                    <span className="mt-1 block text-xs break-all text-[var(--foreground-secondary)]">
+                      {worker.public_address || worker.worker_id}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function NameServerList({
   title,
   items,
@@ -2325,17 +2653,25 @@ function NameServerList({
 function WorkersPanel({
   workers,
   busy,
+  rotatingWorkerId,
+  revokingWorkerId,
   probingWorkerId,
   probeResults,
   onCreateWorker,
   onProbeWorker,
+  onRotateToken,
+  onRevokeToken,
 }: {
   workers: DNSWorkerItem[];
   busy: boolean;
+  rotatingWorkerId: number | null;
+  revokingWorkerId: number | null;
   probingWorkerId: number | null;
   probeResults: Record<number, DNSWorkerProbe>;
   onCreateWorker: () => void;
   onProbeWorker: (worker: DNSWorkerItem) => void;
+  onRotateToken: (worker: DNSWorkerItem) => void;
+  onRevokeToken: (worker: DNSWorkerItem) => void;
 }) {
   return (
     <AppCard
@@ -2383,6 +2719,22 @@ function WorkersPanel({
                     />
                     <StatusBadge
                       label={
+                        worker.token_revoked_at
+                          ? '密钥已吊销'
+                          : worker.token_prefix
+                            ? '密钥有效'
+                            : '密钥未生成'
+                      }
+                      variant={
+                        worker.token_revoked_at
+                          ? 'danger'
+                          : worker.token_prefix
+                            ? 'success'
+                            : 'warning'
+                      }
+                    />
+                    <StatusBadge
+                      label={
                         worker.geoip_enabled
                           ? '国家识别库已加载'
                           : '国家识别库未加载'
@@ -2419,6 +2771,15 @@ function WorkersPanel({
                     <InfoTile
                       label="公网地址"
                       value={worker.public_address || '—'}
+                    />
+                    <InfoTile
+                      label="密钥前缀"
+                      value={worker.token_prefix || '—'}
+                      helper={
+                        worker.token_revoked_at
+                          ? `已吊销 ${formatRelativeTime(worker.token_revoked_at)}`
+                          : '仅显示前缀，完整密钥只在创建或重新生成后显示。'
+                      }
                     />
                     <InfoTile
                       label="最近心跳"
@@ -2513,6 +2874,25 @@ function WorkersPanel({
                   >
                     {probingWorkerId === worker.id ? '探测中...' : '探测'}
                   </SecondaryButton>
+                  <SecondaryButton
+                    type="button"
+                    disabled={rotatingWorkerId === worker.id}
+                    onClick={() => onRotateToken(worker)}
+                  >
+                    {rotatingWorkerId === worker.id
+                      ? '生成中...'
+                      : '重新生成密钥'}
+                  </SecondaryButton>
+                  <DangerButton
+                    type="button"
+                    disabled={
+                      revokingWorkerId === worker.id ||
+                      Boolean(worker.token_revoked_at)
+                    }
+                    onClick={() => onRevokeToken(worker)}
+                  >
+                    {revokingWorkerId === worker.id ? '吊销中...' : '吊销密钥'}
+                  </DangerButton>
                 </div>
               </div>
             </div>
@@ -4596,7 +4976,7 @@ function RecordEditorModal({
         type: values.type,
         value: values.value.trim(),
         ttl: values.ttl,
-        priority: values.type === 'MX' ? values.priority : 0,
+        priority: isPriorityRecordType(values.type) ? values.priority : 0,
         enabled: values.enabled,
       };
       if (isAddressRecordType(values.type)) {
@@ -4776,17 +5156,19 @@ function RecordEditorModal({
             />
           </ResourceField>
           <ResourceField
-            label="MX 优先级"
+            label="记录优先级"
             hint={
-              recordType === 'MX'
-                ? '只对 MX 生效；同一域名有多个 MX 时，邮件会先投递到数字更小的服务器，常见主服务器填 10，备用服务器填 20。'
-                : '仅 MX 记录需要填写优先级，数字越小越优先；其它记录会自动保存为 0。'
+              isPriorityRecordType(recordType)
+                ? recordType === 'MX'
+                  ? '同一域名有多个 MX 时，邮件会先投递到数字更小的服务器，常见主服务器填 10，备用服务器填 20。'
+                  : '对 SRV、HTTPS 和 SVCB 生效；记录值里不要重复填写最前面的优先级数字。'
+                : '仅 MX、SRV、HTTPS 和 SVCB 需要填写优先级；其它记录会自动保存为 0。'
             }
           >
             <ResourceInput
               type="number"
               min={0}
-              disabled={recordType !== 'MX'}
+              disabled={!isPriorityRecordType(recordType)}
               {...form.register('priority', { valueAsNumber: true })}
             />
           </ResourceField>
@@ -5069,10 +5451,14 @@ function WorkerSettingsModal({
 function WorkerTokenModal({
   worker,
   serverUrl,
+  title,
+  description,
   onClose,
 }: {
   worker: DNSWorkerItem;
   serverUrl: string;
+  title: string;
+  description: string;
   onClose: () => void;
 }) {
   const [copyFeedback, setCopyFeedback] = useState<{
@@ -5122,8 +5508,8 @@ go run ./cmd/dns-worker \\
     <AppModal
       isOpen
       onClose={onClose}
-      title="DNS 响应端密钥"
-      description={`响应端 ${getDNSWorkerDisplayName(worker)} 已创建。密钥离开弹窗后不会再次显示。`}
+      title={title}
+      description={description}
       size="xl"
     >
       <div className="space-y-5">

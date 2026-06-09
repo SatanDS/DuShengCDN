@@ -166,6 +166,8 @@ const defaultOperationFields = {
   GlobalApiRateLimitDuration: '180',
   GlobalWebRateLimitNum: '300',
   GlobalWebRateLimitDuration: '180',
+  DNSWorkerAPIRateLimitNum: '600',
+  DNSWorkerAPIRateLimitDuration: '60',
   UploadRateLimitNum: '50',
   UploadRateLimitDuration: '60',
   DownloadRateLimitNum: '50',
@@ -759,6 +761,9 @@ export function SettingsPage() {
       GlobalApiRateLimitDuration: optionMap.GlobalApiRateLimitDuration ?? '180',
       GlobalWebRateLimitNum: optionMap.GlobalWebRateLimitNum ?? '300',
       GlobalWebRateLimitDuration: optionMap.GlobalWebRateLimitDuration ?? '180',
+      DNSWorkerAPIRateLimitNum: optionMap.DNSWorkerAPIRateLimitNum ?? '600',
+      DNSWorkerAPIRateLimitDuration:
+        optionMap.DNSWorkerAPIRateLimitDuration ?? '60',
       UploadRateLimitNum: optionMap.UploadRateLimitNum ?? '50',
       UploadRateLimitDuration: optionMap.UploadRateLimitDuration ?? '60',
       DownloadRateLimitNum: optionMap.DownloadRateLimitNum ?? '50',
@@ -3414,6 +3419,14 @@ export function SettingsPage() {
                           operationFields.GlobalWebRateLimitDuration,
                         ],
                         [
+                          'DNSWorkerAPIRateLimitNum',
+                          operationFields.DNSWorkerAPIRateLimitNum,
+                        ],
+                        [
+                          'DNSWorkerAPIRateLimitDuration',
+                          operationFields.DNSWorkerAPIRateLimitDuration,
+                        ],
+                        [
                           'UploadRateLimitNum',
                           operationFields.UploadRateLimitNum,
                         ],
@@ -3536,6 +3549,43 @@ export function SettingsPage() {
                         setOperationFields((previous) => ({
                           ...previous,
                           GlobalWebRateLimitDuration: event.target.value,
+                        }))
+                      }
+                    />
+                  </ResourceField>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+                  DNS Worker API 限流
+                </p>
+                <p className="mt-1 text-sm text-[var(--foreground-muted)]">
+                  作用于 DNS 响应端心跳、快照拉取和统计上报接口。
+                </p>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <ResourceField label="请求次数">
+                    <ResourceInput
+                      type="number"
+                      value={operationFields.DNSWorkerAPIRateLimitNum}
+                      onChange={(event) =>
+                        setOperationFields((previous) => ({
+                          ...previous,
+                          DNSWorkerAPIRateLimitNum: event.target.value,
+                        }))
+                      }
+                    />
+                  </ResourceField>
+                  <ResourceField
+                    label={`时间窗口 (${formatSecondsLabel(operationFields.DNSWorkerAPIRateLimitDuration)})`}
+                  >
+                    <ResourceInput
+                      type="number"
+                      value={operationFields.DNSWorkerAPIRateLimitDuration}
+                      onChange={(event) =>
+                        setOperationFields((previous) => ({
+                          ...previous,
+                          DNSWorkerAPIRateLimitDuration: event.target.value,
                         }))
                       }
                     />

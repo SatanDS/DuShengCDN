@@ -18,6 +18,8 @@ import (
 type proxyRouteDNSTargetSelection struct {
 	Targets        []string
 	DesiredTargets []string
+	UnhealthyCount int
+	RecoveryCount  int
 	TTL            int
 	GSLB           bool
 	Reason         string
@@ -188,6 +190,8 @@ func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string,
 	if state != nil && state.ID != 0 {
 		previousTargets = decodeGSLBTargetList(state.SelectedTargets)
 		previousChangedAt = state.LastChangedAt
+		selection.UnhealthyCount = normalizeDebounceCounter(state.UnhealthyCount)
+		selection.RecoveryCount = normalizeDebounceCounter(state.RecoveryCount)
 	}
 	if len(previousTargets) == 0 {
 		previousTargets = splitDNSRecordContent(route.DNSRecordContent)
@@ -201,21 +205,40 @@ func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string,
 		eligibleTargets[candidate.Content] = struct{}{}
 	}
 	cooldown := time.Duration(policy.Debounce.CooldownSeconds) * time.Second
+	unhealthyThreshold := normalizeDebounceThreshold(policy.Debounce.UnhealthyThreshold)
+	recoveryThreshold := normalizeDebounceThreshold(policy.Debounce.RecoveryThreshold)
 	selectedTargets := desiredTargets
 	reason := "selected GSLB targets by " + policy.Strategy
 	previousTargets, _ = normalizeDNSRecordContents(recordType, previousTargets)
-	if len(previousTargets) > 0 &&
-		!sameStringSet(previousTargets, desiredTargets) &&
-		allTargetsEligible(previousTargets, eligibleTargets) &&
-		previousChangedAt != nil &&
-		now.Sub(*previousChangedAt) < cooldown {
-		selectedTargets = previousTargets
-		reason = fmt.Sprintf("kept previous GSLB targets during %ds cooldown", policy.Debounce.CooldownSeconds)
+	if !sameStringSet(previousTargets, desiredTargets) && len(previousTargets) > 0 {
+		if allTargetsEligible(previousTargets, eligibleTargets) {
+			selection.UnhealthyCount = 0
+			selection.RecoveryCount++
+			if selection.RecoveryCount < recoveryThreshold {
+				selectedTargets = previousTargets
+				reason = fmt.Sprintf("kept previous GSLB targets until recovery threshold %d/%d", selection.RecoveryCount, recoveryThreshold)
+			} else if previousChangedAt != nil && now.Sub(*previousChangedAt) < cooldown {
+				selectedTargets = previousTargets
+				reason = fmt.Sprintf("kept previous GSLB targets during %ds cooldown", policy.Debounce.CooldownSeconds)
+			}
+		} else {
+			selection.RecoveryCount = 0
+			selection.UnhealthyCount++
+			if selection.UnhealthyCount < unhealthyThreshold {
+				selectedTargets = previousTargets
+				reason = fmt.Sprintf("kept previous GSLB targets until unhealthy threshold %d/%d", selection.UnhealthyCount, unhealthyThreshold)
+			}
+		}
+	} else {
+		selection.UnhealthyCount = 0
+		selection.RecoveryCount = 0
 	}
 
 	lastChangedAt := previousChangedAt
 	if lastChangedAt == nil || !sameStringSet(previousTargets, selectedTargets) {
 		lastChangedAt = &now
+		selection.UnhealthyCount = 0
+		selection.RecoveryCount = 0
 	}
 	selection.Targets = selectedTargets
 	selection.DesiredTargets = desiredTargets
@@ -303,6 +326,16 @@ func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRout
 		probeStatsByNode = gslbDNSSchedulingProbeStatsByNode(options)
 	}
 	poolPolicies := matchGSLBPoolsForSource(policy.Pools, source)
+	candidates := buildGSLBDNSTargetCandidatesForPools(nodes, metrics, probeStatsByNode, recordType, policy, options, poolPolicies)
+	if len(candidates) == 0 && normalizeGSLBSourcePoolFallbackMode(policy.SourcePoolFallbackMode) == gslbSourcePoolFallbackGlobal && gslbMatchedPoolsHaveSourceConditions(poolPolicies) {
+		if fallbackCandidates := buildGSLBDNSTargetCandidatesForPools(nodes, metrics, probeStatsByNode, recordType, policy, options, gslbGlobalPoolsForFallback(policy.Pools)); len(fallbackCandidates) > 0 {
+			return fallbackCandidates, nil
+		}
+	}
+	return candidates, nil
+}
+
+func buildGSLBDNSTargetCandidatesForPools(nodes []*model.Node, metrics map[string]*model.NodeMetricSnapshot, probeStatsByNode map[string]*dnsWorkerNodeProbeStats, recordType string, policy ProxyRouteGSLBPolicy, options gslbDNSSchedulingOptions, poolPolicies map[string]ProxyRouteGSLBPoolPolicy) []gslbDNSTargetCandidate {
 	candidates := make([]gslbDNSTargetCandidate, 0, len(nodes))
 	seen := make(map[string]struct{}, len(nodes))
 	for _, node := range nodes {
@@ -367,7 +400,35 @@ func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRout
 		}
 	}
 	sortGSLBCandidates(candidates, policy.Strategy)
-	return candidates, nil
+	return candidates
+}
+
+func gslbMatchedPoolsHaveSourceConditions(pools map[string]ProxyRouteGSLBPoolPolicy) bool {
+	for _, pool := range pools {
+		if len(pool.SourceCIDRs) > 0 || len(pool.ASNs) > 0 || len(pool.Operators) > 0 || len(pool.Countries) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func gslbGlobalPoolsForFallback(pools []ProxyRouteGSLBPoolPolicy) map[string]ProxyRouteGSLBPoolPolicy {
+	global := map[string]ProxyRouteGSLBPoolPolicy{}
+	all := map[string]ProxyRouteGSLBPoolPolicy{}
+	for _, pool := range pools {
+		name := normalizeNodePoolName(pool.Name)
+		if name == "" || !pool.Enabled {
+			continue
+		}
+		all[name] = pool
+		if len(pool.SourceCIDRs) == 0 && len(pool.ASNs) == 0 && len(pool.Operators) == 0 && len(pool.Countries) == 0 {
+			global[name] = pool
+		}
+	}
+	if len(global) > 0 {
+		return global
+	}
+	return all
 }
 
 func latestNodeMetricSnapshots() map[string]*model.NodeMetricSnapshot {
@@ -759,6 +820,8 @@ func recordProxyRouteGSLBDecision(route *model.ProxyRoute, recordType string, se
 	state.ScopeKey = scopeKey
 	state.SelectedTargets = encodeGSLBTargetList(selection.Targets)
 	state.DesiredTargets = encodeGSLBTargetList(selection.DesiredTargets)
+	state.UnhealthyCount = normalizeDebounceCounter(selection.UnhealthyCount)
+	state.RecoveryCount = normalizeDebounceCounter(selection.RecoveryCount)
 	state.LastReason = selection.Reason
 	state.LastChangedAt = lastChangedAt
 	state.LastEvaluatedAt = &now

@@ -26,7 +26,11 @@ type Config struct {
 	RequestTimeout           time.Duration
 	SnapshotMaxAge           time.Duration
 	QueryRateLimit           int
+	ResponseRateLimit        int
 	UDPResponseSize          int
+	ECSEnabled               bool
+	ECSIPv4Prefix            int
+	ECSIPv6Prefix            int
 	Version                  string
 }
 
@@ -46,7 +50,11 @@ func LoadConfig(args []string, version string) (*Config, error) {
 		RequestTimeout:           parseDurationEnv("DUSHENGCDN_DNS_WORKER_REQUEST_TIMEOUT", DefaultRequestTimeout),
 		SnapshotMaxAge:           parseDurationEnv("DUSHENGCDN_DNS_WORKER_SNAPSHOT_MAX_AGE", DefaultSnapshotMaxAge),
 		QueryRateLimit:           parseIntEnv("DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT", DefaultQueryRateLimit),
+		ResponseRateLimit:        parseIntEnv("DUSHENGCDN_DNS_WORKER_RESPONSE_RATE_LIMIT", DefaultResponseRateLimit),
 		UDPResponseSize:          parseIntEnv("DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE", DefaultUDPResponseSize),
+		ECSEnabled:               parseBoolEnv("DUSHENGCDN_DNS_WORKER_ECS_ENABLED", true),
+		ECSIPv4Prefix:            parseIntEnv("DUSHENGCDN_DNS_WORKER_ECS_IPV4_PREFIX", DefaultECSIPv4Prefix),
+		ECSIPv6Prefix:            parseIntEnv("DUSHENGCDN_DNS_WORKER_ECS_IPV6_PREFIX", DefaultECSIPv6Prefix),
 		Version:                  version,
 	}
 	fs := flag.NewFlagSet("dns-worker", flag.ContinueOnError)
@@ -64,7 +72,11 @@ func LoadConfig(args []string, version string) (*Config, error) {
 	fs.DurationVar(&cfg.RequestTimeout, "request-timeout", cfg.RequestTimeout, "Server request timeout")
 	fs.DurationVar(&cfg.SnapshotMaxAge, "snapshot-max-age", cfg.SnapshotMaxAge, "maximum age for dynamic DNS answers")
 	fs.IntVar(&cfg.QueryRateLimit, "query-rate-limit", cfg.QueryRateLimit, "maximum DNS queries per source IP per second, 0 disables rate limiting")
+	fs.IntVar(&cfg.ResponseRateLimit, "response-rate-limit", cfg.ResponseRateLimit, "maximum abnormal DNS responses per source IP/qname/rcode per second, 0 disables response rate limiting")
 	fs.IntVar(&cfg.UDPResponseSize, "udp-response-size", cfg.UDPResponseSize, "maximum UDP DNS response payload size")
+	fs.BoolVar(&cfg.ECSEnabled, "ecs-enabled", cfg.ECSEnabled, "use EDNS Client Subnet for source classification")
+	fs.IntVar(&cfg.ECSIPv4Prefix, "ecs-ipv4-prefix", cfg.ECSIPv4Prefix, "IPv4 ECS source prefix used for source classification")
+	fs.IntVar(&cfg.ECSIPv6Prefix, "ecs-ipv6-prefix", cfg.ECSIPv6Prefix, "IPv6 ECS source prefix used for source classification")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -106,8 +118,23 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.QueryRateLimit < 0 {
 		cfg.QueryRateLimit = 0
 	}
+	if cfg.ResponseRateLimit < 0 {
+		cfg.ResponseRateLimit = 0
+	}
 	if cfg.UDPResponseSize <= 0 {
 		cfg.UDPResponseSize = DefaultUDPResponseSize
+	}
+	if cfg.ECSIPv4Prefix < 0 {
+		cfg.ECSIPv4Prefix = 0
+	}
+	if cfg.ECSIPv4Prefix > 32 {
+		cfg.ECSIPv4Prefix = 32
+	}
+	if cfg.ECSIPv6Prefix < 0 {
+		cfg.ECSIPv6Prefix = 0
+	}
+	if cfg.ECSIPv6Prefix > 128 {
+		cfg.ECSIPv6Prefix = 128
 	}
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "dev"
@@ -140,11 +167,20 @@ func validateConfig(cfg *Config) error {
 	if cfg.QueryRateLimit < 0 {
 		return errors.New("query-rate-limit cannot be negative")
 	}
+	if cfg.ResponseRateLimit < 0 {
+		return errors.New("response-rate-limit cannot be negative")
+	}
 	if cfg.UDPResponseSize < 512 {
 		return errors.New("udp-response-size must be at least 512")
 	}
 	if cfg.UDPResponseSize > 65535 {
 		return errors.New("udp-response-size cannot exceed 65535")
+	}
+	if cfg.ECSIPv4Prefix < 0 || cfg.ECSIPv4Prefix > 32 {
+		return errors.New("ecs-ipv4-prefix must be between 0 and 32")
+	}
+	if cfg.ECSIPv6Prefix < 0 || cfg.ECSIPv6Prefix > 128 {
+		return errors.New("ecs-ipv6-prefix must be between 0 and 128")
 	}
 	return nil
 }

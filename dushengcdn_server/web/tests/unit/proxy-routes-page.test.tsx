@@ -1832,6 +1832,7 @@ describe('Proxy route website pages', () => {
       dns_ttl: 60,
       gslb_enabled: true,
       gslb_policy: {
+        source_pool_fallback_mode: 'strict',
         pools: [
           {
             name: 'hk',

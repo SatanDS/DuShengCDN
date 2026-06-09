@@ -12,10 +12,12 @@ import (
 )
 
 const (
-	gslbModeCloudflareDNS      = "cloudflare_dns"
-	gslbSourceProviderNone     = "none"
-	gslbSourceProviderHTTP     = "http"
-	defaultGSLBCooldownSeconds = 60
+	gslbModeCloudflareDNS        = "cloudflare_dns"
+	gslbSourceProviderNone       = "none"
+	gslbSourceProviderHTTP       = "http"
+	gslbSourcePoolFallbackStrict = "strict"
+	gslbSourcePoolFallbackGlobal = "fallback_to_global"
+	defaultGSLBCooldownSeconds   = 60
 )
 
 type ProxyRouteGSLBPoolPolicy struct {
@@ -48,14 +50,15 @@ type ProxyRouteGSLBDebounce struct {
 }
 
 type ProxyRouteGSLBPolicy struct {
-	Mode           string                         `json:"mode"`
-	Strategy       string                         `json:"strategy"`
-	Pools          []ProxyRouteGSLBPoolPolicy     `json:"pools"`
-	TargetCount    int                            `json:"target_count"`
-	TTL            int                            `json:"ttl"`
-	SourceIP       ProxyRouteGSLBSourceIPProvider `json:"source_ip"`
-	LoadThresholds ProxyRouteGSLBLoadThresholds   `json:"load_thresholds"`
-	Debounce       ProxyRouteGSLBDebounce         `json:"debounce"`
+	Mode                   string                         `json:"mode"`
+	Strategy               string                         `json:"strategy"`
+	Pools                  []ProxyRouteGSLBPoolPolicy     `json:"pools"`
+	TargetCount            int                            `json:"target_count"`
+	TTL                    int                            `json:"ttl"`
+	SourceIP               ProxyRouteGSLBSourceIPProvider `json:"source_ip"`
+	SourcePoolFallbackMode string                         `json:"source_pool_fallback_mode"`
+	LoadThresholds         ProxyRouteGSLBLoadThresholds   `json:"load_thresholds"`
+	Debounce               ProxyRouteGSLBDebounce         `json:"debounce"`
 }
 
 func defaultGSLBPolicy(nodePool string, targetCount int, scheduleMode string, ttl int) ProxyRouteGSLBPolicy {
@@ -78,6 +81,7 @@ func defaultGSLBPolicy(nodePool string, targetCount int, scheduleMode string, tt
 		SourceIP: ProxyRouteGSLBSourceIPProvider{
 			Provider: gslbSourceProviderNone,
 		},
+		SourcePoolFallbackMode: gslbSourcePoolFallbackStrict,
 		Debounce: ProxyRouteGSLBDebounce{
 			CooldownSeconds:    defaultGSLBCooldownSeconds,
 			UnhealthyThreshold: 1,
@@ -95,7 +99,8 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 		input.TTL == 0 &&
 		strings.TrimSpace(input.SourceIP.Provider) == "" &&
 		strings.TrimSpace(input.SourceIP.APIURL) == "" &&
-		strings.TrimSpace(input.SourceIP.APIToken) == "" {
+		strings.TrimSpace(input.SourceIP.APIToken) == "" &&
+		strings.TrimSpace(input.SourcePoolFallbackMode) == "" {
 		return defaultPolicy, nil
 	}
 
@@ -139,6 +144,7 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 	}
 
 	policy.LoadThresholds = normalizeGSLBLoadThresholds(input.LoadThresholds)
+	policy.SourcePoolFallbackMode = normalizeGSLBSourcePoolFallbackMode(input.SourcePoolFallbackMode)
 	policy.Debounce = normalizeGSLBDebounce(input.Debounce)
 
 	if len(input.Pools) > 0 {
@@ -149,6 +155,15 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 		policy.Pools = pools
 	}
 	return policy, nil
+}
+
+func normalizeGSLBSourcePoolFallbackMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case gslbSourcePoolFallbackGlobal:
+		return gslbSourcePoolFallbackGlobal
+	default:
+		return gslbSourcePoolFallbackStrict
+	}
 }
 
 func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolPolicy, error) {
@@ -534,6 +549,20 @@ func normalizeGSLBDebounce(input ProxyRouteGSLBDebounce) ProxyRouteGSLBDebounce 
 		debounce.RecoveryThreshold = 1
 	}
 	return debounce
+}
+
+func normalizeDebounceThreshold(value int) int {
+	if value <= 0 {
+		return 1
+	}
+	return value
+}
+
+func normalizeDebounceCounter(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func decodeStoredGSLBPolicy(raw string) (ProxyRouteGSLBPolicy, error) {

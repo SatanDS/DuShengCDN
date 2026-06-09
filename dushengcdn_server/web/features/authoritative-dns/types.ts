@@ -5,7 +5,12 @@ export type DNSRecordType =
   | 'TXT'
   | 'MX'
   | 'NS'
-  | 'SOA';
+  | 'SOA'
+  | 'CAA'
+  | 'SRV'
+  | 'HTTPS'
+  | 'SVCB'
+  | 'TLSA';
 
 export interface DNSZoneItem {
   id: number;
@@ -41,6 +46,8 @@ export interface DNSWorkerItem {
   name: string;
   remark: string;
   token?: string;
+  token_prefix: string;
+  token_revoked_at?: string | null;
   public_address: string;
   version: string;
   status: 'online' | 'offline';
@@ -465,6 +472,16 @@ export interface DNSZoneDelegationCheck {
   status: DNSZoneDelegationStatus;
   checked_at: string;
   error?: string;
+}
+
+export interface DNSZoneWorkerAssignment {
+  zone_id: number;
+  worker_ids: number[];
+  workers: DNSWorkerItem[];
+}
+
+export interface DNSZoneWorkerAssignmentPayload {
+  worker_ids: number[];
 }
 
 export interface DNSZoneMutationPayload {

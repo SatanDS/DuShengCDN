@@ -223,6 +223,9 @@ var (
 
 	CriticalRateLimitNum            = 100
 	CriticalRateLimitDuration int64 = 20 * 60
+
+	DNSWorkerAPIRateLimitNum            = 600
+	DNSWorkerAPIRateLimitDuration int64 = 60
 )
 
 var RateLimitKeyExpirationDuration = 20 * time.Minute
