@@ -24,10 +24,20 @@ type Snapshot struct {
 	SnapshotVersion            string                    `json:"snapshot_version"`
 	GeneratedAt                time.Time                 `json:"generated_at"`
 	GSLBProbeSchedulingEnabled bool                      `json:"gslb_probe_scheduling_enabled"`
+	WorkerPolicy               WorkerPolicy              `json:"worker_policy"`
 	Zones                      []SnapshotZone            `json:"zones"`
 	Routes                     []SnapshotRoute           `json:"routes"`
 	Nodes                      []SnapshotNode            `json:"nodes"`
 	SchedulingStates           []SnapshotSchedulingState `json:"scheduling_states,omitempty"`
+}
+
+type WorkerPolicy struct {
+	QueryRateLimit    int  `json:"query_rate_limit"`
+	ResponseRateLimit int  `json:"response_rate_limit"`
+	UDPResponseSize   int  `json:"udp_response_size"`
+	ECSEnabled        bool `json:"ecs_enabled"`
+	ECSIPv4Prefix     int  `json:"ecs_ipv4_prefix"`
+	ECSIPv6Prefix     int  `json:"ecs_ipv6_prefix"`
 }
 
 type SnapshotZone struct {

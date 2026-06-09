@@ -273,6 +273,48 @@ func TestAuthoritativeDNSWorkerTokenHashRotateRevokeAndLegacyFallback(t *testing
 	}
 }
 
+func TestAuthoritativeDNSSnapshotIncludesWorkerPolicyOptions(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldQueryLimit := common.AuthoritativeDNSWorkerQueryRateLimit
+	oldResponseLimit := common.AuthoritativeDNSWorkerResponseRateLimit
+	oldUDPSize := common.AuthoritativeDNSWorkerUDPResponseSize
+	oldECSEnabled := common.AuthoritativeDNSWorkerECSEnabled
+	oldECSIPv4 := common.AuthoritativeDNSWorkerECSIPv4Prefix
+	oldECSIPv6 := common.AuthoritativeDNSWorkerECSIPv6Prefix
+	common.AuthoritativeDNSWorkerQueryRateLimit = 321
+	common.AuthoritativeDNSWorkerResponseRateLimit = 45
+	common.AuthoritativeDNSWorkerUDPResponseSize = 1400
+	common.AuthoritativeDNSWorkerECSEnabled = false
+	common.AuthoritativeDNSWorkerECSIPv4Prefix = 20
+	common.AuthoritativeDNSWorkerECSIPv6Prefix = 60
+	t.Cleanup(func() {
+		common.AuthoritativeDNSWorkerQueryRateLimit = oldQueryLimit
+		common.AuthoritativeDNSWorkerResponseRateLimit = oldResponseLimit
+		common.AuthoritativeDNSWorkerUDPResponseSize = oldUDPSize
+		common.AuthoritativeDNSWorkerECSEnabled = oldECSEnabled
+		common.AuthoritativeDNSWorkerECSIPv4Prefix = oldECSIPv4
+		common.AuthoritativeDNSWorkerECSIPv6Prefix = oldECSIPv6
+	})
+
+	snapshot, err := GetAuthoritativeDNSSnapshot(nil)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+	if snapshot.WorkerPolicy.QueryRateLimit != 321 ||
+		snapshot.WorkerPolicy.ResponseRateLimit != 45 ||
+		snapshot.WorkerPolicy.UDPResponseSize != 1400 ||
+		snapshot.WorkerPolicy.ECSEnabled ||
+		snapshot.WorkerPolicy.ECSIPv4Prefix != 20 ||
+		snapshot.WorkerPolicy.ECSIPv6Prefix != 60 {
+		t.Fatalf("unexpected authoritative worker policy: %+v", snapshot.WorkerPolicy)
+	}
+	workerSnapshot := convertAuthoritativeSnapshotToWorker(snapshot)
+	if workerSnapshot.WorkerPolicy != snapshot.WorkerPolicy {
+		t.Fatalf("expected worker snapshot policy to match, got %+v vs %+v", workerSnapshot.WorkerPolicy, snapshot.WorkerPolicy)
+	}
+}
+
 func TestAuthoritativeDNSSECEnableCreatesEncryptedKeysAndSnapshot(t *testing.T) {
 	setupServiceTestDB(t)
 	t.Setenv("DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY", "test-dnssec-secret")

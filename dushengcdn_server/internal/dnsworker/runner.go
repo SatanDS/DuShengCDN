@@ -101,6 +101,7 @@ func (r *Runner) pullSnapshot(ctx context.Context) error {
 	if err := r.Store.Set(snapshot); err != nil {
 		return err
 	}
+	r.applyWorkerPolicy(snapshot.WorkerPolicy)
 	if r.DNSServer != nil && r.DNSServer.Scheduler != nil {
 		if loaded, _, _, _ := r.Store.Current(); loaded != nil {
 			r.DNSServer.Scheduler.LoadSnapshotStates(loaded)
@@ -168,6 +169,7 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		r.clearPendingUpdateResult()
 	}
 	if response != nil {
+		r.applyWorkerPolicy(response.Settings.WorkerPolicy)
 		r.maybeStartUpdate(response.Settings)
 		r.maybeStartUninstall(response.Settings)
 	}
@@ -178,6 +180,19 @@ func (r *Runner) sendHeartbeat(ctx context.Context) error {
 		"rollups", len(rollups),
 	)
 	return nil
+}
+
+func (r *Runner) applyWorkerPolicy(policy WorkerPolicy) {
+	if r == nil {
+		return
+	}
+	policy = normalizeWorkerPolicy(policy)
+	if r.SourceResolver != nil {
+		r.SourceResolver.ApplyECSPolicy(policy.ECSEnabled, policy.ECSIPv4Prefix, policy.ECSIPv6Prefix)
+	}
+	if r.DNSServer != nil {
+		r.DNSServer.ApplyWorkerPolicy(policy)
+	}
 }
 
 func (r *Runner) uninstallSupported() bool {

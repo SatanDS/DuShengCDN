@@ -68,6 +68,12 @@ func InitOptionMap() {
 	common.OptionMap["AuthoritativeDNSListenAddr"] = common.AuthoritativeDNSListenAddr
 	common.OptionMap["AuthoritativeDNSDefaultTTL"] = strconv.Itoa(common.AuthoritativeDNSDefaultTTL)
 	common.OptionMap["AuthoritativeDNSSnapshotMaxAge"] = strconv.Itoa(common.AuthoritativeDNSSnapshotMaxAge)
+	common.OptionMap["AuthoritativeDNSWorkerQueryRateLimit"] = strconv.Itoa(common.AuthoritativeDNSWorkerQueryRateLimit)
+	common.OptionMap["AuthoritativeDNSWorkerResponseRateLimit"] = strconv.Itoa(common.AuthoritativeDNSWorkerResponseRateLimit)
+	common.OptionMap["AuthoritativeDNSWorkerUDPResponseSize"] = strconv.Itoa(common.AuthoritativeDNSWorkerUDPResponseSize)
+	common.OptionMap["AuthoritativeDNSWorkerECSEnabled"] = strconv.FormatBool(common.AuthoritativeDNSWorkerECSEnabled)
+	common.OptionMap["AuthoritativeDNSWorkerECSIPv4Prefix"] = strconv.Itoa(common.AuthoritativeDNSWorkerECSIPv4Prefix)
+	common.OptionMap["AuthoritativeDNSWorkerECSIPv6Prefix"] = strconv.Itoa(common.AuthoritativeDNSWorkerECSIPv6Prefix)
 	common.OptionMap["GSLBMetricFreshnessSeconds"] = strconv.Itoa(common.GSLBMetricFreshnessSeconds)
 	common.OptionMap["GSLBProbeSchedulingEnabled"] = strconv.FormatBool(common.GSLBProbeSchedulingEnabled)
 	common.OptionMap["OpenRestyWorkerProcesses"] = common.OpenRestyWorkerProcesses
@@ -283,6 +289,28 @@ func updateOptionMap(key string, value string) {
 	case "AuthoritativeDNSSnapshotMaxAge":
 		if v, err := strconv.Atoi(value); err == nil && v > 0 {
 			common.AuthoritativeDNSSnapshotMaxAge = v
+		}
+	case "AuthoritativeDNSWorkerQueryRateLimit":
+		if v, err := strconv.Atoi(value); err == nil && v >= 0 {
+			common.AuthoritativeDNSWorkerQueryRateLimit = v
+		}
+	case "AuthoritativeDNSWorkerResponseRateLimit":
+		if v, err := strconv.Atoi(value); err == nil && v >= 0 {
+			common.AuthoritativeDNSWorkerResponseRateLimit = v
+		}
+	case "AuthoritativeDNSWorkerUDPResponseSize":
+		if v, err := strconv.Atoi(value); err == nil && v >= 512 && v <= 65535 {
+			common.AuthoritativeDNSWorkerUDPResponseSize = v
+		}
+	case "AuthoritativeDNSWorkerECSEnabled":
+		common.AuthoritativeDNSWorkerECSEnabled = value == "true"
+	case "AuthoritativeDNSWorkerECSIPv4Prefix":
+		if v, err := strconv.Atoi(value); err == nil && v >= 0 && v <= 32 {
+			common.AuthoritativeDNSWorkerECSIPv4Prefix = v
+		}
+	case "AuthoritativeDNSWorkerECSIPv6Prefix":
+		if v, err := strconv.Atoi(value); err == nil && v >= 0 && v <= 128 {
+			common.AuthoritativeDNSWorkerECSIPv6Prefix = v
 		}
 	case "GSLBMetricFreshnessSeconds":
 		if v, err := strconv.Atoi(value); err == nil && v > 0 {

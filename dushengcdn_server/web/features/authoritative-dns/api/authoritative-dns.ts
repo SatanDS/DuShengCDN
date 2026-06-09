@@ -8,6 +8,9 @@ import type {
   DNSObservabilitySummary,
   DNSRecordItem,
   DNSRecordMutationPayload,
+  DNSSECDSRecord,
+  DNSSECEnablePayload,
+  DNSSECStatus,
   DNSWorkerItem,
   DNSWorkerMutationPayload,
   DNSWorkerProbe,
@@ -68,6 +71,43 @@ export function updateDNSZoneWorkers(
     method: 'POST',
     body: JSON.stringify(payload),
   }).then(normalizeDNSZoneWorkerAssignment);
+}
+
+export function getDNSZoneDNSSEC(id: number) {
+  return apiRequest<DNSSECStatus>(`/dns-zones/${id}/dnssec`).then(
+    normalizeDNSSECStatus,
+  );
+}
+
+export function enableDNSZoneDNSSEC(id: number, payload: DNSSECEnablePayload) {
+  return apiRequest<DNSSECStatus>(`/dns-zones/${id}/dnssec/enable`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then(normalizeDNSSECStatus);
+}
+
+export function disableDNSZoneDNSSEC(id: number) {
+  return apiRequest<DNSSECStatus>(`/dns-zones/${id}/dnssec/disable`, {
+    method: 'POST',
+  }).then(normalizeDNSSECStatus);
+}
+
+export function rotateDNSZoneDNSSECZSK(id: number) {
+  return apiRequest<DNSSECStatus>(`/dns-zones/${id}/dnssec/rotate-zsk`, {
+    method: 'POST',
+  }).then(normalizeDNSSECStatus);
+}
+
+export function rotateDNSZoneDNSSECKSK(id: number) {
+  return apiRequest<DNSSECStatus>(`/dns-zones/${id}/dnssec/rotate-ksk`, {
+    method: 'POST',
+  }).then(normalizeDNSSECStatus);
+}
+
+export function getDNSZoneDNSSECDS(id: number) {
+  return apiRequest<DNSSECDSRecord[]>(`/dns-zones/${id}/dnssec/ds`).then(
+    normalizeDNSSECDSRecords,
+  );
 }
 
 export function getDNSZoneRecords(zoneId: number) {
@@ -191,6 +231,14 @@ function normalizeDNSZone(zone: DNSZoneItem) {
     ...zone,
     name_servers: asArray(zone.name_servers),
     records: zone.records ? normalizeDNSRecords(zone.records) : zone.records,
+    dnssec_enabled: Boolean(zone.dnssec_enabled),
+    dnssec_denial_mode:
+      zone.dnssec_denial_mode === 'nsec3'
+        ? ('nsec3' as const)
+        : ('nsec' as const),
+    dnssec_nsec3_salt: zone.dnssec_nsec3_salt ?? '',
+    dnssec_nsec3_iterations: zone.dnssec_nsec3_iterations ?? 0,
+    dnssec_signature_validity: zone.dnssec_signature_validity ?? 604800,
   };
 }
 
@@ -259,6 +307,39 @@ function normalizeDNSZoneWorkerAssignment(
     worker_ids: asArray(value?.worker_ids),
     workers: normalizeDNSWorkers(value?.workers),
   };
+}
+
+function normalizeDNSSECStatus(value: DNSSECStatus | null | undefined) {
+  return {
+    zone_id: value?.zone_id ?? 0,
+    enabled: Boolean(value?.enabled),
+    denial_mode:
+      value?.denial_mode === 'nsec3' ? ('nsec3' as const) : ('nsec' as const),
+    nsec3_salt: value?.nsec3_salt ?? '',
+    nsec3_iterations: value?.nsec3_iterations ?? 0,
+    signature_validity_seconds: value?.signature_validity_seconds ?? 604800,
+    algorithm: value?.algorithm ?? 13,
+    algorithm_name: value?.algorithm_name ?? 'ECDSAP256SHA256',
+    key_encryption_configured: Boolean(value?.key_encryption_configured),
+    keys: asArray(value?.keys).map((key) => ({
+      ...key,
+      role: key.role || 'zsk',
+      status: key.status || 'active',
+      public_key: key.public_key ?? '',
+      ds_digest_sha256: key.ds_digest_sha256 ?? '',
+      activated_at: key.activated_at ?? null,
+      retired_at: key.retired_at ?? null,
+    })),
+    ds_records: normalizeDNSSECDSRecords(value?.ds_records),
+  };
+}
+
+function normalizeDNSSECDSRecords(value: DNSSECDSRecord[] | null | undefined) {
+  return asArray(value).map((record) => ({
+    ...record,
+    digest: record.digest ?? '',
+    record: record.record ?? '',
+  }));
 }
 
 function normalizeDNSGSLBSchedulingStates(

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -21,6 +22,7 @@ type DNSServer struct {
 	Limiter    *QueryRateLimiter
 	RRLimiter  *ResponseRateLimiter
 	UDPSize    int
+	policyMu   sync.RWMutex
 	udpServer  *dns.Server
 	tcpServer  *dns.Server
 }
@@ -67,6 +69,38 @@ func NewDNSServerWithProtection(store *SnapshotStore, scheduler *Scheduler, roll
 	server.udpServer = &dns.Server{Addr: listenAddr, Net: "udp", Handler: mux, UDPSize: udpSize}
 	server.tcpServer = &dns.Server{Addr: listenAddr, Net: "tcp", Handler: mux}
 	return server
+}
+
+func (s *DNSServer) ApplyWorkerPolicy(policy WorkerPolicy) {
+	if s == nil {
+		return
+	}
+	policy = normalizeWorkerPolicy(policy)
+	s.policyMu.Lock()
+	s.UDPSize = clampUDPResponseSize(policy.UDPResponseSize)
+	if s.Limiter == nil {
+		s.Limiter = NewQueryRateLimiter(policy.QueryRateLimit)
+	} else {
+		s.Limiter.SetLimit(policy.QueryRateLimit)
+	}
+	if s.RRLimiter == nil {
+		s.RRLimiter = NewResponseRateLimiter(policy.ResponseRateLimit)
+	} else {
+		s.RRLimiter.SetLimit(policy.ResponseRateLimit)
+	}
+	if s.udpServer != nil {
+		s.udpServer.UDPSize = s.UDPSize
+	}
+	s.policyMu.Unlock()
+}
+
+func (s *DNSServer) runtimePolicy() (int, *QueryRateLimiter, *ResponseRateLimiter) {
+	if s == nil {
+		return DefaultUDPResponseSize, nil, nil
+	}
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.UDPSize, s.Limiter, s.RRLimiter
 }
 
 func (s *DNSServer) Run(ctx context.Context) error {
@@ -138,7 +172,8 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	sourceScope := "global"
 	source := SourceContext{ScopeKey: "global"}
 	defer func() {
-		if s.RRLimiter != nil && !s.RRLimiter.Allow(remoteAddr, qname, rcodeLabel) {
+		_, _, rrLimiter := s.runtimePolicy()
+		if rrLimiter != nil && !rrLimiter.Allow(remoteAddr, qname, rcodeLabel) {
 			response.Answer = nil
 			response.Ns = nil
 			response.Extra = nil
@@ -153,7 +188,8 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 			s.Rollups.RecordWithSource(zoneID, routeID, rollupSource, qname, qtype, rcodeLabel, targets, time.Since(startedAt))
 		}
 	}()
-	if s.Limiter != nil && !s.Limiter.Allow(remoteAddr) {
+	_, limiter, _ := s.runtimePolicy()
+	if limiter != nil && !limiter.Allow(remoteAddr) {
 		response.Rcode = dns.RcodeRefused
 		rcodeLabel = "REFUSED"
 		return response
@@ -301,8 +337,11 @@ func (s *DNSServer) truncateUDPResponse(request *dns.Msg, response *dns.Msg) *dn
 func (s *DNSServer) udpResponseSize(request *dns.Msg) int {
 	size := dns.MinMsgSize
 	limit := DefaultUDPResponseSize
-	if s != nil && s.UDPSize > 0 {
-		limit = s.UDPSize
+	if s != nil {
+		udpSize, _, _ := s.runtimePolicy()
+		if udpSize > 0 {
+			limit = udpSize
+		}
 	}
 	if request != nil {
 		if opt := request.IsEdns0(); opt != nil {
@@ -311,6 +350,19 @@ func (s *DNSServer) udpResponseSize(request *dns.Msg) int {
 	}
 	if size > limit {
 		size = limit
+	}
+	if size < dns.MinMsgSize {
+		return dns.MinMsgSize
+	}
+	if size > dns.MaxMsgSize {
+		return dns.MaxMsgSize
+	}
+	return size
+}
+
+func clampUDPResponseSize(size int) int {
+	if size <= 0 {
+		size = DefaultUDPResponseSize
 	}
 	if size < dns.MinMsgSize {
 		return dns.MinMsgSize

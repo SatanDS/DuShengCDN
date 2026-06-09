@@ -160,6 +160,12 @@ const defaultOperationFields = {
     'error timeout updating http_500 http_502 http_503 http_504',
   AuthoritativeDNSDefaultTTL: '30',
   AuthoritativeDNSSnapshotMaxAge: '300',
+  AuthoritativeDNSWorkerQueryRateLimit: '200',
+  AuthoritativeDNSWorkerResponseRateLimit: '50',
+  AuthoritativeDNSWorkerUDPResponseSize: '1232',
+  AuthoritativeDNSWorkerECSEnabled: true,
+  AuthoritativeDNSWorkerECSIPv4Prefix: '24',
+  AuthoritativeDNSWorkerECSIPv6Prefix: '56',
   GSLBMetricFreshnessSeconds: '120',
   GSLBProbeSchedulingEnabled: false,
   GlobalApiRateLimitNum: '300',
@@ -752,6 +758,20 @@ export function SettingsPage() {
       AuthoritativeDNSDefaultTTL: optionMap.AuthoritativeDNSDefaultTTL ?? '30',
       AuthoritativeDNSSnapshotMaxAge:
         optionMap.AuthoritativeDNSSnapshotMaxAge ?? '300',
+      AuthoritativeDNSWorkerQueryRateLimit:
+        optionMap.AuthoritativeDNSWorkerQueryRateLimit ?? '200',
+      AuthoritativeDNSWorkerResponseRateLimit:
+        optionMap.AuthoritativeDNSWorkerResponseRateLimit ?? '50',
+      AuthoritativeDNSWorkerUDPResponseSize:
+        optionMap.AuthoritativeDNSWorkerUDPResponseSize ?? '1232',
+      AuthoritativeDNSWorkerECSEnabled: toBoolean(
+        optionMap.AuthoritativeDNSWorkerECSEnabled,
+        true,
+      ),
+      AuthoritativeDNSWorkerECSIPv4Prefix:
+        optionMap.AuthoritativeDNSWorkerECSIPv4Prefix ?? '24',
+      AuthoritativeDNSWorkerECSIPv6Prefix:
+        optionMap.AuthoritativeDNSWorkerECSIPv6Prefix ?? '56',
       GSLBMetricFreshnessSeconds: optionMap.GSLBMetricFreshnessSeconds ?? '120',
       GSLBProbeSchedulingEnabled: toBoolean(
         optionMap.GSLBProbeSchedulingEnabled,
@@ -2092,6 +2112,26 @@ export function SettingsPage() {
                           operationFields.GSLBMetricFreshnessSeconds,
                           10,
                         );
+                        const queryRateLimit = Number.parseInt(
+                          operationFields.AuthoritativeDNSWorkerQueryRateLimit,
+                          10,
+                        );
+                        const responseRateLimit = Number.parseInt(
+                          operationFields.AuthoritativeDNSWorkerResponseRateLimit,
+                          10,
+                        );
+                        const udpResponseSize = Number.parseInt(
+                          operationFields.AuthoritativeDNSWorkerUDPResponseSize,
+                          10,
+                        );
+                        const ecsIPv4Prefix = Number.parseInt(
+                          operationFields.AuthoritativeDNSWorkerECSIPv4Prefix,
+                          10,
+                        );
+                        const ecsIPv6Prefix = Number.parseInt(
+                          operationFields.AuthoritativeDNSWorkerECSIPv6Prefix,
+                          10,
+                        );
 
                         if (
                           Number.isNaN(defaultTtl) ||
@@ -2118,6 +2158,45 @@ export function SettingsPage() {
                             '节点状态数据有效时间必须为大于 0 的整数秒。',
                           );
                         }
+                        if (
+                          Number.isNaN(queryRateLimit) ||
+                          queryRateLimit < 0
+                        ) {
+                          throw new Error(
+                            '普通查询限流必须为大于或等于 0 的整数，0 表示关闭。',
+                          );
+                        }
+                        if (
+                          Number.isNaN(responseRateLimit) ||
+                          responseRateLimit < 0
+                        ) {
+                          throw new Error(
+                            '异常响应 RRL 必须为大于或等于 0 的整数，0 表示关闭。',
+                          );
+                        }
+                        if (
+                          Number.isNaN(udpResponseSize) ||
+                          udpResponseSize < 512 ||
+                          udpResponseSize > 65535
+                        ) {
+                          throw new Error(
+                            'UDP 响应大小必须为 512 到 65535 之间的整数。',
+                          );
+                        }
+                        if (
+                          Number.isNaN(ecsIPv4Prefix) ||
+                          ecsIPv4Prefix < 0 ||
+                          ecsIPv4Prefix > 32
+                        ) {
+                          throw new Error('ECS IPv4 前缀必须为 0 到 32。');
+                        }
+                        if (
+                          Number.isNaN(ecsIPv6Prefix) ||
+                          ecsIPv6Prefix < 0 ||
+                          ecsIPv6Prefix > 128
+                        ) {
+                          throw new Error('ECS IPv6 前缀必须为 0 到 128。');
+                        }
 
                         await saveOptionEntries(
                           [
@@ -2129,6 +2208,32 @@ export function SettingsPage() {
                             [
                               'GSLBMetricFreshnessSeconds',
                               String(metricFreshness),
+                            ],
+                            [
+                              'AuthoritativeDNSWorkerQueryRateLimit',
+                              String(queryRateLimit),
+                            ],
+                            [
+                              'AuthoritativeDNSWorkerResponseRateLimit',
+                              String(responseRateLimit),
+                            ],
+                            [
+                              'AuthoritativeDNSWorkerUDPResponseSize',
+                              String(udpResponseSize),
+                            ],
+                            [
+                              'AuthoritativeDNSWorkerECSEnabled',
+                              String(
+                                operationFields.AuthoritativeDNSWorkerECSEnabled,
+                              ),
+                            ],
+                            [
+                              'AuthoritativeDNSWorkerECSIPv4Prefix',
+                              String(ecsIPv4Prefix),
+                            ],
+                            [
+                              'AuthoritativeDNSWorkerECSIPv6Prefix',
+                              String(ecsIPv6Prefix),
                             ],
                             [
                               'GSLBProbeSchedulingEnabled',
@@ -2194,6 +2299,117 @@ export function SettingsPage() {
                       setOperationFields((previous) => ({
                         ...previous,
                         GSLBMetricFreshnessSeconds: event.target.value,
+                      }))
+                    }
+                  />
+                </ResourceField>
+              </div>
+              <div className="mt-5 grid gap-5 md:grid-cols-3">
+                <ResourceField
+                  label="普通查询限流（次/秒）"
+                  hint="按来源 IP 统计，0 表示关闭。"
+                  tooltip="用于限制单个来源 IP 每秒可发起的 DNS 查询数。"
+                >
+                  <ResourceInput
+                    type="number"
+                    min={0}
+                    value={operationFields.AuthoritativeDNSWorkerQueryRateLimit}
+                    onChange={(event) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AuthoritativeDNSWorkerQueryRateLimit:
+                          event.target.value,
+                      }))
+                    }
+                  />
+                </ResourceField>
+                <ResourceField
+                  label="异常响应 RRL（次/秒）"
+                  hint="按来源、QNAME、RCODE 统计，0 表示关闭。"
+                  tooltip="用于抑制重复 NXDOMAIN、SERVFAIL、REFUSED 等异常响应被放大滥用。"
+                >
+                  <ResourceInput
+                    type="number"
+                    min={0}
+                    value={
+                      operationFields.AuthoritativeDNSWorkerResponseRateLimit
+                    }
+                    onChange={(event) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AuthoritativeDNSWorkerResponseRateLimit:
+                          event.target.value,
+                      }))
+                    }
+                  />
+                </ResourceField>
+                <ResourceField
+                  label="UDP 响应大小（字节）"
+                  hint="默认 1232，降低可减少分片风险。"
+                  tooltip="DNS Worker 会按这里的上限截断 UDP 响应，客户端可改用 TCP 重试。"
+                >
+                  <ResourceInput
+                    type="number"
+                    min={512}
+                    max={65535}
+                    value={
+                      operationFields.AuthoritativeDNSWorkerUDPResponseSize
+                    }
+                    onChange={(event) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AuthoritativeDNSWorkerUDPResponseSize:
+                          event.target.value,
+                      }))
+                    }
+                  />
+                </ResourceField>
+              </div>
+              <div className="mt-5 grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                <ToggleField
+                  label="启用 ECS 分流"
+                  description="允许 DNS Worker 使用 EDNS Client Subnet 作为来源分流依据。"
+                  tooltip="关闭后只按递归解析器来源 IP 分流；开启后会按下方前缀规范化 ECS 地址。"
+                  checked={operationFields.AuthoritativeDNSWorkerECSEnabled}
+                  onChange={(checked) =>
+                    setOperationFields((previous) => ({
+                      ...previous,
+                      AuthoritativeDNSWorkerECSEnabled: checked,
+                    }))
+                  }
+                />
+                <ResourceField
+                  label="ECS IPv4 前缀"
+                  hint="默认 /24。"
+                  tooltip="DNS Worker 会把收到的 IPv4 ECS 地址规范到不超过该前缀后再参与分流和统计。"
+                >
+                  <ResourceInput
+                    type="number"
+                    min={0}
+                    max={32}
+                    value={operationFields.AuthoritativeDNSWorkerECSIPv4Prefix}
+                    onChange={(event) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AuthoritativeDNSWorkerECSIPv4Prefix: event.target.value,
+                      }))
+                    }
+                  />
+                </ResourceField>
+                <ResourceField
+                  label="ECS IPv6 前缀"
+                  hint="默认 /56。"
+                  tooltip="DNS Worker 会把收到的 IPv6 ECS 地址规范到不超过该前缀后再参与分流和统计。"
+                >
+                  <ResourceInput
+                    type="number"
+                    min={0}
+                    max={128}
+                    value={operationFields.AuthoritativeDNSWorkerECSIPv6Prefix}
+                    onChange={(event) =>
+                      setOperationFields((previous) => ({
+                        ...previous,
+                        AuthoritativeDNSWorkerECSIPv6Prefix: event.target.value,
                       }))
                     }
                   />

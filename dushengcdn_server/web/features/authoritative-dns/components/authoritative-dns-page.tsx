@@ -1,7 +1,15 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Minus, Plus, Settings } from 'lucide-react';
+import {
+  Copy,
+  KeyRound,
+  Minus,
+  Plus,
+  RotateCw,
+  Settings,
+  ShieldCheck,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
@@ -25,16 +33,21 @@ import {
   deleteDNSRecord,
   deleteDNSWorker,
   deleteDNSZone,
+  disableDNSZoneDNSSEC,
+  enableDNSZoneDNSSEC,
   getDNSGSLBSchedulingStates,
   getDNSMigrationCandidates,
   getDNSObservability,
   getDNSWorkers,
+  getDNSZoneDNSSEC,
   getDNSZoneWorkers,
   getDNSZoneRecords,
   getDNSZones,
   probeDNSWorker,
   requestDNSWorkerUpdate,
   revokeDNSWorkerToken,
+  rotateDNSZoneDNSSECKSK,
+  rotateDNSZoneDNSSECZSK,
   rotateDNSWorkerToken,
   simulateDNSGSLB,
   updateDNSWorker,
@@ -54,6 +67,8 @@ import type {
   DNSRecordItem,
   DNSRecordMutationPayload,
   DNSRecordType,
+  DNSSECDenialMode,
+  DNSSECStatus,
   DNSWorkerHealthItem,
   DNSWorkerItem,
   DNSWorkerProbe,
@@ -1129,6 +1144,11 @@ export function AuthoritativeDNSPage() {
     queryFn: () => getDNSZoneWorkers(selectedZone?.id ?? 0),
     enabled: Boolean(selectedZone?.id),
   });
+  const selectedZoneDNSSECQuery = useQuery({
+    queryKey: ['authoritative-dns', 'zone-dnssec', selectedZone?.id],
+    queryFn: () => getDNSZoneDNSSEC(selectedZone?.id ?? 0),
+    enabled: Boolean(selectedZone?.id),
+  });
   const delegationCheckQuery = useQuery({
     queryKey: ['authoritative-dns', 'delegation-check', selectedZone?.id],
     queryFn: () => checkDNSZoneDelegation(selectedZone?.id ?? 0),
@@ -1284,6 +1304,77 @@ export function AuthoritativeDNSPage() {
           queryKey: ['authoritative-dns', 'zones'],
         }),
       ]);
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const refreshDNSSECQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ['authoritative-dns', 'zone-dnssec'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['authoritative-dns', 'zones'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['authoritative-dns', 'observability'],
+      }),
+    ]);
+  };
+  const enableDNSSECMutation = useMutation({
+    mutationFn: ({
+      zoneId,
+      denialMode,
+      nsec3Iterations,
+    }: {
+      zoneId: number;
+      denialMode: DNSSECDenialMode;
+      nsec3Iterations: number;
+    }) =>
+      enableDNSZoneDNSSEC(zoneId, {
+        denial_mode: denialMode,
+        nsec3_iterations: nsec3Iterations,
+      }),
+    onSuccess: async () => {
+      setFeedback({
+        tone: 'success',
+        message: 'DNSSEC 已启用，请把 DS 记录配置到注册商。',
+      });
+      await refreshDNSSECQueries();
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const disableDNSSECMutation = useMutation({
+    mutationFn: disableDNSZoneDNSSEC,
+    onSuccess: async () => {
+      setFeedback({ tone: 'success', message: 'DNSSEC 已关闭。' });
+      await refreshDNSSECQueries();
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const rotateZSKMutation = useMutation({
+    mutationFn: rotateDNSZoneDNSSECZSK,
+    onSuccess: async () => {
+      setFeedback({ tone: 'success', message: 'ZSK 已轮换。' });
+      await refreshDNSSECQueries();
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+  const rotateKSKMutation = useMutation({
+    mutationFn: rotateDNSZoneDNSSECKSK,
+    onSuccess: async () => {
+      setFeedback({
+        tone: 'success',
+        message: 'KSK 已轮换，请更新注册商 DS 记录。',
+      });
+      await refreshDNSSECQueries();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -1907,6 +1998,19 @@ export function AuthoritativeDNSPage() {
                 : ''
             }
             zoneWorkerAssignmentSaving={updateZoneWorkersMutation.isPending}
+            dnssec={selectedZoneDNSSECQuery.data ?? null}
+            dnssecLoading={selectedZoneDNSSECQuery.isLoading}
+            dnssecError={
+              selectedZoneDNSSECQuery.isError
+                ? getErrorMessage(selectedZoneDNSSECQuery.error)
+                : ''
+            }
+            dnssecBusy={
+              enableDNSSECMutation.isPending ||
+              disableDNSSECMutation.isPending ||
+              rotateZSKMutation.isPending ||
+              rotateKSKMutation.isPending
+            }
             onCheckDelegation={() => {
               setFeedback(null);
               void delegationCheckQuery.refetch();
@@ -1915,6 +2019,50 @@ export function AuthoritativeDNSPage() {
               updateZoneWorkersMutation.mutate({
                 zoneId: zone.id,
                 workerIds,
+              })
+            }
+            onEnableDNSSEC={(zone, denialMode, nsec3Iterations) =>
+              enableDNSSECMutation.mutate({
+                zoneId: zone.id,
+                denialMode,
+                nsec3Iterations,
+              })
+            }
+            onDisableDNSSEC={(zone) =>
+              void confirmDialog({
+                title: '关闭 DNSSEC',
+                message:
+                  '关闭后该托管域名不再返回 DNSSEC 签名。请先确认注册商 DS 记录已经移除，否则外部验证解析可能失败。',
+                confirmLabel: '关闭 DNSSEC',
+                tone: 'danger',
+              }).then((confirmed) => {
+                if (confirmed) {
+                  disableDNSSECMutation.mutate(zone.id);
+                }
+              })
+            }
+            onRotateZSK={(zone) =>
+              void confirmDialog({
+                title: '轮换 ZSK',
+                message:
+                  'ZSK 轮换会更新在线签名密钥，响应端下一次拉取快照后生效。',
+                confirmLabel: '轮换 ZSK',
+              }).then((confirmed) => {
+                if (confirmed) {
+                  rotateZSKMutation.mutate(zone.id);
+                }
+              })
+            }
+            onRotateKSK={(zone) =>
+              void confirmDialog({
+                title: '轮换 KSK',
+                message:
+                  'KSK 轮换会生成新的 DS 记录。请准备在注册商同步更新 DS，避免验证链中断。',
+                confirmLabel: '轮换 KSK',
+              }).then((confirmed) => {
+                if (confirmed) {
+                  rotateKSKMutation.mutate(zone.id);
+                }
               })
             }
             onSelectZone={(zone) => setSelectedZoneId(zone.id)}
@@ -2116,6 +2264,10 @@ function ZonesPanel({
   zoneWorkerAssignmentLoading,
   zoneWorkerAssignmentError,
   zoneWorkerAssignmentSaving,
+  dnssec,
+  dnssecLoading,
+  dnssecError,
+  dnssecBusy,
   busy,
   onSelectZone,
   onCreateZone,
@@ -2123,6 +2275,10 @@ function ZonesPanel({
   onDeleteZone,
   onCheckDelegation,
   onSaveZoneWorkers,
+  onEnableDNSSEC,
+  onDisableDNSSEC,
+  onRotateZSK,
+  onRotateKSK,
   onCreateRecord,
   onEditRecord,
   onDeleteRecord,
@@ -2140,6 +2296,10 @@ function ZonesPanel({
   zoneWorkerAssignmentLoading: boolean;
   zoneWorkerAssignmentError: string;
   zoneWorkerAssignmentSaving: boolean;
+  dnssec: DNSSECStatus | null;
+  dnssecLoading: boolean;
+  dnssecError: string;
+  dnssecBusy: boolean;
   busy: boolean;
   onSelectZone: (zone: DNSZoneItem) => void;
   onCreateZone: () => void;
@@ -2147,6 +2307,14 @@ function ZonesPanel({
   onDeleteZone: (zone: DNSZoneItem) => void;
   onCheckDelegation: () => void;
   onSaveZoneWorkers: (zone: DNSZoneItem, workerIds: number[]) => void;
+  onEnableDNSSEC: (
+    zone: DNSZoneItem,
+    denialMode: DNSSECDenialMode,
+    nsec3Iterations: number,
+  ) => void;
+  onDisableDNSSEC: (zone: DNSZoneItem) => void;
+  onRotateZSK: (zone: DNSZoneItem) => void;
+  onRotateKSK: (zone: DNSZoneItem) => void;
   onCreateRecord: (zone: DNSZoneItem) => void;
   onEditRecord: (zone: DNSZoneItem, record: DNSRecordItem) => void;
   onDeleteRecord: (record: DNSRecordItem) => void;
@@ -2196,6 +2364,9 @@ function ZonesPanel({
                       label={zone.enabled ? '启用' : '停用'}
                       variant={zone.enabled ? 'success' : 'warning'}
                     />
+                    {zone.dnssec_enabled ? (
+                      <StatusBadge label="DNSSEC" variant="success" />
+                    ) : null}
                   </div>
                 </button>
               );
@@ -2214,6 +2385,16 @@ function ZonesPanel({
                       <StatusBadge
                         label={selectedZone.enabled ? '启用' : '停用'}
                         variant={selectedZone.enabled ? 'success' : 'warning'}
+                      />
+                      <StatusBadge
+                        label={
+                          selectedZone.dnssec_enabled
+                            ? `DNSSEC ${selectedZone.dnssec_denial_mode.toUpperCase()}`
+                            : 'DNSSEC 未启用'
+                        }
+                        variant={
+                          selectedZone.dnssec_enabled ? 'success' : 'warning'
+                        }
                       />
                     </div>
                     <p className="text-sm leading-6 text-[var(--foreground-secondary)]">
@@ -2279,6 +2460,20 @@ function ZonesPanel({
                 isLoading={delegationLoading}
                 error={delegationError}
                 onCheck={onCheckDelegation}
+              />
+
+              <DNSSECPanel
+                zone={selectedZone}
+                dnssec={dnssec}
+                isLoading={dnssecLoading}
+                isBusy={dnssecBusy}
+                error={dnssecError}
+                onEnable={(denialMode, nsec3Iterations) =>
+                  onEnableDNSSEC(selectedZone, denialMode, nsec3Iterations)
+                }
+                onDisable={() => onDisableDNSSEC(selectedZone)}
+                onRotateZSK={() => onRotateZSK(selectedZone)}
+                onRotateKSK={() => onRotateKSK(selectedZone)}
               />
 
               <ZoneWorkerAssignmentPanel
@@ -2474,6 +2669,262 @@ function DelegationCheckPanel({
           <p className="text-sm text-[var(--foreground-secondary)]">
             点击后检查注册商是否已经把 {zone.name} 指向当前 NS。
           </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DNSSECPanel({
+  zone,
+  dnssec,
+  isLoading,
+  isBusy,
+  error,
+  onEnable,
+  onDisable,
+  onRotateZSK,
+  onRotateKSK,
+}: {
+  zone: DNSZoneItem;
+  dnssec: DNSSECStatus | null;
+  isLoading: boolean;
+  isBusy: boolean;
+  error: string;
+  onEnable: (denialMode: DNSSECDenialMode, nsec3Iterations: number) => void;
+  onDisable: () => void;
+  onRotateZSK: () => void;
+  onRotateKSK: () => void;
+}) {
+  const [denialMode, setDenialMode] = useState<DNSSECDenialMode>(
+    zone.dnssec_denial_mode === 'nsec3' ? 'nsec3' : 'nsec',
+  );
+  const [nsec3Iterations, setNsec3Iterations] = useState(
+    String(zone.dnssec_nsec3_iterations ?? 0),
+  );
+
+  useEffect(() => {
+    setDenialMode(zone.dnssec_denial_mode === 'nsec3' ? 'nsec3' : 'nsec');
+    setNsec3Iterations(String(zone.dnssec_nsec3_iterations ?? 0));
+  }, [zone.id, zone.dnssec_denial_mode, zone.dnssec_nsec3_iterations]);
+
+  const visibleDNSSEC = dnssec?.zone_id === zone.id ? dnssec : null;
+  const enabled = Boolean(visibleDNSSEC?.enabled ?? zone.dnssec_enabled);
+  const encryptionConfigured = Boolean(
+    visibleDNSSEC?.key_encryption_configured,
+  );
+  const activeKeys =
+    visibleDNSSEC?.keys.filter((key) => key.status === 'active') ?? [];
+  const dsRecords = visibleDNSSEC?.ds_records ?? [];
+  const parsedIterations = Number.parseInt(nsec3Iterations, 10);
+  const canEnable =
+    encryptionConfigured &&
+    !isBusy &&
+    !Number.isNaN(parsedIterations) &&
+    parsedIterations >= 0 &&
+    parsedIterations <= 50;
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-base font-semibold text-[var(--foreground-primary)]">
+              DNSSEC
+            </h3>
+            <StatusBadge
+              label={enabled ? '已启用' : '未启用'}
+              variant={enabled ? 'success' : 'warning'}
+            />
+            <StatusBadge
+              label={encryptionConfigured ? '主密钥已配置' : '主密钥未配置'}
+              variant={encryptionConfigured ? 'success' : 'danger'}
+            />
+          </div>
+          <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
+            为该托管域名生成 DNSKEY/RRSIG 和否定证明，并导出注册商需要配置的 DS
+            记录。
+          </p>
+        </div>
+        {enabled ? (
+          <div className="flex flex-wrap gap-2">
+            <SecondaryButton
+              type="button"
+              disabled={isBusy}
+              onClick={onRotateZSK}
+            >
+              <RotateCw className="mr-2 h-4 w-4" aria-hidden="true" />
+              轮换 ZSK
+            </SecondaryButton>
+            <SecondaryButton
+              type="button"
+              disabled={isBusy}
+              onClick={onRotateKSK}
+            >
+              <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
+              轮换 KSK
+            </SecondaryButton>
+            <DangerButton type="button" disabled={isBusy} onClick={onDisable}>
+              关闭 DNSSEC
+            </DangerButton>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-4">
+        {isLoading ? (
+          <LoadingState />
+        ) : error ? (
+          <InlineMessage tone="danger" message={error} />
+        ) : !visibleDNSSEC ? (
+          <InlineMessage tone="warning" message="DNSSEC 状态暂未加载。" />
+        ) : !enabled ? (
+          <div className="space-y-4">
+            {!encryptionConfigured ? (
+              <InlineMessage
+                tone="danger"
+                message="Server 未配置 DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY，不能启用 DNSSEC。"
+              />
+            ) : null}
+            <div className="grid gap-4 md:grid-cols-3">
+              <ResourceField label="否定证明模式" container="div">
+                <ResourceSelect
+                  value={denialMode}
+                  disabled={isBusy}
+                  onChange={(event) =>
+                    setDenialMode(
+                      event.target.value === 'nsec3' ? 'nsec3' : 'nsec',
+                    )
+                  }
+                >
+                  <option value="nsec">NSEC</option>
+                  <option value="nsec3">NSEC3</option>
+                </ResourceSelect>
+              </ResourceField>
+              <ResourceField
+                label="NSEC3 iterations"
+                hint="NSEC 模式会自动使用 0。"
+              >
+                <ResourceInput
+                  type="number"
+                  min={0}
+                  max={50}
+                  value={nsec3Iterations}
+                  disabled={isBusy || denialMode !== 'nsec3'}
+                  onChange={(event) => setNsec3Iterations(event.target.value)}
+                />
+              </ResourceField>
+              <div className="flex items-end">
+                <PrimaryButton
+                  type="button"
+                  disabled={!canEnable}
+                  onClick={() =>
+                    onEnable(
+                      denialMode,
+                      denialMode === 'nsec3' ? parsedIterations : 0,
+                    )
+                  }
+                >
+                  <ShieldCheck className="mr-2 h-4 w-4" aria-hidden="true" />
+                  {isBusy ? '启用中...' : '启用 DNSSEC'}
+                </PrimaryButton>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+              <InfoTile
+                label="算法"
+                value={
+                  visibleDNSSEC.algorithm_name ||
+                  String(visibleDNSSEC.algorithm)
+                }
+              />
+              <InfoTile
+                label="否定证明"
+                value={visibleDNSSEC.denial_mode.toUpperCase()}
+                helper={
+                  visibleDNSSEC.denial_mode === 'nsec3'
+                    ? `salt ${visibleDNSSEC.nsec3_salt || '-'} · ${visibleDNSSEC.nsec3_iterations} iterations`
+                    : 'NSEC'
+                }
+              />
+              <InfoTile
+                label="签名有效期"
+                value={formatDurationSeconds(
+                  visibleDNSSEC.signature_validity_seconds,
+                )}
+              />
+              <InfoTile label="活动密钥" value={`${activeKeys.length} 个`} />
+            </div>
+
+            <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+                  注册商 DS 记录
+                </p>
+                {dsRecords.length > 0 ? (
+                  <SecondaryButton
+                    type="button"
+                    onClick={() =>
+                      void copyToClipboard(
+                        dsRecords.map((item) => item.record).join('\n'),
+                      )
+                    }
+                  >
+                    <Copy className="mr-2 h-4 w-4" aria-hidden="true" />
+                    复制 DS
+                  </SecondaryButton>
+                ) : null}
+              </div>
+              {dsRecords.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {dsRecords.map((record) => (
+                    <CodeBlock
+                      key={`${record.key_tag}-${record.digest_type}-${record.digest}`}
+                      className="break-all whitespace-pre-wrap"
+                    >
+                      {record.record}
+                    </CodeBlock>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-[var(--foreground-secondary)]">
+                  暂无 DS 记录。
+                </p>
+              )}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {visibleDNSSEC.keys.map((key) => (
+                <div
+                  key={key.id}
+                  className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-panel)] px-4 py-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge
+                      label={key.role.toUpperCase()}
+                      variant={key.role === 'ksk' ? 'info' : 'success'}
+                    />
+                    <StatusBadge
+                      label={key.status === 'active' ? '活动' : '已退役'}
+                      variant={key.status === 'active' ? 'success' : 'warning'}
+                    />
+                    <span className="text-sm font-semibold text-[var(--foreground-primary)]">
+                      Key Tag {key.key_tag}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs break-all text-[var(--foreground-secondary)]">
+                    {key.algorithm_name || key.algorithm} · flags {key.flags}
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--foreground-muted)]">
+                    创建时间：{formatDateTime(key.created_at)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </div>

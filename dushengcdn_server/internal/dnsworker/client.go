@@ -70,11 +70,12 @@ type HeartbeatWorkerInfo struct {
 }
 
 type WorkerSettings struct {
-	UpdateNow     bool   `json:"update_now"`
-	UninstallNow  bool   `json:"uninstall_now"`
-	UpdateRepo    string `json:"update_repo"`
-	UpdateChannel string `json:"update_channel"`
-	UpdateTag     string `json:"update_tag"`
+	UpdateNow     bool         `json:"update_now"`
+	UninstallNow  bool         `json:"uninstall_now"`
+	UpdateRepo    string       `json:"update_repo"`
+	UpdateChannel string       `json:"update_channel"`
+	UpdateTag     string       `json:"update_tag"`
+	WorkerPolicy  WorkerPolicy `json:"worker_policy"`
 }
 
 type QueryRollupPayload struct {

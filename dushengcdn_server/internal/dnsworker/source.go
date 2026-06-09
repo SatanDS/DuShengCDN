@@ -4,12 +4,14 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/miekg/dns"
 	"github.com/oschwald/maxminddb-golang"
 )
 
 type SourceResolver struct {
+	mu                       sync.RWMutex
 	reader                   *maxminddb.Reader
 	asnReader                *maxminddb.Reader
 	databasePath             string
@@ -63,10 +65,7 @@ type geoRecord struct {
 
 func WithECS(enabled bool, ipv4Prefix int, ipv6Prefix int) SourceResolverOption {
 	return func(r *SourceResolver) {
-		r.ecsConfigured = true
-		r.ecsEnabled = enabled
-		r.ecsIPv4Prefix = normalizePrefix(ipv4Prefix, 32, DefaultECSIPv4Prefix)
-		r.ecsIPv6Prefix = normalizePrefix(ipv6Prefix, 128, DefaultECSIPv6Prefix)
+		r.ApplyECSPolicy(enabled, ipv4Prefix, ipv6Prefix)
 	}
 }
 
@@ -168,7 +167,8 @@ func (r *SourceResolver) Status() SourceResolverStatus {
 }
 
 func (r *SourceResolver) Resolve(request *dns.Msg, remoteAddr net.Addr) SourceContext {
-	sourceIP := clientSubnetIPWithPolicy(request, ecsEnabled(r), ecsIPv4Prefix(r), ecsIPv6Prefix(r))
+	ecsEnabled, ecsIPv4Prefix, ecsIPv6Prefix := sourceResolverECSPolicy(r)
+	sourceIP := clientSubnetIPWithPolicy(request, ecsEnabled, ecsIPv4Prefix, ecsIPv6Prefix)
 	if sourceIP == nil {
 		sourceIP = remoteIP(remoteAddr)
 	}
@@ -203,6 +203,32 @@ func (r *SourceResolver) Resolve(request *dns.Msg, remoteAddr net.Addr) SourceCo
 	}
 	ctx.ScopeKey = sourceScopeKey(ctx)
 	return ctx
+}
+
+func (r *SourceResolver) ApplyECSPolicy(enabled bool, ipv4Prefix int, ipv6Prefix int) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.ecsConfigured = true
+	r.ecsEnabled = enabled
+	r.ecsIPv4Prefix = normalizePrefix(ipv4Prefix, 32, DefaultECSIPv4Prefix)
+	r.ecsIPv6Prefix = normalizePrefix(ipv6Prefix, 128, DefaultECSIPv6Prefix)
+	r.mu.Unlock()
+}
+
+func sourceResolverECSPolicy(r *SourceResolver) (bool, int, int) {
+	if r == nil {
+		return true, DefaultECSIPv4Prefix, DefaultECSIPv6Prefix
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ecsConfigured {
+		return true, DefaultECSIPv4Prefix, DefaultECSIPv6Prefix
+	}
+	return r.ecsEnabled,
+		normalizePrefix(r.ecsIPv4Prefix, 32, DefaultECSIPv4Prefix),
+		normalizePrefix(r.ecsIPv6Prefix, 128, DefaultECSIPv6Prefix)
 }
 
 func (r *SourceResolver) detectMMDBCapabilities(reader *maxminddb.Reader, asnOnly bool) {

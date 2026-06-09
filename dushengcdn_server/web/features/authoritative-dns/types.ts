@@ -20,11 +20,62 @@ export interface DNSZoneItem {
   name_servers: string[];
   default_ttl: number;
   serial: number;
+  dnssec_enabled: boolean;
+  dnssec_denial_mode: DNSSECDenialMode;
+  dnssec_nsec3_salt?: string;
+  dnssec_nsec3_iterations: number;
+  dnssec_signature_validity: number;
   enabled: boolean;
   record_count: number;
   records?: DNSRecordItem[];
   created_at: string;
   updated_at: string;
+}
+
+export type DNSSECDenialMode = 'nsec' | 'nsec3';
+
+export interface DNSSECStatus {
+  zone_id: number;
+  enabled: boolean;
+  denial_mode: DNSSECDenialMode;
+  nsec3_salt?: string;
+  nsec3_iterations: number;
+  signature_validity_seconds: number;
+  algorithm: number;
+  algorithm_name: string;
+  key_encryption_configured: boolean;
+  keys: DNSSECKey[];
+  ds_records: DNSSECDSRecord[];
+}
+
+export interface DNSSECKey {
+  id: number;
+  zone_id: number;
+  role: 'ksk' | 'zsk' | string;
+  flags: number;
+  algorithm: number;
+  algorithm_name: string;
+  public_key: string;
+  key_tag: number;
+  ds_digest_sha256: string;
+  status: 'active' | 'retired' | string;
+  activated_at?: string | null;
+  retired_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DNSSECDSRecord {
+  key_tag: number;
+  algorithm: number;
+  digest_type: number;
+  digest: string;
+  record: string;
+}
+
+export interface DNSSECEnablePayload {
+  denial_mode: DNSSECDenialMode;
+  nsec3_iterations?: number;
 }
 
 export interface DNSRecordItem {

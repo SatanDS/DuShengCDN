@@ -151,6 +151,32 @@ func validateAuthoritativeDNSOption(key string, value string) error {
 			return fmt.Errorf("%s 必须为大于 0 的整数秒", key)
 		}
 		return nil
+	case "AuthoritativeDNSWorkerQueryRateLimit", "AuthoritativeDNSWorkerResponseRateLimit":
+		intValue, err := strconv.Atoi(trimmed)
+		if err != nil || intValue < 0 {
+			return fmt.Errorf("%s 必须为大于或等于 0 的整数，0 表示关闭", key)
+		}
+		return nil
+	case "AuthoritativeDNSWorkerUDPResponseSize":
+		intValue, err := strconv.Atoi(trimmed)
+		if err != nil || intValue < 512 || intValue > 65535 {
+			return fmt.Errorf("%s 必须为 512 到 65535 之间的整数字节", key)
+		}
+		return nil
+	case "AuthoritativeDNSWorkerECSEnabled":
+		return validateBooleanOption(key, trimmed)
+	case "AuthoritativeDNSWorkerECSIPv4Prefix":
+		intValue, err := strconv.Atoi(trimmed)
+		if err != nil || intValue < 0 || intValue > 32 {
+			return fmt.Errorf("%s 必须为 0 到 32 之间的整数", key)
+		}
+		return nil
+	case "AuthoritativeDNSWorkerECSIPv6Prefix":
+		intValue, err := strconv.Atoi(trimmed)
+		if err != nil || intValue < 0 || intValue > 128 {
+			return fmt.Errorf("%s 必须为 0 到 128 之间的整数", key)
+		}
+		return nil
 	case "GSLBMetricFreshnessSeconds":
 		intValue, err := strconv.Atoi(trimmed)
 		if err != nil || intValue <= 0 {

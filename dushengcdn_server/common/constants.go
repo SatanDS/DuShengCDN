@@ -115,6 +115,12 @@ var AuthoritativeDNSEnabled = false
 var AuthoritativeDNSListenAddr = ":53"
 var AuthoritativeDNSDefaultTTL = 30
 var AuthoritativeDNSSnapshotMaxAge = 300
+var AuthoritativeDNSWorkerQueryRateLimit = 200
+var AuthoritativeDNSWorkerResponseRateLimit = 50
+var AuthoritativeDNSWorkerUDPResponseSize = 1232
+var AuthoritativeDNSWorkerECSEnabled = true
+var AuthoritativeDNSWorkerECSIPv4Prefix = 24
+var AuthoritativeDNSWorkerECSIPv6Prefix = 56
 var GSLBMetricFreshnessSeconds = 120
 var GSLBProbeSchedulingEnabled = false
 

@@ -266,6 +266,7 @@ func checksumSnapshot(snapshot *Snapshot) (string, error) {
 
 func normalizeSnapshot(input *Snapshot) *Snapshot {
 	out := *input
+	out.WorkerPolicy = normalizeWorkerPolicy(out.WorkerPolicy)
 	out.Zones = append([]SnapshotZone(nil), input.Zones...)
 	out.Routes = append([]SnapshotRoute(nil), input.Routes...)
 	out.Nodes = append([]SnapshotNode(nil), input.Nodes...)
@@ -329,6 +330,36 @@ func normalizeSnapshot(input *Snapshot) *Snapshot {
 	}
 	out.SchedulingStates = states
 	return &out
+}
+
+func normalizeWorkerPolicy(policy WorkerPolicy) WorkerPolicy {
+	if policy.QueryRateLimit < 0 {
+		policy.QueryRateLimit = 0
+	}
+	if policy.QueryRateLimit == 0 && policy.ResponseRateLimit == 0 && policy.UDPResponseSize == 0 && policy.ECSIPv4Prefix == 0 && policy.ECSIPv6Prefix == 0 && !policy.ECSEnabled {
+		policy.QueryRateLimit = DefaultQueryRateLimit
+		policy.ResponseRateLimit = DefaultResponseRateLimit
+		policy.UDPResponseSize = DefaultUDPResponseSize
+		policy.ECSEnabled = true
+		policy.ECSIPv4Prefix = DefaultECSIPv4Prefix
+		policy.ECSIPv6Prefix = DefaultECSIPv6Prefix
+		return policy
+	}
+	if policy.ResponseRateLimit < 0 {
+		policy.ResponseRateLimit = 0
+	}
+	if policy.UDPResponseSize <= 0 {
+		policy.UDPResponseSize = DefaultUDPResponseSize
+	}
+	if policy.UDPResponseSize < 512 {
+		policy.UDPResponseSize = 512
+	}
+	if policy.UDPResponseSize > 65535 {
+		policy.UDPResponseSize = 65535
+	}
+	policy.ECSIPv4Prefix = normalizePrefix(policy.ECSIPv4Prefix, 32, DefaultECSIPv4Prefix)
+	policy.ECSIPv6Prefix = normalizePrefix(policy.ECSIPv6Prefix, 128, DefaultECSIPv6Prefix)
+	return policy
 }
 
 func normalizeSnapshotRuntimeTimes(snapshot *Snapshot, now time.Time) {

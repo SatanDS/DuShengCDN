@@ -1339,6 +1339,43 @@ func TestUDPResponseTruncationUsesEDNSAndServerLimit(t *testing.T) {
 	}
 }
 
+func TestApplyWorkerPolicyUpdatesRateLimitsAndUDPSize(t *testing.T) {
+	server := testServerWithProtection(t, largeTXTRecordSnapshot(), DefaultSnapshotMaxAge, 0, 0, 4096)
+	remote := &net.UDPAddr{IP: net.ParseIP("192.0.2.58"), Port: 53000}
+
+	for i := 0; i < 2; i++ {
+		response := server.Resolve(testQuery("www.example.com", dns.TypeA, ""), remote)
+		if response.Rcode != dns.RcodeSuccess {
+			t.Fatalf("expected query %d before policy update to pass, got %s", i+1, dns.RcodeToString[response.Rcode])
+		}
+	}
+
+	server.ApplyWorkerPolicy(WorkerPolicy{
+		QueryRateLimit:    1,
+		ResponseRateLimit: 1,
+		UDPResponseSize:   700,
+		ECSEnabled:        true,
+		ECSIPv4Prefix:     24,
+		ECSIPv6Prefix:     56,
+	})
+	response := server.Resolve(testQuery("www.example.com", dns.TypeA, ""), remote)
+	if response.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected first query after policy update to pass, got %s", dns.RcodeToString[response.Rcode])
+	}
+	response = server.Resolve(testQuery("www.example.com", dns.TypeA, ""), remote)
+	if response.Rcode != dns.RcodeRefused {
+		t.Fatalf("expected policy query limit REFUSED, got %s", dns.RcodeToString[response.Rcode])
+	}
+
+	query := testQuery("large.example.com", dns.TypeTXT, "")
+	query.SetEdns0(4096, false)
+	largeResponse := server.Resolve(query, &net.UDPAddr{IP: net.ParseIP("192.0.2.59"), Port: 53000})
+	truncated := server.truncateUDPResponse(query, largeResponse)
+	if !truncated.Truncated || truncated.Len() > 700 {
+		t.Fatalf("expected policy UDP size to truncate to 700, truncated=%v len=%d", truncated.Truncated, truncated.Len())
+	}
+}
+
 func testServer(t *testing.T, snapshot *Snapshot) *DNSServer {
 	t.Helper()
 	return testServerWithMaxAge(t, snapshot, DefaultSnapshotMaxAge)

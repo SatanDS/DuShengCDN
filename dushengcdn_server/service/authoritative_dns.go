@@ -128,11 +128,12 @@ type DNSWorkerUpdateResultInput struct {
 }
 
 type DNSWorkerSettings struct {
-	UpdateNow     bool   `json:"update_now"`
-	UninstallNow  bool   `json:"uninstall_now"`
-	UpdateRepo    string `json:"update_repo"`
-	UpdateChannel string `json:"update_channel"`
-	UpdateTag     string `json:"update_tag"`
+	UpdateNow     bool                   `json:"update_now"`
+	UninstallNow  bool                   `json:"uninstall_now"`
+	UpdateRepo    string                 `json:"update_repo"`
+	UpdateChannel string                 `json:"update_channel"`
+	UpdateTag     string                 `json:"update_tag"`
+	WorkerPolicy  dnsworker.WorkerPolicy `json:"worker_policy"`
 }
 
 type DNSQueryRollupInput struct {
@@ -727,6 +728,7 @@ type AuthoritativeDNSSnapshot struct {
 	SnapshotVersion            string                                    `json:"snapshot_version"`
 	GeneratedAt                time.Time                                 `json:"generated_at"`
 	GSLBProbeSchedulingEnabled bool                                      `json:"gslb_probe_scheduling_enabled"`
+	WorkerPolicy               dnsworker.WorkerPolicy                    `json:"worker_policy"`
 	Zones                      []AuthoritativeDNSSnapshotZone            `json:"zones"`
 	Routes                     []AuthoritativeDNSSnapshotRoute           `json:"routes"`
 	Nodes                      []AuthoritativeDNSSnapshotNode            `json:"nodes"`
@@ -1903,6 +1905,7 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 			UpdateRepo:    common.ServerUpdateRepo,
 			UpdateChannel: updateChannel.String(),
 			UpdateTag:     updateTag,
+			WorkerPolicy:  authoritativeDNSWorkerPolicy(),
 		},
 	}, nil
 }
@@ -2008,6 +2011,33 @@ func applyDNSWorkerHeartbeatUpdateAck(worker *model.DNSWorker, input DNSWorkerHe
 func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnapshot, error) {
 	return getAuthoritativeDNSSnapshotWithQueries(worker, defaultGSLBDNSSchedulingDataQueries)
 }
+func authoritativeDNSWorkerPolicy() dnsworker.WorkerPolicy {
+	return dnsworker.WorkerPolicy{
+		QueryRateLimit:    nonNegativeInt(common.AuthoritativeDNSWorkerQueryRateLimit),
+		ResponseRateLimit: nonNegativeInt(common.AuthoritativeDNSWorkerResponseRateLimit),
+		UDPResponseSize:   clampInt(common.AuthoritativeDNSWorkerUDPResponseSize, 512, 65535),
+		ECSEnabled:        common.AuthoritativeDNSWorkerECSEnabled,
+		ECSIPv4Prefix:     clampInt(common.AuthoritativeDNSWorkerECSIPv4Prefix, 0, 32),
+		ECSIPv6Prefix:     clampInt(common.AuthoritativeDNSWorkerECSIPv6Prefix, 0, 128),
+	}
+}
+
+func nonNegativeInt(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func clampInt(value int, minValue int, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
 
 func getAuthoritativeDNSSnapshotWithQueries(worker *model.DNSWorker, schedulingQueries gslbDNSSchedulingDataQueries) (*AuthoritativeDNSSnapshot, error) {
 	if err := EnsureCommercialFeatureEnabled(CommercialFeatureAuthoritativeDNS); err != nil {
@@ -2035,6 +2065,7 @@ func getAuthoritativeDNSSnapshotWithQueries(worker *model.DNSWorker, schedulingQ
 	snapshot := &AuthoritativeDNSSnapshot{
 		GeneratedAt:                time.Now().UTC(),
 		GSLBProbeSchedulingEnabled: common.GSLBProbeSchedulingEnabled,
+		WorkerPolicy:               authoritativeDNSWorkerPolicy(),
 		Zones:                      zones,
 		Routes:                     routes,
 		Nodes:                      nodes,
@@ -4016,6 +4047,7 @@ func convertAuthoritativeSnapshotToWorker(snapshot *AuthoritativeDNSSnapshot) *d
 		SnapshotVersion:            snapshot.SnapshotVersion,
 		GeneratedAt:                snapshot.GeneratedAt,
 		GSLBProbeSchedulingEnabled: snapshot.GSLBProbeSchedulingEnabled,
+		WorkerPolicy:               snapshot.WorkerPolicy,
 		Zones:                      make([]dnsworker.SnapshotZone, 0, len(snapshot.Zones)),
 		Routes:                     make([]dnsworker.SnapshotRoute, 0, len(snapshot.Routes)),
 		Nodes:                      make([]dnsworker.SnapshotNode, 0, len(snapshot.Nodes)),
@@ -4165,11 +4197,13 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 func authoritativeDNSSnapshotVersion(snapshot *AuthoritativeDNSSnapshot) (string, error) {
 	payload := struct {
 		GSLBProbeSchedulingEnabled bool                                   `json:"gslb_probe_scheduling_enabled"`
+		WorkerPolicy               dnsworker.WorkerPolicy                 `json:"worker_policy"`
 		Zones                      []AuthoritativeDNSSnapshotZone         `json:"zones"`
 		Routes                     []authoritativeDNSSnapshotVersionRoute `json:"routes"`
 		Nodes                      []authoritativeDNSSnapshotVersionNode  `json:"nodes"`
 	}{
 		GSLBProbeSchedulingEnabled: snapshot.GSLBProbeSchedulingEnabled,
+		WorkerPolicy:               snapshot.WorkerPolicy,
 		Zones:                      snapshot.Zones,
 		Routes:                     authoritativeDNSSnapshotVersionRoutes(snapshot.Routes),
 		Nodes:                      authoritativeDNSSnapshotVersionNodes(snapshot.Nodes),

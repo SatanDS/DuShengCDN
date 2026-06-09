@@ -30,8 +30,8 @@ type rateLimitBucket struct {
 }
 
 func NewQueryRateLimiter(limit int) *QueryRateLimiter {
-	if limit <= 0 {
-		return nil
+	if limit < 0 {
+		limit = 0
 	}
 	return &QueryRateLimiter{
 		limit:   limit,
@@ -41,9 +41,24 @@ func NewQueryRateLimiter(limit int) *QueryRateLimiter {
 	}
 }
 
+func (l *QueryRateLimiter) SetLimit(limit int) {
+	if l == nil {
+		return
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	l.mu.Lock()
+	l.limit = limit
+	if limit == 0 {
+		l.buckets = map[string]rateLimitBucket{}
+	}
+	l.mu.Unlock()
+}
+
 func NewResponseRateLimiter(limit int) *ResponseRateLimiter {
-	if limit <= 0 {
-		return nil
+	if limit < 0 {
+		limit = 0
 	}
 	return &ResponseRateLimiter{
 		limit:   limit,
@@ -51,6 +66,21 @@ func NewResponseRateLimiter(limit int) *ResponseRateLimiter {
 		now:     time.Now,
 		buckets: map[string]rateLimitBucket{},
 	}
+}
+
+func (l *ResponseRateLimiter) SetLimit(limit int) {
+	if l == nil {
+		return
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	l.mu.Lock()
+	l.limit = limit
+	if limit == 0 {
+		l.buckets = map[string]rateLimitBucket{}
+	}
+	l.mu.Unlock()
 }
 
 func (l *QueryRateLimiter) Allow(remoteAddr net.Addr) bool {
@@ -65,6 +95,9 @@ func (l *QueryRateLimiter) Allow(remoteAddr net.Addr) bool {
 	windowStart := now.Truncate(l.window)
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.limit <= 0 {
+		return true
+	}
 	if len(l.buckets) > 4096 {
 		l.prune(now)
 	}
@@ -95,6 +128,9 @@ func (l *ResponseRateLimiter) Allow(remoteAddr net.Addr, qname string, rcode str
 	windowStart := now.Truncate(l.window)
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.limit <= 0 {
+		return true
+	}
 	if len(l.buckets) > 8192 {
 		l.prune(now)
 	}
