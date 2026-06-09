@@ -783,6 +783,7 @@ install_openresty_from_source() {
       --prefix="$prefix" \
       --with-pcre-jit \
       --with-http_ssl_module \
+      --with-http_stub_status_module \
       --with-http_v2_module \
       --with-stream \
       --with-stream_ssl_module \
