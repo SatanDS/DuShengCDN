@@ -26,7 +26,7 @@ export function StatusBadge({
   disabled = false,
 }: StatusBadgeProps) {
   const badgeClassName = cn(
-    'inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium tracking-wide',
+    'inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium tracking-wide',
     variantClasses[variant],
     onClick
       ? 'cursor-pointer transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-60'
