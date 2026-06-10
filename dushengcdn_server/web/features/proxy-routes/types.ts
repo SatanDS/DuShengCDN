@@ -116,6 +116,7 @@ export interface ProxyRouteItem {
   limit_conn_per_server: number;
   limit_conn_per_ip: number;
   limit_rate: string;
+  proxy_buffering_mode: 'default' | 'off';
   cache_enabled: boolean;
   cache_policy: string;
   cache_rules: string;
@@ -185,6 +186,7 @@ export interface ProxyRouteMutationPayload {
   limit_conn_per_server?: number;
   limit_conn_per_ip?: number;
   limit_rate?: string;
+  proxy_buffering_mode?: 'default' | 'off';
   cache_enabled: boolean;
   cache_policy: string;
   cache_rules: string[];

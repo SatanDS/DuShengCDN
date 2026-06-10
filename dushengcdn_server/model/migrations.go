@@ -2462,6 +2462,22 @@ func validateDatabaseSchemaV43(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func migrateV44(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
+	return applyCurrentSchema(db, backend)
+}
+
+func validateDatabaseSchemaV44(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV43(db, backend); err != nil {
+		return err
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "proxy_buffering_mode") {
+		return errors.New("column proxy_routes.proxy_buffering_mode is missing")
+	}
+	_ = backend
+	return nil
+}
+
 func backfillDNSWorkerTokenHashes(db *gorm.DB) error {
 	if db == nil || !db.Migrator().HasTable(&DNSWorker{}) {
 		return nil
@@ -2636,6 +2652,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 40, toVersion: 41, migrate: migrateV41, validate: validateDatabaseSchemaV41},
 		{fromVersion: 41, toVersion: 42, migrate: migrateV42, validate: validateDatabaseSchemaV42},
 		{fromVersion: 42, toVersion: 43, migrate: migrateV43, validate: validateDatabaseSchemaV43},
+		{fromVersion: 43, toVersion: 44, migrate: migrateV44, validate: validateDatabaseSchemaV44},
 	}
 }
 
@@ -2683,7 +2700,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV43(db, backend)
+		return validateDatabaseSchemaV44(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2699,7 +2716,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV43(db, backend)
+	return validateDatabaseSchemaV44(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2730,7 +2747,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV43(db, backend); err != nil {
+	if err := validateDatabaseSchemaV44(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

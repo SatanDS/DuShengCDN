@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"gorm.io/gorm/clause"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ReleaseResult struct {
@@ -85,6 +85,7 @@ type snapshotRoute struct {
 	LimitConnPerServer         int                           `json:"limit_conn_per_server,omitempty"`
 	LimitConnPerIP             int                           `json:"limit_conn_per_ip,omitempty"`
 	LimitRate                  string                        `json:"limit_rate,omitempty"`
+	ProxyBufferingMode         string                        `json:"proxy_buffering_mode,omitempty"`
 	CacheEnabled               bool                          `json:"cache_enabled"`
 	CachePolicy                string                        `json:"cache_policy,omitempty"`
 	CacheRules                 []string                      `json:"cache_rules,omitempty"`
@@ -116,6 +117,10 @@ type routeLimitConfig struct {
 	LimitConnPerServer int
 	LimitConnPerIP     int
 	LimitRate          string
+}
+
+type routeProxyBufferingConfig struct {
+	Mode string
 }
 
 type routeRegionRestrictionConfig struct {
@@ -907,6 +912,7 @@ func buildSnapshotRoutesWithContext(
 			LimitConnPerServer:         route.LimitConnPerServer,
 			LimitConnPerIP:             route.LimitConnPerIP,
 			LimitRate:                  route.LimitRate,
+			ProxyBufferingMode:         normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
 			CacheEnabled:               route.CacheEnabled,
 			CachePolicy:                route.CachePolicy,
 			CacheRules:                 cacheRules,
@@ -1031,6 +1037,7 @@ func normalizeSnapshotRoutes(routes []snapshotRoute) []snapshotRoute {
 		if err == nil {
 			routes[index].LimitRate = normalizedLimitRate
 		}
+		routes[index].ProxyBufferingMode = normalizeProxyRouteProxyBufferingMode(routes[index].ProxyBufferingMode)
 		if routes[index].PoWEnabled {
 			raw, err := json.Marshal(routes[index].PoWConfig)
 			if err == nil {
@@ -1111,7 +1118,7 @@ func flattenSnapshotRoutesByDomain(routes []snapshotRoute) map[string]snapshotRo
 }
 
 func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
-	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || normalizeNodePoolName(left.NodePool) != normalizeNodePoolName(right.NodePool) || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPassword != right.BasicAuthPassword || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
+	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || normalizeNodePoolName(left.NodePool) != normalizeNodePoolName(right.NodePool) || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || normalizeProxyRouteProxyBufferingMode(left.ProxyBufferingMode) != normalizeProxyRouteProxyBufferingMode(right.ProxyBufferingMode) || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPassword != right.BasicAuthPassword || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
 		return false
 	}
 	if len(left.Domains) != len(right.Domains) {
@@ -1555,6 +1562,9 @@ func renderRouteConfigWithContextAndQueries(
 			LimitConnPerIP:     route.LimitConnPerIP,
 			LimitRate:          route.LimitRate,
 		}
+		proxyBufferingConfig := routeProxyBufferingConfig{
+			Mode: normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
+		}
 		regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
 		if err != nil {
 			return "", nil, fmt.Errorf("路由 %s 地区限制配置无效", route.Domain)
@@ -1578,7 +1588,7 @@ func renderRouteConfigWithContextAndQueries(
 			builder.WriteString(renderNamedUpstreamBlock(upstreamConfig))
 		}
 		if !route.EnableHTTPS {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
 			continue
 		}
 		certIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
@@ -1639,7 +1649,7 @@ func renderRouteConfigWithContextAndQueries(
 
 		if route.RedirectHTTP {
 			if len(httpOnlyDomains) > 0 {
-				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
 			}
 			for _, certID := range certIDs {
 				assignedDomains := domainsByCertID[certID]
@@ -1649,14 +1659,14 @@ func renderRouteConfigWithContextAndQueries(
 				builder.WriteString(renderHTTPRedirectServer(renderServerNames(assignedDomains), regionConfig, wafConfig, ccConfig))
 			}
 		} else {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
 		}
 		for _, certID := range certIDs {
 			assignedDomains := domainsByCertID[certID]
 			if len(assignedDomains) == 0 {
 				continue
 			}
-			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), route.OriginURL, route.OriginHost, certID, customHeaders, cacheConfig, limitConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), route.OriginURL, route.OriginHost, certID, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
 		}
 	}
 	return builder.String(), dedupeSupportFiles(supportFiles), nil
@@ -2020,18 +2030,18 @@ func nextVersionNumber(now time.Time) (string, error) {
 	return fmt.Sprintf("%s-%03d", prefix, sequence+1), nil
 }
 
-func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
+	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
 	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s\n    return 301 https://$host$request_uri;\n}\n\n", serverNames, renderRegionRestrictionBlock(regionConfig, wafConfig, ccConfig))
 }
 
-func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
+func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
 	certPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateCertFileName(certificateID))
 	keyPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateKeyFileName(certificateID))
-	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderServerNames(domains []string) string {
@@ -2199,6 +2209,13 @@ func renderRouteCacheBlock(cacheConfig routeCacheConfig, cfg openRestyConfigSnap
 	builder.WriteString("        proxy_cache_bypass $dushengcdn_skip_cache;\n")
 	builder.WriteString("        proxy_no_cache $dushengcdn_skip_cache;\n")
 	return builder.String()
+}
+
+func renderRouteProxyBufferingBlock(config routeProxyBufferingConfig) string {
+	if normalizeProxyRouteProxyBufferingMode(config.Mode) != proxyRouteProxyBufferingModeOff {
+		return ""
+	}
+	return "        proxy_buffering off;\n        proxy_request_buffering off;\n        proxy_max_temp_file_size 0;\n"
 }
 
 func renderRouteLimitBlock(limitConfig routeLimitConfig) string {

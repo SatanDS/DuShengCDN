@@ -357,6 +357,7 @@ export function ProxyRouteCreateDrawer({
         limit_conn_per_server: 0,
         limit_conn_per_ip: 0,
         limit_rate: '',
+        proxy_buffering_mode: 'default',
         cache_enabled: false,
         cache_policy: 'url',
         cache_rules: [],

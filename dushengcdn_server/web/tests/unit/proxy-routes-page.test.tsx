@@ -60,6 +60,7 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
     limit_conn_per_server: 120,
     limit_conn_per_ip: 12,
     limit_rate: '512k',
+    proxy_buffering_mode: 'default',
     cache_enabled: true,
     cache_policy: 'path_prefix',
     cache_rules: JSON.stringify(['/assets']),
@@ -1440,6 +1441,7 @@ describe('Proxy route website pages', () => {
     });
     await user.selectOptions(screen.getByLabelText('节点池选择'), 'edge-hk');
     expect(screen.getByLabelText('节点池选择')).toHaveValue('edge-hk');
+    await user.selectOptions(screen.getByLabelText('代理缓冲模式'), 'off');
     await waitFor(() => {
       expect(screen.getByLabelText('池内节点')).toHaveValue('node-hk');
     });
@@ -1460,6 +1462,7 @@ describe('Proxy route website pages', () => {
     expect(updateRequests[0]).toMatchObject({
       node_pool: 'edge-hk',
       origin_url: 'https://origin-a.internal:443',
+      proxy_buffering_mode: 'off',
       upstreams: ['https://origin-b.internal:443'],
     });
   });

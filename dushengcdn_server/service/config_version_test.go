@@ -502,6 +502,42 @@ func TestRenderRouteConfigBatchesSharedCertificateLoading(t *testing.T) {
 	}
 }
 
+func TestRenderRouteConfigDisablesProxyBufferingForStreamingRoutes(t *testing.T) {
+	routeConfig, _, err := renderRouteConfig(
+		[]*model.ProxyRoute{
+			{
+				SiteName:                   "emby",
+				Domain:                     "emby.example.com",
+				Domains:                    mustJSON(t, []string{"emby.example.com"}),
+				OriginURL:                  "https://origin.internal",
+				Upstreams:                  mustJSON(t, []string{"https://origin.internal"}),
+				Enabled:                    true,
+				CustomHeaders:              "[]",
+				CacheRules:                 "[]",
+				ProxyBufferingMode:         proxyRouteProxyBufferingModeOff,
+				RegionRestrictionMode:      proxyRouteRegionModeBlock,
+				RegionRestrictionCountries: "[]",
+				WAFMode:                    proxyRouteWAFModeBlock,
+				CCMode:                     proxyRouteCCModeBlock,
+			},
+		},
+		buildOpenRestyConfigSnapshot(),
+	)
+	if err != nil {
+		t.Fatalf("renderRouteConfig failed: %v", err)
+	}
+
+	for _, expected := range []string{
+		"proxy_buffering off;",
+		"proxy_request_buffering off;",
+		"proxy_max_temp_file_size 0;",
+	} {
+		if !strings.Contains(routeConfig, expected) {
+			t.Fatalf("expected route config to contain %q, got %s", expected, routeConfig)
+		}
+	}
+}
+
 func TestBuildSnapshotRoutesBatchesLegacyCertificateInference(t *testing.T) {
 	setupServiceTestDB(t)
 

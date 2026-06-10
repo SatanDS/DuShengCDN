@@ -33,6 +33,8 @@ const (
 	proxyRouteCCModeLog                  = "log"
 	proxyRouteCCModeBlock                = "block"
 	proxyRouteCCModePoW                  = "pow"
+	proxyRouteProxyBufferingModeDefault  = "default"
+	proxyRouteProxyBufferingModeOff      = "off"
 	DNSProviderModeCloudflare            = "cloudflare"
 	DNSProviderModeAuthoritative         = "authoritative"
 )
@@ -64,6 +66,7 @@ type ProxyRouteInput struct {
 	LimitConnPerServer         int                           `json:"limit_conn_per_server"`
 	LimitConnPerIP             int                           `json:"limit_conn_per_ip"`
 	LimitRate                  string                        `json:"limit_rate"`
+	ProxyBufferingMode         string                        `json:"proxy_buffering_mode"`
 	CacheEnabled               bool                          `json:"cache_enabled"`
 	CachePolicy                string                        `json:"cache_policy"`
 	CacheRules                 []string                      `json:"cache_rules"`
@@ -125,6 +128,7 @@ type ProxyRouteView struct {
 	LimitConnPerServer         int                           `json:"limit_conn_per_server"`
 	LimitConnPerIP             int                           `json:"limit_conn_per_ip"`
 	LimitRate                  string                        `json:"limit_rate"`
+	ProxyBufferingMode         string                        `json:"proxy_buffering_mode"`
 	CacheEnabled               bool                          `json:"cache_enabled"`
 	CachePolicy                string                        `json:"cache_policy"`
 	CacheRules                 string                        `json:"cache_rules"`
@@ -291,6 +295,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
+	proxyBufferingMode := normalizeProxyRouteProxyBufferingMode(input.ProxyBufferingMode)
 
 	cacheRulesJSON, err := json.Marshal(cacheRules)
 	if err != nil {
@@ -486,6 +491,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.LimitConnPerServer = limitConnPerServer
 	route.LimitConnPerIP = limitConnPerIP
 	route.LimitRate = limitRate
+	route.ProxyBufferingMode = proxyBufferingMode
 	route.CacheEnabled = input.CacheEnabled
 	route.CachePolicy = normalizeCachePolicy(input.CacheEnabled, cachePolicy)
 	route.CacheRules = string(cacheRulesJSON)
@@ -831,6 +837,7 @@ func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRoute
 		LimitConnPerServer:         route.LimitConnPerServer,
 		LimitConnPerIP:             route.LimitConnPerIP,
 		LimitRate:                  route.LimitRate,
+		ProxyBufferingMode:         normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
 		CacheEnabled:               route.CacheEnabled,
 		CachePolicy:                route.CachePolicy,
 		CacheRules:                 route.CacheRules,
@@ -1693,6 +1700,15 @@ func normalizeProxyRouteLimitRate(raw string) (string, error) {
 		return "", nil
 	}
 	return normalized, nil
+}
+
+func normalizeProxyRouteProxyBufferingMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case proxyRouteProxyBufferingModeOff:
+		return proxyRouteProxyBufferingModeOff
+	default:
+		return proxyRouteProxyBufferingModeDefault
+	}
 }
 
 func resolveProxyRoutePrimaryOrigin(input ProxyRouteInput) (string, *uint, error) {

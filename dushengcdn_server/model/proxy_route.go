@@ -26,6 +26,7 @@ type ProxyRoute struct {
 	LimitConnPerServer         int        `json:"limit_conn_per_server" gorm:"not null;default:0"`
 	LimitConnPerIP             int        `json:"limit_conn_per_ip" gorm:"not null;default:0"`
 	LimitRate                  string     `json:"limit_rate" gorm:"size:32;not null;default:''"`
+	ProxyBufferingMode         string     `json:"proxy_buffering_mode" gorm:"size:16;not null;default:'default'"`
 	CacheEnabled               bool       `json:"cache_enabled" gorm:"not null;default:false"`
 	CachePolicy                string     `json:"cache_policy" gorm:"size:32;not null;default:''"`
 	CacheRules                 string     `json:"cache_rules" gorm:"type:text;not null;default:'[]'"`
@@ -183,6 +184,7 @@ func (route *ProxyRoute) Update() error {
 		"limit_conn_per_server":        route.LimitConnPerServer,
 		"limit_conn_per_ip":            route.LimitConnPerIP,
 		"limit_rate":                   route.LimitRate,
+		"proxy_buffering_mode":         route.ProxyBufferingMode,
 		"cache_enabled":                route.CacheEnabled,
 		"cache_policy":                 route.CachePolicy,
 		"cache_rules":                  route.CacheRules,

@@ -156,6 +156,7 @@ const reverseProxySchema = z
     origin_urls_text: z.string().trim().min(1, '请至少填写一个源站地址'),
     node_pool: z.string().trim().max(64, '节点池名称不能超过 64 个字符'),
     origin_host: z.string(),
+    proxy_buffering_mode: z.enum(['default', 'off']),
     custom_headers_text: z.string(),
     remark: z.string().max(255, '备注不能超过 255 个字符'),
   })
@@ -738,6 +739,8 @@ function ReverseProxySection({
       origin_urls_text: route.upstream_list.join('\n'),
       node_pool: route.node_pool || 'default',
       origin_host: route.origin_host || '',
+      proxy_buffering_mode:
+        route.proxy_buffering_mode === 'off' ? 'off' : 'default',
       custom_headers_text: customHeadersToText(route.custom_header_list),
       remark: route.remark || '',
     },
@@ -748,6 +751,8 @@ function ReverseProxySection({
       origin_urls_text: route.upstream_list.join('\n'),
       node_pool: route.node_pool || 'default',
       origin_host: route.origin_host || '',
+      proxy_buffering_mode:
+        route.proxy_buffering_mode === 'off' ? 'off' : 'default',
       custom_headers_text: customHeadersToText(route.custom_header_list),
       remark: route.remark || '',
     });
@@ -800,6 +805,7 @@ function ReverseProxySection({
               origin_uri: primaryOrigin.uri,
               node_pool: values.node_pool.trim() || 'default',
               origin_host: values.origin_host.trim(),
+              proxy_buffering_mode: values.proxy_buffering_mode,
               upstreams: urls.slice(1),
               custom_headers: headers,
               remark: values.remark.trim(),
@@ -897,6 +903,19 @@ function ReverseProxySection({
             placeholder="origin.example.internal"
             {...form.register('origin_host')}
           />
+        </ResourceField>
+
+        <ResourceField
+          label="代理缓冲模式"
+          hint="Emby、Jellyfin、大文件下载和 Range 视频流建议关闭，避免边缘节点提前从源站读取大量内容。"
+        >
+          <ResourceSelect
+            aria-label="代理缓冲模式"
+            {...form.register('proxy_buffering_mode')}
+          >
+            <option value="default">跟随全局配置</option>
+            <option value="off">流媒体模式：关闭代理缓冲</option>
+          </ResourceSelect>
         </ResourceField>
 
         <ResourceField

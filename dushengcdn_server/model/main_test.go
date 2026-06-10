@@ -3681,6 +3681,42 @@ func TestEnsureDatabaseSchemaUpToDateAddsDDOSProtectionTargetFields(t *testing.T
 	}
 }
 
+func TestEnsureDatabaseSchemaUpToDateAddsProxyRouteBufferingMode(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "proxy-route-buffering-mode.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateAll(db); err != nil {
+		t.Fatalf("auto migrate current schema: %v", err)
+	}
+	if db.Migrator().HasColumn(&ProxyRoute{}, "proxy_buffering_mode") {
+		if err := db.Migrator().DropColumn(&ProxyRoute{}, "proxy_buffering_mode"); err != nil {
+			t.Fatalf("drop proxy_routes.proxy_buffering_mode: %v", err)
+		}
+	}
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 43); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "proxy_buffering_mode") {
+		t.Fatal("expected proxy_routes.proxy_buffering_mode column to exist")
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
 func TestEnsureDatabaseSchemaUpToDateAddsDNSWorkerNodeProbeNodeIndex(t *testing.T) {
 	db := openBareTestSQLiteDB(t, "dns-worker-node-probe-node-index.db")
 	if err := registerSharding(db, "sqlite"); err != nil {

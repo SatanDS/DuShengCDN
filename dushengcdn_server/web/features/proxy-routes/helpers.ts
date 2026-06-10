@@ -343,6 +343,8 @@ export function buildPayloadFromRoute(
     limit_conn_per_server: route.limit_conn_per_server,
     limit_conn_per_ip: route.limit_conn_per_ip,
     limit_rate: route.limit_rate,
+    proxy_buffering_mode:
+      route.proxy_buffering_mode === 'off' ? 'off' : 'default',
     cache_enabled: route.cache_enabled,
     cache_policy: route.cache_policy || 'url',
     cache_rules: route.cache_rule_list,
