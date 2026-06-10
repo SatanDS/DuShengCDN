@@ -25,7 +25,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "${DUSHENGCDN_HTTP_BIND:-127.0.0.1}:${DUSHENGCDN_HTTP_PORT:-3010}:3000"
+      - "${DUSHENGCDN_HTTP_BIND:-0.0.0.0}:${DUSHENGCDN_HTTP_PORT:-3010}:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}

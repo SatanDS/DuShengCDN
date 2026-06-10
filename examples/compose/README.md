@@ -26,7 +26,7 @@ docker compose --env-file .env -f server.production.yaml ps
 ```
 
 启动前必须在 `.env` 中替换 `DUSHENGCDN_VERSION`、`POSTGRES_PASSWORD`、`SESSION_SECRET` 和 `DSN`；生产 Compose 不会再用公开占位密码或浮动 `latest` 兜底。
-生产环境建议保留默认 `DUSHENGCDN_HTTP_BIND=127.0.0.1`，再用 Nginx、OpenResty、宝塔或其它反向代理提供 HTTPS。
+默认 `DUSHENGCDN_HTTP_BIND=0.0.0.0` 会把面板发布到宿主机 `3010` 端口，浏览器可直接访问 `http://服务器IP:3010`。如果只想通过 HTTPS 反向代理访问，可改为 `DUSHENGCDN_HTTP_BIND=127.0.0.1`。
 Server 自动升级默认关闭；需要一键自动升级时，在 `.env` 设置 `DUSHENGCDN_SERVER_AUTO_UPGRADE_ENABLED=true`，并确认 Release 已发布对应 Server 二进制和同名 `.sha256` 校验文件。生产环境更推荐上传已审阅的 Server 二进制手动确认升级。
 
 ## Server 源码部署

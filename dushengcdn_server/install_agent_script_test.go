@@ -156,6 +156,7 @@ func TestInstallerScriptsAvoidSecretArgvExposure(t *testing.T) {
 	requireScriptContains(t, serverScript, `harden_env_file_permissions() {`)
 	requireScriptContains(t, serverScript, `(umask 077 && cp "${SERVER_DIR}/.env.example" "$ENV_FILE")`)
 	requireScriptContains(t, serverScript, `chmod 0600 "$ENV_FILE"`)
+	requireScriptContains(t, serverScript, `env_value DUSHENGCDN_HTTP_BIND 0.0.0.0`)
 	requireScriptContains(t, serverScript, `--token-file "$token_file"`)
 	requireScriptContains(t, serverScript, `trap cleanup_install_dns_worker_token_file RETURN`)
 	requireScriptContains(t, serverScript, `cleanup_install_dns_worker_token_file`)
@@ -346,6 +347,27 @@ func TestComposeFilesAvoidDebugAndHostGatewayDefaults(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSourceComposeDefaultsPublishPanelPort(t *testing.T) {
+	for _, relPath := range []string{
+		"dushengcdn_server/docker-compose.yaml",
+		"examples/compose/server.source.yaml",
+		"examples/compose/server.production.yaml",
+	} {
+		t.Run(relPath, func(t *testing.T) {
+			content := readScript(t, relPath)
+			requireScriptContains(t, content, `DUSHENGCDN_HTTP_BIND:-0.0.0.0`)
+			if strings.Contains(content, `DUSHENGCDN_HTTP_BIND:-127.0.0.1`) {
+				t.Fatal("source compose defaults should publish the panel port for first-run accessibility")
+			}
+		})
+	}
+
+	envExample := readScript(t, "dushengcdn_server/.env.example")
+	requireScriptContains(t, envExample, `DUSHENGCDN_HTTP_BIND=0.0.0.0`)
+	exampleEnv := readScript(t, "examples/compose/server.env.example")
+	requireScriptContains(t, exampleEnv, `DUSHENGCDN_HTTP_BIND=0.0.0.0`)
 }
 
 func TestSwaggerDoesNotSuggestBearerForHighRiskAdminRoutes(t *testing.T) {

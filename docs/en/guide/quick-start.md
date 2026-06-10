@@ -112,10 +112,10 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-The example binds the management port to local loopback only. When the `dushengcdn` container is running and logs show `server listening`, open it on the server itself; publish production access through an HTTPS reverse proxy:
+The example publishes the management port on the host. When the `dushengcdn` container is running and logs show `server listening`, open it directly; for HTTPS-only access set `DUSHENGCDN_HTTP_BIND=127.0.0.1` and put it behind a reverse proxy:
 
 ```text
-http://localhost:3000
+http://SERVER_IP:3000
 ```
 
 First login:

@@ -108,10 +108,10 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-默认示例只把管理端绑定到本机 `127.0.0.1`。看到 `server listening` 且 `dushengcdn` 容器状态为 running 后，可在服务器本机访问；生产公开访问请放在 HTTPS 反向代理后面：
+默认示例会把管理端发布到宿主机端口。看到 `server listening` 且 `dushengcdn` 容器状态为 running 后，可直接访问服务器 IP；如果只想通过 HTTPS 反向代理访问，可把 `DUSHENGCDN_HTTP_BIND` 改成 `127.0.0.1`：
 
 ```text
-http://localhost:3000
+http://服务器IP:3000
 ```
 
 首次登录：
@@ -251,7 +251,7 @@ journalctl -u dushengcdn-agent -n 100 --no-pager
 
 | 现象 | 排查方向 |
 | --- | --- |
-| 浏览器打不开管理端 | 确认 `docker compose ps` 中 Server 正在运行，宿主机端口没有被占用；端口冲突时可把宿主侧改为 `127.0.0.1:3010:3000` 或其它本机空闲端口 |
+| 浏览器打不开管理端 | 确认 `docker compose ps` 中 Server 正在运行，宿主机端口没有被占用；端口冲突时可把宿主侧改为 `3010:3000` 或其它空闲端口 |
 | 登录后数据无法保存 | 检查 PostgreSQL 容器健康状态，以及 `DSN` 中的用户名、密码、库名是否一致 |
 | Agent 无法注册 | 确认 Agent 节点能访问 `--server-url`，并检查 Token 是否填错或已失效 |
 | Agent 在线但没有应用配置 | 确认网站配置已启用，并且已经发布并激活版本 |

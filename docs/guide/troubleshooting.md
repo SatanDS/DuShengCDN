@@ -60,7 +60,7 @@ ls -ld "$(dirname /path/to/dushengcdn.db)"
 | SQLite 无法创建文件 | 检查 `SQLITE_PATH` 所在目录是否存在且可写 |
 | 端口被占用 | 修改 `PORT` 或 `--port`，或停止占用端口的进程 |
 
-Docker Compose 部署时如只想改宿主机访问端口，可把 `ports` 改成 `127.0.0.1:3010:3000`；容器内应用仍监听 `3000`。生产公开访问请走本机 HTTPS 反向代理。
+Docker Compose 部署时如只想改宿主机访问端口，可把 `ports` 改成 `3010:3000`；容器内应用仍监听 `3000`。如需只允许本机 HTTPS 反向代理访问，可改成 `127.0.0.1:3010:3000`。
 
 如果 `docker compose up -d --build` 用了很久，先区分“构建慢”和“启动慢”：Docker 输出中 `load build context` 表示把源码目录打包发给 Docker，`pnpm build` / `go build` 表示编译，最后 `Container ... Started` 才是容器启动。`load build context` 如果显示数 GB，通常是仓库目录里混入了 `postgres-data`、`dushengcdn-data`、`backups`、`upload`、`logs` 等运行数据；这些目录应被 `.dockerignore` 排除。清理或移动这些目录后再构建，升级时间会明显下降，生产数据仍通过 Compose volume 挂载，不需要打进镜像。
 
@@ -178,7 +178,7 @@ error: Your local changes to the following files would be overwritten by merge:
 3. 在 `dushengcdn_server` 目录执行 `cp -n .env.example .env`，把真实部署参数写入 `.env`。
 4. 再执行 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build`。
 
-端口冲突只需要改宿主机侧端口，例如 `127.0.0.1:3010:3000`；容器内仍监听 `3000`。
+端口冲突只需要改宿主机侧端口，例如 `3010:3000`；容器内仍监听 `3000`。如需只允许本机反向代理访问，再加上 `127.0.0.1:` 前缀。
 
 ## Agent 无法注册或一直离线
 

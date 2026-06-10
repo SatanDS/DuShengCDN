@@ -555,8 +555,15 @@ ensure_server_running
 check_server_http_health
 print_initial_login_hint
 log "Server deployment completed."
+http_bind="$(env_value DUSHENGCDN_HTTP_BIND 0.0.0.0)"
 log "Panel URL for local access: ${SERVER_URL}"
-log "The default Compose binding is 127.0.0.1; publish the panel through a local HTTPS reverse proxy instead of exposing the host panel port directly."
+if [[ "$http_bind" == "0.0.0.0" || "$http_bind" == "::" ]]; then
+  http_port="$(env_value DUSHENGCDN_HTTP_PORT 3010)"
+  log "The default source Compose binding publishes the panel on all interfaces at port ${http_port}."
+  log "For HTTPS-only deployments, set DUSHENGCDN_HTTP_BIND=127.0.0.1 and put the panel behind a reverse proxy."
+else
+  log "Panel host binding: ${http_bind}:$(env_value DUSHENGCDN_HTTP_PORT 3010)."
+fi
 
 if [[ "$INSTALL_DNS_WORKER" != "true" ]]; then
 	log "DNS Worker installation skipped."

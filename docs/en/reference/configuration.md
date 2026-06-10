@@ -100,7 +100,7 @@ The repository also provides `examples/compose/` templates for image-based Serve
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `DUSHENGCDN_REPO_DIR` | Source checkout path used by `server.source.yaml` | `../..` |
-| `DUSHENGCDN_HTTP_BIND` | Host bind address used by Server Compose templates | `127.0.0.1` |
+| `DUSHENGCDN_HTTP_BIND` | Host bind address used by Server Compose templates | `0.0.0.0` |
 
 ## Integrated Server Installer Options
 

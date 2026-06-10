@@ -260,7 +260,7 @@ OpenResty 性能参数与缓存参数继续统一保存在 `Option` 表。当前
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
 | `DUSHENGCDN_REPO_DIR` | `server.source.yaml` 源码构建时的仓库根目录 | `../..` |
-| `DUSHENGCDN_HTTP_BIND` | `server.production.yaml` / `server.source.yaml` 暴露管理端时绑定的宿主机地址 | `127.0.0.1` |
+| `DUSHENGCDN_HTTP_BIND` | `server.production.yaml` / `server.source.yaml` 暴露管理端时绑定的宿主机地址 | `0.0.0.0` |
 
 ## 一体化部署脚本参数
 

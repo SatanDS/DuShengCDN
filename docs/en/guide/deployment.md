@@ -149,7 +149,7 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-The example binds the management port to local loopback only. Open `http://localhost:3000` on the server itself, and publish production access through an HTTPS reverse proxy. The first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or read the generated one-time password from the `initial-root-password.txt` file named in the Server log. The log prints the file path, not the password. Change the root password immediately after login.
+The example publishes the management port on the host. Open `http://SERVER_IP:3000`; if you only want HTTPS reverse-proxy access, bind the port as `127.0.0.1:3000:3000`. The first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or read the generated one-time password from the `initial-root-password.txt` file named in the Server log. The log prints the file path, not the password. Change the root password immediately after login.
 
 Commercial or multi-instance deployments should also provide a Redis service and set `REDIS_CONN_STRING`. If Redis must not silently degrade to in-process helpers, set `REDIS_REQUIRED=true`. To enforce private commercial licensing, set `DUSHENGCDN_LICENSE_REQUIRED=true` and `DUSHENGCDN_LICENSE_PUBLIC_KEYS`, then install the `dscdn_license_v1...` token from **Settings -> Commercial License**.
 
@@ -186,7 +186,7 @@ If the host port `3000` is already in use, change only the host-side mapping, fo
 
 ```yaml
 ports:
-  - "127.0.0.1:3010:3000"
+  - "3010:3000"
 ```
 
 For source Compose deployments, keep local deployment parameters in `dushengcdn_server/.env`:

@@ -152,7 +152,7 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-默认示例只把管理端绑定到本机 `127.0.0.1`。首次可在服务器本机访问 `http://localhost:3000`，生产公开访问请通过 HTTPS 反向代理；用户名为 `root`，密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 日志提示的 `initial-root-password.txt` 文件（权限为 0600，日志不打印密码）。登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码/密码文件。
+默认示例会把管理端发布到宿主机 `3000` 端口。首次可访问 `http://服务器IP:3000`；如果只想通过 HTTPS 反向代理访问，可把端口绑定改成 `127.0.0.1:3000:3000`。用户名为 `root`，密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 日志提示的 `initial-root-password.txt` 文件（权限为 0600，日志不打印密码）。登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码/密码文件。
 
 商用或多实例部署建议额外提供 Redis 服务并设置 `REDIS_CONN_STRING`；如果不能接受 Redis 失效后降级为单进程限流和缓存，可设置 `REDIS_REQUIRED=true` 让 Server 在 Redis 不可用时直接启动失败。需要私有商业授权约束时，设置 `DUSHENGCDN_LICENSE_REQUIRED=true` 和 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，启动后在管理端「设置 -> 商业授权」安装 `dscdn_license_v1...` 许可证令牌。
 
@@ -169,10 +169,10 @@ cp -n .env.example .env
 
 ```yaml
 ports:
-  - "127.0.0.1:3010:3000"
+  - "3010:3000"
 ```
 
-此时浏览器访问 `http://localhost:3010`，容器内部仍监听 `3000`。
+此时浏览器访问 `http://服务器IP:3010`，容器内部仍监听 `3000`。如需只允许本机反向代理访问，可改成 `127.0.0.1:3010:3000`。
 
 也可以在仓库根目录使用一体化部署脚本。脚本会在 `.env` 不存在时从 `.env.example` 创建环境文件；全新部署会自动生成 `POSTGRES_PASSWORD`、`SESSION_SECRET`、`DUSHENGCDN_INITIAL_ROOT_PASSWORD` 和匹配的 `DSN`。如果升级旧源码部署且已存在 `dushengcdn_server/postgres-data`，脚本会保留 `.env.example` 中的数据库密码和 DSN，只生成运行密钥和初始 root 密码配置，避免旧 PostgreSQL 数据目录因密码不一致导致面板连不上数据库。`docker compose up` 后，脚本会先确认 `dushengcdn` 服务仍在运行，再访问 `SERVER_URL/api/status` 做 HTTP 健康检查；检查失败时会打印最近日志，并提示数据库认证、端口映射和反向代理上游端口等常见原因。源码 Compose 默认宿主机访问端口是 `.env` 中的 `DUSHENGCDN_HTTP_PORT=3010`，容器内仍监听 `3000`。默认还会在面板本机自动部署 DNS Worker：部署前先检查本机是否已有 `dushengcdn-dns-worker.service`、同名 systemd unit 文件、`/opt/dushengcdn-dns-worker`、Worker 环境文件、同名 Docker 容器、Worker 进程或 DuShengCDN 监听 `53` 端口；发现已有部署时会跳过自动创建和安装，避免覆盖现有 Worker。没有发现本地 Worker 时，脚本会自动探测公网 IPv4，在 Server 中创建名为 `DNS服务响应端` 的 DNS Worker，拿到 Token 后调用 `scripts/install-dns-worker.sh` 监听 `PUBLIC_IP:53`。
 

@@ -275,7 +275,8 @@ show_hints() {
   log "Next checks"
   cat <<EOF
 If http://127.0.0.1:${http_port}/api/status is healthy but the browser still cannot open the panel:
-  - Point Nginx, Nginx Proxy Manager, Baota, or another reverse proxy upstream to 127.0.0.1:${http_port}.
+  - Check DUSHENGCDN_HTTP_BIND in ${ENV_FILE}. The source Compose default is 0.0.0.0; 127.0.0.1 requires a same-host reverse proxy.
+  - Point Nginx, Nginx Proxy Manager, Baota, or another reverse proxy upstream to the host-mapped port ${http_port}.
   - Use 127.0.0.1:3000 only when the host mapping is explicitly 3000:3000 or Server is running directly on 3000.
 
 If the dushengcdn service is not running:

@@ -235,7 +235,7 @@ This usually means the server-side repository copy has local edits in Compose fi
 3. Create `dushengcdn_server/.env` from `.env.example` and put real deployment values there.
 4. Start with `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build`.
 
-Port conflicts only require changing the host-side mapping, for example `127.0.0.1:3010:3000`; the container still listens on `3000`.
+Port conflicts only require changing the host-side mapping, for example `3010:3000`; the container still listens on `3000`. Add the `127.0.0.1:` prefix only when the panel should be reachable through a same-host reverse proxy.
 
 ## Automatic DNS Does Not Switch Nodes
 
