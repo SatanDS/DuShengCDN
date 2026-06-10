@@ -1798,23 +1798,21 @@ describe('Proxy route website pages', () => {
     );
     await user.clear(screen.getByLabelText('节点池权重 1'));
     await user.type(screen.getByLabelText('节点池权重 1'), '80');
-    await user.type(screen.getByLabelText('节点池国家或地区 1'), 'HK,TW');
-    await user.click(
-      within(
-        screen.getByRole('group', { name: '节点池访问运营商 1' }),
-      ).getByRole('checkbox', { name: '电信' }),
+    await user.selectOptions(
+      screen.getByLabelText('节点池匹配模式'),
+      'mixed_weighted',
     );
-    await user.type(
-      screen.getByLabelText('节点池 ASN 1'),
-      'AS4134 as4837 asn:4134 4294967296 0 bad',
-    );
+    expect(screen.queryByLabelText('节点池国家或地区 1')).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('节点池排除国家或地区 1'), 'CN');
     await user.click(
       within(
         screen.getByRole('group', { name: '节点池排除访问运营商 1' }),
       ).getByRole('checkbox', { name: '排除电信' }),
     );
-    await user.type(screen.getByLabelText('节点池排除 ASN 1'), 'AS9808');
+    await user.type(
+      screen.getByLabelText('节点池排除 ASN 1'),
+      'AS9808 asn:9808 4294967296 0 bad',
+    );
     await user.type(
       screen.getByLabelText('节点池排除来源网段 1'),
       '198.51.100.0/24',
@@ -1827,9 +1825,7 @@ describe('Proxy route website pages', () => {
     ).toBeChecked();
     await user.clear(screen.getByLabelText('节点池权重 2'));
     await user.type(screen.getByLabelText('节点池权重 2'), '20');
-    await user.type(screen.getByLabelText('节点池国家或地区 2'), 'DE FR');
 
-    await user.selectOptions(screen.getByLabelText('节点池匹配模式'), 'mixed_weighted');
     await user.selectOptions(screen.getByLabelText('代理缓冲模式'), 'off');
 
     const saveButton = document.querySelector(
@@ -1856,9 +1852,9 @@ describe('Proxy route website pages', () => {
           {
             name: 'hk',
             weight: 80,
-            countries: ['HK', 'TW'],
-            operators: ['cn-telecom'],
-            asns: [4134, 4837],
+            countries: [],
+            operators: [],
+            asns: [],
             exclude_countries: ['CN'],
             exclude_operators: ['cn-telecom'],
             exclude_asns: [9808],
@@ -1869,7 +1865,8 @@ describe('Proxy route website pages', () => {
           {
             name: 'eu',
             weight: 20,
-            countries: ['DE', 'FR'],
+            countries: [],
+            exclude_countries: [],
             node_ids: [],
             enabled: true,
           },
