@@ -1818,7 +1818,7 @@ describe('Proxy route website pages', () => {
     await user.type(screen.getByLabelText('节点池权重 2'), '20');
     await user.type(screen.getByLabelText('节点池国家或地区 2'), 'DE FR');
 
-    await user.selectOptions(screen.getByLabelText('边缘代理缓冲模式'), 'off');
+    await user.selectOptions(screen.getByLabelText('代理缓冲模式'), 'off');
 
     const saveButton = document.querySelector(
       'button[form="proxy-route-dns-form"]',

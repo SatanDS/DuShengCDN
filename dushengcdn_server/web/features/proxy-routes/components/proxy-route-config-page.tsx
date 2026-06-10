@@ -285,6 +285,13 @@ type DNSAutomationValues = {
   ddos_protection_target: string;
 };
 
+function getProxyBufferingMode(route: ProxyRouteItem): 'default' | 'off' {
+  return route.proxy_buffering_mode === 'off' ? 'off' : 'default';
+}
+
+const proxyBufferingModeHint =
+  '该设置与反向代理页、负载均衡页同步；Emby、Jellyfin、大文件下载和 Range 视频流建议关闭，避免边缘节点提前从源站读取大量内容。';
+
 type GSLBPoolRow = {
   id: string;
   name: string;
@@ -740,8 +747,7 @@ function ReverseProxySection({
       origin_urls_text: route.upstream_list.join('\n'),
       node_pool: route.node_pool || 'default',
       origin_host: route.origin_host || '',
-      proxy_buffering_mode:
-        route.proxy_buffering_mode === 'off' ? 'off' : 'default',
+      proxy_buffering_mode: getProxyBufferingMode(route),
       custom_headers_text: customHeadersToText(route.custom_header_list),
       remark: route.remark || '',
     },
@@ -752,8 +758,7 @@ function ReverseProxySection({
       origin_urls_text: route.upstream_list.join('\n'),
       node_pool: route.node_pool || 'default',
       origin_host: route.origin_host || '',
-      proxy_buffering_mode:
-        route.proxy_buffering_mode === 'off' ? 'off' : 'default',
+      proxy_buffering_mode: getProxyBufferingMode(route),
       custom_headers_text: customHeadersToText(route.custom_header_list),
       remark: route.remark || '',
     });
@@ -908,13 +913,13 @@ function ReverseProxySection({
 
         <ResourceField
           label="代理缓冲模式"
-          hint="Emby、Jellyfin、大文件下载和 Range 视频流建议关闭，避免边缘节点提前从源站读取大量内容。"
+          hint={proxyBufferingModeHint}
         >
           <ResourceSelect
             aria-label="代理缓冲模式"
             {...form.register('proxy_buffering_mode')}
           >
-            <option value="default">跟随全局配置</option>
+            <option value="default">默认模式：开启代理缓冲</option>
             <option value="off">流媒体模式：关闭代理缓冲</option>
           </ResourceSelect>
         </ResourceField>
@@ -998,8 +1003,7 @@ export function DNSAutomationSection({
         route.gslb_policy?.source_pool_fallback_mode === 'fallback_to_global'
           ? 'fallback_to_global'
           : 'strict',
-      proxy_buffering_mode:
-        route.proxy_buffering_mode === 'off' ? 'off' : 'default',
+      proxy_buffering_mode: getProxyBufferingMode(route),
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
       ddos_protection_provider:
@@ -1040,8 +1044,7 @@ export function DNSAutomationSection({
         route.gslb_policy?.source_pool_fallback_mode === 'fallback_to_global'
           ? 'fallback_to_global'
           : 'strict',
-      proxy_buffering_mode:
-        route.proxy_buffering_mode === 'off' ? 'off' : 'default',
+      proxy_buffering_mode: getProxyBufferingMode(route),
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
       ddos_protection_provider:
@@ -1908,15 +1911,15 @@ export function DNSAutomationSection({
                 </ResourceField>
 
                 <ResourceField
-                  label="边缘代理缓冲模式"
-                  hint="Emby、Jellyfin、大文件下载和 Range 视频流建议关闭，避免命中的边缘节点提前从源站读取大量内容。"
+                  label="代理缓冲模式"
+                  hint={proxyBufferingModeHint}
                 >
                   <ResourceSelect
-                    aria-label="边缘代理缓冲模式"
+                    aria-label="代理缓冲模式"
                     disabled={!autoSyncEnabled}
                     {...form.register('proxy_buffering_mode')}
                   >
-                    <option value="default">跟随全局配置</option>
+                    <option value="default">默认模式：开启代理缓冲</option>
                     <option value="off">流媒体模式：关闭代理缓冲</option>
                   </ResourceSelect>
                 </ResourceField>
