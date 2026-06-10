@@ -5,8 +5,10 @@ import (
 	"dushengcdn/common"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,7 +35,7 @@ func TestRefreshDNSSourceDatabaseMirrorPublishesCurrentAndRemovesPrevious(t *tes
 		"/cmcc.txt":     []byte("1.0.2.0/24\n1.0.2.1/32\n"),
 		"/drpeng6.txt":  []byte{},
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		payload, ok := payloads[r.URL.Path]
 		if !ok {
 			http.NotFound(w, r)
@@ -42,11 +44,12 @@ func TestRefreshDNSSourceDatabaseMirrorPublishesCurrentAndRemovesPrevious(t *tes
 		_, _ = w.Write(payload)
 	}))
 	t.Cleanup(server.Close)
+	defer SetDNSSourceDatabaseMirrorHTTPClientForTest(dnsMirrorClientForTLSServer(t, server))()
 
 	common.DNSSourceDatabaseMirrorPath = root
-	common.DNSSourceDatabaseCountryURL = server.URL + "/country.mmdb"
-	common.DNSSourceDatabaseASNURL = server.URL + "/asn.mmdb"
-	common.DNSSourceDatabaseOperatorCIDRBaseURL = server.URL
+	common.DNSSourceDatabaseCountryURL = "https://mirror.example.test/country.mmdb"
+	common.DNSSourceDatabaseASNURL = "https://mirror.example.test/asn.mmdb"
+	common.DNSSourceDatabaseOperatorCIDRBaseURL = "https://mirror.example.test"
 	common.DNSSourceDatabaseOperatorCIDRFiles = "chinanet.txt cmcc.txt drpeng6.txt"
 
 	if err := RefreshDNSSourceDatabaseMirror(context.Background()); err != nil {
@@ -136,10 +139,147 @@ func TestGetDNSSourceDatabaseMirrorStatusMissing(t *testing.T) {
 	}
 }
 
+func TestOpenDNSSourceDatabaseMirrorFileRejectsManifestPathTraversal(t *testing.T) {
+	root := t.TempDir()
+	oldMirrorPath := common.DNSSourceDatabaseMirrorPath
+	common.DNSSourceDatabaseMirrorPath = root
+	t.Cleanup(func() {
+		common.DNSSourceDatabaseMirrorPath = oldMirrorPath
+	})
+
+	current := filepath.Join(root, "current")
+	if err := os.MkdirAll(filepath.Join(current, "operator"), 0o755); err != nil {
+		t.Fatalf("create mirror dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	manifest := `{
+  "updated_at": "2026-01-01T00:00:00Z",
+  "sources": {
+    "operator": {
+      "kind": "operator",
+      "updated_at": "2026-01-01T00:00:00Z",
+      "files": [{
+        "name": "chinanet.txt",
+        "path": "../secret.txt",
+        "size": 6,
+        "sha256": "unused",
+        "updated_at": "2026-01-01T00:00:00Z"
+      }]
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(current, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	file, _, err := OpenDNSSourceDatabaseMirrorFile("operator", "chinanet.txt")
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("expected manifest path traversal to be rejected")
+	}
+}
+
+func TestRefreshDNSSourceDatabaseMirrorRejectsUnsafeDownloadURL(t *testing.T) {
+	root := t.TempDir()
+	oldMirrorPath := common.DNSSourceDatabaseMirrorPath
+	oldCountryURL := common.DNSSourceDatabaseCountryURL
+	oldASNURL := common.DNSSourceDatabaseASNURL
+	oldOperatorBaseURL := common.DNSSourceDatabaseOperatorCIDRBaseURL
+	oldOperatorFiles := common.DNSSourceDatabaseOperatorCIDRFiles
+	t.Cleanup(func() {
+		common.DNSSourceDatabaseMirrorPath = oldMirrorPath
+		common.DNSSourceDatabaseCountryURL = oldCountryURL
+		common.DNSSourceDatabaseASNURL = oldASNURL
+		common.DNSSourceDatabaseOperatorCIDRBaseURL = oldOperatorBaseURL
+		common.DNSSourceDatabaseOperatorCIDRFiles = oldOperatorFiles
+	})
+
+	common.DNSSourceDatabaseMirrorPath = root
+	common.DNSSourceDatabaseCountryURL = "http://169.254.169.254/latest/meta-data"
+	common.DNSSourceDatabaseASNURL = "https://example.com/asn.mmdb"
+	common.DNSSourceDatabaseOperatorCIDRBaseURL = "https://example.com"
+	common.DNSSourceDatabaseOperatorCIDRFiles = "chinanet.txt"
+
+	err := RefreshDNSSourceDatabaseMirror(context.Background())
+	if err == nil {
+		t.Fatal("expected unsafe DNS source database URL to be rejected")
+	}
+}
+
+func TestRefreshDNSSourceDatabaseMirrorRejectsOversizedDownload(t *testing.T) {
+	root := t.TempDir()
+	oldMirrorPath := common.DNSSourceDatabaseMirrorPath
+	oldCountryURL := common.DNSSourceDatabaseCountryURL
+	oldASNURL := common.DNSSourceDatabaseASNURL
+	oldOperatorBaseURL := common.DNSSourceDatabaseOperatorCIDRBaseURL
+	oldOperatorFiles := common.DNSSourceDatabaseOperatorCIDRFiles
+	oldMaxBytes := maxDNSSourceDatabaseMirrorBytes
+	t.Cleanup(func() {
+		common.DNSSourceDatabaseMirrorPath = oldMirrorPath
+		common.DNSSourceDatabaseCountryURL = oldCountryURL
+		common.DNSSourceDatabaseASNURL = oldASNURL
+		common.DNSSourceDatabaseOperatorCIDRBaseURL = oldOperatorBaseURL
+		common.DNSSourceDatabaseOperatorCIDRFiles = oldOperatorFiles
+		maxDNSSourceDatabaseMirrorBytes = oldMaxBytes
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "9")
+		_, _ = w.Write([]byte("123456789"))
+	}))
+	t.Cleanup(server.Close)
+	defer SetDNSSourceDatabaseMirrorHTTPClientForTest(dnsMirrorClientForTLSServer(t, server))()
+	maxDNSSourceDatabaseMirrorBytes = 8
+	common.DNSSourceDatabaseMirrorPath = root
+	common.DNSSourceDatabaseCountryURL = "https://mirror.example.test/country.mmdb"
+	common.DNSSourceDatabaseASNURL = "https://mirror.example.test/asn.mmdb"
+	common.DNSSourceDatabaseOperatorCIDRBaseURL = "https://mirror.example.test"
+	common.DNSSourceDatabaseOperatorCIDRFiles = "chinanet.txt"
+
+	err := RefreshDNSSourceDatabaseMirror(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected oversized DNS source database download to be rejected, got %v", err)
+	}
+}
+
 func bytesOfSize(value byte, size int) []byte {
 	data := make([]byte, size)
 	for i := range data {
 		data[i] = value
 	}
 	return data
+}
+
+func dnsMirrorClientForTLSServer(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+	upstream, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse TLS server URL: %v", err)
+	}
+	baseClient := server.Client()
+	baseTransport := baseClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	baseClient.Transport = dnsMirrorTestTransport{
+		base:     baseTransport,
+		upstream: upstream,
+	}
+	return baseClient
+}
+
+type dnsMirrorTestTransport struct {
+	base     http.RoundTripper
+	upstream *url.URL
+}
+
+func (transport dnsMirrorTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	rewritten := request.Clone(request.Context())
+	rewritten.URL = cloneURL(request.URL)
+	rewritten.URL.Scheme = transport.upstream.Scheme
+	rewritten.URL.Host = transport.upstream.Host
+	rewritten.Host = request.URL.Host
+	return transport.base.RoundTrip(rewritten)
 }

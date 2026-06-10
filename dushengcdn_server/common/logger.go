@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"dushengcdn/utils/security"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"io"
@@ -52,7 +53,7 @@ func (h *customTextHandler) Handle(_ context.Context, record slog.Record) error 
 	builder.WriteString(" | ")
 	builder.WriteString(sourceLocation(record.PC))
 	builder.WriteString(" - ")
-	builder.WriteString(record.Message)
+	builder.WriteString(security.RedactSensitiveText(record.Message))
 
 	attrs := make([]slog.Attr, 0, len(h.attrs)+record.NumAttrs())
 	attrs = append(attrs, h.attrs...)
@@ -174,12 +175,12 @@ func SetupGinLog() {
 	if *LogDir != "" {
 		commonLogPath := filepath.Join(*LogDir, "common.log")
 		errorLogPath := filepath.Join(*LogDir, "error.log")
-		commonFd, err := os.OpenFile(commonLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		commonFd, err := os.OpenFile(commonLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			_, _ = io.WriteString(os.Stderr, "failed to open common log file\n")
 			os.Exit(1)
 		}
-		errorFd, err := os.OpenFile(errorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		errorFd, err := os.OpenFile(errorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			_, _ = io.WriteString(os.Stderr, "failed to open error log file\n")
 			os.Exit(1)
@@ -235,7 +236,35 @@ func formatAttrs(groups []string, attrs []slog.Attr) string {
 		if len(groups) > 0 {
 			key = strings.Join(append(slices.Clone(groups), key), ".")
 		}
-		parts = append(parts, fmt.Sprintf("%s=%v", key, attr.Value.Any()))
+		parts = append(parts, fmt.Sprintf("%s=%v", key, redactLogValue(key, attr.Value.Any())))
 	}
 	return strings.Join(parts, " ")
+}
+
+func redactLogValue(key string, value any) any {
+	normalized := strings.ToLower(key)
+	sensitiveFragments := []string{
+		"authorization",
+		"credential",
+		"password",
+		"secret",
+		"token",
+		"private_key",
+		"privatekey",
+		"client_secret",
+		"access_key",
+		"api_key",
+		"dsn",
+	}
+	for _, fragment := range sensitiveFragments {
+		if strings.Contains(normalized, fragment) {
+			return "<redacted>"
+		}
+	}
+	if normalized == "message" || normalized == "error" {
+		if text, ok := value.(string); ok {
+			return security.RedactSensitiveText(text)
+		}
+	}
+	return value
 }

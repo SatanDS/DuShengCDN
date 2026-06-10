@@ -75,17 +75,21 @@ func GetTLSCertificate(id uint) (*model.TLSCertificate, error) {
 	return model.GetTLSCertificateByID(id)
 }
 
-func GetTLSCertificateContent(id uint) (*TLSCertificateContent, error) {
+func GetTLSCertificateContent(id uint, revealKey bool) (*TLSCertificateContent, error) {
 	certificate, err := model.GetTLSCertificateByID(id)
 	if err != nil {
 		return nil, err
+	}
+	keyPEM := ""
+	if revealKey {
+		keyPEM = certificate.KeyPEM
 	}
 
 	return &TLSCertificateContent{
 		ID:              certificate.ID,
 		Name:            certificate.Name,
 		CertPEM:         certificate.CertPEM,
-		KeyPEM:          certificate.KeyPEM,
+		KeyPEM:          keyPEM,
 		Remark:          certificate.Remark,
 		Provider:        certificate.Provider,
 		AcmeAccountID:   certificate.AcmeAccountID,

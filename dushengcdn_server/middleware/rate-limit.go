@@ -21,6 +21,11 @@ var inMemoryRateLimiter ratelimit.InMemoryRateLimiter
 var redisRateLimitSequence uint64
 var redisRateLimitInstanceID = uuid.NewString()
 
+func ResetRateLimiterForTest() {
+	inMemoryRateLimiter = ratelimit.InMemoryRateLimiter{}
+	atomic.StoreUint64(&redisRateLimitSequence, 0)
+}
+
 var redisRateLimitScript = redis.NewScript(`
 local key = KEYS[1]
 local now = tonumber(ARGV[1])

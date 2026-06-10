@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -445,6 +446,7 @@ func normalizeAccessLogPath(value string) string {
 	if trimmed == "" {
 		return ""
 	}
+	trimmed = stripAccessLogPathQuery(trimmed)
 	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
 		return truncateAccessLogPath(trimmed)
 	}
@@ -452,6 +454,21 @@ func normalizeAccessLogPath(value string) string {
 		return truncateAccessLogPath(trimmed)
 	}
 	return truncateAccessLogPath("/" + trimmed)
+}
+
+func stripAccessLogPathQuery(value string) string {
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		parsed, err := url.Parse(value)
+		if err == nil {
+			parsed.RawQuery = ""
+			parsed.Fragment = ""
+			return parsed.String()
+		}
+	}
+	if index := strings.IndexAny(value, "?#"); index >= 0 {
+		return value[:index]
+	}
+	return value
 }
 
 func truncateAccessLogPath(value string) string {

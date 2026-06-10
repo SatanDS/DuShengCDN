@@ -3,6 +3,7 @@ package middleware
 import (
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"dushengcdn/utils/security"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,6 +72,67 @@ func TestAgentAuthAllowsLegacyTokenWhenCompatibilityEnabled(t *testing.T) {
 
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("expected enabled legacy token to pass, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAgentAuthRejectsLegacyTokenForHashedNodeToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	configureAgentAuthTestDB(t)
+	configureLegacyAgentToken(t, true)
+	seedMiddlewareTestNode(t, &model.Node{
+		NodeID:           "hashed-node",
+		Name:             "hashed-node",
+		IP:               "10.0.0.4",
+		AgentTokenHash:   security.HashSecretToken("node-specific-token"),
+		AgentTokenPrefix: security.SecretTokenPrefix("node-specific-token"),
+		AgentVersion:     "0.2.0",
+		Status:           "online",
+	})
+
+	router := gin.New()
+	router.POST("/guarded", AgentAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/guarded", strings.NewReader(`{"node_id":"hashed-node"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Token", "legacy-token")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected legacy token to be rejected for hashed node, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAgentAuthRejectsLegacyTokenForActiveConfigFetch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	configureAgentAuthTestDB(t)
+	configureLegacyAgentToken(t, true)
+	seedMiddlewareTestNode(t, &model.Node{
+		NodeID:       "legacy-node",
+		Name:         "legacy-node",
+		IP:           "10.0.0.5",
+		AgentVersion: "0.1.0",
+		Status:       "online",
+	})
+
+	router := gin.New()
+	router.GET("/api/agent/config-versions/active", AgentAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/config-versions/active", strings.NewReader(`{"node_id":"legacy-node"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Token", "legacy-token")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected legacy token active config fetch to be rejected, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "cannot fetch active configs") {
+		t.Fatalf("expected active config migration message, got %s", recorder.Body.String())
 	}
 }
 
@@ -161,6 +223,31 @@ func TestAgentRegisterAuthReportsDisabledLegacyTokenAfterDiscoveryFails(t *testi
 	}
 }
 
+func TestAgentRegisterAuthDoesNotInitializeDiscoveryTokenOnFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	configureAgentAuthTestDB(t)
+	configureLegacyAgentToken(t, false)
+	configureDiscoveryTokenOption(t, "")
+
+	router := gin.New()
+	router.POST("/register", AgentRegisterAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(`{"ip":"10.0.0.3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Token", "junk-token")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected invalid discovery token to be rejected, got %d", recorder.Code)
+	}
+	if got := strings.TrimSpace(common.GetOptionValue("AgentDiscoveryToken")); got != "" {
+		t.Fatalf("expected failed public registration not to initialize discovery token, got %q", got)
+	}
+}
+
 func configureAgentAuthTestDB(t *testing.T) {
 	t.Helper()
 	oldDB := model.DB
@@ -168,7 +255,7 @@ func configureAgentAuthTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err = db.AutoMigrate(&model.Node{}); err != nil {
+	if err = db.AutoMigrate(&model.Node{}, &model.Option{}); err != nil {
 		t.Fatalf("migrate node table: %v", err)
 	}
 	model.DB = db
@@ -197,9 +284,14 @@ func configureDiscoveryTokenOption(t *testing.T, token string) {
 	t.Helper()
 	common.OptionMapRWMutex.Lock()
 	oldOptionMap := common.OptionMap
-	common.OptionMap = map[string]string{"AgentDiscoveryToken": token}
 	common.OptionMapRWMutex.Unlock()
 	oldDiscoveryToken := common.AgentDiscoveryToken
+	if err := model.UpdateOption("AgentDiscoveryToken", token); err != nil {
+		t.Fatalf("configure discovery token option: %v", err)
+	}
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap = map[string]string{"AgentDiscoveryToken": token}
+	common.OptionMapRWMutex.Unlock()
 	common.AgentDiscoveryToken = token
 	t.Cleanup(func() {
 		common.OptionMapRWMutex.Lock()

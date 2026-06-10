@@ -3575,7 +3575,7 @@ const docTemplate = `{
             "in": "header"
         },
         "BearerAuth": {
-            "description": "管理端可使用 Bearer Token，例如：Bearer \u003ctoken\u003e",
+            "description": "仅部分兼容接口支持长期 Bearer 用户 Token；高危管理接口要求浏览器 session cookie 和 CSRF Token",
             "type": "apiKey",
             "name": "Authorization",
             "in": "header"

@@ -74,6 +74,7 @@ func InitOptionMap() {
 	common.OptionMap["AuthoritativeDNSWorkerECSEnabled"] = strconv.FormatBool(common.AuthoritativeDNSWorkerECSEnabled)
 	common.OptionMap["AuthoritativeDNSWorkerECSIPv4Prefix"] = strconv.Itoa(common.AuthoritativeDNSWorkerECSIPv4Prefix)
 	common.OptionMap["AuthoritativeDNSWorkerECSIPv6Prefix"] = strconv.Itoa(common.AuthoritativeDNSWorkerECSIPv6Prefix)
+	common.OptionMap["AuthoritativeDNSWorkerAllowUnassignedZones"] = strconv.FormatBool(common.AuthoritativeDNSWorkerAllowUnassignedZones)
 	common.OptionMap["GSLBMetricFreshnessSeconds"] = strconv.Itoa(common.GSLBMetricFreshnessSeconds)
 	common.OptionMap["GSLBProbeSchedulingEnabled"] = strconv.FormatBool(common.GSLBProbeSchedulingEnabled)
 	common.OptionMap["OpenRestyWorkerProcesses"] = common.OpenRestyWorkerProcesses
@@ -312,6 +313,8 @@ func updateOptionMap(key string, value string) {
 		if v, err := strconv.Atoi(value); err == nil && v >= 0 && v <= 128 {
 			common.AuthoritativeDNSWorkerECSIPv6Prefix = v
 		}
+	case "AuthoritativeDNSWorkerAllowUnassignedZones":
+		common.AuthoritativeDNSWorkerAllowUnassignedZones = value == "true"
 	case "GSLBMetricFreshnessSeconds":
 		if v, err := strconv.Atoi(value); err == nil && v > 0 {
 			common.GSLBMetricFreshnessSeconds = v

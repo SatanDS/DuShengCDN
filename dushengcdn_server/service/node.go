@@ -2,13 +2,12 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip"
 	"dushengcdn/utils/geoip/iputil"
-	"encoding/hex"
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -55,7 +54,15 @@ type NodeAgentReleaseInfo struct {
 }
 
 type NodeBootstrapView struct {
-	DiscoveryToken string `json:"discovery_token"`
+	DiscoveryToken          string `json:"discovery_token,omitempty"`
+	DiscoveryTokenPrefix    string `json:"discovery_token_prefix"`
+	DiscoveryTokenAvailable bool   `json:"discovery_token_available"`
+}
+
+type NodeAgentTokenView struct {
+	AgentToken          string `json:"agent_token,omitempty"`
+	AgentTokenPrefix    string `json:"agent_token_prefix"`
+	AgentTokenAvailable bool   `json:"agent_token_available"`
 }
 
 type NodeDeleteResult struct {
@@ -98,10 +105,12 @@ func CreateNode(input NodeInput) (*NodeView, error) {
 	if err != nil {
 		return nil, err
 	}
-	node.AgentToken, err = newRandomToken()
+	agentToken, err := newRandomToken()
 	if err != nil {
 		return nil, err
 	}
+	node.AgentTokenHash = security.HashSecretToken(agentToken)
+	node.AgentTokenPrefix = security.SecretTokenPrefix(agentToken)
 	if !node.GeoManualOverride {
 		applyGeoInfoFromIP(node, node.IP)
 	}
@@ -113,9 +122,9 @@ func CreateNode(input NodeInput) (*NodeView, error) {
 		}
 		return nil, err
 	}
-	refreshAgentTokenCache(node)
+	refreshAgentTokenCacheForToken(agentToken, node)
 	slog.Info("node created", "name", node.Name, "node_id", node.NodeID)
-	return buildNodeView(node), nil
+	return buildNodeViewWithAgentToken(node, agentToken), nil
 }
 
 func UpdateNode(id uint, input NodeInput) (*NodeView, error) {
@@ -173,7 +182,7 @@ func DeleteNode(id uint) (*NodeDeleteResult, error) {
 	if err := node.Delete(); err != nil {
 		return nil, err
 	}
-	invalidateAgentTokenCache(node.AgentToken)
+	invalidateAgentTokenCacheForNode(node)
 	return result, nil
 }
 
@@ -254,6 +263,34 @@ func RequestNodeForceSync(id uint) (*NodeView, error) {
 	return buildNodeView(node), nil
 }
 
+func RotateNodeAgentToken(id uint) (*NodeAgentTokenView, error) {
+	node, err := model.GetNodeByID(id)
+	if err != nil {
+		return nil, err
+	}
+	oldToken := node.AgentToken
+	oldHash := node.AgentTokenHash
+	token, err := newRandomToken()
+	if err != nil {
+		return nil, err
+	}
+	if err = model.StoreNodeAgentTokenHash(node.ID, token); err != nil {
+		return nil, err
+	}
+	if oldToken != "" {
+		invalidateAgentTokenCache(oldToken)
+	}
+	if oldHash != "" {
+		invalidateAgentTokenCache(oldHash)
+	}
+	node.AgentToken = ""
+	node.AgentTokenHash = security.HashSecretToken(token)
+	node.AgentTokenPrefix = security.SecretTokenPrefix(token)
+	refreshAgentTokenCacheForToken(token, node)
+	slog.Info("node agent token rotated", "node_id", node.NodeID, "name", node.Name)
+	return buildNodeAgentTokenView(token), nil
+}
+
 func AuthenticateAgentToken(token string) (*model.Node, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -292,6 +329,9 @@ func AuthenticateLegacyAgentTokenForNode(token string, nodeID string) (*model.No
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(node.AgentTokenHash) != "" || strings.TrimSpace(node.AgentTokenPrefix) != "" {
+		return nil, errors.New("节点已切换为专属 Agent Token")
+	}
 	nodeAgentToken := strings.TrimSpace(node.AgentToken)
 	if nodeAgentToken != "" && nodeAgentToken != strings.TrimSpace(common.AgentToken) {
 		return nil, errors.New("节点已切换为专属 Agent Token")
@@ -304,18 +344,28 @@ func AuthenticateLegacyAgentTokenForNode(token string, nodeID string) (*model.No
 }
 
 func ValidateDiscoveryToken(token string) error {
+	return validateDiscoveryTokenValue(token)
+}
+
+func validateDiscoveryTokenValue(token string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return errors.New("缺少 Discovery Token")
+		return errors.New("missing Discovery Token")
 	}
-	discoveryToken, err := EnsureGlobalDiscoveryToken()
-	if err != nil {
-		return err
+	discoveryToken := strings.TrimSpace(common.GetOptionValue("AgentDiscoveryToken"))
+	if discoveryToken == "" {
+		return errors.New("Discovery Token is not initialized")
+	}
+	if security.IsHashedSecretToken(discoveryToken) {
+		if !security.VerifySecretTokenHash(token, discoveryToken) {
+			return errors.New("Discovery Token invalid")
+		}
+		return nil
 	}
 	if !constantTimeTokenEqual(token, discoveryToken) {
-		return errors.New("Discovery Token 无效")
+		return errors.New("Discovery Token invalid")
 	}
-	return nil
+	return model.UpdateOption("AgentDiscoveryToken", security.HashSecretToken(token))
 }
 
 func constantTimeTokenEqual(a string, b string) bool {
@@ -342,7 +392,7 @@ func EnsureGlobalDiscoveryToken() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err = model.UpdateOption("AgentDiscoveryToken", token); err != nil {
+	if err = model.UpdateOption("AgentDiscoveryToken", security.HashSecretToken(token)); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -353,7 +403,7 @@ func GetNodeBootstrapView() (*NodeBootstrapView, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &NodeBootstrapView{DiscoveryToken: token}, nil
+	return buildNodeBootstrapView(token, false), nil
 }
 
 func RotateGlobalDiscoveryToken() (*NodeBootstrapView, error) {
@@ -361,10 +411,26 @@ func RotateGlobalDiscoveryToken() (*NodeBootstrapView, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = model.UpdateOption("AgentDiscoveryToken", token); err != nil {
+	if err = model.UpdateOption("AgentDiscoveryToken", security.HashSecretToken(token)); err != nil {
 		return nil, err
 	}
-	return &NodeBootstrapView{DiscoveryToken: token}, nil
+	return buildNodeBootstrapView(token, true), nil
+}
+
+func buildNodeBootstrapView(token string, reveal bool) *NodeBootstrapView {
+	token = strings.TrimSpace(token)
+	view := &NodeBootstrapView{
+		DiscoveryTokenAvailable: token != "",
+	}
+	if security.IsHashedSecretToken(token) {
+		view.DiscoveryTokenAvailable = true
+		return view
+	}
+	view.DiscoveryTokenPrefix = security.SecretTokenPrefix(token)
+	if reveal {
+		view.DiscoveryToken = token
+	}
+	return view
 }
 
 func buildNodeView(node *model.Node) *NodeView {
@@ -384,7 +450,8 @@ func buildNodeView(node *model.Node) *NodeView {
 		GeoLatitude:               node.GeoLatitude,
 		GeoLongitude:              node.GeoLongitude,
 		GeoManualOverride:         node.GeoManualOverride,
-		AgentToken:                node.AgentToken,
+		AgentTokenPrefix:          nodeAgentTokenPrefix(node),
+		AgentTokenAvailable:       nodeAgentTokenAvailable(node),
 		UpdateChannel:             strings.TrimSpace(node.UpdateChannel),
 		UpdateTag:                 strings.TrimSpace(node.UpdateTag),
 		RestartOpenrestyRequested: node.RestartOpenrestyRequested,
@@ -407,6 +474,40 @@ func buildNodeView(node *model.Node) *NodeView {
 	}
 	applyNodeViewTargetConfig(view, node)
 	return view
+}
+
+func buildNodeViewWithAgentToken(node *model.Node, token string) *NodeView {
+	view := buildNodeView(node)
+	view.AgentToken = strings.TrimSpace(token)
+	view.AgentTokenPrefix = security.SecretTokenPrefix(token)
+	view.AgentTokenAvailable = view.AgentToken != ""
+	return view
+}
+
+func buildNodeAgentTokenView(token string) *NodeAgentTokenView {
+	token = strings.TrimSpace(token)
+	return &NodeAgentTokenView{
+		AgentToken:          token,
+		AgentTokenPrefix:    security.SecretTokenPrefix(token),
+		AgentTokenAvailable: token != "",
+	}
+}
+
+func nodeAgentTokenPrefix(node *model.Node) string {
+	if node == nil {
+		return ""
+	}
+	if prefix := strings.TrimSpace(node.AgentTokenPrefix); prefix != "" {
+		return prefix
+	}
+	return security.SecretTokenPrefix(node.AgentToken)
+}
+
+func nodeAgentTokenAvailable(node *model.Node) bool {
+	if node == nil {
+		return false
+	}
+	return strings.TrimSpace(node.AgentTokenHash) != "" || strings.TrimSpace(node.AgentToken) != ""
 }
 
 func applyNodeViewTargetConfig(view *NodeView, node *model.Node) {
@@ -750,7 +851,7 @@ func RegisterNodeWithAgentToken(node *model.Node, payload AgentNodePayload) (*Ag
 	slog.Info("agent register succeeded on reserved node", "node_id", node.NodeID, "name", node.Name)
 	return &AgentRegistrationResponse{
 		NodeID:     node.NodeID,
-		AgentToken: node.AgentToken,
+		AgentToken: "",
 		Name:       node.Name,
 	}, nil
 }
@@ -773,9 +874,10 @@ func RegisterNodeWithDiscovery(payload AgentNodePayload) (*AgentRegistrationResp
 		nodeName = nodeID
 	}
 	node := &model.Node{
-		NodeID:     nodeID,
-		Name:       nodeName,
-		AgentToken: agentToken,
+		NodeID:           nodeID,
+		Name:             nodeName,
+		AgentTokenHash:   security.HashSecretToken(agentToken),
+		AgentTokenPrefix: security.SecretTokenPrefix(agentToken),
 	}
 	applyNodeRuntime(node, payload, false)
 	if err = withCommercialResourceCreation("node", func(tx *gorm.DB) error {
@@ -786,11 +888,11 @@ func RegisterNodeWithDiscovery(payload AgentNodePayload) (*AgentRegistrationResp
 		}
 		return nil, err
 	}
-	refreshAgentTokenCache(node)
+	refreshAgentTokenCacheForToken(agentToken, node)
 	slog.Info("agent discovery register succeeded", "node_id", node.NodeID, "name", node.Name)
 	return &AgentRegistrationResponse{
 		NodeID:     node.NodeID,
-		AgentToken: node.AgentToken,
+		AgentToken: agentToken,
 		Name:       node.Name,
 	}, nil
 }
@@ -802,9 +904,9 @@ func normalizeAgentNodePayload(payload AgentNodePayload) AgentNodePayload {
 	payload.NginxVersion = strings.TrimSpace(payload.NginxVersion)
 	payload.CurrentVersion = strings.TrimSpace(payload.CurrentVersion)
 	payload.CurrentChecksum = strings.TrimSpace(payload.CurrentChecksum)
-	payload.LastError = truncateForDatabase(payload.LastError, 16000)
+	payload.LastError = truncateForDatabase(security.RedactSensitiveText(payload.LastError), 16000)
 	payload.OpenrestyStatus = normalizeOpenrestyStatus(payload.OpenrestyStatus)
-	payload.OpenrestyMessage = truncateForDatabase(payload.OpenrestyMessage, 16000)
+	payload.OpenrestyMessage = truncateForDatabase(security.RedactSensitiveText(payload.OpenrestyMessage), 16000)
 	return payload
 }
 
@@ -878,11 +980,7 @@ func normalizeOpenrestyStatus(status string) string {
 }
 
 func newRandomToken() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
+	return security.GenerateSecretToken()
 }
 
 func newServerNodeID() (string, error) {

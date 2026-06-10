@@ -42,6 +42,7 @@ Behavior:
   3. In sqlite mode, uses sqlite3 .backup when available, otherwise copies the db file
   4. Archives DATA_DIR when it exists
   5. Writes a manifest with paths and checksums
+  6. Stores backup outputs with owner-only permissions by default
 
 This script only creates backup files. It does not stop, restore, overwrite, or
 delete any production data.
@@ -154,10 +155,13 @@ if [[ -z "$SQLITE_PATH" ]]; then
 fi
 SQLITE_PATH="$(abs_path "$SQLITE_PATH")"
 
+umask 077
 mkdir -p "$BACKUP_DIR"
+chmod 0700 "$BACKUP_DIR"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 DEST_DIR="${BACKUP_DIR}/${TIMESTAMP}"
 mkdir -p "$DEST_DIR"
+chmod 0700 "$DEST_DIR"
 
 compose_cmd=(docker compose)
 if [[ -n "$ENV_FILE" && -f "$ENV_FILE" ]]; then
@@ -181,6 +185,7 @@ backup_data_dir() {
   local archive="${DEST_DIR}/dushengcdn-data-${TIMESTAMP}.tar.gz"
   log "archiving data directory: $DATA_DIR"
   tar -czf "$archive" -C "$(dirname "$DATA_DIR")" "$(basename "$DATA_DIR")"
+  chmod 0600 "$archive"
 }
 
 backup_postgres() {
@@ -192,6 +197,7 @@ backup_postgres() {
     rm -f "$dump_file"
     die "pg_dump failed"
   fi
+  chmod 0600 "$dump_file"
 }
 
 backup_sqlite() {
@@ -207,6 +213,7 @@ backup_sqlite() {
     warn "sqlite3 not found; copying SQLite file directly"
     cp -p "$SQLITE_PATH" "$sqlite_file"
   fi
+  chmod 0600 "$sqlite_file"
 }
 
 ACTUAL_MODE="$MODE"
@@ -248,6 +255,7 @@ MANIFEST="${DEST_DIR}/manifest.txt"
     (cd "$DEST_DIR" && sha256sum ./* 2>/dev/null | grep -v "manifest.txt" || true)
   fi
 } > "$MANIFEST"
+chmod 0600 "$MANIFEST"
 
 log "backup complete: $DEST_DIR"
 log "manifest: $MANIFEST"

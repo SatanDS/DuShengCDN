@@ -160,10 +160,15 @@ jobs:
             echo "DUSHENGCDN_LICENSE_PUBLIC_KEYS secret is required for commercial server builds" >&2
             exit 1
           fi
+          private_key_file="$RUNNER_TEMP/dushengcdn-release-signing-key"
+          install -m 0600 /dev/null "$private_key_file"
+          printf '%s' "$RELEASE_SIGNING_PRIVATE_KEY" > "$private_key_file"
+          unset RELEASE_SIGNING_PRIVATE_KEY
+          trap 'rm -f "$private_key_file"' EXIT
           mkdir -p ../dist
           "$GARBLE" -literals build -trimpath -buildvcs=false -ldflags "-s -w -X 'dushengcdn/common.Version=$VERSION' -X 'dushengcdn/common.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY' -X 'dushengcdn/common.CommercialBuildMode=required-online' -X 'dushengcdn/common.CommercialBuildWatermark=$BUILD_WATERMARK' -X 'dushengcdn/common.CommercialLicensePublicKeys=$COMMERCIAL_LICENSE_PUBLIC_KEYS'" -o "../dist/$ASSET_NAME" .
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
-          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
+          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key-file "$private_key_file" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v7
@@ -227,10 +232,15 @@ jobs:
             echo "release signing secrets are required" >&2
             exit 1
           fi
+          private_key_file="$RUNNER_TEMP/dushengcdn-release-signing-key"
+          install -m 0600 /dev/null "$private_key_file"
+          printf '%s' "$RELEASE_SIGNING_PRIVATE_KEY" > "$private_key_file"
+          unset RELEASE_SIGNING_PRIVATE_KEY
+          trap 'rm -f "$private_key_file"' EXIT
           mkdir -p ../dist
           "$GARBLE" -literals build -trimpath -buildvcs=false -ldflags "-s -w -X 'dushengcdn-agent/internal/config.AgentVersion=$VERSION' -X 'dushengcdn-agent/internal/config.ReleaseSignaturePublicKey=$RELEASE_SIGNATURE_PUBLIC_KEY'" -o "../dist/$ASSET_NAME" ./cmd/agent
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
-          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
+          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key-file "$private_key_file" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload Agent Artifact
         uses: actions/upload-artifact@v7
@@ -296,10 +306,15 @@ jobs:
             echo "release signing private key is required" >&2
             exit 1
           fi
+          private_key_file="$RUNNER_TEMP/dushengcdn-release-signing-key"
+          install -m 0600 /dev/null "$private_key_file"
+          printf '%s' "$RELEASE_SIGNING_PRIVATE_KEY" > "$private_key_file"
+          unset RELEASE_SIGNING_PRIVATE_KEY
+          trap 'rm -f "$private_key_file"' EXIT
           mkdir -p ../dist
           "$GARBLE" -literals build -trimpath -buildvcs=false -ldflags "-s -w -X 'main.version=$VERSION'" -o "../dist/$ASSET_NAME" ./cmd/dns-worker
           (cd ../dist && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
-          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
+          GOOS= GOARCH= go run ../scripts/sign-release-asset.go -private-key-file "$private_key_file" -tag "$VERSION" -asset "$ASSET_NAME" -checksum-file "../dist/$ASSET_NAME.sha256" -signature-file "../dist/$ASSET_NAME.sig"
 
       - name: Upload DNS Worker Artifact
         uses: actions/upload-artifact@v7
@@ -374,6 +389,11 @@ jobs:
             echo "release signing secrets are required" >&2
             exit 1
           fi
+          private_key_file="$RUNNER_TEMP/dushengcdn-release-signing-key"
+          install -m 0600 /dev/null "$private_key_file"
+          printf '%s' "$RELEASE_SIGNING_PRIVATE_KEY" > "$private_key_file"
+          unset RELEASE_SIGNING_PRIVATE_KEY
+          trap 'rm -f "$private_key_file"' EXIT
           sed "s|__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__|$RELEASE_SIGNATURE_PUBLIC_KEY|g" scripts/install-commercial.sh > dist/install-commercial.sh
           sed "s|__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__|$RELEASE_SIGNATURE_PUBLIC_KEY|g" scripts/install-agent.sh > dist/install-agent.sh
           sed "s|__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__|$RELEASE_SIGNATURE_PUBLIC_KEY|g" scripts/install-dns-worker.sh > dist/install-dns-worker.sh
@@ -384,9 +404,9 @@ jobs:
             sha256sum install-agent.sh > install-agent.sh.sha256
             sha256sum install-dns-worker.sh > install-dns-worker.sh.sha256
           )
-          GOOS= GOARCH= go run scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset install-commercial.sh -checksum-file dist/install-commercial.sh.sha256 -signature-file dist/install-commercial.sh.sig
-          GOOS= GOARCH= go run scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset install-agent.sh -checksum-file dist/install-agent.sh.sha256 -signature-file dist/install-agent.sh.sig
-          GOOS= GOARCH= go run scripts/sign-release-asset.go -private-key "$RELEASE_SIGNING_PRIVATE_KEY" -tag "$VERSION" -asset install-dns-worker.sh -checksum-file dist/install-dns-worker.sh.sha256 -signature-file dist/install-dns-worker.sh.sig
+          GOOS= GOARCH= go run scripts/sign-release-asset.go -private-key-file "$private_key_file" -tag "$VERSION" -asset install-commercial.sh -checksum-file dist/install-commercial.sh.sha256 -signature-file dist/install-commercial.sh.sig
+          GOOS= GOARCH= go run scripts/sign-release-asset.go -private-key-file "$private_key_file" -tag "$VERSION" -asset install-agent.sh -checksum-file dist/install-agent.sh.sha256 -signature-file dist/install-agent.sh.sig
+          GOOS= GOARCH= go run scripts/sign-release-asset.go -private-key-file "$private_key_file" -tag "$VERSION" -asset install-dns-worker.sh -checksum-file dist/install-dns-worker.sh.sha256 -signature-file dist/install-dns-worker.sh.sig
 
       - name: Generate Release Notes
         id: release_notes

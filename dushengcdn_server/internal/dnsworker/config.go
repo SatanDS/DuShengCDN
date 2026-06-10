@@ -3,6 +3,7 @@ package dnsworker
 import (
 	"errors"
 	"flag"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -35,6 +36,7 @@ type Config struct {
 }
 
 func LoadConfig(args []string, version string) (*Config, error) {
+	tokenFile := strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_TOKEN_FILE"))
 	cfg := &Config{
 		ServerURL:                strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SERVER_URL")),
 		Token:                    strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_TOKEN")),
@@ -60,6 +62,7 @@ func LoadConfig(args []string, version string) (*Config, error) {
 	fs := flag.NewFlagSet("dns-worker", flag.ContinueOnError)
 	fs.StringVar(&cfg.ServerURL, "server-url", cfg.ServerURL, "DuShengCDN Server URL")
 	fs.StringVar(&cfg.Token, "token", cfg.Token, "DNS Worker token")
+	fs.StringVar(&tokenFile, "token-file", tokenFile, "file containing DNS Worker token")
 	fs.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "DNS UDP/TCP listen address")
 	fs.StringVar(&cfg.SnapshotPath, "snapshot-path", cfg.SnapshotPath, "local snapshot cache path")
 	fs.StringVar(&cfg.InstallDir, "install-dir", cfg.InstallDir, "DNS Worker install directory used by controlled self-update")
@@ -80,11 +83,36 @@ func LoadConfig(args []string, version string) (*Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	tokenFlagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "token" {
+			tokenFlagSet = true
+		}
+	})
+	if err := applyTokenFile(cfg, tokenFile, tokenFlagSet); err != nil {
+		return nil, err
+	}
 	applyConfigDefaults(cfg)
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func applyTokenFile(cfg *Config, tokenFile string, tokenFlagSet bool) error {
+	tokenFile = strings.TrimSpace(tokenFile)
+	if tokenFile == "" {
+		return nil
+	}
+	if tokenFlagSet {
+		return errors.New("use only one of --token and --token-file")
+	}
+	content, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return err
+	}
+	cfg.Token = strings.TrimSpace(string(content))
+	return nil
 }
 
 func applyConfigDefaults(cfg *Config) {
@@ -152,6 +180,16 @@ func validateConfig(cfg *Config) error {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return errors.New("server-url format is invalid")
 	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	switch scheme {
+	case "https":
+	case "http":
+		if !isLoopbackServerHost(parsed.Hostname()) {
+			return errors.New("server-url must use https unless it points to localhost or a loopback IP")
+		}
+	default:
+		return errors.New("server-url scheme must be https")
+	}
 	if strings.TrimSpace(cfg.Token) == "" {
 		return errors.New("token cannot be empty")
 	}
@@ -183,6 +221,15 @@ func validateConfig(cfg *Config) error {
 		return errors.New("ecs-ipv6-prefix must be between 0 and 128")
 	}
 	return nil
+}
+
+func isLoopbackServerHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func parseDurationEnv(key string, fallback time.Duration) time.Duration {

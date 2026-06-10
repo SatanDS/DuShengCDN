@@ -5,7 +5,7 @@ set -euo pipefail
 # Usage:
 #   curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-dns-worker.sh | bash -s -- \
 #     --server-url https://cdn.example.com \
-#     --token your-dns-worker-token
+#     --token-file /run/secrets/dushengcdn-dns-worker-token
 
 INSTALL_DIR="/opt/dushengcdn-dns-worker"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
@@ -15,8 +15,12 @@ ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
 RELEASE_CHANNEL="${DUSHENGCDN_DNS_WORKER_RELEASE_CHANNEL:-stable}"
 RELEASE_TAG="${DUSHENGCDN_DNS_WORKER_RELEASE_TAG:-}"
 SERVER_URL=""
+WORKER_ID="${DUSHENGCDN_DNS_WORKER_ID:-}"
 TOKEN=""
+TOKEN_FILE=""
+PERSISTED_TOKEN_FILE=""
 SERVICE_NAME="${DUSHENGCDN_DNS_WORKER_SERVICE_NAME:-}"
+SERVICE_USER="${DUSHENGCDN_DNS_WORKER_SERVICE_USER:-dushengcdn-dns-worker}"
 CREATE_SERVICE="true"
 AUTO_INSTALL_DEPS="true"
 LISTEN_ADDR="${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-}"
@@ -46,6 +50,7 @@ LOG_LEVEL_VALUE="${LOG_LEVEL:-}"
 DUSHENGCDN_BUILD_GO_DIR="${DUSHENGCDN_BUILD_GO_DIR:-/opt/dushengcdn-build/go}"
 OPENSSL_BIN=""
 FORCE_OVERWRITE_ENV="false"
+ALLOW_INSECURE_TOKEN_ARGV="false"
 
 usage() {
   cat <<EOF
@@ -56,8 +61,12 @@ Usage:
 
 Options:
   --server-url URL           Server URL (required)
-  --token TOKEN              DNS Worker token (required)
+  --worker-id ID             DNS Worker ID used to bind Agent-mediated updates
+  --token TOKEN              DNS Worker token (prefer --token-file)
   --dns-worker-token TOKEN   Alias of --token
+  --token-file FILE          Read DNS Worker token from FILE instead of argv
+  --allow-insecure-token-argv
+                            Allow token values in argv for legacy automation; prefer --token-file
   --install-dir DIR          Installation directory (default: /opt/dushengcdn-dns-worker)
   --listen ADDR              DNS UDP/TCP listen address (default: :53)
   --snapshot-path PATH       Snapshot cache path (default: INSTALL_DIR/data/dns-worker-snapshot.json)
@@ -89,6 +98,7 @@ Options:
   --udp-response-size NUM    Maximum UDP DNS response payload size (default: 1232)
   --log-level LEVEL          debug, info, warn, or error (default: info)
   --service-name NAME        systemd service name (default: dushengcdn-dns-worker)
+  --service-user USER        systemd user to run the Worker (default: ${SERVICE_USER})
   --repo REPO                GitHub release repository (default: ${REPO})
   --release-channel CHANNEL  Release channel: stable or preview (default: stable)
   --release-tag TAG          Install a specific release tag
@@ -101,10 +111,10 @@ Options:
   -h, --help                 Show this help message
 
 Examples:
-  install-dns-worker.sh --server-url https://cdn.example.com --token worker-token
-  install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --geoip-database /var/lib/GeoLite2-Country.mmdb
-  install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --source-database-profile operator
-  install-dns-worker.sh --server-url https://cdn.example.com --token worker-token --no-source-database-download
+  install-dns-worker.sh --server-url https://cdn.example.com --token-file /run/secrets/dushengcdn-dns-worker-token
+  install-dns-worker.sh --server-url https://cdn.example.com --token-file /run/secrets/dushengcdn-dns-worker-token --geoip-database /var/lib/GeoLite2-Country.mmdb
+  install-dns-worker.sh --server-url https://cdn.example.com --token-file /run/secrets/dushengcdn-dns-worker-token --source-database-profile operator
+  install-dns-worker.sh --server-url https://cdn.example.com --token-file /run/secrets/dushengcdn-dns-worker-token --no-source-database-download
 
 Notes:
   The full preset downloads Country + ASN MMDBs and gaoyifan/china-operator-ip operator CIDR lists.
@@ -116,10 +126,28 @@ EOF
   exit 0
 }
 
+accept_insecure_token_arg() {
+  local option_name="$1"
+  if [[ "$ALLOW_INSECURE_TOKEN_ARGV" != "true" ]]; then
+    die "${option_name} exposes the DNS Worker token in shell history and process arguments; use --token-file or pass --allow-insecure-token-argv only for legacy automation."
+  fi
+  echo "Warning: ${option_name} exposes the DNS Worker token in shell history and process arguments; prefer --token-file" >&2
+}
+
+for arg in "$@"; do
+  if [[ "$arg" == "--allow-insecure-token-argv" ]]; then
+    ALLOW_INSECURE_TOKEN_ARGV="true"
+    break
+  fi
+done
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --server-url) SERVER_URL="$2"; shift 2 ;;
-    --token|--dns-worker-token) TOKEN="$2"; shift 2 ;;
+    --worker-id) WORKER_ID="$2"; shift 2 ;;
+    --allow-insecure-token-argv) ALLOW_INSECURE_TOKEN_ARGV="true"; shift ;;
+    --token|--dns-worker-token) accept_insecure_token_arg "$1"; TOKEN="$2"; shift 2 ;;
+    --token-file) TOKEN_FILE="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --listen) LISTEN_ADDR="$2"; shift 2 ;;
     --snapshot-path) SNAPSHOT_PATH="$2"; shift 2 ;;
@@ -144,6 +172,7 @@ while [[ $# -gt 0 ]]; do
     --udp-response-size) UDP_RESPONSE_SIZE="$2"; shift 2 ;;
     --log-level) LOG_LEVEL_VALUE="$2"; shift 2 ;;
     --service-name) SERVICE_NAME="$2"; shift 2 ;;
+    --service-user) SERVICE_USER="$2"; shift 2 ;;
     --repo) REPO="$2"; shift 2 ;;
     --release-channel) RELEASE_CHANNEL="$2"; shift 2 ;;
     --release-tag) RELEASE_TAG="$2"; shift 2 ;;
@@ -160,6 +189,10 @@ done
 
 log() {
   echo "==> $*"
+}
+
+warn() {
+  echo "Warning: $*" >&2
 }
 
 die() {
@@ -188,21 +221,134 @@ write_file_as_root() {
   rm -f "$tmp"
 }
 
+chown_file_as_root() {
+  local target="$1"
+  local owner="$2"
+  local group="$3"
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "${owner}:${group}" "$target"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo chown "${owner}:${group}" "$target"
+  else
+    die "this operation requires root or sudo."
+  fi
+}
+
+file_uid() {
+  if stat -c '%u' "$1" >/dev/null 2>&1; then
+    stat -c '%u' "$1"
+    return 0
+  fi
+  if stat -f '%u' "$1" >/dev/null 2>&1; then
+    stat -f '%u' "$1"
+    return 0
+  fi
+  return 1
+}
+
+ensure_trusted_existing_env_file() {
+  local env_file="$1"
+  local mode mode_digits group_digit other_digit uid
+
+  [[ -f "$env_file" ]] || return 0
+  mode="$(stat -c '%a' "$env_file" 2>/dev/null || stat -f '%Lp' "$env_file" 2>/dev/null || true)"
+  mode_digits="${mode: -3}"
+  group_digit="${mode_digits:1:1}"
+  other_digit="${mode_digits:2:1}"
+  case "$group_digit$other_digit" in
+    *[2367]*)
+      die "refusing to source writable existing env file: ${env_file}; rerun with --force-overwrite-env to replace it"
+      ;;
+  esac
+  if [[ "$(uname -s | tr '[:upper:]' '[:lower:]')" == "linux" ]]; then
+    uid="$(file_uid "$env_file" 2>/dev/null || true)"
+    if [[ "$uid" != "0" ]]; then
+      die "refusing to source non-root-owned existing env file: ${env_file}; rerun with --force-overwrite-env to replace it"
+    fi
+  fi
+}
+
 env_quote() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  printf '"%s"' "$value"
+	local value="$1"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	printf '"%s"' "$value"
+}
+
+load_token_file() {
+  local value
+  [[ -n "$TOKEN_FILE" ]] || return 0
+  [[ -f "$TOKEN_FILE" ]] || die "--token-file does not exist: ${TOKEN_FILE}"
+  value="$(head -n 1 "$TOKEN_FILE" | tr -d '\r\n')"
+  [[ -n "$value" ]] || die "--token-file is empty: ${TOKEN_FILE}"
+  TOKEN="$value"
+}
+
+read_token_file_value() {
+  local file_path="$1"
+  local value
+  [[ -n "$file_path" && -f "$file_path" ]] || return 1
+  if [[ -r "$file_path" ]]; then
+    value="$(head -n 1 "$file_path" | tr -d '\r\n')"
+  else
+    value="$(run_as_root head -n 1 "$file_path" | tr -d '\r\n')"
+  fi
+  [[ -n "$value" ]] || return 1
+  printf '%s' "$value"
+}
+
+persist_dns_worker_token_file() {
+  local token_file_dir="$1"
+  local token_file_path="$2"
+
+  [[ -n "$TOKEN" ]] || die "DNS Worker token is required"
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root mkdir -p "$token_file_dir"
+    chown_file_as_root "$token_file_dir" root "$SERVICE_USER"
+    run_as_root chmod 0750 "$token_file_dir"
+    write_file_as_root "$token_file_path" "0640" <<TOKENEOF
+$TOKEN
+TOKENEOF
+    chown_file_as_root "$token_file_path" root "$SERVICE_USER"
+  else
+    (umask 077 && mkdir -p "$token_file_dir")
+    chmod 0750 "$token_file_dir"
+    (umask 077 && cat > "$token_file_path") <<TOKENEOF
+$TOKEN
+TOKENEOF
+    chmod 0600 "$token_file_path"
+  fi
+  PERSISTED_TOKEN_FILE="$token_file_path"
+}
+
+curl_with_dns_worker_token() {
+  local config_file status
+  [[ -n "$TOKEN" ]] || return 1
+  config_file="$(mktemp "/tmp/dushengcdn-dns-worker-curl.XXXXXX")"
+  chmod 0600 "$config_file"
+  {
+    printf 'header = "X-DNS-Worker-Token: %s"\n' "$TOKEN"
+  } > "$config_file"
+  curl -q --config "$config_file" "$@"
+  status=$?
+  rm -f "$config_file"
+  return "$status"
 }
 
 load_existing_env_defaults() {
   local env_file="${INSTALL_DIR}/dns-worker.env"
   [[ "$FORCE_OVERWRITE_ENV" != "true" && -f "$env_file" ]] || return 0
+  ensure_trusted_existing_env_file "$env_file"
   set -a
   # shellcheck disable=SC1090
   . "$env_file"
   set +a
   [[ -n "$SERVER_URL" ]] || SERVER_URL="${DUSHENGCDN_DNS_WORKER_SERVER_URL:-}"
+  [[ -n "$WORKER_ID" ]] || WORKER_ID="${DUSHENGCDN_DNS_WORKER_ID:-}"
+  if [[ -z "$TOKEN" && -n "${DUSHENGCDN_DNS_WORKER_TOKEN_FILE:-}" ]]; then
+    TOKEN="$(read_token_file_value "$DUSHENGCDN_DNS_WORKER_TOKEN_FILE" 2>/dev/null || true)"
+  fi
   [[ -n "$TOKEN" ]] || TOKEN="${DUSHENGCDN_DNS_WORKER_TOKEN:-}"
   [[ -n "$LISTEN_ADDR" ]] || LISTEN_ADDR="${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-:53}"
   [[ -n "$SNAPSHOT_PATH" ]] || SNAPSHOT_PATH="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-}"
@@ -376,6 +522,87 @@ validate_service_name() {
       die "refusing to use unsafe systemd service name: ${SERVICE_NAME}"
       ;;
   esac
+}
+
+validate_service_user() {
+  if [[ -z "$SERVICE_USER" ]]; then
+    die "--service-user cannot be empty"
+  fi
+  case "$SERVICE_USER" in
+    root|[a-z_][a-z0-9_-]*)
+      ;;
+    *)
+      die "refusing to use unsafe systemd service user: ${SERVICE_USER}"
+      ;;
+  esac
+}
+
+ensure_service_user() {
+  if [[ "$SERVICE_USER" == "root" ]]; then
+    warn "DNS Worker service will run as root because --service-user root was requested."
+    return
+  fi
+  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    return
+  fi
+  command -v useradd >/dev/null 2>&1 || die "useradd is required to create service user ${SERVICE_USER}; pass --service-user root only if you accept the risk"
+  local nologin_shell="/usr/sbin/nologin"
+  if [[ ! -x "$nologin_shell" ]]; then
+    nologin_shell="/sbin/nologin"
+  fi
+  run_as_root useradd --system --home-dir "$INSTALL_DIR" --shell "$nologin_shell" --user-group "$SERVICE_USER"
+}
+
+append_unique_path() {
+  local path="$1"
+  shift
+  local existing
+
+  [[ -n "$path" ]] || return 0
+  for existing in "$@"; do
+    if [[ "$existing" == "$path" ]]; then
+      return 1
+    fi
+  done
+  printf '%s\n' "$path"
+}
+
+dns_worker_writable_paths() {
+  local paths=("${INSTALL_DIR}/data")
+  local candidate appended operator_path
+
+  if [[ -n "$OPERATOR_CIDR_DATABASE" ]]; then
+    if [[ -e "$OPERATOR_CIDR_DATABASE" && ! -d "$OPERATOR_CIDR_DATABASE" ]]; then
+      operator_path="$(dirname "$OPERATOR_CIDR_DATABASE")"
+    else
+      operator_path="$OPERATOR_CIDR_DATABASE"
+    fi
+  fi
+
+  for candidate in \
+    "$(dirname "$SNAPSHOT_PATH")" \
+    "$SOURCE_DATABASE_METADATA_DIR" \
+    "$(dirname "${GEOIP_DATABASE:-}")" \
+    "$(dirname "${ASN_DATABASE:-}")" \
+    "${operator_path:-}"; do
+    [[ -n "$candidate" && "$candidate" != "." ]] || continue
+    appended="$(append_unique_path "$candidate" "${paths[@]}")" || true
+    if [[ -n "$appended" ]]; then
+      paths+=("$appended")
+    fi
+  done
+
+  printf '%s' "${paths[*]}"
+}
+
+chown_dns_worker_writable_paths() {
+  local path
+
+  [[ "$SERVICE_USER" != "root" ]] || return 0
+  for path in $(dns_worker_writable_paths); do
+    run_as_root mkdir -p "$path"
+    run_as_root chown -R "${SERVICE_USER}:${SERVICE_USER}" "$path"
+  done
 }
 
 validate_build_go_dir() {
@@ -885,7 +1112,7 @@ fetch_server_source_database_manifest() {
   if [[ -z "$SERVER_URL" || -z "$TOKEN" ]]; then
     return 1
   fi
-  curl -fsSL -H "X-DNS-Worker-Token: ${TOKEN}" -o "$output" "$url"
+  curl_with_dns_worker_token -fsSL -o "$output" "$url"
 }
 
 manifest_source_updated_at() {
@@ -967,7 +1194,7 @@ download_source_database_file_from_server() {
     tmp="$(mktemp "${parent}/.${name}.XXXXXX")"
   fi
   headers="$(mktemp "/tmp/dushengcdn-dns-worker-source-headers.XXXXXX")"
-  if ! curl -fsSL -D "$headers" -H "X-DNS-Worker-Token: ${TOKEN}" -o "$tmp" "$url"; then
+  if ! curl_with_dns_worker_token -fsSL -D "$headers" -o "$tmp" "$url"; then
     rm -f "$tmp"
     rm -f "$headers"
     return 1
@@ -1526,7 +1753,12 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 SERVER_URL="${DUSHENGCDN_DNS_WORKER_SERVER_URL:-}"
-TOKEN="${DUSHENGCDN_DNS_WORKER_TOKEN:-}"
+TOKEN_FILE="${DUSHENGCDN_DNS_WORKER_TOKEN_FILE:-}"
+TOKEN=""
+if [[ -n "$TOKEN_FILE" && -f "$TOKEN_FILE" ]]; then
+  TOKEN="$(head -n 1 "$TOKEN_FILE" | tr -d '\r\n')"
+fi
+[[ -n "$TOKEN" ]] || TOKEN="${DUSHENGCDN_DNS_WORKER_TOKEN:-}"
 PROFILE="${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}"
 GEOIP_DATABASE="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH:-}"
 ASN_DATABASE="${DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH:-}"
@@ -1620,6 +1852,18 @@ METADATAEOF
   chmod 0644 "$(meta_path "$kind" "$name")"
 }
 
+curl_with_dns_worker_token() {
+  local config_file status
+  [[ -n "$TOKEN" ]] || return 1
+  config_file="$(mktemp "${WORK_DIR}/curl.XXXXXX")"
+  chmod 0600 "$config_file"
+  printf 'header = "X-DNS-Worker-Token: %s"\n' "$TOKEN" > "$config_file"
+  curl -q --config "$config_file" "$@"
+  status=$?
+  rm -f "$config_file"
+  return "$status"
+}
+
 local_epoch() {
   local updated epoch
   updated="$(read_meta_value "$1" "$2" updated_at 2>/dev/null || true)"
@@ -1688,7 +1932,7 @@ download_file() {
   tmp="$(mktemp "${parent}/.${name}.XXXXXX")"
   headers="$(mktemp "${WORK_DIR}/headers.XXXXXX")"
   if [[ "$auth" == "true" ]]; then
-    if ! curl -fsSL -D "$headers" -H "X-DNS-Worker-Token: ${TOKEN}" -o "$tmp" "$url"; then
+    if ! curl_with_dns_worker_token -fsSL -D "$headers" -o "$tmp" "$url"; then
       rm -f "$tmp" "$headers"
       return 1
     fi
@@ -1748,7 +1992,7 @@ download_file() {
 fetch_manifest() {
   local output="$1"
   [[ -n "$SERVER_URL" && -n "$TOKEN" ]] || return 1
-  curl -fsSL -H "X-DNS-Worker-Token: ${TOKEN}" -o "$output" "${SERVER_URL%/}/api/dns-source-databases/manifest"
+  curl_with_dns_worker_token -fsSL -o "$output" "${SERVER_URL%/}/api/dns-source-databases/manifest"
 }
 
 manifest_source_updated_at() {
@@ -1933,7 +2177,12 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 SERVER_URL="${DUSHENGCDN_DNS_WORKER_SERVER_URL:-}"
-TOKEN="${DUSHENGCDN_DNS_WORKER_TOKEN:-}"
+TOKEN_FILE="${DUSHENGCDN_DNS_WORKER_TOKEN_FILE:-}"
+TOKEN=""
+if [[ -n "$TOKEN_FILE" && -f "$TOKEN_FILE" ]]; then
+  TOKEN="$(head -n 1 "$TOKEN_FILE" | tr -d '\r\n')"
+fi
+[[ -n "$TOKEN" ]] || TOKEN="${DUSHENGCDN_DNS_WORKER_TOKEN:-}"
 LISTEN_ADDR="${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-:53}"
 SNAPSHOT_PATH="${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-${INSTALL_DIR}/data/dns-worker-snapshot.json}"
 GEOIP_DATABASE="${DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH:-}"
@@ -1965,9 +2214,22 @@ if [[ -z "$SERVER_URL" || -z "$TOKEN" ]]; then
   exit 1
 fi
 
+token_file="${TOKEN_FILE:-}"
+if [[ -z "$token_file" || ! -f "$token_file" ]]; then
+  token_file="$(mktemp)"
+  chmod 0600 "$token_file"
+  printf '%s\n' "$TOKEN" > "$token_file"
+fi
+cleanup_token_file() {
+  if [[ "$token_file" != "${TOKEN_FILE:-}" ]]; then
+    rm -f "$token_file"
+  fi
+}
+trap cleanup_token_file EXIT
+
 args=(
   --server-url "$SERVER_URL"
-  --token "$TOKEN"
+  --token-file "$token_file"
   --install-dir "$INSTALL_DIR"
   --listen "$LISTEN_ADDR"
   --snapshot-path "$SNAPSHOT_PATH"
@@ -2006,6 +2268,7 @@ sig_file="$(mktemp)"
 release_json="$(mktemp)"
 cleanup() {
   rm -f "$installer" "$sha_file" "$sig_file" "$release_json"
+  cleanup_token_file
 }
 trap cleanup EXIT
 
@@ -2248,6 +2511,7 @@ UNINSTALLEREOF
 }
 
 load_existing_env_defaults
+load_token_file
 apply_dns_worker_defaults
 
 if [[ -z "$SERVER_URL" ]]; then
@@ -2270,6 +2534,7 @@ fi
 
 validate_install_dir
 validate_service_name
+validate_service_user
 validate_build_go_dir
 normalize_source_database_profile
 if [[ -z "$SNAPSHOT_PATH" ]]; then
@@ -2375,6 +2640,9 @@ fi
 check_listen_port_available
 
 log "Installing to ${INSTALL_DIR}..."
+if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
+  ensure_service_user
+fi
 if [[ "$NEEDS_ROOT" == "true" ]]; then
   run_as_root mkdir -p "${INSTALL_DIR}/data"
   run_as_root mkdir -p "$(dirname "$SNAPSHOT_PATH")"
@@ -2393,13 +2661,26 @@ prepare_operator_cidr_database
 prune_source_database_metadata
 
 ENV_FILE="${INSTALL_DIR}/dns-worker.env"
-ENV_MODE="0600"
-UPDATE_ENABLED_VALUE="${DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED:-true}"
+ENV_MODE="0640"
+TOKEN_FILE_DIR="${INSTALL_DIR}/secrets"
+RUNTIME_TOKEN_FILE="${TOKEN_FILE_DIR}/dns-worker-token"
+persist_dns_worker_token_file "$TOKEN_FILE_DIR" "$RUNTIME_TOKEN_FILE"
+UPDATE_ENABLED_VALUE="${DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED:-}"
+if [[ -z "$UPDATE_ENABLED_VALUE" ]]; then
+  if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" && "$SERVICE_USER" != "root" ]]; then
+    UPDATE_ENABLED_VALUE="false"
+  else
+    UPDATE_ENABLED_VALUE="true"
+  fi
+elif [[ "$UPDATE_ENABLED_VALUE" == "true" && "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" && "$SERVICE_USER" != "root" ]]; then
+  warn "DNS Worker controlled self-update is enabled while the service runs as ${SERVICE_USER}; the update script may require sudo/root privileges."
+fi
 log "Writing DNS Worker environment file..."
 if [[ "$NEEDS_ROOT" == "true" ]]; then
   write_file_as_root "$ENV_FILE" "$ENV_MODE" <<ENVEOF
 DUSHENGCDN_DNS_WORKER_SERVER_URL=$(env_quote "$SERVER_URL")
-DUSHENGCDN_DNS_WORKER_TOKEN=$(env_quote "$TOKEN")
+DUSHENGCDN_DNS_WORKER_ID=$(env_quote "$WORKER_ID")
+DUSHENGCDN_DNS_WORKER_TOKEN_FILE=$(env_quote "$PERSISTED_TOKEN_FILE")
 DUSHENGCDN_DNS_WORKER_INSTALL_DIR=$(env_quote "$INSTALL_DIR")
 DUSHENGCDN_DNS_WORKER_UPDATE_SCRIPT=$(env_quote "${INSTALL_DIR}/update-dns-worker.sh")
 DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED=$(env_quote "$UPDATE_ENABLED_VALUE")
@@ -2426,7 +2707,8 @@ ENVEOF
 else
   cat > "$ENV_FILE" <<ENVEOF
 DUSHENGCDN_DNS_WORKER_SERVER_URL=$(env_quote "$SERVER_URL")
-DUSHENGCDN_DNS_WORKER_TOKEN=$(env_quote "$TOKEN")
+DUSHENGCDN_DNS_WORKER_ID=$(env_quote "$WORKER_ID")
+DUSHENGCDN_DNS_WORKER_TOKEN_FILE=$(env_quote "$PERSISTED_TOKEN_FILE")
 DUSHENGCDN_DNS_WORKER_INSTALL_DIR=$(env_quote "$INSTALL_DIR")
 DUSHENGCDN_DNS_WORKER_UPDATE_SCRIPT=$(env_quote "${INSTALL_DIR}/update-dns-worker.sh")
 DUSHENGCDN_DNS_WORKER_UPDATE_ENABLED=$(env_quote "$UPDATE_ENABLED_VALUE")
@@ -2456,9 +2738,16 @@ fi
 write_source_database_updater
 write_dns_worker_updater
 write_dns_worker_uninstaller
+if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" && "$SERVICE_USER" != "root" ]]; then
+  run_as_root chown root:root "$INSTALL_DIR"
+  run_as_root chmod 0755 "$INSTALL_DIR"
+  chown_file_as_root "$ENV_FILE" root "$SERVICE_USER"
+  chown_dns_worker_writable_paths
+fi
 
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
   log "Creating systemd service..."
+  DNS_WORKER_READ_WRITE_PATHS="$(dns_worker_writable_paths)"
   write_file_as_root "/etc/systemd/system/${SERVICE_NAME}.service" "0644" <<SVCEOF
 [Unit]
 Description=DuShengCDN DNS Worker
@@ -2470,11 +2759,17 @@ Type=simple
 EnvironmentFile=${ENV_FILE}
 ExecStart=${INSTALL_DIR}/dushengcdn-dns-worker
 WorkingDirectory=${INSTALL_DIR}
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
 Restart=always
 RestartSec=10
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=${DNS_WORKER_READ_WRITE_PATHS}
 
 [Install]
 WantedBy=multi-user.target
@@ -2493,7 +2788,14 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
 ExecStart=${INSTALL_DIR}/update-source-databases.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=${DNS_WORKER_READ_WRITE_PATHS}
 UPDSVCEOF
     write_file_as_root "/etc/systemd/system/${SERVICE_NAME}-source-database-update.timer" "0644" <<UPDTIMEREOF
 [Unit]

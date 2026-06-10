@@ -1355,11 +1355,22 @@ describe('Authoritative DNS page', () => {
     });
     expect(screen.getByDisplayValue('created-token')).toBeInTheDocument();
     expect(screen.getByText(/install-dns-worker\.sh/)).toBeInTheDocument();
-    expect(screen.getAllByText(/--token created-token/).length).toBeGreaterThan(
-      0,
-    );
     expect(
-      screen.getByText(/DUSHENGCDN_DNS_WORKER_TOKEN=created-token/),
+      screen.getByText(/--worker-id 'dns-worker-8'/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/--token-file "\$token_file"/).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/read -r dns_worker_token/).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        /DUSHENGCDN_DNS_WORKER_TOKEN_FILE=\/run\/secrets\/dushengcdn_dns_worker_token/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/DUSHENGCDN_DNS_WORKER_ID='dns-worker-8'/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200/),

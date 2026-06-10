@@ -101,3 +101,83 @@ func TestDNSAccountCreateOmitsAuthorizationFromResponse(t *testing.T) {
 		t.Fatal("expected DNS account response to omit authorization")
 	}
 }
+
+func TestDNSAccountUpdateWithEmptyAuthorizationPreservesStoredSecret(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	token := prepareRootToken(t)
+	createResp := performJSONRequest(t, engine, token, http.MethodPost, "/api/dns-accounts/", map[string]any{
+		"name":          "cloudflare-preserve",
+		"type":          "cloudflare",
+		"authorization": "original-token",
+	})
+	var created model.DnsAccount
+	decodeResponseData(t, createResp, &created)
+
+	updateResp := performJSONRequest(t, engine, token, http.MethodPost, "/api/dns-accounts/"+toString(created.ID)+"/update", map[string]any{
+		"name":          "cloudflare-renamed",
+		"type":          "cloudflare",
+		"authorization": "   ",
+	})
+
+	var updated model.DnsAccount
+	decodeResponseData(t, updateResp, &updated)
+	if updated.Name != "cloudflare-renamed" {
+		t.Fatalf("expected DNS account name to update, got %q", updated.Name)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(updateResp.Data, &raw); err != nil {
+		t.Fatalf("failed to decode DNS account update response: %v", err)
+	}
+	if _, ok := raw["authorization"]; ok {
+		t.Fatal("expected DNS account update response to omit authorization")
+	}
+
+	var stored model.DnsAccount
+	if err := model.DB.First(&stored, created.ID).Error; err != nil {
+		t.Fatalf("failed to load updated DNS account: %v", err)
+	}
+	if stored.Authorization != `{"api_token":"original-token"}` {
+		t.Fatalf("expected blank update to preserve authorization, got %q", stored.Authorization)
+	}
+}
+
+func TestDNSAccountUpdateWithAuthorizationRotatesStoredSecret(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	token := prepareRootToken(t)
+	createResp := performJSONRequest(t, engine, token, http.MethodPost, "/api/dns-accounts/", map[string]any{
+		"name":          "cloudflare-rotate",
+		"type":          "cloudflare",
+		"authorization": "original-token",
+	})
+	var created model.DnsAccount
+	decodeResponseData(t, createResp, &created)
+
+	performJSONRequest(t, engine, token, http.MethodPost, "/api/dns-accounts/"+toString(created.ID)+"/update", map[string]any{
+		"name":          "cloudflare-rotate",
+		"type":          "cloudflare",
+		"authorization": "Bearer rotated-token",
+	})
+
+	var stored model.DnsAccount
+	if err := model.DB.First(&stored, created.ID).Error; err != nil {
+		t.Fatalf("failed to load rotated DNS account: %v", err)
+	}
+	if stored.Authorization != `{"api_token":"rotated-token"}` {
+		t.Fatalf("expected non-empty update to rotate authorization, got %q", stored.Authorization)
+	}
+}

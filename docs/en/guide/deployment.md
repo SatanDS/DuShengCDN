@@ -115,7 +115,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: ${DSN:?set DSN in .env}
@@ -149,7 +149,7 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-Open `http://localhost:3000`. The first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first empty-database Server log when that variable is not set. Change the root password immediately after login.
+The example binds the management port to local loopback only. Open `http://localhost:3000` on the server itself, and publish production access through an HTTPS reverse proxy. The first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or read the generated one-time password from the `initial-root-password.txt` file named in the Server log. The log prints the file path, not the password. Change the root password immediately after login.
 
 Commercial or multi-instance deployments should also provide a Redis service and set `REDIS_CONN_STRING`. If Redis must not silently degrade to in-process helpers, set `REDIS_REQUIRED=true`. To enforce private commercial licensing, set `DUSHENGCDN_LICENSE_REQUIRED=true` and `DUSHENGCDN_LICENSE_PUBLIC_KEYS`, then install the `dscdn_license_v1...` token from **Settings -> Commercial License**.
 
@@ -186,7 +186,7 @@ If the host port `3000` is already in use, change only the host-side mapping, fo
 
 ```yaml
 ports:
-  - "3010:3000"
+  - "127.0.0.1:3010:3000"
 ```
 
 For source Compose deployments, keep local deployment parameters in `dushengcdn_server/.env`:
@@ -236,7 +236,7 @@ With `discovery_token`:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --discovery-token YOUR_DISCOVERY_TOKEN
+  --discovery-token-file /run/secrets/dushengcdn-discovery-token
 ```
 
 With node-specific `agent_token`:
@@ -244,7 +244,7 @@ With node-specific `agent_token`:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 Supported options:
@@ -252,8 +252,10 @@ Supported options:
 | Option | Description |
 | --- | --- |
 | `--server-url` | Server URL, required |
-| `--discovery-token` | First-registration token, mutually exclusive with `--agent-token` |
-| `--agent-token` | Node-specific token, mutually exclusive with `--discovery-token` |
+| `--discovery-token-file` | Read first-registration token from a file; preferred |
+| `--agent-token-file` | Read node-specific token from a file; preferred |
+| `--discovery-token` | First-registration token; compatibility option. Rejected by default unless `--allow-insecure-token-argv` is explicitly passed |
+| `--agent-token` | Node-specific token; compatibility option. Rejected by default unless `--allow-insecure-token-argv` is explicitly passed |
 | `--install-dir` | Install directory, default `/opt/dushengcdn-agent` |
 | `--openresty-path` | OpenResty binary path, auto-detected when omitted |
 | `--repo` | GitHub repository for Agent downloads, default `SatanDS/DuShengCDN` |
@@ -309,7 +311,7 @@ Recommended install script:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
   --server-url https://cdn.example.com \
-  --token YOUR_DNS_WORKER_TOKEN
+  --token-file /run/secrets/dushengcdn-dns-worker-token
 ```
 
 Defaults:
@@ -329,7 +331,7 @@ If Server and Worker are on the same host, pass an explicit public bind address 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
   --server-url http://127.0.0.1:3000 \
-  --token YOUR_DNS_WORKER_TOKEN \
+  --token-file /run/secrets/dushengcdn-dns-worker-token \
   --listen 203.0.113.10:53
 ```
 
@@ -360,8 +362,9 @@ DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp \
   -v dushengcdn-dns-worker-data:/data \
+  -v /run/secrets/dushengcdn-dns-worker-token:/run/secrets/dushengcdn_dns_worker_token:ro \
   -e DUSHENGCDN_DNS_WORKER_SERVER_URL=https://cdn.example.com \
-  -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
+  -e DUSHENGCDN_DNS_WORKER_TOKEN_FILE=/run/secrets/dushengcdn_dns_worker_token \
   ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
@@ -481,7 +484,11 @@ If the root password is lost but you still have server access:
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
 docker compose stop dushengcdn
-docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /tmp/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+docker compose run --rm -v /tmp/dushengcdn-root-password:/run/secrets/dushengcdn-root-password:ro dushengcdn /dushengcdn --reset-root-password-file /run/secrets/dushengcdn-root-password
+rm -f /tmp/dushengcdn-root-password
 docker compose up -d
 ```
 

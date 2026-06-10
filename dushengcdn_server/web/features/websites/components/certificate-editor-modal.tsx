@@ -52,7 +52,7 @@ export function CertificateEditorModal({
 
   const certificateQuery = useQuery({
     queryKey: ['tls-certificates', 'content', certificateId],
-    queryFn: () => getTlsCertificateContent(certificateId as number),
+    queryFn: () => getTlsCertificateContent(certificateId as number, true),
     enabled: isOpen && certificateId !== null,
   });
 

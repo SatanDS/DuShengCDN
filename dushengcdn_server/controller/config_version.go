@@ -2,7 +2,6 @@ package controller
 
 import (
 	"dushengcdn/service"
-	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -18,17 +17,10 @@ import (
 func GetConfigVersions(c *gin.Context) {
 	versions, err := service.ListConfigVersions()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    versions,
-	})
+	respondSuccess(c, versions)
 }
 
 // GetConfigVersion godoc
@@ -43,25 +35,15 @@ func GetConfigVersions(c *gin.Context) {
 func GetConfigVersion(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "invalid id",
-		})
+		respondBadRequest(c, "invalid id")
 		return
 	}
 	version, err := service.GetConfigVersionDetail(uint(id))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    version,
-	})
+	respondSuccess(c, version)
 }
 
 // GetActiveConfigVersion godoc
@@ -74,17 +56,10 @@ func GetConfigVersion(c *gin.Context) {
 func GetActiveConfigVersion(c *gin.Context) {
 	version, err := service.GetActiveConfigVersion()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "当前没有激活版本",
-		})
+		respondFailure(c, "当前没有激活版本")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    version,
-	})
+	respondSuccess(c, version)
 }
 
 // PreviewConfigVersion godoc
@@ -97,17 +72,10 @@ func GetActiveConfigVersion(c *gin.Context) {
 func PreviewConfigVersion(c *gin.Context) {
 	preview, err := service.PreviewConfigVersion()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    preview,
-	})
+	respondSuccess(c, preview)
 }
 
 // DiffConfigVersion godoc
@@ -120,17 +88,10 @@ func PreviewConfigVersion(c *gin.Context) {
 func DiffConfigVersion(c *gin.Context) {
 	diff, err := service.DiffConfigVersion()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    diff,
-	})
+	respondSuccess(c, diff)
 }
 
 // PublishConfigVersion godoc
@@ -145,17 +106,10 @@ func PublishConfigVersion(c *gin.Context) {
 	force := c.Query("force") == "true"
 	result, err := service.PublishConfigVersion(username, force)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    result.Version,
-	})
+	respondSuccess(c, service.BuildConfigVersionDetailForAdmin(result.Version))
 }
 
 // ActivateConfigVersion godoc
@@ -170,25 +124,15 @@ func PublishConfigVersion(c *gin.Context) {
 func ActivateConfigVersion(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "invalid id",
-		})
+		respondBadRequest(c, "invalid id")
 		return
 	}
 	version, err := service.ActivateConfigVersion(uint(id))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    version,
-	})
+	respondSuccess(c, service.BuildConfigVersionDetailForAdmin(version))
 }
 
 type CleanupConfigVersionRequest struct {
@@ -207,25 +151,15 @@ type CleanupConfigVersionRequest struct {
 func CleanupConfigVersions(c *gin.Context) {
 	var req CleanupConfigVersionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "参数错误",
-		})
+		respondFailure(c, "参数错误")
 		return
 	}
 
 	deletedCount, err := service.CleanupConfigVersions(req.KeepCount)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "清理成功",
-		"data":    map[string]interface{}{"deleted_count": deletedCount},
-	})
+	respondSuccessWithExtras(c, map[string]interface{}{"deleted_count": deletedCount}, gin.H{"message": "清理成功"})
 }

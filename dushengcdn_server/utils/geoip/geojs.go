@@ -1,12 +1,17 @@
 package geoip
 
 import (
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 )
+
+const maxGeoJSResponseBytes int64 = 1024 * 1024
 
 // GeoJSService 使用 geojs.io 服务实现 GeoIPService 接口。
 type GeoJSService struct {
@@ -28,9 +33,7 @@ type geoJSResponse struct {
 // NewGeoJSService 创建并返回一个 GeoJSService 的新实例。
 func NewGeoJSService() (*GeoJSService, error) {
 	return &GeoJSService{
-		Client: &http.Client{
-			Timeout: 5 * time.Second, // 设置一个合理的超时时间
-		},
+		Client: security.NewPublicHTTPClient(5*time.Second, true),
 	}, nil
 }
 
@@ -42,9 +45,18 @@ func (s *GeoJSService) Name() string {
 // GetGeoInfo 使用 geojs.io 服务检索给定 IP 地址的地理位置信息。
 func (s *GeoJSService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	// GeoJS 的 API 端点
-	apiURL := fmt.Sprintf("https://get.geojs.io/v1/ip/geo/%s.json", ip.String())
+	apiURL := fmt.Sprintf("https://get.geojs.io/v1/ip/geo/%s.json", url.PathEscape(ip.String()))
 
-	resp, err := s.Client.Get(apiURL)
+	client := s.Client
+	if client == nil {
+		client = security.NewPublicHTTPClient(5*time.Second, true)
+	}
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create geojs.io request: %w", err)
+	}
+	req.Header.Set("User-Agent", "DuShengCDN-Server")
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get geo info from geojs.io: %w", err)
 	}
@@ -56,7 +68,7 @@ func (s *GeoJSService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	}
 
 	var apiResp geoJSResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxGeoJSResponseBytes)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode geojs.io response: %w", err)
 	}
 

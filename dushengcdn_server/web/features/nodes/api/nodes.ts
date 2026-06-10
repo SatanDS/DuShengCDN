@@ -2,6 +2,7 @@ import { apiRequest } from '@/lib/api/client';
 
 import type {
   NodeAgentReleaseInfo,
+  NodeAgentToken,
   NodeAgentUpdatePayload,
   NodeBootstrapToken,
   NodeDeleteResult,
@@ -41,6 +42,12 @@ export function getNodeBootstrapToken() {
 
 export function rotateNodeBootstrapToken() {
   return apiRequest<NodeBootstrapToken>('/nodes/bootstrap-token/rotate', {
+    method: 'POST',
+  });
+}
+
+export function rotateNodeAgentToken(id: number) {
+  return apiRequest<NodeAgentToken>(`/nodes/${id}/agent-token/rotate`, {
     method: 'POST',
   });
 }

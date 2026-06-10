@@ -4,17 +4,22 @@ import (
 	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/service"
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
 
 const pendingExternalAccountSessionKey = "pending_external_account"
+const pendingExternalAccountCSRFSessionKey = "pending_external_account_csrf"
 
 type authSourceTogglePayload struct {
 	IsActive bool `json:"is_active"`
@@ -197,33 +202,34 @@ func OAuthCallback(c *gin.Context) {
 	}
 	session.Delete(oauthStateSessionKey(source.ID))
 	session.Delete(oauthNonceSessionKey(source.ID))
-	if err := session.Save(); err != nil {
-		respondFailure(c, "无法更新授权状态，请重试")
-		return
-	}
 	if oauthError := c.Query("error"); oauthError != "" {
-		description := c.Query("error_description")
-		if description == "" {
-			description = oauthError
-		}
-		respondFailure(c, description)
+		_ = session.Save()
+		slog.Warn("oauth provider returned an error",
+			"source_id", source.ID,
+			"source_name", source.Name,
+			"oauth_error", strings.TrimSpace(oauthError),
+			"description_present", strings.TrimSpace(c.Query("error_description")) != "",
+		)
+		respondFailure(c, "第三方授权失败，请返回登录页重试")
 		return
 	}
 
 	profile, err := service.ExchangeOAuthProfileWithNonce(c.Request.Context(), source, c.Query("code"), oauthFrontendCallbackURL(c, source.ID), expectedNonce)
 	if err != nil {
-		respondFailure(c, err.Error())
+		_ = session.Save()
+		slog.Warn("oauth profile exchange failed", "source_id", source.ID, "source_name", source.Name, "error", err)
+		respondFailure(c, "第三方授权失败，请返回登录页重试")
 		return
 	}
 	var currentUserID *int
-	if value := session.Get("id"); value != nil {
-		if idValue, ok := value.(int); ok {
-			currentUserID = &idValue
-		}
+	if currentUser, ok := authenticatedSessionUser(c); ok {
+		currentUserID = &currentUser.Id
 	}
 	result, pending, err := service.CompleteOAuthLogin(source, profile, currentUserID)
 	if err != nil {
-		respondFailure(c, err.Error())
+		_ = session.Save()
+		slog.Warn("oauth login completion failed", "source_id", source.ID, "source_name", source.Name, "error", err)
+		respondFailure(c, "第三方授权失败，请返回登录页重试")
 		return
 	}
 	if pending != nil {
@@ -233,6 +239,12 @@ func OAuthCallback(c *gin.Context) {
 			return
 		}
 		session.Set(pendingExternalAccountSessionKey, string(raw))
+		csrfToken, err := ensurePendingExternalAccountCSRFToken(session)
+		if err != nil {
+			respondFailure(c, "无法保存待绑定账号，请重试")
+			return
+		}
+		result.CSRFToken = csrfToken
 		if err := session.Save(); err != nil {
 			respondFailure(c, "无法保存待绑定账号，请重试")
 			return
@@ -247,6 +259,9 @@ func OAuthCallback(c *gin.Context) {
 			return
 		}
 		result.User = cleanUser
+	} else if err := session.Save(); err != nil {
+		respondFailure(c, "无法更新授权状态，请重试")
+		return
 	}
 	respondSuccess(c, result)
 }
@@ -256,6 +271,10 @@ func LinkExistingOAuthAccount(c *gin.Context) {
 	raw, _ := session.Get(pendingExternalAccountSessionKey).(string)
 	if raw == "" {
 		respondFailure(c, "待绑定第三方账号已失效，请重新登录")
+		return
+	}
+	if !verifyPendingExternalAccountCSRF(c, session) {
+		respondFailure(c, "CSRF token invalid or missing")
 		return
 	}
 	var pending service.PendingExternalAccount
@@ -268,12 +287,24 @@ func LinkExistingOAuthAccount(c *gin.Context) {
 		respondBadRequest(c, "无效的参数")
 		return
 	}
+	loginKey := loginFailureKeyForRequest(input.Username, c)
+	if locked, retryAfter := loginAttemptLocked(loginKey, time.Now()); locked {
+		c.JSON(http.StatusOK, gin.H{
+			"message":             "登录失败次数过多，请稍后再试",
+			"success":             false,
+			"retry_after_seconds": int(retryAfter.Seconds()),
+		})
+		return
+	}
 	user, err := service.LinkPendingExternalAccount(&pending, input)
 	if err != nil {
+		recordLoginFailure(loginKey, time.Now())
 		respondFailure(c, err.Error())
 		return
 	}
+	clearLoginFailure(loginKey)
 	session.Delete(pendingExternalAccountSessionKey)
+	session.Delete(pendingExternalAccountCSRFSessionKey)
 	if err := session.Save(); err != nil {
 		respondFailure(c, "无法更新会话信息，请重试")
 		return
@@ -284,6 +315,22 @@ func LinkExistingOAuthAccount(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, service.OAuthCallbackResult{Status: "linked", User: cleanUser})
+}
+
+func ensurePendingExternalAccountCSRFToken(session sessions.Session) (string, error) {
+	token, _ := session.Get(pendingExternalAccountCSRFSessionKey).(string)
+	if token != "" {
+		return token, nil
+	}
+	token = security.GenerateCSRFToken()
+	session.Set(pendingExternalAccountCSRFSessionKey, token)
+	return token, nil
+}
+
+func verifyPendingExternalAccountCSRF(c *gin.Context, session sessions.Session) bool {
+	expected, _ := session.Get(pendingExternalAccountCSRFSessionKey).(string)
+	provided := c.GetHeader("X-CSRF-Token")
+	return security.VerifyCSRFToken(expected, provided)
 }
 
 func ListExternalAccounts(c *gin.Context) {

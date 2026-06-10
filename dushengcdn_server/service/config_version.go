@@ -1,14 +1,16 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"dushengcdn/common"
 	"dushengcdn/model"
-	"encoding/base64"
+	"dushengcdn/utils/security"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"sort"
@@ -20,14 +22,17 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+var routeUpstreamLookupIPAddr = net.DefaultResolver.LookupIPAddr
+
 type ReleaseResult struct {
 	Version *model.ConfigVersion `json:"version"`
-	Routes  []*model.ProxyRoute  `json:"routes"`
+	Routes  []*ProxyRouteView    `json:"routes"`
 }
 
 type SupportFile struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path     string `json:"path"`
+	Content  string `json:"content"`
+	Redacted bool   `json:"redacted,omitempty"`
 }
 
 type ConfigPreviewResult struct {
@@ -43,7 +48,18 @@ type ConfigPreviewResult struct {
 
 type ConfigVersionSummary = model.ConfigVersionSummary
 
-type ConfigVersionDetail = model.ConfigVersion
+type ConfigVersionDetail struct {
+	ID               uint      `json:"id"`
+	Version          string    `json:"version"`
+	SnapshotJSON     string    `json:"snapshot_json"`
+	MainConfig       string    `json:"main_config"`
+	RenderedConfig   string    `json:"rendered_config"`
+	SupportFilesJSON string    `json:"support_files_json"`
+	Checksum         string    `json:"checksum"`
+	IsActive         bool      `json:"is_active"`
+	CreatedBy        string    `json:"created_by"`
+	CreatedAt        time.Time `json:"created_at"`
+}
 
 type ConfigDiffResult struct {
 	ActiveVersion        string                 `json:"active_version,omitempty"`
@@ -100,7 +116,8 @@ type snapshotRoute struct {
 	CCConfig                   *ProxyRouteCCConfig           `json:"cc_config,omitempty"`
 	BasicAuthEnabled           bool                          `json:"basic_auth_enabled,omitempty"`
 	BasicAuthUsername          string                        `json:"basic_auth_username,omitempty"`
-	BasicAuthPassword          string                        `json:"basic_auth_password,omitempty"`
+	BasicAuthPasswordHash      string                        `json:"basic_auth_password_hash,omitempty"`
+	BasicAuthPassword          string                        `json:"-"`
 	RegionRestrictionEnabled   bool                          `json:"region_restriction_enabled,omitempty"`
 	RegionRestrictionMode      string                        `json:"region_restriction_mode,omitempty"`
 	RegionRestrictionCountries []string                      `json:"region_restriction_countries,omitempty"`
@@ -258,11 +275,115 @@ func ListConfigVersions() ([]*ConfigVersionSummary, error) {
 }
 
 func GetConfigVersionDetail(id uint) (*ConfigVersionDetail, error) {
-	return model.GetConfigVersionByID(id)
+	version, err := model.GetConfigVersionByID(id)
+	if err != nil {
+		return nil, err
+	}
+	return BuildConfigVersionDetailForAdmin(version), nil
 }
 
 func GetActiveConfigVersion() (*ConfigVersionDetail, error) {
-	return model.GetActiveConfigVersion()
+	version, err := model.GetActiveConfigVersion()
+	if err != nil {
+		return nil, err
+	}
+	return BuildConfigVersionDetailForAdmin(version), nil
+}
+
+func BuildConfigVersionDetailForAdmin(version *model.ConfigVersion) *ConfigVersionDetail {
+	if version == nil {
+		return nil
+	}
+	return &ConfigVersionDetail{
+		ID:               version.ID,
+		Version:          version.Version,
+		SnapshotJSON:     redactConfigSnapshotForAdmin(version.SnapshotJSON),
+		MainConfig:       version.MainConfig,
+		RenderedConfig:   redactRenderedConfigForAdmin(version.RenderedConfig),
+		SupportFilesJSON: redactSupportFilesJSONForAdmin(version.SupportFilesJSON),
+		Checksum:         version.Checksum,
+		IsActive:         version.IsActive,
+		CreatedBy:        version.CreatedBy,
+		CreatedAt:        version.CreatedAt,
+	}
+}
+
+func redactConfigSnapshotForAdmin(snapshotJSON string) string {
+	if strings.TrimSpace(snapshotJSON) == "" {
+		return snapshotJSON
+	}
+	var doc snapshotDocument
+	if err := json.Unmarshal([]byte(snapshotJSON), &doc); err != nil {
+		return snapshotJSON
+	}
+	for index := range doc.Routes {
+		doc.Routes[index].BasicAuthPasswordHash = ""
+		doc.Routes[index].BasicAuthPassword = ""
+		doc.Routes[index].CustomHeaders = redactSensitiveCustomHeaders(doc.Routes[index].CustomHeaders)
+	}
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return snapshotJSON
+	}
+	return string(raw)
+}
+
+func redactRenderedConfigForAdmin(renderedConfig string) string {
+	if strings.TrimSpace(renderedConfig) == "" {
+		return renderedConfig
+	}
+	linePattern := regexp.MustCompile(`(?m)^(\s*proxy_set_header\s+([A-Za-z0-9_-]+)\s+)([^;]*)(;\s*)$`)
+	redacted := linePattern.ReplaceAllStringFunc(renderedConfig, func(line string) string {
+		matches := linePattern.FindStringSubmatch(line)
+		if len(matches) != 5 || !isSensitiveProxyRouteCustomHeader(matches[2]) {
+			return line
+		}
+		return matches[1] + quoteNginxHeaderValue(redactedProxyRouteCustomHeaderValue) + matches[4]
+	})
+	return security.RedactSensitiveText(redacted)
+}
+
+func redactSupportFilesJSONForAdmin(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	var files []SupportFile
+	if err := json.Unmarshal([]byte(raw), &files); err != nil {
+		return raw
+	}
+	redacted, err := json.Marshal(redactSupportFilesForAdmin(files))
+	if err != nil {
+		return raw
+	}
+	return string(redacted)
+}
+
+func redactSupportFilesForAdmin(files []SupportFile) []SupportFile {
+	if len(files) == 0 {
+		return files
+	}
+	result := make([]SupportFile, 0, len(files))
+	for _, file := range files {
+		file.Redacted = false
+		if supportFileContainsSensitiveKey(file) {
+			file.Content = "[redacted private key; available only through the agent configuration channel]"
+			file.Redacted = true
+		}
+		result = append(result, file)
+	}
+	return result
+}
+
+func supportFileContainsSensitiveKey(file SupportFile) bool {
+	path := strings.ToLower(strings.TrimSpace(file.Path))
+	content := strings.ToUpper(file.Content)
+	if strings.HasSuffix(path, ".key") {
+		return true
+	}
+	if strings.Contains(content, "PRIVATE KEY") {
+		return true
+	}
+	return false
 }
 
 func PreviewConfigVersion() (*ConfigPreviewResult, error) {
@@ -271,11 +392,11 @@ func PreviewConfigVersion() (*ConfigPreviewResult, error) {
 		return nil, err
 	}
 	return &ConfigPreviewResult{
-		SnapshotJSON:   bundle.SnapshotJSON,
+		SnapshotJSON:   redactConfigSnapshotForAdmin(bundle.SnapshotJSON),
 		MainConfig:     bundle.MainConfig,
-		RouteConfig:    bundle.RouteConfig,
-		RenderedConfig: bundle.RouteConfig,
-		SupportFiles:   bundle.SupportFiles,
+		RouteConfig:    redactRenderedConfigForAdmin(bundle.RouteConfig),
+		RenderedConfig: redactRenderedConfigForAdmin(bundle.RouteConfig),
+		SupportFiles:   redactSupportFilesForAdmin(bundle.SupportFiles),
 		Checksum:       bundle.Checksum,
 		RouteCount:     len(bundle.Routes),
 		WebsiteCount:   len(bundle.SnapshotRoutes),
@@ -449,9 +570,13 @@ func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) 
 		return nil, err
 	}
 	BroadcastAgentWSActiveConfigForVersion(record)
+	routeViews, err := buildProxyRouteViews(bundle.Routes)
+	if err != nil {
+		return nil, err
+	}
 	return &ReleaseResult{
 		Version: record,
-		Routes:  bundle.Routes,
+		Routes:  routeViews,
 	}, nil
 }
 
@@ -927,7 +1052,7 @@ func buildSnapshotRoutesWithContext(
 			CCConfig:                   ccConfig,
 			BasicAuthEnabled:           route.BasicAuthEnabled,
 			BasicAuthUsername:          route.BasicAuthUsername,
-			BasicAuthPassword:          route.BasicAuthPassword,
+			BasicAuthPasswordHash:      basicAuthCredentialHash(route.BasicAuthUsername, route.BasicAuthPassword),
 			RegionRestrictionEnabled:   regionEnabled,
 			RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
 			RegionRestrictionCountries: regionCountries,
@@ -1077,6 +1202,10 @@ func normalizeSnapshotRoutes(routes []snapshotRoute) []snapshotRoute {
 		}
 		if !routes[index].BasicAuthEnabled {
 			routes[index].BasicAuthUsername = ""
+			routes[index].BasicAuthPasswordHash = ""
+			routes[index].BasicAuthPassword = ""
+		} else if routes[index].BasicAuthPasswordHash == "" {
+			routes[index].BasicAuthPasswordHash = basicAuthCredentialHash(routes[index].BasicAuthUsername, routes[index].BasicAuthPassword)
 			routes[index].BasicAuthPassword = ""
 		}
 		regionMode, regionCountries, err := normalizeProxyRouteRegionRestriction(
@@ -1118,7 +1247,7 @@ func flattenSnapshotRoutesByDomain(routes []snapshotRoute) map[string]snapshotRo
 }
 
 func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
-	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || normalizeNodePoolName(left.NodePool) != normalizeNodePoolName(right.NodePool) || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || normalizeProxyRouteProxyBufferingMode(left.ProxyBufferingMode) != normalizeProxyRouteProxyBufferingMode(right.ProxyBufferingMode) || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPassword != right.BasicAuthPassword || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
+	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || normalizeNodePoolName(left.NodePool) != normalizeNodePoolName(right.NodePool) || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || normalizeProxyRouteProxyBufferingMode(left.ProxyBufferingMode) != normalizeProxyRouteProxyBufferingMode(right.ProxyBufferingMode) || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPasswordHash != right.BasicAuthPasswordHash || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
 		return false
 	}
 	if len(left.Domains) != len(right.Domains) {
@@ -1583,7 +1712,10 @@ func renderRouteConfigWithContextAndQueries(
 			Mode:    normalizeCCMode(route.CCMode),
 		}
 		powRequired := route.PoWEnabled || (ccConfig.Enabled && ccConfig.Mode == proxyRouteCCModePoW)
-		upstreamConfig := buildRouteUpstreamConfig(route, upstreams)
+		upstreamConfig, err := buildRouteUpstreamConfig(route, upstreams)
+		if err != nil {
+			return "", nil, fmt.Errorf("路由 %s 源站解析不安全: %w", route.Domain, err)
+		}
 		if upstreamConfig.UsesNamedUpstream {
 			builder.WriteString(renderNamedUpstreamBlock(upstreamConfig))
 		}
@@ -1781,7 +1913,10 @@ func onOff(value bool) string {
 	return "off"
 }
 
-const nginxPowStaticDirPlaceholder = "__DUSHENGCDN_POW_STATIC_DIR__"
+const (
+	nginxPowStaticDirPlaceholder    = "__DUSHENGCDN_POW_STATIC_DIR__"
+	basicAuthCredentialHashMaterial = "dushengcdn basic auth v1\n"
+)
 
 func renderPowAccessBlock(powEnabled bool) string {
 	return renderUnifiedAccessBlock(powEnabled)
@@ -1802,16 +1937,38 @@ func renderBasicAuthBlock(enabled bool, username, password string) string {
 	if !enabled || username == "" || password == "" {
 		return ""
 	}
-	credentials := username + ":" + password
-	encoded := base64.StdEncoding.EncodeToString([]byte(credentials))
+	expectedHash := basicAuthCredentialHash(username, password)
 	return fmt.Sprintf(`        rewrite_by_lua_block {
-            local auth = ngx.var.http_authorization
-            if auth ~= "Basic %s" then
+            local expected_hash = "%s"
+            local auth = ngx.var.http_authorization or ""
+            local credential = nil
+            if string.sub(auth, 1, 6) == "Basic " then
+                credential = ngx.decode_base64(string.sub(auth, 7))
+            end
+            local ok = false
+            if credential then
+                local sha256 = require "resty.sha256"
+                local str = require "resty.string"
+                local hasher = sha256:new()
+                hasher:update(%s)
+                hasher:update(credential)
+                ok = str.to_hex(hasher:final()) == expected_hash
+            end
+            if not ok then
                 ngx.header["WWW-Authenticate"] = 'Basic realm="Restricted"'
                 return ngx.exit(401)
             end
         }
-`, encoded)
+`, expectedHash, luaStringLiteral(basicAuthCredentialHashMaterial))
+}
+
+func basicAuthCredentialHash(username, password string) string {
+	credentials := strings.TrimSpace(username) + ":" + strings.TrimSpace(password)
+	if credentials == ":" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(basicAuthCredentialHashMaterial + credentials))
+	return hex.EncodeToString(sum[:])
 }
 
 func renderRegionRestrictionBlock(config routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
@@ -2167,6 +2324,9 @@ func renderProxyHeaderBlock(originURL string, originHost string, customHeaders [
 	if upstreamServerName := resolveUpstreamServerName(originURL, originHost); upstreamServerName != "" {
 		builder.WriteString("        proxy_ssl_server_name on;\n")
 		builder.WriteString(fmt.Sprintf("        proxy_ssl_name %s;\n", quoteNginxHeaderValue(upstreamServerName)))
+		builder.WriteString("        proxy_ssl_verify on;\n")
+		builder.WriteString("        proxy_ssl_verify_depth 3;\n")
+		builder.WriteString("        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;\n")
 	}
 	builder.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 	builder.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
@@ -2311,49 +2471,57 @@ func renderProxyPassBlock(originURL string, upstreamConfig routeUpstreamConfig) 
 	return fmt.Sprintf("        proxy_pass %s;\n", originURL)
 }
 
-func buildRouteUpstreamConfig(route *model.ProxyRoute, upstreams []string) routeUpstreamConfig {
+func buildRouteUpstreamConfig(route *model.ProxyRoute, upstreams []string) (routeUpstreamConfig, error) {
 	if len(upstreams) == 0 {
-		return routeUpstreamConfig{}
+		return routeUpstreamConfig{}, nil
 	}
 	if len(upstreams) == 1 {
 		parsed, err := url.Parse(strings.TrimSpace(upstreams[0]))
 		if err != nil || parsed.Host == "" || parsed.Scheme == "" {
-			return routeUpstreamConfig{}
+			return routeUpstreamConfig{}, nil
+		}
+		servers, err := resolvePublicUpstreamServers(context.Background(), parsed.Scheme, parsed.Host)
+		if err != nil {
+			return routeUpstreamConfig{}, err
 		}
 		return routeUpstreamConfig{
 			Name:              buildRouteUpstreamName(route),
 			Scheme:            parsed.Scheme,
 			ProxyPassURI:      buildUpstreamProxyPassURI(parsed),
-			Servers:           []string{parsed.Host},
+			Servers:           servers,
 			UsesNamedUpstream: true,
-		}
+		}, nil
 	}
 	servers := make([]string, 0, len(upstreams))
 	var scheme string
 	for _, upstream := range upstreams {
 		parsed, err := url.Parse(strings.TrimSpace(upstream))
 		if err != nil || parsed.Host == "" || parsed.Scheme == "" {
-			return routeUpstreamConfig{}
+			return routeUpstreamConfig{}, nil
 		}
 		if strings.TrimSpace(parsed.EscapedPath()) != "" && strings.TrimSpace(parsed.EscapedPath()) != "/" {
-			return routeUpstreamConfig{}
+			return routeUpstreamConfig{}, nil
 		}
 		if parsed.RawQuery != "" {
-			return routeUpstreamConfig{}
+			return routeUpstreamConfig{}, nil
 		}
 		if scheme == "" {
 			scheme = parsed.Scheme
 		} else if scheme != parsed.Scheme {
-			return routeUpstreamConfig{}
+			return routeUpstreamConfig{}, nil
 		}
-		servers = append(servers, parsed.Host)
+		resolvedServers, err := resolvePublicUpstreamServers(context.Background(), parsed.Scheme, parsed.Host)
+		if err != nil {
+			return routeUpstreamConfig{}, err
+		}
+		servers = append(servers, resolvedServers...)
 	}
 	return routeUpstreamConfig{
 		Name:              buildRouteUpstreamName(route),
 		Scheme:            scheme,
 		Servers:           servers,
 		UsesNamedUpstream: true,
-	}
+	}, nil
 }
 
 func buildUpstreamProxyPassURI(parsed *url.URL) string {
@@ -2368,6 +2536,67 @@ func buildUpstreamProxyPassURI(parsed *url.URL) string {
 		return path
 	}
 	return fmt.Sprintf("%s?%s", path, parsed.RawQuery)
+}
+
+func resolvePublicUpstreamServers(ctx context.Context, scheme string, hostPort string) ([]string, error) {
+	host, port := splitUpstreamHostPort(scheme, hostPort)
+	normalizedPort, err := normalizeOriginPort(port)
+	if err != nil {
+		return nil, err
+	}
+	port = normalizedPort
+	if err := security.ValidatePublicHostname(host); err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		if err := security.ValidatePublicIP(ip); err != nil {
+			return nil, err
+		}
+		return []string{formatUpstreamServer(ip.String(), port)}, nil
+	}
+	addresses, err := routeUpstreamLookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("origin host %s has no addresses", host)
+	}
+	servers := make([]string, 0, len(addresses))
+	seen := make(map[string]struct{}, len(addresses))
+	for _, address := range addresses {
+		if err := security.ValidatePublicIP(address.IP); err != nil {
+			return nil, fmt.Errorf("origin host %s resolved to unsafe ip: %w", host, err)
+		}
+		server := formatUpstreamServer(address.IP.String(), port)
+		if _, ok := seen[server]; ok {
+			continue
+		}
+		seen[server] = struct{}{}
+		servers = append(servers, server)
+	}
+	return servers, nil
+}
+
+func splitUpstreamHostPort(scheme string, hostPort string) (string, string) {
+	host, port, err := net.SplitHostPort(hostPort)
+	if err == nil {
+		return host, port
+	}
+	parsed := &url.URL{Scheme: scheme, Host: hostPort}
+	host = parsed.Hostname()
+	port = parsed.Port()
+	if port == "" {
+		if strings.EqualFold(scheme, "https") {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return host, port
+}
+
+func formatUpstreamServer(host string, port string) string {
+	return net.JoinHostPort(strings.Trim(host, "[]"), port)
 }
 
 func buildRouteUpstreamName(route *model.ProxyRoute) string {
@@ -2426,6 +2655,14 @@ func quoteNginxHeaderValue(value string) string {
 func quoteNginxStringLiteral(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return fmt.Sprintf(`"%s"`, escaped)
+}
+
+func luaStringLiteral(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
+	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
 	return fmt.Sprintf(`"%s"`, escaped)
 }
 

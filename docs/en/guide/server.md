@@ -74,7 +74,8 @@ go run . --port 3000 --log-dir ./logs
 | --- | --- | --- |
 | `--port` | Specify the Server listening port | `3000` |
 | `--log-dir` | Specify the log directory | Empty (outputs to standard output) |
-| `--reset-root-password` | Reset the `root` password and exit without starting HTTP service | Empty |
+| `--reset-root-password-file` / `--reset-root-password-stdin` | Read the new password from a file or stdin, reset the `root` password, and exit without starting HTTP service | Empty |
+| `--reset-root-password` | Compatibility argv input; avoid it because it can leak through shell history or process arguments | Empty |
 | `--version` | Output the version and exit | `false` |
 | `--help` | Output the help information and exit | `false` |
 
@@ -83,7 +84,10 @@ Reset the root password offline with the same database configuration:
 ```bash
 cd dushengcdn_server
 export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
-./dushengcdn-server --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /run/secrets/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+./dushengcdn-server --reset-root-password-file /run/secrets/dushengcdn-root-password
 ```
 
 ## First Login
@@ -92,9 +96,9 @@ First login:
 
 | Username | Password |
 | --- | --- |
-| `root` | `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first empty-database Server startup log |
+| `root` | `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the generated one-time password in the `initial-root-password.txt` file named in the Server log |
 
-Change the root password immediately after logging in for the first time. If it is lost, use `--reset-root-password`.
+Change the root password immediately after logging in for the first time. If it is lost, use `--reset-root-password-file` or `--reset-root-password-stdin`.
 
 ## Swagger
 

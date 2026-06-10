@@ -25,7 +25,10 @@ Reset the root password offline:
 ```bash
 cd dushengcdn_server
 export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
-./dushengcdn-server --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /run/secrets/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+./dushengcdn-server --reset-root-password-file /run/secrets/dushengcdn-root-password
 ```
 
 Create a DNS Worker and print the newly created Token:
@@ -234,7 +237,7 @@ GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 ## Uninstall Agent
@@ -248,7 +251,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
   --server-url https://cdn.example.com \
-  --token YOUR_DNS_WORKER_TOKEN
+  --token-file /run/secrets/dushengcdn-dns-worker-token
 ```
 
 Common options:
@@ -256,7 +259,8 @@ Common options:
 | Option | Description |
 | --- | --- |
 | `--server-url` | Server URL, required |
-| `--token` / `--dns-worker-token` | DNS Worker Token, required |
+| `--token-file` | Read DNS Worker Token from a file, preferred |
+| `--token` / `--dns-worker-token` | DNS Worker Token, compatibility option. Rejected by default unless `--allow-insecure-token-argv` is explicitly passed |
 | `--install-dir` | Install directory, default `/opt/dushengcdn-dns-worker` |
 | `--listen` | UDP/TCP listen address, default `:53` |
 | `--snapshot-path` | Snapshot cache path |

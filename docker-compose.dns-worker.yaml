@@ -14,6 +14,7 @@ services:
 
     volumes:
       - ./dushengcdn_dns/data:/data
+      - ./secrets/dushengcdn-dns-worker-token:/run/secrets/dushengcdn_dns_worker_token:ro
       # Optional: mount source databases for country/ASN/operator GSLB pools.
       # Operator CIDR lists can come from gaoyifan/china-operator-ip.
       # - ./dushengcdn_dns/geoip:/geoip:ro
@@ -21,7 +22,7 @@ services:
 
     environment:
       DUSHENGCDN_DNS_WORKER_SERVER_URL: ${DUSHENGCDN_DNS_WORKER_SERVER_URL:?set DUSHENGCDN_DNS_WORKER_SERVER_URL in .env}
-      DUSHENGCDN_DNS_WORKER_TOKEN: ${DUSHENGCDN_DNS_WORKER_TOKEN:?set DUSHENGCDN_DNS_WORKER_TOKEN in .env}
+      DUSHENGCDN_DNS_WORKER_TOKEN_FILE: /run/secrets/dushengcdn_dns_worker_token
       DUSHENGCDN_DNS_WORKER_LISTEN_ADDR: ${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-:53}
       DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH: ${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-/data/dns-worker-snapshot.json}
       # Uncomment together with the source database volumes above when country/ASN/operator pools are used.
@@ -34,6 +35,3 @@ services:
       DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT: ${DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT:-200}
       DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE: ${DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE:-1232}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-
-    extra_hosts:
-      - "host.docker.internal:host-gateway"

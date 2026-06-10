@@ -45,7 +45,9 @@ export type AuthSourcePayload = Omit<
 };
 
 export interface BootstrapTokenPayload {
-  discovery_token: string;
+  discovery_token?: string;
+  discovery_token_prefix: string;
+  discovery_token_available: boolean;
 }
 
 export interface GeoIPLookupResult {

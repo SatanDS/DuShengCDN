@@ -12,12 +12,12 @@ import (
 func SetRouter(router *gin.Engine, buildFS embed.FS, indexPage []byte) {
 	SetApiRouter(router)
 	swaggerRoute := router.Group("/swagger")
-	swaggerRoute.Use(middleware.AdminAuth())
+	swaggerRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 	swaggerRoute.GET("/*any", ginSwagger.WrapHandler(
 		swaggerFiles.Handler,
 		ginSwagger.URL("/swagger/doc.json"),
 		ginSwagger.DocExpansion("list"),
-		ginSwagger.PersistAuthorization(true),
+		ginSwagger.PersistAuthorization(false),
 		ginSwagger.DefaultModelsExpandDepth(1),
 	))
 	setWebRouter(router, buildFS, indexPage)

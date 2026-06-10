@@ -1,13 +1,18 @@
 package geoip
 
 import (
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+const maxIPAPIResponseBytes int64 = 1024 * 1024
 
 // IPAPIService 使用 ip-api.com 服务实现 GeoIPService 接口。
 type IPAPIService struct {
@@ -40,25 +45,35 @@ func (s *IPAPIService) Name() string {
 // NewIPAPIService 创建并返回一个 IPAPIService 的新实例。
 func NewIPAPIService() (*IPAPIService, error) {
 	return &IPAPIService{
-		Client: &http.Client{
-			Timeout: 5 * time.Second, // 设置请求超时
-		},
+		Client: security.NewPublicHTTPClient(5*time.Second, true),
 	}, nil
 }
 
 // GetGeoInfo 使用 ip-api.com 服务检索给定 IP 地址的地理位置信息。
 func (s *IPAPIService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	// API URL, 使用 fields 参数来仅请求需要的字段
-	apiURL := fmt.Sprintf("http://ip-api.com/json/%s?fields=status,message,country,countryCode,isp,org,as", ip.String())
+	apiURL := fmt.Sprintf("https://ip-api.com/json/%s?fields=status,message,country,countryCode,isp,org,as", url.PathEscape(ip.String()))
 
-	resp, err := s.Client.Get(apiURL)
+	client := s.Client
+	if client == nil {
+		client = security.NewPublicHTTPClient(5*time.Second, true)
+	}
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ip-api.com request: %w", err)
+	}
+	req.Header.Set("User-Agent", "DuShengCDN-Server")
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get geo info from ip-api.com: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ip-api.com returned non-200 status: %s", resp.Status)
+	}
 
 	var apiResp ipAPIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxIPAPIResponseBytes)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode ip-api.com response: %w", err)
 	}
 

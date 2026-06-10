@@ -60,7 +60,7 @@ ls -ld "$(dirname /path/to/dushengcdn.db)"
 | SQLite 无法创建文件 | 检查 `SQLITE_PATH` 所在目录是否存在且可写 |
 | 端口被占用 | 修改 `PORT` 或 `--port`，或停止占用端口的进程 |
 
-Docker Compose 部署时如只想改宿主机访问端口，可把 `ports` 改成 `3010:3000`；容器内应用仍监听 `3000`。
+Docker Compose 部署时如只想改宿主机访问端口，可把 `ports` 改成 `127.0.0.1:3010:3000`；容器内应用仍监听 `3000`。生产公开访问请走本机 HTTPS 反向代理。
 
 如果 `docker compose up -d --build` 用了很久，先区分“构建慢”和“启动慢”：Docker 输出中 `load build context` 表示把源码目录打包发给 Docker，`pnpm build` / `go build` 表示编译，最后 `Container ... Started` 才是容器启动。`load build context` 如果显示数 GB，通常是仓库目录里混入了 `postgres-data`、`dushengcdn-data`、`backups`、`upload`、`logs` 等运行数据；这些目录应被 `.dockerignore` 排除。清理或移动这些目录后再构建，升级时间会明显下降，生产数据仍通过 Compose volume 挂载，不需要打进镜像。
 
@@ -103,7 +103,7 @@ cd dushengcdn_server/web
 pnpm build
 ```
 
-3. 检查浏览器访问地址是否与反向代理配置一致。Nginx、Nginx Proxy Manager 或宝塔的上游端口应填写宿主机映射端口，例如默认源码 Compose 是 `3010`；只有直接暴露 `3000:3000` 时才填 `3000`。
+3. 检查浏览器访问地址是否与反向代理配置一致。Nginx、Nginx Proxy Manager 或宝塔的上游端口应填写宿主机本机映射端口，例如默认源码 Compose 是 `3010`；只有你手动把面板改成 `0.0.0.0:3000:3000` 这类公网映射时才会直接访问 `3000`，生产不建议这样做。
 
 4. 如果通过前端开发服务器访问，确认后端代理地址：
 
@@ -124,7 +124,7 @@ docker compose logs --since "12h" postgres | grep -Ei "too many clients|ERROR|FA
 
 ## 默认账号或 root 无法登录
 
-首次空库启动会创建 `root` 用户。密码优先使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 首次空库启动日志中的一次性随机密码。首次登录后如果已经修改密码，应使用修改后的密码。
+首次空库启动会创建 `root` 用户。密码优先使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 日志提示的 `initial-root-password.txt` 文件，日志不会打印密码本身。首次登录后如果已经修改密码，应使用修改后的密码。
 
 排查步骤：
 
@@ -140,7 +140,11 @@ Docker Compose 部署：
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
 docker compose stop dushengcdn
-docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /tmp/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+docker compose run --rm -v /tmp/dushengcdn-root-password:/run/secrets/dushengcdn-root-password:ro dushengcdn /dushengcdn --reset-root-password-file /run/secrets/dushengcdn-root-password
+rm -f /tmp/dushengcdn-root-password
 docker compose up -d
 ```
 
@@ -150,7 +154,10 @@ docker compose up -d
 cd /opt/dushengcdn/dushengcdn_server
 export SESSION_SECRET='same-session-secret'
 export DSN='postgres://dushengcdn:password@127.0.0.1:5432/dushengcdn?sslmode=disable'
-./dushengcdn --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /run/secrets/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+./dushengcdn --reset-root-password-file /run/secrets/dushengcdn-root-password
 ```
 
 如果使用 SQLite，把 `DSN` 换成实际 `SQLITE_PATH`。重置完成后请重新启动 Server，并登录后再次设置一个只自己知道的强密码。
@@ -171,7 +178,7 @@ error: Your local changes to the following files would be overwritten by merge:
 3. 在 `dushengcdn_server` 目录执行 `cp -n .env.example .env`，把真实部署参数写入 `.env`。
 4. 再执行 `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build`。
 
-端口冲突只需要改宿主机侧端口，例如 `3010:3000`；容器内仍监听 `3000`。
+端口冲突只需要改宿主机侧端口，例如 `127.0.0.1:3010:3000`；容器内仍监听 `3000`。
 
 ## Agent 无法注册或一直离线
 
@@ -202,7 +209,7 @@ sed -n '1,160p' /opt/dushengcdn-agent/agent.json
 | `heartbeat_interval` | 支持毫秒整数或 Go duration 字符串 |
 | `request_timeout` | 网络较慢时可适当增大 |
 
-如果日志提示 Token 无效，重新在管理端准备 Token 并更新 `agent.json`，然后重启。日志中出现 `Agent authentication failed` 时，优先核对 `agent_token` / `discovery_token` 或 `DUSHENGCDN_AGENT_TOKEN` / `DUSHENGCDN_DISCOVERY_TOKEN`；首次注册应使用 Discovery Token，注册后心跳、拉取配置和 WebSocket 应使用节点专属 Agent Token。日志中出现 `request to Server URL ... failed` 时，优先核对 `server_url`、DNS 解析、防火墙和证书信任。
+如果日志提示 Token 无效，重新在管理端准备 Token 并更新 `agent.json` 或权限受限的 token 文件，然后重启。日志中出现 `Agent authentication failed` 时，优先核对 `agent_token` / `discovery_token`、`DUSHENGCDN_AGENT_TOKEN_FILE` / `DUSHENGCDN_DISCOVERY_TOKEN_FILE`，或兼容环境变量 `DUSHENGCDN_AGENT_TOKEN` / `DUSHENGCDN_DISCOVERY_TOKEN`；首次注册应使用 Discovery Token，注册后心跳、拉取配置和 WebSocket 应使用节点专属 Agent Token。日志中出现 `request to Server URL ... failed` 时，优先核对 `server_url`、DNS 解析、防火墙和证书信任。
 
 如果是升级 Server/面板后，升级前已经部署的旧 Agent 全部离线，先确认 Server 进程或容器仍然配置了旧版 `AGENT_TOKEN`。旧 Agent 可能还在使用这个全局 Token 上报心跳；Server 会兼容这类请求，但要求心跳或应用日志 payload 中携带已存在的 `node_id`，并且该节点尚未切换为新的节点专属 Agent Token。兼容成功后节点会恢复 HTTP 心跳、配置拉取和应用日志上报；建议后续在节点详情复制新的节点专属安装/配置命令，逐步把旧 Agent 配置迁移到专属 Token。
 
@@ -371,7 +378,7 @@ bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.co
 
 1. 先确认至少一个 Worker 在列表中为在线，并且最近一次公网 UDP/TCP `53` 探测为健康。
 2. 查看「Worker 快照一致性」，确认公网可达 Worker 的 `last_snapshot_version` 不为空且一致，`last_snapshot_at` 没有超过 `AuthoritativeDNSSnapshotMaxAge`。
-3. 在 Worker 服务器查看服务日志，重点检查 Token 无效、Server URL 不可达、HTTPS 证书校验失败、快照接口返回错误等信息。日志中出现 `DNS Worker Token authentication failed` 时，优先核对 `DUSHENGCDN_DNS_WORKER_TOKEN` 或 `--token`；出现 `request to Server URL ... failed` 时，优先核对 `DUSHENGCDN_DNS_WORKER_SERVER_URL` 或 `--server-url`、DNS 解析、防火墙和证书信任。
+3. 在 Worker 服务器查看服务日志，重点检查 Token 无效、Server URL 不可达、HTTPS 证书校验失败、快照接口返回错误等信息。日志中出现 `DNS Worker Token authentication failed` 时，优先核对 `DUSHENGCDN_DNS_WORKER_TOKEN_FILE` / `--token-file`，或兼容配置 `DUSHENGCDN_DNS_WORKER_TOKEN` / `--token`；出现 `request to Server URL ... failed` 时，优先核对 `DUSHENGCDN_DNS_WORKER_SERVER_URL` 或 `--server-url`、DNS 解析、防火墙和证书信任。
 4. 确认 Worker 使用的 Token 是左侧「本地自建解析」中创建的 DNS Worker Token，不是 Agent Token 或登录密码。
 5. 修复后等待下一次 Worker 心跳/快照拉取，或重启 Worker，再刷新迁移向导或重新保存网站。
 

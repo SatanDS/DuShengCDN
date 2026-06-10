@@ -10,6 +10,7 @@ import (
 
 	"dushengcdn-agent/internal/nginx"
 	"dushengcdn-agent/internal/protocol"
+	"dushengcdn-agent/internal/security"
 	"dushengcdn-agent/internal/state"
 )
 
@@ -150,6 +151,45 @@ func (s *Service) ForceSyncOnce(ctx context.Context, target *protocol.ActiveConf
 }
 
 func (s *Service) applyIfNeeded(ctx context.Context, mode string, startup bool, snapshot *state.Snapshot, currentChecksum string, target *protocol.ActiveConfigMeta, config *protocol.ActiveConfigResponse) error {
+	if config == nil {
+		return fmt.Errorf("active config response is empty")
+	}
+	config.Version = strings.TrimSpace(config.Version)
+	config.Checksum = strings.TrimSpace(config.Checksum)
+	routeConfig := config.RouteConfig
+	if routeConfig == "" {
+		routeConfig = config.RenderedConfig
+	}
+	mainConfigChecksum := checksumString(config.MainConfig)
+	routeConfigChecksum := checksumString(routeConfig)
+	computedChecksum := nginx.BundleChecksum(config.MainConfig, routeConfig, config.SupportFiles)
+	if config.Checksum == "" || !strings.EqualFold(computedChecksum, config.Checksum) {
+		message := "active config integrity check failed: declared checksum does not match fetched config bundle"
+		slog.Error("active config checksum mismatch", "mode", mode, "version", config.Version, "declared_checksum", config.Checksum, "computed_checksum", computedChecksum)
+		markBlockedTarget(snapshot, config.Version, config.Checksum, message)
+		snapshot.LastError = message
+		snapshot.OpenrestyMessage = message
+		if snapshot.OpenrestyStatus == "" {
+			snapshot.OpenrestyStatus = protocol.OpenrestyStatusUnknown
+		}
+		if err := s.stateStore.Save(snapshot); err != nil {
+			return err
+		}
+		if err := s.client.ReportApplyLog(ctx, protocol.ApplyLogPayload{
+			NodeID:              snapshot.NodeID,
+			Version:             config.Version,
+			Result:              ApplyResultFailed,
+			Message:             message,
+			Checksum:            config.Checksum,
+			MainConfigChecksum:  mainConfigChecksum,
+			RouteConfigChecksum: routeConfigChecksum,
+			SupportFileCount:    len(config.SupportFiles),
+		}); err != nil {
+			slog.Error("report integrity failure apply log failed", "version", config.Version, "error", err)
+			return err
+		}
+		return outcomeError(config.Version, message)
+	}
 	if currentChecksum == config.Checksum {
 		slog.Debug("local openresty config already up to date", "mode", mode, "version", config.Version)
 		if startup {
@@ -191,15 +231,9 @@ func (s *Service) applyIfNeeded(ctx context.Context, mode string, startup bool, 
 		slog.Debug("skipping apply because state already records target version/checksum", "version", config.Version, "checksum", config.Checksum)
 		return s.stateStore.Save(snapshot)
 	}
-	routeConfig := config.RouteConfig
-	if routeConfig == "" {
-		routeConfig = config.RenderedConfig
-	}
-	mainConfigChecksum := checksumString(config.MainConfig)
-	routeConfigChecksum := checksumString(routeConfig)
 	slog.Info("applying new openresty config", "mode", mode, "from_version", snapshot.CurrentVersion, "to_version", config.Version, "old_checksum", currentChecksum, "new_checksum", config.Checksum)
 	outcome := s.nginxManager.Apply(ctx, config.MainConfig, routeConfig, config.SupportFiles)
-	message := strings.TrimSpace(outcome.Message)
+	message := security.RedactSensitiveText(strings.TrimSpace(outcome.Message))
 	if outcome.Status == "" {
 		outcome.Status = nginx.ApplyStatusFatal
 		if message == "" {

@@ -35,6 +35,7 @@ const (
 	proxyRouteCCModePoW                  = "pow"
 	proxyRouteProxyBufferingModeDefault  = "default"
 	proxyRouteProxyBufferingModeOff      = "off"
+	redactedProxyRouteCustomHeaderValue  = "[redacted sensitive header; preserved on save]"
 	DNSProviderModeCloudflare            = "cloudflare"
 	DNSProviderModeAuthoritative         = "authoritative"
 )
@@ -107,73 +108,74 @@ type ProxyRouteInput struct {
 }
 
 type ProxyRouteView struct {
-	ID                         uint                          `json:"id"`
-	SiteName                   string                        `json:"site_name"`
-	Domain                     string                        `json:"domain"`
-	Domains                    []string                      `json:"domains"`
-	PrimaryDomain              string                        `json:"primary_domain"`
-	DomainCount                int                           `json:"domain_count"`
-	OriginID                   *uint                         `json:"origin_id"`
-	OriginURL                  string                        `json:"origin_url"`
-	OriginHost                 string                        `json:"origin_host"`
-	Upstreams                  string                        `json:"upstreams"`
-	UpstreamList               []string                      `json:"upstream_list"`
-	NodePool                   string                        `json:"node_pool"`
-	Enabled                    bool                          `json:"enabled"`
-	EnableHTTPS                bool                          `json:"enable_https"`
-	CertID                     *uint                         `json:"cert_id"`
-	CertIDs                    []uint                        `json:"cert_ids"`
-	DomainCertIDs              []uint                        `json:"domain_cert_ids"`
-	RedirectHTTP               bool                          `json:"redirect_http"`
-	LimitConnPerServer         int                           `json:"limit_conn_per_server"`
-	LimitConnPerIP             int                           `json:"limit_conn_per_ip"`
-	LimitRate                  string                        `json:"limit_rate"`
-	ProxyBufferingMode         string                        `json:"proxy_buffering_mode"`
-	CacheEnabled               bool                          `json:"cache_enabled"`
-	CachePolicy                string                        `json:"cache_policy"`
-	CacheRules                 string                        `json:"cache_rules"`
-	CacheRuleList              []string                      `json:"cache_rule_list"`
-	CustomHeaders              string                        `json:"custom_headers"`
-	CustomHeaderList           []ProxyRouteCustomHeaderInput `json:"custom_header_list"`
-	PoWEnabled                 bool                          `json:"pow_enabled"`
-	PoWConfig                  *ProxyRoutePoWConfig          `json:"pow_config"`
-	WAFEnabled                 bool                          `json:"waf_enabled"`
-	WAFMode                    string                        `json:"waf_mode"`
-	WAFConfig                  *ProxyRouteWAFConfig          `json:"waf_config"`
-	CCEnabled                  bool                          `json:"cc_enabled"`
-	CCMode                     string                        `json:"cc_mode"`
-	CCConfig                   *ProxyRouteCCConfig           `json:"cc_config"`
-	BasicAuthEnabled           bool                          `json:"basic_auth_enabled"`
-	BasicAuthUsername          string                        `json:"basic_auth_username"`
-	BasicAuthPassword          string                        `json:"basic_auth_password"`
-	RegionRestrictionEnabled   bool                          `json:"region_restriction_enabled"`
-	RegionRestrictionMode      string                        `json:"region_restriction_mode"`
-	RegionRestrictionCountries []string                      `json:"region_restriction_countries"`
-	DNSAutoSync                bool                          `json:"dns_auto_sync"`
-	DNSAccountID               *uint                         `json:"dns_account_id"`
-	DNSZoneID                  string                        `json:"dns_zone_id"`
-	DNSRecordType              string                        `json:"dns_record_type"`
-	DNSRecordName              string                        `json:"dns_record_name"`
-	DNSRecordContent           string                        `json:"dns_record_content"`
-	DNSAutoTarget              bool                          `json:"dns_auto_target"`
-	DNSTargetCount             int                           `json:"dns_target_count"`
-	DNSScheduleMode            string                        `json:"dns_schedule_mode"`
-	DNSTTL                     int                           `json:"dns_ttl"`
-	DNSProviderMode            string                        `json:"dns_provider_mode"`
-	DNSZoneIDRef               *uint                         `json:"dns_zone_id_ref"`
-	GSLBEnabled                bool                          `json:"gslb_enabled"`
-	GSLBPolicy                 ProxyRouteGSLBPolicy          `json:"gslb_policy"`
-	DNSRecordIDs               map[string]string             `json:"dns_record_ids"`
-	CloudflareProxied          bool                          `json:"cloudflare_proxied"`
-	DDOSProtectionMode         string                        `json:"ddos_protection_mode"`
-	DDOSProtectionProvider     string                        `json:"ddos_protection_provider"`
-	DDOSProtectionTarget       string                        `json:"ddos_protection_target"`
-	DNSLastSyncStatus          string                        `json:"dns_last_sync_status"`
-	DNSLastSyncMessage         string                        `json:"dns_last_sync_message"`
-	DNSLastSyncedAt            *time.Time                    `json:"dns_last_synced_at"`
-	Remark                     string                        `json:"remark"`
-	CreatedAt                  time.Time                     `json:"created_at"`
-	UpdatedAt                  time.Time                     `json:"updated_at"`
+	ID                          uint                          `json:"id"`
+	SiteName                    string                        `json:"site_name"`
+	Domain                      string                        `json:"domain"`
+	Domains                     []string                      `json:"domains"`
+	PrimaryDomain               string                        `json:"primary_domain"`
+	DomainCount                 int                           `json:"domain_count"`
+	OriginID                    *uint                         `json:"origin_id"`
+	OriginURL                   string                        `json:"origin_url"`
+	OriginHost                  string                        `json:"origin_host"`
+	Upstreams                   string                        `json:"upstreams"`
+	UpstreamList                []string                      `json:"upstream_list"`
+	NodePool                    string                        `json:"node_pool"`
+	Enabled                     bool                          `json:"enabled"`
+	EnableHTTPS                 bool                          `json:"enable_https"`
+	CertID                      *uint                         `json:"cert_id"`
+	CertIDs                     []uint                        `json:"cert_ids"`
+	DomainCertIDs               []uint                        `json:"domain_cert_ids"`
+	RedirectHTTP                bool                          `json:"redirect_http"`
+	LimitConnPerServer          int                           `json:"limit_conn_per_server"`
+	LimitConnPerIP              int                           `json:"limit_conn_per_ip"`
+	LimitRate                   string                        `json:"limit_rate"`
+	ProxyBufferingMode          string                        `json:"proxy_buffering_mode"`
+	CacheEnabled                bool                          `json:"cache_enabled"`
+	CachePolicy                 string                        `json:"cache_policy"`
+	CacheRules                  string                        `json:"cache_rules"`
+	CacheRuleList               []string                      `json:"cache_rule_list"`
+	CustomHeaders               string                        `json:"custom_headers"`
+	CustomHeaderList            []ProxyRouteCustomHeaderInput `json:"custom_header_list"`
+	PoWEnabled                  bool                          `json:"pow_enabled"`
+	PoWConfig                   *ProxyRoutePoWConfig          `json:"pow_config"`
+	WAFEnabled                  bool                          `json:"waf_enabled"`
+	WAFMode                     string                        `json:"waf_mode"`
+	WAFConfig                   *ProxyRouteWAFConfig          `json:"waf_config"`
+	CCEnabled                   bool                          `json:"cc_enabled"`
+	CCMode                      string                        `json:"cc_mode"`
+	CCConfig                    *ProxyRouteCCConfig           `json:"cc_config"`
+	BasicAuthEnabled            bool                          `json:"basic_auth_enabled"`
+	BasicAuthUsername           string                        `json:"basic_auth_username"`
+	BasicAuthPassword           string                        `json:"-"`
+	BasicAuthPasswordConfigured bool                          `json:"basic_auth_password_configured"`
+	RegionRestrictionEnabled    bool                          `json:"region_restriction_enabled"`
+	RegionRestrictionMode       string                        `json:"region_restriction_mode"`
+	RegionRestrictionCountries  []string                      `json:"region_restriction_countries"`
+	DNSAutoSync                 bool                          `json:"dns_auto_sync"`
+	DNSAccountID                *uint                         `json:"dns_account_id"`
+	DNSZoneID                   string                        `json:"dns_zone_id"`
+	DNSRecordType               string                        `json:"dns_record_type"`
+	DNSRecordName               string                        `json:"dns_record_name"`
+	DNSRecordContent            string                        `json:"dns_record_content"`
+	DNSAutoTarget               bool                          `json:"dns_auto_target"`
+	DNSTargetCount              int                           `json:"dns_target_count"`
+	DNSScheduleMode             string                        `json:"dns_schedule_mode"`
+	DNSTTL                      int                           `json:"dns_ttl"`
+	DNSProviderMode             string                        `json:"dns_provider_mode"`
+	DNSZoneIDRef                *uint                         `json:"dns_zone_id_ref"`
+	GSLBEnabled                 bool                          `json:"gslb_enabled"`
+	GSLBPolicy                  ProxyRouteGSLBPolicy          `json:"gslb_policy"`
+	DNSRecordIDs                map[string]string             `json:"dns_record_ids"`
+	CloudflareProxied           bool                          `json:"cloudflare_proxied"`
+	DDOSProtectionMode          string                        `json:"ddos_protection_mode"`
+	DDOSProtectionProvider      string                        `json:"ddos_protection_provider"`
+	DDOSProtectionTarget        string                        `json:"ddos_protection_target"`
+	DNSLastSyncStatus           string                        `json:"dns_last_sync_status"`
+	DNSLastSyncMessage          string                        `json:"dns_last_sync_message"`
+	DNSLastSyncedAt             *time.Time                    `json:"dns_last_synced_at"`
+	Remark                      string                        `json:"remark"`
+	CreatedAt                   time.Time                     `json:"created_at"`
+	UpdatedAt                   time.Time                     `json:"updated_at"`
 }
 
 func ListProxyRoutes() ([]*ProxyRouteView, error) {
@@ -280,6 +282,10 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		return nil, err
 	}
 	customHeaders, err := normalizeCustomHeaders(input.CustomHeaders)
+	if err != nil {
+		return nil, err
+	}
+	customHeaders, err = restoreRedactedCustomHeaders(customHeaders, route)
 	if err != nil {
 		return nil, err
 	}
@@ -404,6 +410,9 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if input.BasicAuthEnabled {
 		input.BasicAuthUsername = strings.TrimSpace(input.BasicAuthUsername)
 		input.BasicAuthPassword = strings.TrimSpace(input.BasicAuthPassword)
+		if input.BasicAuthPassword == "" && route != nil {
+			input.BasicAuthPassword = route.BasicAuthPassword
+		}
 		if input.BasicAuthUsername == "" || input.BasicAuthPassword == "" {
 			return nil, errors.New("basic_auth_username and basic_auth_password cannot be empty when basic auth is enabled")
 		}
@@ -816,73 +825,73 @@ func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRoute
 	}
 	primaryDomain := domains[0]
 	return &ProxyRouteView{
-		ID:                         route.ID,
-		SiteName:                   normalizeProxyRouteSiteNameInput(route, route.SiteName, primaryDomain),
-		Domain:                     primaryDomain,
-		Domains:                    domains,
-		PrimaryDomain:              primaryDomain,
-		DomainCount:                len(domains),
-		OriginID:                   route.OriginID,
-		OriginURL:                  route.OriginURL,
-		OriginHost:                 route.OriginHost,
-		Upstreams:                  route.Upstreams,
-		UpstreamList:               upstreams,
-		NodePool:                   normalizeNodePoolName(route.NodePool),
-		Enabled:                    route.Enabled,
-		EnableHTTPS:                route.EnableHTTPS,
-		CertID:                     certID,
-		CertIDs:                    certIDs,
-		DomainCertIDs:              domainCertIDs,
-		RedirectHTTP:               route.RedirectHTTP,
-		LimitConnPerServer:         route.LimitConnPerServer,
-		LimitConnPerIP:             route.LimitConnPerIP,
-		LimitRate:                  route.LimitRate,
-		ProxyBufferingMode:         normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
-		CacheEnabled:               route.CacheEnabled,
-		CachePolicy:                route.CachePolicy,
-		CacheRules:                 route.CacheRules,
-		CacheRuleList:              cacheRules,
-		CustomHeaders:              route.CustomHeaders,
-		CustomHeaderList:           customHeaders,
-		PoWEnabled:                 route.PoWEnabled,
-		PoWConfig:                  powConfig,
-		WAFEnabled:                 route.WAFEnabled,
-		WAFMode:                    normalizeWAFMode(route.WAFMode),
-		WAFConfig:                  wafConfig,
-		CCEnabled:                  route.CCEnabled,
-		CCMode:                     normalizeCCMode(route.CCMode),
-		CCConfig:                   ccConfig,
-		BasicAuthEnabled:           route.BasicAuthEnabled,
-		BasicAuthUsername:          route.BasicAuthUsername,
-		BasicAuthPassword:          route.BasicAuthPassword,
-		RegionRestrictionEnabled:   route.RegionRestrictionEnabled,
-		RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
-		RegionRestrictionCountries: regionCountries,
-		DNSAutoSync:                route.DNSAutoSync,
-		DNSAccountID:               route.DNSAccountID,
-		DNSZoneID:                  route.DNSZoneID,
-		DNSRecordType:              normalizeDNSRecordType(route.DNSRecordType),
-		DNSRecordName:              route.DNSRecordName,
-		DNSRecordContent:           route.DNSRecordContent,
-		DNSAutoTarget:              route.DNSAutoTarget,
-		DNSTargetCount:             normalizeDNSTargetCount(route.DNSTargetCount),
-		DNSScheduleMode:            normalizeDNSScheduleMode(route.DNSScheduleMode),
-		DNSTTL:                     normalizeDNSTTL(route.DNSTTL),
-		DNSProviderMode:            normalizeDNSProviderMode(route.DNSProviderMode),
-		DNSZoneIDRef:               route.DNSZoneIDRef,
-		GSLBEnabled:                route.GSLBEnabled,
-		GSLBPolicy:                 gslbPolicy,
-		DNSRecordIDs:               decodeDNSRecordIDs(route.DNSRecordIDs),
-		CloudflareProxied:          route.CloudflareProxied,
-		DDOSProtectionMode:         normalizeDDOSProtectionMode(route.DDOSProtectionMode),
-		DDOSProtectionProvider:     normalizeDDOSProtectionProvider(route.DDOSProtectionProvider),
-		DDOSProtectionTarget:       strings.TrimSpace(route.DDOSProtectionTarget),
-		DNSLastSyncStatus:          route.DNSLastSyncStatus,
-		DNSLastSyncMessage:         route.DNSLastSyncMessage,
-		DNSLastSyncedAt:            route.DNSLastSyncedAt,
-		Remark:                     route.Remark,
-		CreatedAt:                  route.CreatedAt,
-		UpdatedAt:                  route.UpdatedAt,
+		ID:                          route.ID,
+		SiteName:                    normalizeProxyRouteSiteNameInput(route, route.SiteName, primaryDomain),
+		Domain:                      primaryDomain,
+		Domains:                     domains,
+		PrimaryDomain:               primaryDomain,
+		DomainCount:                 len(domains),
+		OriginID:                    route.OriginID,
+		OriginURL:                   route.OriginURL,
+		OriginHost:                  route.OriginHost,
+		Upstreams:                   route.Upstreams,
+		UpstreamList:                upstreams,
+		NodePool:                    normalizeNodePoolName(route.NodePool),
+		Enabled:                     route.Enabled,
+		EnableHTTPS:                 route.EnableHTTPS,
+		CertID:                      certID,
+		CertIDs:                     certIDs,
+		DomainCertIDs:               domainCertIDs,
+		RedirectHTTP:                route.RedirectHTTP,
+		LimitConnPerServer:          route.LimitConnPerServer,
+		LimitConnPerIP:              route.LimitConnPerIP,
+		LimitRate:                   route.LimitRate,
+		ProxyBufferingMode:          normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
+		CacheEnabled:                route.CacheEnabled,
+		CachePolicy:                 route.CachePolicy,
+		CacheRules:                  route.CacheRules,
+		CacheRuleList:               cacheRules,
+		CustomHeaders:               marshalCustomHeadersForView(customHeaders),
+		CustomHeaderList:            redactSensitiveCustomHeaders(customHeaders),
+		PoWEnabled:                  route.PoWEnabled,
+		PoWConfig:                   powConfig,
+		WAFEnabled:                  route.WAFEnabled,
+		WAFMode:                     normalizeWAFMode(route.WAFMode),
+		WAFConfig:                   wafConfig,
+		CCEnabled:                   route.CCEnabled,
+		CCMode:                      normalizeCCMode(route.CCMode),
+		CCConfig:                    ccConfig,
+		BasicAuthEnabled:            route.BasicAuthEnabled,
+		BasicAuthUsername:           route.BasicAuthUsername,
+		BasicAuthPasswordConfigured: route.BasicAuthEnabled && strings.TrimSpace(route.BasicAuthPassword) != "",
+		RegionRestrictionEnabled:    route.RegionRestrictionEnabled,
+		RegionRestrictionMode:       normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
+		RegionRestrictionCountries:  regionCountries,
+		DNSAutoSync:                 route.DNSAutoSync,
+		DNSAccountID:                route.DNSAccountID,
+		DNSZoneID:                   route.DNSZoneID,
+		DNSRecordType:               normalizeDNSRecordType(route.DNSRecordType),
+		DNSRecordName:               route.DNSRecordName,
+		DNSRecordContent:            route.DNSRecordContent,
+		DNSAutoTarget:               route.DNSAutoTarget,
+		DNSTargetCount:              normalizeDNSTargetCount(route.DNSTargetCount),
+		DNSScheduleMode:             normalizeDNSScheduleMode(route.DNSScheduleMode),
+		DNSTTL:                      normalizeDNSTTL(route.DNSTTL),
+		DNSProviderMode:             normalizeDNSProviderMode(route.DNSProviderMode),
+		DNSZoneIDRef:                route.DNSZoneIDRef,
+		GSLBEnabled:                 route.GSLBEnabled,
+		GSLBPolicy:                  gslbPolicy,
+		DNSRecordIDs:                decodeDNSRecordIDs(route.DNSRecordIDs),
+		CloudflareProxied:           route.CloudflareProxied,
+		DDOSProtectionMode:          normalizeDDOSProtectionMode(route.DDOSProtectionMode),
+		DDOSProtectionProvider:      normalizeDDOSProtectionProvider(route.DDOSProtectionProvider),
+		DDOSProtectionTarget:        strings.TrimSpace(route.DDOSProtectionTarget),
+		DNSLastSyncStatus:           route.DNSLastSyncStatus,
+		DNSLastSyncMessage:          route.DNSLastSyncMessage,
+		DNSLastSyncedAt:             route.DNSLastSyncedAt,
+		Remark:                      route.Remark,
+		CreatedAt:                   route.CreatedAt,
+		UpdatedAt:                   route.UpdatedAt,
 	}, nil
 }
 
@@ -1800,6 +1809,9 @@ func normalizeCustomHeaders(headers []ProxyRouteCustomHeaderInput) ([]ProxyRoute
 		if !proxyHeaderKeyPattern.MatchString(key) {
 			return nil, errors.New("custom header key format is invalid")
 		}
+		if strings.EqualFold(key, "Host") {
+			return nil, errors.New("custom header Host is managed by origin_host")
+		}
 		if strings.ContainsAny(key, "\r\n") || strings.ContainsAny(value, "\r\n") {
 			return nil, errors.New("custom headers cannot contain newlines")
 		}
@@ -1809,6 +1821,72 @@ func normalizeCustomHeaders(headers []ProxyRouteCustomHeaderInput) ([]ProxyRoute
 		})
 	}
 	return normalized, nil
+}
+
+func restoreRedactedCustomHeaders(headers []ProxyRouteCustomHeaderInput, route *model.ProxyRoute) ([]ProxyRouteCustomHeaderInput, error) {
+	if len(headers) == 0 || route == nil {
+		return headers, nil
+	}
+	existing, err := decodeStoredCustomHeaders(route.CustomHeaders)
+	if err != nil {
+		return nil, err
+	}
+	existingByKey := make(map[string]string, len(existing))
+	for _, header := range existing {
+		existingByKey[strings.ToLower(header.Key)] = header.Value
+	}
+	for index := range headers {
+		if !isSensitiveProxyRouteCustomHeader(headers[index].Key) {
+			continue
+		}
+		if headers[index].Value != redactedProxyRouteCustomHeaderValue {
+			continue
+		}
+		if value, ok := existingByKey[strings.ToLower(headers[index].Key)]; ok {
+			headers[index].Value = value
+		}
+	}
+	return headers, nil
+}
+
+func marshalCustomHeadersForView(headers []ProxyRouteCustomHeaderInput) string {
+	viewHeaders := redactSensitiveCustomHeaders(headers)
+	raw, err := json.Marshal(viewHeaders)
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
+}
+
+func redactSensitiveCustomHeaders(headers []ProxyRouteCustomHeaderInput) []ProxyRouteCustomHeaderInput {
+	if len(headers) == 0 {
+		return []ProxyRouteCustomHeaderInput{}
+	}
+	redacted := make([]ProxyRouteCustomHeaderInput, 0, len(headers))
+	for _, header := range headers {
+		if isSensitiveProxyRouteCustomHeader(header.Key) && header.Value != "" {
+			header.Value = redactedProxyRouteCustomHeaderValue
+		}
+		redacted = append(redacted, header)
+	}
+	return redacted
+}
+
+func isSensitiveProxyRouteCustomHeader(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	if normalized == "" {
+		return false
+	}
+	switch normalized {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-api-token", "x-auth-token", "x-access-token", "x-csrf-token":
+		return true
+	}
+	for _, marker := range []string{"token", "secret", "credential", "password", "passwd", "apikey", "api-key", "session", "cookie", "authorization"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeUpstreams(originURL string, upstreams []string) ([]string, error) {
@@ -2100,8 +2178,22 @@ func validateOriginURL(raw string) error {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return errors.New("origin URL must start with http:// or https://")
 	}
+	if parsed.User != nil {
+		return errors.New("origin URL must not include userinfo")
+	}
 	if parsed.Host == "" {
 		return errors.New("origin URL format is invalid")
+	}
+	if err := validateOriginAddress(normalizeOriginAddress(parsed.Hostname())); err != nil {
+		return err
+	}
+	if parsed.Port() != "" {
+		if _, err := normalizeOriginPort(parsed.Port()); err != nil {
+			return err
+		}
+	}
+	if strings.ContainsAny(parsed.EscapedPath(), ";\r\n{}") || strings.ContainsAny(parsed.RawQuery, ";\r\n{}") {
+		return errors.New("origin URL path or query contains unsafe characters")
 	}
 	return nil
 }
@@ -2110,7 +2202,7 @@ func validateOriginHost(raw string) error {
 	if raw == "" {
 		return nil
 	}
-	if strings.ContainsAny(raw, "/\\ \t\r\n") || strings.Contains(raw, "://") {
+	if strings.ContainsAny(raw, "/\\ \t\r\n;$`{}") || strings.Contains(raw, "://") {
 		return errors.New("origin_host format is invalid")
 	}
 	parsed, err := url.Parse("//" + raw)
@@ -2119,6 +2211,11 @@ func validateOriginHost(raw string) error {
 	}
 	if parsed.Hostname() == "" {
 		return errors.New("origin_host format is invalid")
+	}
+	if parsed.Port() != "" {
+		if _, err := normalizeOriginPort(parsed.Port()); err != nil {
+			return errors.New("origin_host format is invalid")
+		}
 	}
 	return nil
 }

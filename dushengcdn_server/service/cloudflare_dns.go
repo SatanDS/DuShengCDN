@@ -30,6 +30,7 @@ const (
 	defaultCloudflareHTTPTimeout     = 15 * time.Second
 	defaultCloudflareSyncUserAgent   = "DuShengCDN/CloudflareDNS"
 	defaultCloudflareDNSListMaxPages = 100
+	maxCloudflareErrorDetailLength   = 240
 )
 
 type CloudflareCredentials struct {
@@ -260,7 +261,7 @@ func (client *cloudflareClient) do(ctx context.Context, method string, path stri
 		return fmt.Errorf("读取 Cloudflare API 响应失败：%w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("Cloudflare API 返回异常状态 %s：%s", resp.Status, strings.TrimSpace(string(raw)))
+		return fmt.Errorf("Cloudflare API 返回异常状态 %s：%s", resp.Status, summarizeCloudflareErrorResponse(raw))
 	}
 	if out == nil {
 		return nil
@@ -269,6 +270,30 @@ func (client *cloudflareClient) do(ctx context.Context, method string, path stri
 		return fmt.Errorf("解析 Cloudflare API 响应失败：%w", err)
 	}
 	return nil
+}
+
+func summarizeCloudflareErrorResponse(raw []byte) string {
+	var response struct {
+		Success bool                 `json:"success"`
+		Errors  []cloudflareAPIError `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil || len(response.Errors) == 0 {
+		return "Cloudflare API 返回非 JSON 错误响应"
+	}
+	message := cloudflareErrorMessage(response.Errors)
+	message = strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\n', '\t':
+			return ' '
+		default:
+			return r
+		}
+	}, message)
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) > maxCloudflareErrorDetailLength {
+		message = message[:maxCloudflareErrorDetailLength] + "..."
+	}
+	return message
 }
 
 func cloudflareErrorMessage(errorsList []cloudflareAPIError) string {

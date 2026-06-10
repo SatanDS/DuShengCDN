@@ -1,6 +1,8 @@
 package model
 
 import (
+	"dushengcdn/utils/security"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -22,6 +24,8 @@ type Node struct {
 	GeoLongitude              *float64  `json:"geo_longitude"`
 	GeoManualOverride         bool      `json:"geo_manual_override" gorm:"not null;default:false"`
 	AgentToken                string    `json:"-" gorm:"size:128;index"`
+	AgentTokenHash            string    `json:"-" gorm:"column:agent_token_hash;size:71;index;not null;default:''"`
+	AgentTokenPrefix          string    `json:"agent_token_prefix" gorm:"column:agent_token_prefix;size:16;index;not null;default:''"`
 	AutoUpdateEnabled         bool      `json:"auto_update_enabled" gorm:"not null;default:false"`
 	UpdateRequested           bool      `json:"update_requested" gorm:"not null;default:false"`
 	UpdateChannel             string    `json:"update_channel" gorm:"size:16;not null;default:'stable'"`
@@ -66,9 +70,35 @@ func GetNodeByID(id uint) (*Node, error) {
 }
 
 func GetNodeByAgentToken(token string) (*Node, error) {
+	token = strings.TrimSpace(token)
 	node := &Node{}
+	tokenHash := security.HashSecretToken(token)
+	if tokenHash != "" {
+		err := DB.Where("agent_token_hash = ?", tokenHash).First(node).Error
+		if err == nil {
+			return node, nil
+		}
+		if err != gorm.ErrRecordNotFound {
+			return node, err
+		}
+	}
 	err := DB.Where("agent_token = ?", token).First(node).Error
+	if err == nil && tokenHash != "" {
+		if migrateErr := StoreNodeAgentTokenHash(node.ID, token); migrateErr == nil {
+			node.AgentTokenHash = tokenHash
+			node.AgentTokenPrefix = security.SecretTokenPrefix(token)
+			node.AgentToken = ""
+		}
+	}
 	return node, err
+}
+
+func StoreNodeAgentTokenHash(id uint, token string) error {
+	return DB.Model(&Node{}).Where("id = ?", id).Updates(map[string]any{
+		"agent_token":        "",
+		"agent_token_hash":   security.HashSecretToken(token),
+		"agent_token_prefix": security.SecretTokenPrefix(token),
+	}).Error
 }
 
 func (node *Node) Insert() error {

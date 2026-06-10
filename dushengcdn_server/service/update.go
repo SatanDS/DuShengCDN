@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"dushengcdn/common"
+	"dushengcdn/utils/security"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -68,9 +69,7 @@ const (
 	ReleaseChannelPreview ReleaseChannel = "preview"
 )
 
-var updateHTTPClient = &http.Client{
-	Timeout: 30 * time.Second,
-}
+var updateHTTPClient = security.NewPublicHTTPClient(30*time.Second, true)
 
 var serverUpgradeState struct {
 	sync.Mutex
@@ -256,34 +255,36 @@ func UploadManualServerBinary(ctx context.Context, fileName string, reader io.Re
 	if err = verifyExecutableDirectoryWritable(execPath); err != nil {
 		return nil, err
 	}
+	assetName := serverAssetName(runtime.GOOS, runtime.GOARCH)
+	checksum, err := readUploadedServerChecksum(checksumReader, assetName)
+	if err != nil {
+		return nil, err
+	}
+	signature, err := readUploadedServerSignature(signatureReader)
+	if err != nil {
+		return nil, err
+	}
+	verifiedVersion, err := verifyUploadedServerReleaseSignatureCandidates(assetName, checksum, signature)
+	if err != nil {
+		return nil, fmt.Errorf("manual server upgrade signature validation failed: %w", err)
+	}
 	tempPath, err := persistUploadedServerBinary(filepath.Dir(execPath), fileName, reader)
 	if err != nil {
 		return nil, err
 	}
 
+	if err = verifyServerBinaryChecksum(tempPath, checksum); err != nil {
+		_ = os.Remove(tempPath)
+		return nil, err
+	}
 	detectedVersion, err := detectUploadedServerBinaryVersion(ctx, tempPath)
 	if err != nil {
 		_ = os.Remove(tempPath)
 		return nil, err
 	}
-	assetName := serverAssetName(runtime.GOOS, runtime.GOARCH)
-	checksum, err := readUploadedServerChecksum(checksumReader, assetName)
-	if err != nil {
+	if normalizeVersion(detectedVersion) != normalizeVersion(verifiedVersion) {
 		_ = os.Remove(tempPath)
-		return nil, err
-	}
-	signature, err := readUploadedServerSignature(signatureReader)
-	if err != nil {
-		_ = os.Remove(tempPath)
-		return nil, err
-	}
-	if err = verifyServerBinaryChecksum(tempPath, checksum); err != nil {
-		_ = os.Remove(tempPath)
-		return nil, err
-	}
-	if err = verifyServerReleaseSignature(detectedVersion, assetName, checksum, signature); err != nil {
-		_ = os.Remove(tempPath)
-		return nil, fmt.Errorf("manual server upgrade signature validation failed: %w", err)
+		return nil, fmt.Errorf("manual server upgrade binary version mismatch: signature=%s, binary=%s", strings.TrimSpace(verifiedVersion), strings.TrimSpace(detectedVersion))
 	}
 
 	currentVersion := strings.TrimSpace(common.Version)
@@ -737,7 +738,7 @@ func doServerUpdateDownload(req *http.Request) (*http.Response, error) {
 	}
 	baseClient := updateHTTPClient
 	if baseClient == nil {
-		baseClient = http.DefaultClient
+		baseClient = security.NewPublicHTTPClient(30*time.Second, true)
 	}
 	client := *baseClient
 	previousCheckRedirect := client.CheckRedirect
@@ -998,6 +999,68 @@ func verifyServerReleaseSignature(tagName string, assetName string, checksum str
 		return errors.New("release signature verification failed")
 	}
 	return nil
+}
+
+func verifyUploadedServerReleaseSignatureCandidates(assetName string, checksum string, signature []byte) (string, error) {
+	candidates := []string{
+		strings.TrimSpace(common.Version),
+	}
+	for _, candidate := range commonSupportedManualUploadVersionCandidates() {
+		if candidate != "" {
+			candidates = append(candidates, candidate)
+		}
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, exists := seen[candidate]; exists {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		if err := verifyServerReleaseSignature(candidate, assetName, checksum, signature); err == nil {
+			return candidate, nil
+		}
+		if !strings.HasPrefix(candidate, "v") {
+			withPrefix := "v" + candidate
+			if _, exists := seen[withPrefix]; !exists {
+				seen[withPrefix] = struct{}{}
+				if err := verifyServerReleaseSignature(withPrefix, assetName, checksum, signature); err == nil {
+					return withPrefix, nil
+				}
+			}
+		}
+	}
+	return "", errors.New("release signature verification failed")
+}
+
+func commonSupportedManualUploadVersionCandidates() []string {
+	current := parseVersionInfo(common.Version)
+	if !current.Valid || len(current.Numbers) == 0 {
+		return nil
+	}
+	candidates := make([]string, 0, 32)
+	major := current.Numbers[0]
+	minor := 0
+	patch := 0
+	if len(current.Numbers) > 1 {
+		minor = current.Numbers[1]
+	}
+	if len(current.Numbers) > 2 {
+		patch = current.Numbers[2]
+	}
+	for delta := 0; delta <= 24; delta++ {
+		candidates = append(candidates, fmt.Sprintf("v%d.%d.%d", major, minor, patch+delta))
+	}
+	for delta := 1; delta <= 12; delta++ {
+		candidates = append(candidates, fmt.Sprintf("v%d.%d.0", major, minor+delta))
+	}
+	for delta := 1; delta <= 3; delta++ {
+		candidates = append(candidates, fmt.Sprintf("v%d.0.0", major+delta))
+	}
+	return candidates
 }
 
 func verifyServerBinaryChecksum(path string, expectedChecksum string) error {

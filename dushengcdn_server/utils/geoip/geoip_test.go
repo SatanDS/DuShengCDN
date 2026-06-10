@@ -1,11 +1,14 @@
 package geoip
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -151,7 +154,8 @@ func TestMaxMindUpdateDatabaseRejectsOversizedDownload(t *testing.T) {
 		_, _ = w.Write([]byte("123456789"))
 	}))
 	defer server.Close()
-	GeoIpUrl = server.URL
+	GeoIpUrl = "https://geoip.example.test/GeoLite2-Country.mmdb"
+	geoIPDownloadHTTPClient = geoIPDownloadTestClient(t, server)
 
 	service := &MaxMindGeoIPService{dbFilePath: filepath.Join(t.TempDir(), "GeoLite2-Country.mmdb")}
 	err := service.UpdateDatabase()
@@ -172,7 +176,8 @@ func TestMaxMindUpdateDatabaseRejectsInvalidDatabaseWithoutReplacingExisting(t *
 		_, _ = w.Write([]byte("not a mmdb"))
 	}))
 	defer server.Close()
-	GeoIpUrl = server.URL
+	GeoIpUrl = "https://geoip.example.test/GeoLite2-Country.mmdb"
+	geoIPDownloadHTTPClient = geoIPDownloadTestClient(t, server)
 
 	target := filepath.Join(t.TempDir(), "GeoLite2-Country.mmdb")
 	if err := os.WriteFile(target, []byte("existing database"), 0o644); err != nil {
@@ -191,4 +196,192 @@ func TestMaxMindUpdateDatabaseRejectsInvalidDatabaseWithoutReplacingExisting(t *
 	if string(data) != "existing database" {
 		t.Fatalf("expected existing database to remain unchanged, got %q", string(data))
 	}
+}
+
+func TestMaxMindUpdateDatabaseRejectsUnsafeURL(t *testing.T) {
+	originalURL := GeoIpUrl
+	t.Cleanup(func() {
+		GeoIpUrl = originalURL
+	})
+	GeoIpUrl = "http://127.0.0.1/GeoLite2-Country.mmdb"
+
+	service := &MaxMindGeoIPService{dbFilePath: filepath.Join(t.TempDir(), "GeoLite2-Country.mmdb")}
+	err := service.UpdateDatabase()
+	if err == nil || !strings.Contains(err.Error(), "url must use https") {
+		t.Fatalf("expected unsafe URL rejection, got %v", err)
+	}
+}
+
+func TestMaxMindUpdateDatabaseCreatesRestrictedDataDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows does not expose POSIX directory mode bits consistently")
+	}
+	originalURL := GeoIpUrl
+	originalClient := geoIPDownloadHTTPClient
+	t.Cleanup(func() {
+		GeoIpUrl = originalURL
+		geoIPDownloadHTTPClient = originalClient
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not a mmdb"))
+	}))
+	defer server.Close()
+	GeoIpUrl = "https://geoip.example.test/GeoLite2-Country.mmdb"
+	geoIPDownloadHTTPClient = geoIPDownloadTestClient(t, server)
+
+	dataDir := filepath.Join(t.TempDir(), "geoip-data")
+	service := &MaxMindGeoIPService{dbFilePath: filepath.Join(dataDir, "GeoLite2-Country.mmdb")}
+	err := service.UpdateDatabase()
+	if err == nil || !strings.Contains(err.Error(), "validate MaxMind database") {
+		t.Fatalf("expected invalid database validation error, got %v", err)
+	}
+
+	info, statErr := os.Stat(dataDir)
+	if statErr != nil {
+		t.Fatalf("expected geoip data directory to be created: %v", statErr)
+	}
+	if got := info.Mode().Perm(); got != 0o750 {
+		t.Fatalf("expected geoip data directory mode 0750, got %03o", got)
+	}
+}
+
+func TestOnlineGeoIPProvidersUseHTTPSAndUserAgent(t *testing.T) {
+	tests := []struct {
+		name     string
+		service  GeoIPService
+		response any
+	}{
+		{
+			name:    "ip-api",
+			service: &IPAPIService{},
+			response: ipAPIResponse{
+				Status:      "success",
+				Country:     "United States",
+				CountryCode: "US",
+				ISP:         "Example ISP",
+			},
+		},
+		{
+			name:    "geojs",
+			service: &GeoJSService{},
+			response: geoJSResponse{
+				Country:     "United States",
+				CountryCode: "US",
+			},
+		},
+		{
+			name:    "ipinfo",
+			service: &IPInfoService{},
+			response: ipInfoResponse{
+				Country: "US",
+				Org:     "Example Org",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var originalScheme string
+			var originalHost string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("User-Agent") != "DuShengCDN-Server" {
+					t.Fatalf("unexpected user agent: %s", r.Header.Get("User-Agent"))
+				}
+				_ = json.NewEncoder(w).Encode(tc.response)
+			}))
+			defer server.Close()
+			client := onlineGeoIPTestClient(t, server, func(r *http.Request) {
+				originalScheme = r.URL.Scheme
+				originalHost = r.URL.Host
+			})
+			switch service := tc.service.(type) {
+			case *IPAPIService:
+				service.Client = client
+			case *GeoJSService:
+				service.Client = client
+			case *IPInfoService:
+				service.Client = client
+			default:
+				t.Fatalf("unsupported service type %T", tc.service)
+			}
+
+			info, err := tc.service.GetGeoInfo(net.ParseIP("8.8.8.8"))
+			if err != nil {
+				t.Fatalf("GetGeoInfo: %v", err)
+			}
+			if info == nil || info.ISOCode != "US" {
+				t.Fatalf("unexpected geo info: %+v", info)
+			}
+			if originalScheme != "https" || originalHost == "" {
+				t.Fatalf("expected provider request to use HTTPS, got scheme=%q host=%q", originalScheme, originalHost)
+			}
+		})
+	}
+}
+
+func geoIPDownloadTestClient(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+	upstream, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
+	}
+	client := server.Client()
+	baseTransport := client.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	client.Transport = geoIPDownloadTestTransport{
+		base:     baseTransport,
+		upstream: upstream,
+	}
+	return client
+}
+
+type geoIPDownloadTestTransport struct {
+	base     http.RoundTripper
+	upstream *url.URL
+}
+
+func (transport geoIPDownloadTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	rewritten := *request.URL
+	rewritten.Scheme = transport.upstream.Scheme
+	rewritten.Host = transport.upstream.Host
+	clone.URL = &rewritten
+	clone.Host = transport.upstream.Host
+	return transport.base.RoundTrip(clone)
+}
+
+func onlineGeoIPTestClient(t *testing.T, server *httptest.Server, observe func(*http.Request)) *http.Client {
+	t.Helper()
+	upstream, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
+	}
+	return &http.Client{
+		Transport: onlineGeoIPTestTransport{
+			base:     http.DefaultTransport,
+			upstream: upstream,
+			observe:  observe,
+		},
+	}
+}
+
+type onlineGeoIPTestTransport struct {
+	base     http.RoundTripper
+	upstream *url.URL
+	observe  func(*http.Request)
+}
+
+func (transport onlineGeoIPTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if transport.observe != nil {
+		transport.observe(request)
+	}
+	clone := request.Clone(request.Context())
+	rewritten := *request.URL
+	rewritten.Scheme = transport.upstream.Scheme
+	rewritten.Host = transport.upstream.Host
+	clone.URL = &rewritten
+	clone.Host = transport.upstream.Host
+	return transport.base.RoundTrip(clone)
 }

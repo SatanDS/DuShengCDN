@@ -1,4 +1,4 @@
-# 本地开发
+﻿# 本地开发
 
 你会学到：如何搭建 DuShengCDN 的本地开发环境、启动 Server、Agent 和管理端前端，运行测试与构建命令，并理解贡献代码前需要遵守的边界。
 
@@ -68,7 +68,7 @@ go run .
 http://localhost:3000
 ```
 
-首次空库启动会创建 `root` 用户。密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 首次启动日志中的一次性随机密码。
+首次空库启动会创建 `root` 用户。密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 日志提示的 `initial-root-password.txt` 文件，日志不会打印密码本身。
 
 ## 启动前端开发服务器
 
@@ -119,7 +119,7 @@ cd dushengcdn_server
 export LOG_LEVEL='debug'
 go run ./cmd/dns-worker \
   --server-url http://127.0.0.1:3000 \
-  --token replace-with-dns-worker-token \
+  --token-file /run/secrets/dushengcdn-dns-worker-token \
   --listen 127.0.0.1:1053 \
   --snapshot-path ./data/dns-worker-snapshot.json \
   --query-rate-limit 200 \

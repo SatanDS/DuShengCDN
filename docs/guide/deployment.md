@@ -117,7 +117,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: ${DSN:?set DSN in .env}
@@ -152,7 +152,7 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-首次访问 `http://localhost:3000`，用户名为 `root`，密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 首次空库启动日志中的一次性随机密码。登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码。
+默认示例只把管理端绑定到本机 `127.0.0.1`。首次可在服务器本机访问 `http://localhost:3000`，生产公开访问请通过 HTTPS 反向代理；用户名为 `root`，密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 日志提示的 `initial-root-password.txt` 文件（权限为 0600，日志不打印密码）。登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码/密码文件。
 
 商用或多实例部署建议额外提供 Redis 服务并设置 `REDIS_CONN_STRING`；如果不能接受 Redis 失效后降级为单进程限流和缓存，可设置 `REDIS_REQUIRED=true` 让 Server 在 Redis 不可用时直接启动失败。需要私有商业授权约束时，设置 `DUSHENGCDN_LICENSE_REQUIRED=true` 和 `DUSHENGCDN_LICENSE_PUBLIC_KEYS`，启动后在管理端「设置 -> 商业授权」安装 `dscdn_license_v1...` 许可证令牌。
 
@@ -169,7 +169,7 @@ cp -n .env.example .env
 
 ```yaml
 ports:
-  - "3010:3000"
+  - "127.0.0.1:3010:3000"
 ```
 
 此时浏览器访问 `http://localhost:3010`，容器内部仍监听 `3000`。
@@ -253,7 +253,7 @@ Worker 上报的聚合指标会在左侧「本地自建解析」展示最近 24 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
   --server-url https://cdn.example.com \
-  --token YOUR_DNS_WORKER_TOKEN
+  --token-file /run/secrets/dushengcdn-dns-worker-token
 ```
 
 脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，并把快照缓存保存在安装目录的 `data/dns-worker-snapshot.json`。启动服务前会检查默认监听端口是否已被其它进程占用；如果本机已有 `systemd-resolved`、`named`、`dnsmasq` 等本地 DNS 服务，请先停用/改端口，或用 `--listen PUBLIC_IP:53` 只绑定 Worker 公网地址。脚本会优先下载 GitHub Release 中的 DNS Worker 二进制；如果当前仓库还没有 Release，会自动安装 Go 并从源码构建，源码构建会把当前 Git 版本写入 Worker，避免版本显示为 `dev`。源码构建会优先复用当前 `PATH` 或 `/usr/local/go/bin/go` 里的 Go；确实需要自动安装 Go 时，会按 `go.dev`、`dl.google.com`、`golang.google.cn` 多源重试。
@@ -286,7 +286,8 @@ bash scripts/verify-authoritative-dns.sh --public-ip PUBLIC_IP --zone example.co
 | 参数 | 说明 |
 | --- | --- |
 | `--server-url` | Server 地址，必填 |
-| `--token` | DNS Worker 专属 Token，必填 |
+| `--token-file` | 从文件读取 DNS Worker 专属 Token，推荐 |
+| `--token` | DNS Worker 专属 Token，兼容参数；默认拒绝，只有显式传 `--allow-insecure-token-argv` 时才接受 |
 | `--install-dir` | 安装目录，默认 `/opt/dushengcdn-dns-worker` |
 | `--listen` | UDP/TCP 监听地址，默认 `:53` |
 | `--snapshot-path` | 快照缓存路径，默认安装目录下的 `data/dns-worker-snapshot.json` |
@@ -310,8 +311,9 @@ DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp \
   -v dushengcdn-dns-worker-data:/data \
+  -v /run/secrets/dushengcdn-dns-worker-token:/run/secrets/dushengcdn_dns_worker_token:ro \
   -e DUSHENGCDN_DNS_WORKER_SERVER_URL=https://cdn.example.com \
-  -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
+  -e DUSHENGCDN_DNS_WORKER_TOKEN_FILE=/run/secrets/dushengcdn_dns_worker_token \
   ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
@@ -333,7 +335,7 @@ docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
 cd dushengcdn_server
 go run ./cmd/dns-worker \
   --server-url https://cdn.example.com \
-  --token YOUR_DNS_WORKER_TOKEN \
+  --token-file /run/secrets/dushengcdn-dns-worker-token \
   --listen :53 \
   --snapshot-path /var/lib/dushengcdn-dns-worker/snapshot.json \
   --query-rate-limit 200 \
@@ -375,7 +377,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/uni
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --discovery-token YOUR_DISCOVERY_TOKEN
+  --discovery-token-file /run/secrets/dushengcdn-discovery-token
 ```
 
 使用节点专属 `agent_token`：
@@ -383,7 +385,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 安装脚本支持参数：
@@ -391,8 +393,10 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 | 参数 | 说明 |
 | --- | --- |
 | `--server-url` | Server 地址，必填 |
-| `--discovery-token` | 首次自动注册 Token，与 `--agent-token` 二选一 |
-| `--agent-token` | 节点专属 Token，与 `--discovery-token` 二选一 |
+| `--discovery-token-file` | 从文件读取首次自动注册 Token，与 `--agent-token-file` 二选一，推荐 |
+| `--agent-token-file` | 从文件读取节点专属 Token，与 `--discovery-token-file` 二选一，推荐 |
+| `--discovery-token` | 首次自动注册 Token，兼容参数；默认拒绝，只有显式传 `--allow-insecure-token-argv` 时才接受 |
+| `--agent-token` | 节点专属 Token，兼容参数；默认拒绝，只有显式传 `--allow-insecure-token-argv` 时才接受 |
 | `--install-dir` | 安装目录，默认 `/opt/dushengcdn-agent` |
 | `--openresty-path` | OpenResty 二进制路径，未传时自动查找 `openresty` |
 | `--repo` | 下载 Agent 的 GitHub 仓库，默认 `SatanDS/DuShengCDN` |
@@ -428,8 +432,9 @@ docker run -d --name dushengcdn-agent --restart unless-stopped \
 ```bash
 docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
+  -v /run/secrets/dushengcdn-agent-token:/run/secrets/dushengcdn_agent_token:ro \
   -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
-  -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
+  -e DUSHENGCDN_AGENT_TOKEN_FILE=/run/secrets/dushengcdn_agent_token \
   ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
@@ -607,7 +612,11 @@ docker compose up -d
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
 docker compose stop dushengcdn
-docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /tmp/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+docker compose run --rm -v /tmp/dushengcdn-root-password:/run/secrets/dushengcdn-root-password:ro dushengcdn /dushengcdn --reset-root-password-file /run/secrets/dushengcdn-root-password
+rm -f /tmp/dushengcdn-root-password
 docker compose up -d
 ```
 

@@ -14,9 +14,8 @@ func AgentAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		token := c.GetHeader("X-Agent-Token")
 		if service.IsLegacyGlobalAgentToken(token) {
-			if isLegacyAgentReadOnlyPath(c) {
-				c.Set("legacy_agent_token", true)
-				c.Next()
+			if isLegacyAgentActiveConfigPath(c) {
+				abortAgentUnauthorized(c, "Legacy global Agent Token cannot fetch active configs; migrate this Agent to a node-specific agent_token")
 				return
 			}
 			if legacyNode, legacyErr := authenticateLegacyAgentNode(c, token); legacyErr == nil {
@@ -81,7 +80,7 @@ func AgentRegisterAuth() func(c *gin.Context) {
 	}
 }
 
-func isLegacyAgentReadOnlyPath(c *gin.Context) bool {
+func isLegacyAgentActiveConfigPath(c *gin.Context) bool {
 	return c.Request.Method == http.MethodGet && c.Request.URL.Path == "/api/agent/config-versions/active"
 }
 

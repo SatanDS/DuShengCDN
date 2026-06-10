@@ -48,12 +48,12 @@
 
 | 问题 | 证据 | 处理 |
 | --- | --- | --- |
-| 根目录 Agent Compose 模板含真实样式 Token | `docker-compose.yaml` 中 `DUSHENGCDN_AGENT_TOKEN` 不是占位值 | 改为 `replace-with-agent-token` |
+| 根目录 Agent Compose 模板曾直接使用 Token 环境变量 | `docker-compose.yaml` 早期示例使用 `DUSHENGCDN_AGENT_TOKEN` | 改为挂载 token 文件并设置 `DUSHENGCDN_AGENT_TOKEN_FILE` |
 | 文档仍描述网站配置下有左侧直达入口 | README 与 `docs/guide/usage.md` 仍写“网站配置下提供直达入口”，但当前导航只保留主目录 | 改为站点详情页内分区导航 |
 | 文档仍使用旧“反代规则”操作路径 | README 中多处操作路径与当前“网站配置”菜单不一致 | 改为当前菜单路径 |
 | 快速开始/Agent 文档存在占位说明 | `docs/guide/quick-start.md`、`docs/guide/agent.md` 的 Token 路径没有落到当前 UI | 按当前前端页面补充准确路径，并同步英文快速开始 |
 | 部署文档存在生产规格占位 | `docs/guide/deployment.md` 没有给出可执行的规格建议 | 补充小规模和中等规模建议，并同步英文部署说明 |
-| 忘记 root 密码缺少离线救急流程 | 排障文档原本是占位；代码没有专用命令 | 新增 `--reset-root-password` 命令并补测试和文档 |
+| 忘记 root 密码缺少离线救急流程 | 排障文档原本是占位；代码没有专用命令 | 新增 `--reset-root-password-file` / `--reset-root-password-stdin` 命令并补测试和文档 |
 | 升级文档没有解释本地 Compose 改动导致 `git pull` 冲突 | 用户实际遇到 `docker-compose.yaml` 本地修改阻塞拉取 | 补充 `pull --ff-only` 与确认后 `reset --hard` 的适用条件 |
 | 备份恢复说明不足 | 只有升级前建议备份，没有可执行命令 | 补充 PostgreSQL/SQLite 备份和恢复入口 |
 | Agent GeoIP 配置文档不全 | Agent 已支持 GeoIP 数据库和在线 API 字段，配置参考未完整列出 | 补充环境变量和 `agent.json` 字段 |
@@ -89,7 +89,11 @@ pnpm.cmd build
 
 ```bash
 cd dushengcdn_server
-go run . --reset-root-password 'new-password-123'
+install -m 0600 /dev/stdin /tmp/dushengcdn-root-password <<'EOF'
+new-password-123
+EOF
+go run . --reset-root-password-file /tmp/dushengcdn-root-password
+rm -f /tmp/dushengcdn-root-password
 ```
 
 文档构建过程中仅出现第三方依赖注释位置相关的 Rollup warning，构建完成。

@@ -9,9 +9,15 @@ import (
 	"dushengcdn/utils/validation"
 	"encoding/json"
 	"fmt"
-	"github.com/gin-gonic/gin"
+	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/gin-gonic/gin"
 )
+
+var sendEmailVerificationCodeAsyncFunc = sendEmailVerificationCodeAsync
 
 // GetStatus godoc
 // @Summary Get server status
@@ -24,29 +30,31 @@ func GetStatus(c *gin.Context) {
 	if err != nil {
 		authSources = []service.PublicAuthSource{}
 	}
+	data := gin.H{
+		"email_verification":        common.EmailVerificationEnabled,
+		"github_oauth":              common.GitHubOAuthEnabled,
+		"github_client_id":          common.GitHubClientId,
+		"system_name":               common.SystemName,
+		"home_page_link":            common.HomePageLink,
+		"footer_html":               common.Footer,
+		"wechat_qrcode":             common.WeChatAccountQRCodeImageURL,
+		"wechat_login":              common.WeChatAuthEnabled,
+		"turnstile_check":           common.TurnstileCheckEnabled,
+		"turnstile_site_key":        common.TurnstileSiteKey,
+		"register_enabled":          common.RegisterEnabled,
+		"password_register_enabled": common.PasswordRegisterEnabled,
+		"auth_sources":              authSources,
+	}
+	if common.PublicStatusRuntimeMetadataEnabled {
+		data["version"] = common.Version
+		data["start_time"] = common.StartTime
+		data["server_address"] = common.ServerAddress
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data": gin.H{
-			"version":                   common.Version,
-			"start_time":                common.StartTime,
-			"email_verification":        common.EmailVerificationEnabled,
-			"github_oauth":              common.GitHubOAuthEnabled,
-			"github_client_id":          common.GitHubClientId,
-			"system_name":               common.SystemName,
-			"home_page_link":            common.HomePageLink,
-			"footer_html":               common.Footer,
-			"wechat_qrcode":             common.WeChatAccountQRCodeImageURL,
-			"wechat_login":              common.WeChatAuthEnabled,
-			"server_address":            common.ServerAddress,
-			"turnstile_check":           common.TurnstileCheckEnabled,
-			"turnstile_site_key":        common.TurnstileSiteKey,
-			"register_enabled":          common.RegisterEnabled,
-			"password_register_enabled": common.PasswordRegisterEnabled,
-			"auth_sources":              authSources,
-		},
+		"data":    data,
 	})
-	return
 }
 
 func GetNotice(c *gin.Context) {
@@ -55,7 +63,6 @@ func GetNotice(c *gin.Context) {
 		"message": "",
 		"data":    common.GetOptionValue("Notice"),
 	})
-	return
 }
 
 func GetAbout(c *gin.Context) {
@@ -64,108 +71,223 @@ func GetAbout(c *gin.Context) {
 		"message": "",
 		"data":    common.GetOptionValue("About"),
 	})
-	return
 }
 
 func SendEmailVerification(c *gin.Context) {
-	email := c.Query("email")
+	var req emailVerificationRequest
+	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "invalid request",
+		})
+		return
+	}
+	email := strings.TrimSpace(req.Email)
 	if err := validation.Validate.Var(email, "required,email"); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "无效的参数",
+			"message": "invalid email",
 		})
+		return
+	}
+	if !publicEmailVerificationEnabled() {
+		respondEmailActionAccepted(c)
 		return
 	}
 	if model.IsEmailAlreadyTaken(email) {
+		respondEmailActionAccepted(c)
+		return
+	}
+	sendEmailVerificationCodeAsyncFunc(email, email, security.EmailVerificationPurpose, "public email verification send failed")
+	respondEmailActionAccepted(c)
+}
+
+func publicEmailVerificationEnabled() bool {
+	return common.RegisterEnabled && common.PasswordRegisterEnabled && common.EmailVerificationEnabled
+}
+
+type emailVerificationRequest struct {
+	Email string `json:"email"`
+}
+
+func SendEmailBindVerification(c *gin.Context) {
+	var req emailVerificationRequest
+	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "邮箱地址已被占用",
+			"message": "invalid request",
 		})
 		return
 	}
-	code := security.GenerateVerificationCode(6)
-	security.RegisterVerificationCodeWithKey(email, code, security.EmailVerificationPurpose)
-	subject := fmt.Sprintf("%s邮箱验证邮件", common.SystemName)
-	content := fmt.Sprintf("<p>您好，你正在进行%s邮箱验证。</p>"+
-		"<p>您的验证码为: <strong>%s</strong></p>"+
-		"<p>验证码 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, code, security.VerificationValidMinutes)
-	err := mail.SendEmail(subject, email, content)
-	if err != nil {
+	email := strings.TrimSpace(req.Email)
+	if err := validation.Validate.Var(email, "required,email"); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "invalid email",
+		})
+		return
+	}
+	id := c.GetInt("id")
+	user := model.User{Id: id}
+	if err := user.FillUserById(); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": err.Error(),
 		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
-	return
+	if model.IsEmailAlreadyTaken(email) && !strings.EqualFold(strings.TrimSpace(user.Email), email) {
+		respondEmailActionAccepted(c)
+		return
+	}
+	sendEmailVerificationCodeAsyncFunc(email, emailBindVerificationKey(id, email), security.EmailVerificationPurpose, "email bind verification send failed")
+	respondEmailActionAccepted(c)
+}
+
+func sendEmailVerificationCodeAsync(email string, key string, purpose string, logMessage string) {
+	email = strings.TrimSpace(email)
+	key = strings.TrimSpace(key)
+	purpose = strings.TrimSpace(purpose)
+	go func() {
+		if err := sendEmailVerificationCode(email, key, purpose); err != nil {
+			slog.Warn(logMessage, "error", err)
+		}
+	}()
+}
+
+func sendEmailVerificationCode(email string, key string, purpose string) error {
+	code := security.GenerateVerificationCode(6)
+	subject := fmt.Sprintf("%s email verification", common.SystemName)
+	content := fmt.Sprintf("<p>Hello, you are verifying an email address for %s.</p>"+
+		"<p>Your verification code is: <strong>%s</strong></p>"+
+		"<p>The code is valid for %d minutes. Ignore this email if you did not request it.</p>", common.SystemName, code, security.VerificationValidMinutes)
+	if err := mail.SendEmail(subject, email, content); err != nil {
+		return err
+	}
+	security.RegisterVerificationCodeWithKey(key, code, purpose)
+	return nil
+}
+
+func emailBindVerificationKey(userID int, email string) string {
+	return fmt.Sprintf("%d:%s", userID, strings.ToLower(strings.TrimSpace(email)))
+}
+
+func passwordResetVerificationKey(userID int, email string) string {
+	return fmt.Sprintf("password-reset:%d:%s", userID, strings.ToLower(strings.TrimSpace(email)))
 }
 
 func SendPasswordResetEmail(c *gin.Context) {
-	email := c.Query("email")
+	var req emailVerificationRequest
+	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "invalid request",
+		})
+		return
+	}
+	email := strings.TrimSpace(req.Email)
 	if err := validation.Validate.Var(email, "required,email"); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "无效的参数",
+			"message": "invalid email",
 		})
 		return
 	}
 	if !model.IsEmailAlreadyTaken(email) {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "该邮箱地址未注册",
-		})
+		respondPasswordResetEmailAccepted(c)
 		return
 	}
-	code := security.GenerateVerificationCode(0)
-	security.RegisterVerificationCodeWithKey(email, code, security.PasswordResetPurpose)
-	link := fmt.Sprintf("%s/user/reset?email=%s&token=%s", common.ServerAddress, email, code)
-	subject := fmt.Sprintf("%s密码重置", common.SystemName)
-	content := fmt.Sprintf("<p>您好，你正在进行%s密码重置。</p>"+
-		"<p>点击<a href='%s'>此处</a>进行密码重置。</p>"+
-		"<p>重置链接 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, link, security.VerificationValidMinutes)
-	err := mail.SendEmail(subject, email, content)
+	user, err := model.GetSingleUserByEmail(email)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondPasswordResetEmailAccepted(c)
 		return
 	}
+	sendPasswordResetEmailAsync(user.Id, email)
+	respondPasswordResetEmailAccepted(c)
+}
+
+func sendPasswordResetEmailAsync(userID int, email string) {
+	email = strings.TrimSpace(email)
+	go func() {
+		if err := sendPasswordResetEmail(userID, email); err != nil {
+			slog.Warn("password reset email send failed", "error", err)
+		}
+	}()
+}
+
+func sendPasswordResetEmail(userID int, email string) error {
+	code := security.GenerateVerificationCode(0)
+	link := fmt.Sprintf("%s/user/reset#email=%s&token=%s", strings.TrimRight(common.ServerAddress, "/"), url.QueryEscape(email), url.QueryEscape(code))
+	subject := fmt.Sprintf("%s password reset", common.SystemName)
+	content := fmt.Sprintf("<p>Hello, you requested a password reset for %s.</p>"+
+		"<p>Click <a href='%s'>here</a> to reset your password.</p>"+
+		"<p>The reset link is valid for %d minutes. Ignore this email if you did not request it.</p>", common.SystemName, link, security.VerificationValidMinutes)
+	if err := mail.SendEmail(subject, email, content); err != nil {
+		return err
+	}
+	security.RegisterVerificationCodeWithKey(passwordResetVerificationKey(userID, email), code, security.PasswordResetPurpose)
+	return nil
+}
+
+func respondEmailActionAccepted(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 	})
-	return
+}
+
+func respondPasswordResetEmailAccepted(c *gin.Context) {
+	respondEmailActionAccepted(c)
 }
 
 type PasswordResetRequest struct {
-	Email string `json:"email"`
-	Token string `json:"token"`
+	Email       string `json:"email"`
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
 }
 
 func ResetPassword(c *gin.Context) {
 	var req PasswordResetRequest
 	err := json.NewDecoder(c.Request.Body).Decode(&req)
-	if req.Email == "" || req.Token == "" {
+	req.Email = strings.TrimSpace(req.Email)
+	req.Token = strings.TrimSpace(req.Token)
+	if err != nil || req.Email == "" || req.Token == "" || req.NewPassword == "" {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "无效的参数",
+			"message": "invalid request",
 		})
 		return
 	}
-	if !security.VerifyCodeWithKey(req.Email, req.Token, security.PasswordResetPurpose) {
+	if err := validation.Validate.Var(req.Email, "required,email"); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "重置链接非法或已过期",
+			"message": "invalid email",
 		})
 		return
 	}
-	password := security.GenerateVerificationCode(12)
-	err = model.ResetUserPasswordByEmail(req.Email, password)
+	if err := validation.Validate.Var(req.NewPassword, "required,min=8,max=20"); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "password length must be 8-20 characters",
+		})
+		return
+	}
+	user, err := model.GetSingleUserByEmail(req.Email)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "password reset link is invalid or expired",
+		})
+		return
+	}
+	if !security.VerifyCodeWithKeyAndDelete(passwordResetVerificationKey(user.Id, req.Email), req.Token, security.PasswordResetPurpose) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "password reset link is invalid or expired",
+		})
+		return
+	}
+	err = model.ResetUserPasswordByID(user.Id, req.NewPassword)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -173,11 +295,8 @@ func ResetPassword(c *gin.Context) {
 		})
 		return
 	}
-	security.DeleteKey(req.Email, security.PasswordResetPurpose)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    password,
 	})
-	return
 }

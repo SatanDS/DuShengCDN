@@ -249,7 +249,7 @@ function M.run()
     if not reason then
         return
     end
-    ngx.log(ngx.WARN, "dushengcdn waf matched ", reason, " host=", host, " ip=", client_ip(), " uri=", ngx.var.request_uri or uri)
+    ngx.log(ngx.WARN, "dushengcdn waf matched ", reason, " host=", host, " ip=", client_ip(), " uri=", uri)
     if (entry.mode or "block") == "log" then
         set_reason(reason, "log")
         ngx.header["X-DuShengCDN-WAF"] = "matched; mode=log; rule=" .. reason

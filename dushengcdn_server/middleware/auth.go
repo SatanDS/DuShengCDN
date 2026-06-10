@@ -3,6 +3,7 @@ package middleware
 import (
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"dushengcdn/utils/security"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -30,6 +31,16 @@ func authHelper(c *gin.Context, minRole int) {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
 				"message": "登录状态已失效，请重新登录",
+			})
+			c.Abort()
+			return
+		}
+		expectedFingerprint, _ := session.Get("password_fingerprint").(string)
+		if !security.VerifyPasswordSessionFingerprint(currentUser.Password, common.SessionSecret, expectedFingerprint) {
+			clearAuthSession(session)
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "session is no longer valid; please log in again",
 			})
 			c.Abort()
 			return
@@ -86,7 +97,18 @@ func clearAuthSession(session sessions.Session) {
 	session.Delete("username")
 	session.Delete("role")
 	session.Delete("status")
+	session.Delete("csrf_token")
+	session.Delete("password_fingerprint")
 	_ = session.Save()
+}
+
+func unsafeSessionMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func UserAuth() func(c *gin.Context) {
@@ -118,6 +140,19 @@ func NoTokenAuth() func(c *gin.Context) {
 			})
 			c.Abort()
 			return
+		}
+		if unsafeSessionMethod(c.Request.Method) {
+			session := sessions.Default(c)
+			expected, _ := session.Get("csrf_token").(string)
+			provided := c.GetHeader("X-CSRF-Token")
+			if !security.VerifyCSRFToken(expected, provided) {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "CSRF token invalid or missing",
+				})
+				c.Abort()
+				return
+			}
 		}
 		c.Next()
 	}

@@ -27,7 +27,8 @@ func TurnstileCheck() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if common.TurnstileCheckEnabled {
 			session := sessions.Default(c)
-			turnstileChecked := session.Get("turnstile")
+			turnstileSessionKey := turnstileSessionKey(c.FullPath())
+			turnstileChecked := session.Get(turnstileSessionKey)
 			if turnstileChecked != nil {
 				c.Next()
 				return
@@ -99,7 +100,7 @@ func TurnstileCheck() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			session.Set("turnstile", true)
+			session.Set(turnstileSessionKey, true)
 			err = session.Save()
 			if err != nil {
 				c.JSON(http.StatusOK, gin.H{
@@ -111,4 +112,12 @@ func TurnstileCheck() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func turnstileSessionKey(routePath string) string {
+	routePath = strings.TrimSpace(routePath)
+	if routePath == "" {
+		routePath = "*"
+	}
+	return "turnstile:" + routePath
 }

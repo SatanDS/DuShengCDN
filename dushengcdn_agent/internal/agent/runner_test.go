@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -813,6 +814,58 @@ func TestRunnerHandlesDNSWorkerUpdateRequest(t *testing.T) {
 	}
 	if captured.WorkerID != "dns-worker-1" || captured.Channel != "stable" {
 		t.Fatalf("unexpected captured request: %+v", captured)
+	}
+}
+
+func TestValidateDNSWorkerUpdateFileOwnershipRejectsWritableFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file mode bits do not reliably model Unix group/world write permissions")
+	}
+	path := filepath.Join(t.TempDir(), "update-dns-worker.sh")
+	if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
+		t.Fatalf("write update script: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat update script: %v", err)
+	}
+	if err = validateDNSWorkerUpdateFileOwnership(path, info, false); err == nil {
+		t.Fatal("expected group/world writable updater to be rejected")
+	}
+
+	if err = os.Chmod(path, 0o750); err != nil {
+		t.Fatalf("chmod update script: %v", err)
+	}
+	info, err = os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat update script: %v", err)
+	}
+	if err = validateDNSWorkerUpdateFileOwnership(path, info, false); err != nil {
+		t.Fatalf("expected non-writable updater to pass mode check, got %v", err)
+	}
+}
+
+func TestValidateDNSWorkerUpdateIdentityRequiresMatchingWorkerID(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "dns-worker.env")
+	if err := os.WriteFile(envFile, []byte("export DUSHENGCDN_DNS_WORKER_ID=\"dns-worker-1\"\n"), 0o640); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	if err := validateDNSWorkerUpdateIdentity(envFile, "dns-worker-1"); err != nil {
+		t.Fatalf("expected matching worker id to pass, got %v", err)
+	}
+	if err := validateDNSWorkerUpdateIdentity(envFile, "dns-worker-2"); err == nil {
+		t.Fatal("expected mismatched worker id to be rejected")
+	}
+	if err := validateDNSWorkerUpdateIdentity(envFile, ""); err == nil {
+		t.Fatal("expected empty request worker id to be rejected")
+	}
+
+	missingIdentityEnv := filepath.Join(t.TempDir(), "dns-worker.env")
+	if err := os.WriteFile(missingIdentityEnv, []byte("DUSHENGCDN_DNS_WORKER_SERVER_URL=\"https://cdn.example.com\"\n"), 0o640); err != nil {
+		t.Fatalf("write env file without identity: %v", err)
+	}
+	if err := validateDNSWorkerUpdateIdentity(missingIdentityEnv, "dns-worker-1"); err == nil {
+		t.Fatal("expected missing local worker id to be rejected")
 	}
 }
 

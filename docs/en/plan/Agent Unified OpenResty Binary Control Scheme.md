@@ -23,7 +23,7 @@ Unify the Agent running model as "write to the managed configuration file, then 
 - Docker Agent Image:
     - Add `dushengcdn_agent/Dockerfile`, with the runtime image based on `openresty/openresty:alpine`.
     - Defaults to `DUSHENGCDN_OPENRESTY_PATH=openresty` and `DUSHENGCDN_DATA_DIR=/data`.
-    - Expose `80`, `443`, and `18081`.
+    - Expose `80` and `443` publicly; keep `18081` as a local observability port.
     - Support mounting `/etc/dushengcdn/agent.json`, and also support environment variable configurations.
     - CI publishes independent multi-architecture images: `ghcr.io/satands/dushengcdn-agent:<version>` and `latest`.
 
@@ -53,7 +53,7 @@ Unify the Agent running model as "write to the managed configuration file, then 
 
 - Target Docker execution method examples:
     - Mount configuration file: `-v ./agent.json:/etc/dushengcdn/agent.json`
-    - Or environment variables: `-e DUSHENGCDN_SERVER_URL=... -e DUSHENGCDN_AGENT_TOKEN=...`
+    - Or environment variables plus a file secret: `-e DUSHENGCDN_SERVER_URL=... -e DUSHENGCDN_AGENT_TOKEN_FILE=/run/secrets/dushengcdn_agent_token`
 
 ## Test Plan
 

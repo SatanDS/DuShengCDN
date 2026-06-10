@@ -65,7 +65,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: ${DSN:?set DSN in .env}
@@ -112,7 +112,7 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-When the `dushengcdn` container is running and logs show `server listening`, open:
+The example binds the management port to local loopback only. When the `dushengcdn` container is running and logs show `server listening`, open it on the server itself; publish production access through an HTTPS reverse proxy:
 
 ```text
 http://localhost:3000
@@ -122,7 +122,7 @@ First login:
 
 | Username | Password |
 | --- | --- |
-| `root` | `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first empty-database Server startup log |
+| `root` | `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the generated one-time password in the `initial-root-password.txt` file named in the Server log |
 
 Change the root password immediately after first login, then remove or rotate the bootstrap value in `.env`.
 
@@ -151,7 +151,7 @@ With `discovery_token`:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --discovery-token YOUR_DISCOVERY_TOKEN
+  --discovery-token-file /run/secrets/dushengcdn-discovery-token
 ```
 
 With node-specific `agent_token`:
@@ -159,7 +159,7 @@ With node-specific `agent_token`:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 The script defaults to:
@@ -199,7 +199,7 @@ Use this only when you want domains to be delegated to DuShengCDN DNS Workers an
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --token YOUR_DNS_WORKER_TOKEN
+  --token-file /run/secrets/dushengcdn-dns-worker-token
 ```
 
 The script installs to `/opt/dushengcdn-dns-worker`, creates `dushengcdn-dns-worker.service`, listens on UDP/TCP `53`, stores a local snapshot cache, and downloads a Country MMDB by default for country-code GSLB pools. Docker is also supported:
@@ -209,8 +209,9 @@ DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp \
   -v dushengcdn-dns-worker-data:/data \
+  -v /run/secrets/dushengcdn-dns-worker-token:/run/secrets/dushengcdn_dns_worker_token:ro \
   -e DUSHENGCDN_DNS_WORKER_SERVER_URL=http://your-server:3000 \
-  -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
+  -e DUSHENGCDN_DNS_WORKER_TOKEN_FILE=/run/secrets/dushengcdn_dns_worker_token \
   -e DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \
   -e DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232 \
   ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}

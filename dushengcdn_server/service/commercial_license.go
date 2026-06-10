@@ -13,7 +13,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -22,6 +21,7 @@ import (
 
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"dushengcdn/utils/security"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -57,7 +57,7 @@ const (
 
 var commercialLicenseNow = time.Now
 var commercialLicenseResourceMu sync.Mutex
-var commercialLicenseHTTPClient = &http.Client{Timeout: 15 * time.Second}
+var commercialLicenseHTTPClient = security.NewPublicHTTPClient(15*time.Second, true)
 
 type CommercialLicenseInstallInput struct {
 	Token string `json:"token"`
@@ -1443,9 +1443,9 @@ func commercialLicenseActivationEndpoint(rawURL string) (string, error) {
 	if value == "" {
 		return "", errors.New("commercial license activation URL is not configured")
 	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", errors.New("commercial license activation URL is invalid")
+	parsed, err := security.ValidatePublicHTTPURL(value, true)
+	if err != nil {
+		return "", fmt.Errorf("commercial license activation URL is unsafe: %w", err)
 	}
 	path := strings.TrimRight(parsed.Path, "/")
 	switch {
@@ -1457,6 +1457,7 @@ func commercialLicenseActivationEndpoint(rawURL string) (string, error) {
 		parsed.Path = path + "/api/license/activation/activate"
 	}
 	parsed.RawQuery = ""
+	parsed.Fragment = ""
 	return parsed.String(), nil
 }
 

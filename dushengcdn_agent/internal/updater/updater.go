@@ -21,6 +21,7 @@ import (
 
 	"dushengcdn-agent/internal/agent"
 	"dushengcdn-agent/internal/config"
+	"dushengcdn-agent/internal/security"
 )
 
 const (
@@ -45,7 +46,7 @@ type Service struct {
 
 func New() *Service {
 	return &Service{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: security.NewPublicHTTPClient(30*time.Second, true),
 	}
 }
 
@@ -482,7 +483,7 @@ func (s *Service) doUpdateDownload(req *http.Request) (*http.Response, error) {
 	}
 	baseClient := s.httpClient
 	if baseClient == nil {
-		baseClient = http.DefaultClient
+		baseClient = security.NewPublicHTTPClient(30*time.Second, true)
 	}
 	client := *baseClient
 	previousCheckRedirect := client.CheckRedirect

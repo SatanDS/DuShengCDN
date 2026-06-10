@@ -5,9 +5,13 @@ RELEASE_REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
 VERSION_TAG="${DUSHENGCDN_VERSION_TAG:-}"
 INSTALL_DIR="${DUSHENGCDN_INSTALL_DIR:-/opt/dushengcdn}"
 SERVICE_NAME="${DUSHENGCDN_SERVICE_NAME:-dushengcdn}"
+SERVICE_USER="${DUSHENGCDN_SERVICE_USER:-dushengcdn}"
 HTTP_PORT="${DUSHENGCDN_HTTP_PORT:-3010}"
+LISTEN_ADDRESS="${DUSHENGCDN_LISTEN_ADDRESS:-127.0.0.1}"
 DB_MODE="${DUSHENGCDN_DB_MODE:-sqlite}"
 LICENSE_TOKEN="${DUSHENGCDN_LICENSE_TOKEN:-}"
+LICENSE_TOKEN_FILE="${DUSHENGCDN_LICENSE_TOKEN_FILE:-}"
+ALLOW_INSECURE_TOKEN_ARGV="false"
 LICENSE_REQUIRED="${DUSHENGCDN_LICENSE_REQUIRED:-true}"
 ACTIVATION_URL="${DUSHENGCDN_LICENSE_ACTIVATION_URL:-https://www.satandu.com}"
 RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__}"
@@ -25,17 +29,23 @@ Options:
   --version TAG            Install a specific release tag instead of latest stable
   --install-dir DIR        Install directory (default: ${INSTALL_DIR})
   --service-name NAME      systemd service name (default: ${SERVICE_NAME})
+  --service-user USER      systemd user to run the Server (default: ${SERVICE_USER})
   --http-port PORT         Panel HTTP port (default: ${HTTP_PORT})
-  --license-token TOKEN    Optional commercial license token to install after startup
+  --listen-address ADDR    Panel bind address (default: ${LISTEN_ADDRESS}; use 0.0.0.0 only behind a firewall)
+  --license-token TOKEN    Optional commercial license token to install after startup (prefer --license-token-file)
+  --license-token-file FILE Read commercial license token from FILE
+  --allow-insecure-token-argv
+                          Allow license token in argv for legacy automation; prefer --license-token-file
   --license-required BOOL  Require valid license for commercial resources (default: ${LICENSE_REQUIRED})
   --activation-url URL     Online activation server URL (default: ${ACTIVATION_URL})
   --no-start               Install files but do not start systemd service
   -h, --help               Show this help message
 
 Environment variables with the same names are also supported:
-  DUSHENGCDN_RELEASE_REPO, DUSHENGCDN_INSTALL_DIR, DUSHENGCDN_HTTP_PORT,
-  DUSHENGCDN_VERSION_TAG, DUSHENGCDN_LICENSE_TOKEN, DUSHENGCDN_LICENSE_REQUIRED,
-  DUSHENGCDN_LICENSE_ACTIVATION_URL
+  DUSHENGCDN_RELEASE_REPO, DUSHENGCDN_INSTALL_DIR, DUSHENGCDN_SERVICE_USER,
+  DUSHENGCDN_HTTP_PORT, DUSHENGCDN_LISTEN_ADDRESS,
+  DUSHENGCDN_VERSION_TAG, DUSHENGCDN_LICENSE_TOKEN, DUSHENGCDN_LICENSE_TOKEN_FILE,
+  DUSHENGCDN_LICENSE_REQUIRED, DUSHENGCDN_LICENSE_ACTIVATION_URL
 EOF
 }
 
@@ -48,14 +58,33 @@ die() {
   exit 1
 }
 
+accept_insecure_token_arg() {
+  local option_name="$1"
+  if [[ "$ALLOW_INSECURE_TOKEN_ARGV" != "true" ]]; then
+    die "${option_name} exposes the token in shell history and process arguments; use ${option_name}-file or pass --allow-insecure-token-argv only for legacy automation"
+  fi
+  echo "Warning: ${option_name} exposes the token in shell history and process arguments; prefer ${option_name}-file" >&2
+}
+
+for arg in "$@"; do
+  if [[ "$arg" == "--allow-insecure-token-argv" ]]; then
+    ALLOW_INSECURE_TOKEN_ARGV="true"
+    break
+  fi
+done
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --release-repo) RELEASE_REPO="$2"; shift 2 ;;
     --version|--tag) VERSION_TAG="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --service-name) SERVICE_NAME="$2"; shift 2 ;;
+    --service-user) SERVICE_USER="$2"; shift 2 ;;
     --http-port) HTTP_PORT="$2"; shift 2 ;;
-    --license-token) LICENSE_TOKEN="$2"; shift 2 ;;
+    --listen-address|--bind-address) LISTEN_ADDRESS="$2"; shift 2 ;;
+    --allow-insecure-token-argv) ALLOW_INSECURE_TOKEN_ARGV="true"; shift ;;
+    --license-token) accept_insecure_token_arg "--license-token"; LICENSE_TOKEN="$2"; shift 2 ;;
+    --license-token-file) LICENSE_TOKEN_FILE="$2"; shift 2 ;;
     --license-required) LICENSE_REQUIRED="$2"; shift 2 ;;
     --activation-url) ACTIVATION_URL="$2"; shift 2 ;;
     --no-start) AUTO_START="false"; shift ;;
@@ -99,6 +128,27 @@ validate_service_name() {
 
 validate_service_name
 
+validate_service_user() {
+  if [[ -z "$SERVICE_USER" ]]; then
+    die "--service-user must not be empty"
+  fi
+  case "$SERVICE_USER" in
+    *[!A-Za-z0-9_.@-]*|.*|*-|*@|*..*|*/*)
+      die "refusing to use unsafe systemd service user: ${SERVICE_USER}"
+      ;;
+  esac
+}
+
+validate_service_user
+
+if [[ -n "$LICENSE_TOKEN" && -n "$LICENSE_TOKEN_FILE" ]]; then
+  die "use only one of --license-token or --license-token-file"
+fi
+if [[ -n "$LICENSE_TOKEN_FILE" ]]; then
+  [[ -r "$LICENSE_TOKEN_FILE" ]] || die "--license-token-file is not readable"
+  LICENSE_TOKEN="$(tr -d '\r\n' < "$LICENSE_TOKEN_FILE")"
+fi
+
 command -v curl >/dev/null 2>&1 || die "curl is required"
 if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
   die "sha256sum or shasum is required"
@@ -112,6 +162,64 @@ run_as_root() {
     sudo "$@"
   else
     die "this operation requires root or sudo"
+  fi
+}
+
+warn() {
+  echo "Warning: $*" >&2
+}
+
+install_secret_file_from_stdin() {
+  local target="$1"
+  local tmp
+  tmp="$(mktemp "/tmp/dushengcdn-secret.XXXXXX")"
+  chmod 0600 "$tmp"
+  if ! cat > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! run_as_root install -m 0600 "$tmp" "$target"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  rm -f "$tmp"
+}
+
+ensure_service_user() {
+  if [[ "$SERVICE_USER" == "root" ]]; then
+    warn "running ${SERVICE_NAME} as root is not recommended"
+    return
+  fi
+  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    return
+  fi
+  command -v useradd >/dev/null 2>&1 || die "useradd is required to create service user ${SERVICE_USER}; pass --service-user root only if you accept the risk"
+  local nologin_shell
+  nologin_shell="/usr/sbin/nologin"
+  if [[ ! -x "$nologin_shell" ]]; then
+    nologin_shell="/sbin/nologin"
+  fi
+  if [[ ! -x "$nologin_shell" ]]; then
+    nologin_shell="/bin/false"
+  fi
+  run_as_root useradd --system --home-dir "$INSTALL_DIR" --shell "$nologin_shell" --user-group "$SERVICE_USER"
+}
+
+harden_server_install_permissions() {
+  if [[ "$SERVICE_USER" == "root" ]]; then
+    return
+  fi
+  run_as_root chown root:root "$INSTALL_DIR" "$INSTALL_DIR/dushengcdn"
+  run_as_root chmod 0755 "$INSTALL_DIR" "$INSTALL_DIR/dushengcdn"
+  run_as_root mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/logs"
+  run_as_root chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR/data" "$INSTALL_DIR/logs"
+  if [[ -f "$env_file" ]]; then
+    run_as_root chown root:"$SERVICE_USER" "$env_file"
+    run_as_root chmod 0640 "$env_file"
+  fi
+  if [[ "$root_password_file" == "$INSTALL_DIR/data/initial-root-password.txt" && -f "$root_password_file" ]]; then
+    run_as_root chown root:"$SERVICE_USER" "$root_password_file"
+    run_as_root chmod 0640 "$root_password_file"
   fi
 }
 
@@ -288,7 +396,7 @@ install_license_token() {
   cookie_jar="$(mktemp "/tmp/dushengcdn-cookie.XXXXXX")"
 
   login_body="{\"username\":\"root\",\"password\":\"$(json_escape "$root_password")\"}"
-  if ! login_response="$(curl -fsS --max-time 10 -c "$cookie_jar" -H 'Content-Type: application/json' -d "$login_body" "${base_url}/api/user/login" 2>/dev/null)"; then
+  if ! login_response="$(printf '%s' "$login_body" | curl -fsS --max-time 10 -c "$cookie_jar" -H 'Content-Type: application/json' --data-binary @- "${base_url}/api/user/login" 2>/dev/null)"; then
     rm -f "$cookie_jar"
     return 1
   fi
@@ -298,7 +406,7 @@ install_license_token() {
   fi
 
   install_body="{\"token\":\"$(json_escape "$token")\"}"
-  if ! install_response="$(curl -fsS --max-time 20 -b "$cookie_jar" -H 'Content-Type: application/json' -d "$install_body" "${base_url}/api/license/install" 2>/dev/null)"; then
+  if ! install_response="$(printf '%s' "$install_body" | curl -fsS --max-time 20 -b "$cookie_jar" -H 'Content-Type: application/json' --data-binary @- "${base_url}/api/license/install" 2>/dev/null)"; then
     rm -f "$cookie_jar"
     return 1
   fi
@@ -341,22 +449,30 @@ log "Release asset checksum and signature verified."
 chmod +x "$tmp_binary"
 
 log "Installing to ${INSTALL_DIR}"
+ensure_service_user
 run_as_root mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/logs"
 run_as_root install -m 0755 "$tmp_binary" "$INSTALL_DIR/dushengcdn"
 
 env_file="$INSTALL_DIR/dushengcdn.env"
 root_password=""
+root_password_file="$INSTALL_DIR/data/initial-root-password.txt"
 if [[ ! -f "$env_file" ]]; then
   session_secret="$(random_hex 32)"
   initial_root_password="$(random_hex 16)"
   root_password="$initial_root_password"
-  run_as_root tee "$env_file" >/dev/null <<EOF
+  install_secret_file_from_stdin "$root_password_file" <<EOF
+username=root
+password=${initial_root_password}
+EOF
+  install_secret_file_from_stdin "$env_file" <<EOF
 PORT=${HTTP_PORT}
+DUSHENGCDN_LISTEN_ADDRESS=${LISTEN_ADDRESS}
 GIN_MODE=release
 LOG_LEVEL=info
 SESSION_SECRET=${session_secret}
 SQLITE_PATH=${INSTALL_DIR}/data/dushengcdn.db
-DUSHENGCDN_INITIAL_ROOT_PASSWORD=${initial_root_password}
+DUSHENGCDN_INITIAL_ROOT_PASSWORD=
+DUSHENGCDN_INITIAL_ROOT_PASSWORD_FILE=${root_password_file}
 DUSHENGCDN_LICENSE_REQUIRED=${LICENSE_REQUIRED}
 DUSHENGCDN_LICENSE_ACTIVATION_URL=${ACTIVATION_URL}
 DUSHENGCDN_LICENSE_ONLINE_ACTIVATION_REQUIRED=true
@@ -364,10 +480,26 @@ DUSHENGCDN_LICENSE_LEASE_DURATION_HOURS=72
 DUSHENGCDN_LICENSE_LEASE_RENEW_BEFORE_HOURS=6
 DUSHENGCDN_SERVER_UPDATE_REPO=${RELEASE_REPO}
 EOF
-  run_as_root chmod 0600 "$env_file"
 else
   log "Keeping existing environment file: ${env_file}"
-  root_password="$(run_as_root grep '^DUSHENGCDN_INITIAL_ROOT_PASSWORD=' "$env_file" 2>/dev/null | tail -n1 | sed 's/^DUSHENGCDN_INITIAL_ROOT_PASSWORD=//' || true)"
+  configured_root_password_file="$(run_as_root grep '^DUSHENGCDN_INITIAL_ROOT_PASSWORD_FILE=' "$env_file" 2>/dev/null | tail -n1 | sed 's/^DUSHENGCDN_INITIAL_ROOT_PASSWORD_FILE=//' || true)"
+  if [[ -n "$configured_root_password_file" ]]; then
+    if [[ "$configured_root_password_file" == "$INSTALL_DIR/data/initial-root-password.txt" ]]; then
+      root_password_file="$configured_root_password_file"
+      root_password="$(run_as_root awk -F= '/^password=/ {print substr($0, index($0, $2)); exit} /^[^=]+$/ {print; exit}' "$root_password_file" 2>/dev/null || true)"
+    else
+      warn "ignoring non-default DUSHENGCDN_INITIAL_ROOT_PASSWORD_FILE in existing environment file"
+      root_password_file=""
+      root_password=""
+    fi
+  else
+    root_password_file=""
+    root_password="$(run_as_root grep '^DUSHENGCDN_INITIAL_ROOT_PASSWORD=' "$env_file" 2>/dev/null | tail -n1 | sed 's/^DUSHENGCDN_INITIAL_ROOT_PASSWORD=//' || true)"
+  fi
+fi
+
+if [[ "$SERVICE_USER" != "root" ]]; then
+  harden_server_install_permissions
 fi
 
 unit_file="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -381,9 +513,16 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=${env_file}
 WorkingDirectory=${INSTALL_DIR}
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
 ExecStart=${INSTALL_DIR}/dushengcdn
 Restart=always
 RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=${INSTALL_DIR}/data ${INSTALL_DIR}/logs
 
 [Install]
 WantedBy=multi-user.target
@@ -408,12 +547,18 @@ fi
 echo
 echo "DuShengCDN commercial server installed."
 echo "  Release: ${tag_name:-latest}"
-echo "  URL:     http://SERVER_IP:${HTTP_PORT}"
-echo "  User:    root"
+echo "  URL:     http://${LISTEN_ADDRESS}:${HTTP_PORT}"
+echo "  Login:   root"
+echo "  Service user: ${SERVICE_USER}"
 echo "  Env:     ${env_file}"
-echo
-echo "Initial root password:"
-run_as_root grep '^DUSHENGCDN_INITIAL_ROOT_PASSWORD=' "$env_file" | sed 's/^DUSHENGCDN_INITIAL_ROOT_PASSWORD=//'
+if [[ "$LISTEN_ADDRESS" == "127.0.0.1" || "$LISTEN_ADDRESS" == "::1" || "$LISTEN_ADDRESS" == "localhost" ]]; then
+  echo "  Note:    The panel is bound to loopback by default. Put it behind an HTTPS reverse proxy, or pass --listen-address 0.0.0.0 only with firewall protection."
+fi
+if [[ -n "$root_password_file" ]]; then
+  echo "  Initial root password file: ${root_password_file}"
+else
+  echo "  Initial root password: configured in ${env_file} (not printed)"
+fi
 echo
 echo "Useful commands:"
 echo "  systemctl status ${SERVICE_NAME} --no-pager"

@@ -134,7 +134,7 @@ function buildRoute(overrides: Record<string, unknown> = {}) {
     },
     basic_auth_enabled: false,
     basic_auth_username: '',
-    basic_auth_password: '',
+    basic_auth_password_configured: false,
     region_restriction_enabled: false,
     region_restriction_mode: 'block',
     region_restriction_countries: [],
@@ -1828,6 +1828,8 @@ describe('Proxy route website pages', () => {
 
     await user.selectOptions(screen.getByLabelText('代理缓冲模式'), 'off');
 
+    await user.selectOptions(screen.getByLabelText('代理缓冲模式'), 'off');
+
     const saveButton = document.querySelector(
       'button[form="proxy-route-dns-form"]',
     ) as HTMLButtonElement | null;
@@ -2902,7 +2904,9 @@ describe('Proxy route website pages', () => {
                 data: buildRoute({
                   basic_auth_enabled: payload.basic_auth_enabled,
                   basic_auth_username: payload.basic_auth_username,
-                  basic_auth_password: payload.basic_auth_password,
+                  basic_auth_password_configured: Boolean(
+                    payload.basic_auth_password,
+                  ),
                 }),
               }),
             ),
@@ -2918,7 +2922,7 @@ describe('Proxy route website pages', () => {
                 data: buildRoute({
                   basic_auth_enabled: false,
                   basic_auth_username: '',
-                  basic_auth_password: '',
+                  basic_auth_password_configured: false,
                 }),
               }),
             ),

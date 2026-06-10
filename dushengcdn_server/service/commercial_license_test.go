@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -572,7 +573,7 @@ func TestCommercialLicenseOnlineActivationIssuesAndStores72HourLease(t *testing.
 		})
 	}))
 	defer server.Close()
-	common.CommercialLicenseActivationURL = server.URL
+	common.CommercialLicenseActivationURL = commercialLicenseActivationURLForTest(t, server)
 
 	view, err = ActivateCommercialLicense(CommercialLicenseActivateInput{})
 	if err != nil {
@@ -738,6 +739,65 @@ func TestCommercialLicenseActivationEndpointNormalizesSatanduDefault(t *testing.
 	}
 }
 
+func TestCommercialLicenseActivationEndpointRejectsUnsafeURL(t *testing.T) {
+	cases := []string{
+		"http://license.example.test",
+		"https://127.0.0.1/api/license/activation",
+		"https://169.254.169.254/api/license/activation",
+		"https://user:pass@license.example.test/api/license/activation",
+	}
+	for _, value := range cases {
+		if endpoint, err := commercialLicenseActivationEndpoint(value); err == nil {
+			t.Fatalf("expected unsafe activation URL %q to be rejected, got %q", value, endpoint)
+		}
+	}
+}
+
+func commercialLicenseActivationURLForTest(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	upstream, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse activation server URL: %v", err)
+	}
+	previousClient := commercialLicenseHTTPClient
+	client := server.Client()
+	baseTransport := client.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	client.Transport = commercialLicenseActivationTestTransport{
+		base:     baseTransport,
+		upstream: upstream,
+	}
+	commercialLicenseHTTPClient = client
+	t.Cleanup(func() {
+		commercialLicenseHTTPClient = previousClient
+	})
+	return "https://license.example.test"
+}
+
+type commercialLicenseActivationTestTransport struct {
+	base     http.RoundTripper
+	upstream *url.URL
+}
+
+func (transport commercialLicenseActivationTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	rewritten := request.Clone(request.Context())
+	rewritten.URL = cloneCommercialLicenseActivationURL(request.URL)
+	rewritten.URL.Scheme = transport.upstream.Scheme
+	rewritten.URL.Host = transport.upstream.Host
+	rewritten.Host = request.URL.Host
+	return transport.base.RoundTrip(rewritten)
+}
+
+func cloneCommercialLicenseActivationURL(value *url.URL) *url.URL {
+	if value == nil {
+		return &url.URL{}
+	}
+	clone := *value
+	return &clone
+}
+
 func TestCommercialLicenseLeaseExpiresAndRenewerRefreshesBeforeDeadline(t *testing.T) {
 	setupServiceTestDB(t)
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -774,7 +834,7 @@ func TestCommercialLicenseLeaseExpiresAndRenewerRefreshesBeforeDeadline(t *testi
 		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": result})
 	}))
 	defer server.Close()
-	common.CommercialLicenseActivationURL = server.URL
+	common.CommercialLicenseActivationURL = commercialLicenseActivationURLForTest(t, server)
 
 	if _, err := ActivateCommercialLicense(CommercialLicenseActivateInput{}); err != nil {
 		t.Fatalf("initial activation failed: %v", err)

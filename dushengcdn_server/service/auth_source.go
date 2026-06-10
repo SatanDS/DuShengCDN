@@ -6,12 +6,12 @@ import (
 	"crypto/rand"
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"dushengcdn/utils/security"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -40,8 +40,9 @@ type OAuthProfile struct {
 }
 
 type OAuthCallbackResult struct {
-	Status string      `json:"status"`
-	User   *model.User `json:"user,omitempty"`
+	Status    string      `json:"status"`
+	User      *model.User `json:"user,omitempty"`
+	CSRFToken string      `json:"csrf_token,omitempty"`
 }
 
 type LinkExistingRequest struct {
@@ -72,7 +73,19 @@ type oauthTokenResponse struct {
 	Scope       string `json:"scope"`
 }
 
-var oauthHTTPClient = &http.Client{Timeout: 8 * time.Second}
+var oauthHTTPClient = security.NewPublicHTTPClient(8*time.Second, true)
+
+func SetOAuthHTTPClientForTest(client *http.Client) func() {
+	previous := oauthHTTPClient
+	if client == nil {
+		oauthHTTPClient = security.NewPublicHTTPClient(8*time.Second, true)
+	} else {
+		oauthHTTPClient = client
+	}
+	return func() {
+		oauthHTTPClient = previous
+	}
+}
 
 var allowedOIDCSignatureAlgorithms = []jose.SignatureAlgorithm{
 	jose.RS256,
@@ -409,8 +422,11 @@ func exchangeGitHubProfile(ctx context.Context, source *model.AuthSource, code s
 	if githubUser.ID == 0 && githubUser.Login == "" {
 		return nil, errors.New("GitHub 用户资料缺少唯一标识")
 	}
+	if githubUser.ID == 0 {
+		return nil, errors.New("GitHub user profile is missing numeric id")
+	}
 	return &OAuthProfile{
-		ExternalID:       githubUser.Login,
+		ExternalID:       fmt.Sprintf("%d", githubUser.ID),
 		ExternalUsername: githubUser.Login,
 		DisplayName:      firstNonEmpty(githubUser.Name, githubUser.Login),
 		Email:            githubUser.Email,
@@ -440,7 +456,10 @@ func exchangeOIDCProfile(ctx context.Context, source *model.AuthSource, code str
 	if err != nil {
 		return nil, err
 	}
-	claims = mergeOIDCClaims(idTokenClaims, claims)
+	claims, err = mergeOIDCClaims(idTokenClaims, claims)
+	if err != nil {
+		return nil, err
+	}
 	profile := profileFromClaims(claims)
 	if profile.ExternalID == "" {
 		return nil, errors.New("OIDC 用户资料缺少 sub")
@@ -449,6 +468,10 @@ func exchangeOIDCProfile(ctx context.Context, source *model.AuthSource, code str
 }
 
 func fetchOIDCDiscovery(ctx context.Context, discoveryURL string) (*oidcDiscovery, error) {
+	discoveryOrigin, err := security.ValidatePublicHTTPURL(discoveryURL, true)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC discovery URL is not allowed: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 	if err != nil {
 		return nil, err
@@ -468,7 +491,41 @@ func fetchOIDCDiscovery(ctx context.Context, discoveryURL string) (*oidcDiscover
 	if discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" || discovery.JWKSURI == "" || discovery.Issuer == "" {
 		return nil, errors.New("OIDC discovery 缺少授权或 token 端点")
 	}
+	if err := validateOIDCDiscoveryEndpoints(discoveryOrigin, &discovery); err != nil {
+		return nil, err
+	}
 	return &discovery, nil
+}
+
+func validateOIDCDiscoveryEndpoints(discoveryOrigin *url.URL, discovery *oidcDiscovery) error {
+	if discovery == nil {
+		return errors.New("OIDC discovery is empty")
+	}
+	issuerURL, err := security.ValidatePublicHTTPURL(discovery.Issuer, true)
+	if err != nil {
+		return fmt.Errorf("OIDC issuer URL is not allowed: %w", err)
+	}
+	if !security.SameOrigin(discoveryOrigin, issuerURL) {
+		return errors.New("OIDC issuer must use the same origin as discovery URL")
+	}
+	endpoints := map[string]string{
+		"authorization_endpoint": discovery.AuthorizationEndpoint,
+		"token_endpoint":         discovery.TokenEndpoint,
+		"jwks_uri":               discovery.JWKSURI,
+	}
+	if strings.TrimSpace(discovery.UserInfoEndpoint) != "" {
+		endpoints["userinfo_endpoint"] = discovery.UserInfoEndpoint
+	}
+	for name, endpoint := range endpoints {
+		endpointURL, err := security.ValidatePublicHTTPURL(endpoint, true)
+		if err != nil {
+			return fmt.Errorf("OIDC %s is not allowed: %w", name, err)
+		}
+		if !security.SameOrigin(issuerURL, endpointURL) {
+			return fmt.Errorf("OIDC %s must use the same origin as issuer", name)
+		}
+	}
+	return nil
 }
 
 func exchangeOIDCToken(ctx context.Context, tokenEndpoint string, source *model.AuthSource, code string, redirectURL string) (*oauthTokenResponse, error) {
@@ -490,8 +547,7 @@ func exchangeOIDCToken(ctx context.Context, tokenEndpoint string, source *model.
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("OIDC token 接口返回异常状态: %s %s", resp.Status, strings.TrimSpace(string(raw)))
+		return nil, fmt.Errorf("OIDC token 接口返回异常状态: %s", resp.Status)
 	}
 	var token oauthTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
@@ -516,8 +572,7 @@ func fetchOIDCUserInfo(ctx context.Context, endpoint string, accessToken string)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("OIDC userinfo 返回异常状态: %s %s", resp.Status, strings.TrimSpace(string(raw)))
+		return nil, fmt.Errorf("OIDC userinfo 返回异常状态: %s", resp.Status)
 	}
 	var claims map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&claims); err != nil {
@@ -608,21 +663,29 @@ func verifyOIDCIDToken(ctx context.Context, discovery *oidcDiscovery, source *mo
 	return result, nil
 }
 
-func mergeOIDCClaims(idTokenClaims map[string]any, userInfoClaims map[string]any) map[string]any {
+func mergeOIDCClaims(idTokenClaims map[string]any, userInfoClaims map[string]any) (map[string]any, error) {
 	if len(userInfoClaims) == 0 {
-		return idTokenClaims
+		return idTokenClaims, nil
 	}
 	merged := make(map[string]any, len(idTokenClaims)+len(userInfoClaims))
 	for key, value := range idTokenClaims {
 		merged[key] = value
 	}
+	idTokenSub := strings.TrimSpace(stringClaimValue(idTokenClaims["sub"]))
 	for key, value := range userInfoClaims {
+		if key == "sub" {
+			userInfoSub := strings.TrimSpace(stringClaimValue(value))
+			if userInfoSub != "" && userInfoSub != idTokenSub {
+				return nil, errors.New("OIDC userinfo subject does not match ID token subject")
+			}
+			continue
+		}
 		merged[key] = value
 	}
 	if strings.TrimSpace(stringClaimValue(merged["sub"])) == "" {
 		merged["sub"] = idTokenClaims["sub"]
 	}
-	return merged
+	return merged, nil
 }
 
 func stringClaimValue(value any) string {

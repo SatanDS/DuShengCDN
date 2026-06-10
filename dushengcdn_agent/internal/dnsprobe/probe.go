@@ -9,11 +9,14 @@ import (
 	"time"
 
 	"dushengcdn-agent/internal/protocol"
+	"dushengcdn-agent/internal/security"
 
 	"github.com/miekg/dns"
 )
 
 const defaultTimeout = 3 * time.Second
+
+var lookupIPAddr = net.DefaultResolver.LookupIPAddr
 
 func ProbeTargets(ctx context.Context, targets []protocol.DNSProbeTarget) []protocol.DNSProbeReport {
 	if len(targets) == 0 {
@@ -61,6 +64,7 @@ func probeTarget(ctx context.Context, target protocol.DNSProbeTarget) (protocol.
 		return protocol.DNSProbeReport{}, false
 	}
 	if err != nil {
+		report.PublicAddress = strings.TrimSpace(target.PublicAddress)
 		report.Results = append(report.Results, protocol.DNSProbeResult{
 			Network: "UDP",
 			Error:   err.Error(),
@@ -95,19 +99,34 @@ func normalizeAddress(raw string) (string, error) {
 		return "", errors.New("public address is empty")
 	}
 	if host, port, err := net.SplitHostPort(value); err == nil {
-		if strings.TrimSpace(host) == "" {
-			return "", errors.New("public address host is empty")
-		}
-		if strings.TrimSpace(port) == "" {
-			return "", errors.New("public address port is empty")
-		}
-		return net.JoinHostPort(host, port), nil
+		return normalizeHostPort(host, port)
 	}
 	host := value
 	if parsed := net.ParseIP(strings.Trim(value, "[]")); parsed != nil {
 		host = parsed.String()
 	}
-	return net.JoinHostPort(host, "53"), nil
+	return normalizeHostPort(host, "53")
+}
+
+func normalizeHostPort(host string, port string) (string, error) {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	port = strings.TrimSpace(port)
+	if host == "" {
+		return "", errors.New("public address host is empty")
+	}
+	if err := security.ValidatePublicHostname(host); err != nil {
+		return "", err
+	}
+	if port == "" {
+		return "", errors.New("public address port is empty")
+	}
+	if port != "53" {
+		return "", errors.New("public address port must be 53")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 func normalizeQueryType(value string) string {
@@ -136,6 +155,11 @@ func exchange(ctx context.Context, address string, network string, qname string,
 	result := protocol.DNSProbeResult{
 		Network: strings.ToUpper(network),
 	}
+	targets, err := resolvePublicProbeTargets(ctx, address)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
 	message := new(dns.Msg)
 	message.SetQuestion(dns.Fqdn(qname), queryTypeCode(qtype))
 	client := &dns.Client{
@@ -143,14 +167,60 @@ func exchange(ctx context.Context, address string, network string, qname string,
 		Timeout: defaultTimeout,
 	}
 	startedAt := time.Now()
-	response, _, err := client.ExchangeContext(ctx, message, address)
-	result.DurationMs = time.Since(startedAt).Milliseconds()
-	if err != nil {
-		result.Error = err.Error()
+	var lastErr error
+	for _, target := range targets {
+		response, _, err := client.ExchangeContext(ctx, message, target)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		result.DurationMs = time.Since(startedAt).Milliseconds()
+		result.Reachable = true
+		result.RCode = dns.RcodeToString[response.Rcode]
+		result.AnswerCount = len(response.Answer)
 		return result
 	}
-	result.Reachable = true
-	result.RCode = dns.RcodeToString[response.Rcode]
-	result.AnswerCount = len(response.Answer)
+	result.DurationMs = time.Since(startedAt).Milliseconds()
+	if lastErr != nil {
+		result.Error = lastErr.Error()
+		return result
+	}
+	result.Error = "public address has no dialable addresses"
 	return result
+}
+
+func resolvePublicProbeTargets(ctx context.Context, address string) ([]string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	if port != "53" {
+		return nil, errors.New("public address port must be 53")
+	}
+	if err := security.ValidatePublicHostname(host); err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		if err := security.ValidatePublicIP(ip); err != nil {
+			return nil, err
+		}
+		return []string{net.JoinHostPort(ip.String(), port)}, nil
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+	addresses, err := lookupIPAddr(lookupCtx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, errors.New("public address host has no addresses")
+	}
+	targets := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		if err := security.ValidatePublicIP(address.IP); err != nil {
+			return nil, err
+		}
+		targets = append(targets, net.JoinHostPort(address.IP.String(), port))
+	}
+	return targets, nil
 }

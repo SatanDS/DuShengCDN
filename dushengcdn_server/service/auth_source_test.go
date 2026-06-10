@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -171,8 +172,8 @@ func TestExchangeOIDCProfileVerifiesJWKSNonceAudienceAndIssuer(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 	nonce := "nonce-123"
-	var issuer string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	issuer := "https://idp.example.test"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -208,14 +209,14 @@ func TestExchangeOIDCProfileVerifiesJWKSNonceAudienceAndIssuer(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	issuer = server.URL
+	defer SetOAuthHTTPClientForTest(oauthClientForTLSServer(t, server))()
 
 	source := &model.AuthSource{
 		Name:               "oidc-test",
 		Type:               model.AuthSourceTypeOIDC,
 		ClientID:           "client-id",
 		ClientSecret:       "client-secret",
-		OpenIDDiscoveryURL: server.URL + "/.well-known/openid-configuration",
+		OpenIDDiscoveryURL: issuer + "/.well-known/openid-configuration",
 		Scopes:             "openid profile email",
 	}
 	profile, err := ExchangeOAuthProfileWithNonce(context.Background(), source, "code", "https://app.example.com/oauth/oidc-test", nonce)
@@ -227,8 +228,65 @@ func TestExchangeOIDCProfileVerifiesJWKSNonceAudienceAndIssuer(t *testing.T) {
 	}
 }
 
+func TestExchangeOIDCProfileRejectsMismatchedUserInfoSubject(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	nonce := "nonce-123"
+	issuer := "https://idp.example.test"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 issuer,
+				"authorization_endpoint": issuer + "/authorize",
+				"token_endpoint":         issuer + "/token",
+				"userinfo_endpoint":      issuer + "/userinfo",
+				"jwks_uri":               issuer + "/jwks",
+			})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+				Key:       publicKey,
+				KeyID:     "test-key",
+				Algorithm: string(jose.EdDSA),
+				Use:       "sig",
+			}}})
+		case "/token":
+			rawIDToken := signedOIDCIDTokenForTest(t, privateKey, issuer, "client-id", "oidc-subject", nonce)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "access-token",
+				"token_type":   "Bearer",
+				"id_token":     rawIDToken,
+			})
+		case "/userinfo":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sub":                "other-subject",
+				"preferred_username": "alice",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	defer SetOAuthHTTPClientForTest(oauthClientForTLSServer(t, server))()
+
+	source := &model.AuthSource{
+		Name:               "oidc-test",
+		Type:               model.AuthSourceTypeOIDC,
+		ClientID:           "client-id",
+		ClientSecret:       "client-secret",
+		OpenIDDiscoveryURL: issuer + "/.well-known/openid-configuration",
+		Scopes:             "openid profile email",
+	}
+	_, err = ExchangeOAuthProfileWithNonce(context.Background(), source, "code", "https://app.example.com/oauth/oidc-test", nonce)
+	if err == nil || !strings.Contains(err.Error(), "subject does not match") {
+		t.Fatalf("expected mismatched subject rejection, got %v", err)
+	}
+}
+
 func TestExchangeOIDCProfileRejectsUnsignedIDToken(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -250,17 +308,91 @@ func TestExchangeOIDCProfileRejectsUnsignedIDToken(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	defer SetOAuthHTTPClientForTest(oauthClientForTLSServer(t, server))()
 
+	issuer := "https://idp.example.test"
 	source := &model.AuthSource{
 		Name:               "oidc-test",
 		Type:               model.AuthSourceTypeOIDC,
 		ClientID:           "client-id",
 		ClientSecret:       "client-secret",
-		OpenIDDiscoveryURL: server.URL + "/.well-known/openid-configuration",
+		OpenIDDiscoveryURL: issuer + "/.well-known/openid-configuration",
 	}
 	if _, err := ExchangeOAuthProfileWithNonce(context.Background(), source, "code", "https://app.example.com/oauth/oidc-test", "nonce"); err == nil {
 		t.Fatal("expected unsigned id token to be rejected")
 	}
+}
+
+func TestAuthSourceValidateRejectsUnsafeOIDCDiscoveryURL(t *testing.T) {
+	source := &model.AuthSource{
+		Name:               "unsafe-oidc",
+		Type:               model.AuthSourceTypeOIDC,
+		ClientID:           "client-id",
+		ClientSecret:       "client-secret",
+		OpenIDDiscoveryURL: "http://127.0.0.1/.well-known/openid-configuration",
+	}
+	if err := source.Validate(); err == nil || !strings.Contains(err.Error(), "public HTTPS") {
+		t.Fatalf("expected unsafe OIDC discovery URL rejection, got %v", err)
+	}
+}
+
+func TestFetchOIDCDiscoveryRejectsUnsafeReturnedEndpoints(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                 serverIssuer(r),
+			"authorization_endpoint": serverIssuer(r) + "/authorize",
+			"token_endpoint":         "https://127.0.0.1/token",
+			"userinfo_endpoint":      serverIssuer(r) + "/userinfo",
+			"jwks_uri":               serverIssuer(r) + "/jwks",
+		})
+	}))
+	defer server.Close()
+	defer SetOAuthHTTPClientForTest(oauthClientForTLSServer(t, server))()
+
+	_, err := fetchOIDCDiscovery(context.Background(), "https://idp.example.test/.well-known/openid-configuration")
+	if err == nil || !strings.Contains(err.Error(), "token_endpoint") {
+		t.Fatalf("expected unsafe token endpoint rejection, got %v", err)
+	}
+}
+
+func oauthClientForTLSServer(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+	upstream, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse TLS server URL: %v", err)
+	}
+	baseClient := server.Client()
+	baseTransport := baseClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	baseClient.Transport = oidcTestTransport{
+		base:     baseTransport,
+		upstream: upstream,
+	}
+	return baseClient
+}
+
+type oidcTestTransport struct {
+	base     http.RoundTripper
+	upstream *url.URL
+}
+
+func (transport oidcTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	rewritten := request.Clone(request.Context())
+	rewritten.URL = cloneURL(request.URL)
+	rewritten.URL.Scheme = transport.upstream.Scheme
+	rewritten.URL.Host = transport.upstream.Host
+	rewritten.Host = request.URL.Host
+	return transport.base.RoundTrip(rewritten)
+}
+
+func cloneURL(value *url.URL) *url.URL {
+	if value == nil {
+		return &url.URL{}
+	}
+	clone := *value
+	return &clone
 }
 
 func signedOIDCIDTokenForTest(t *testing.T, privateKey ed25519.PrivateKey, issuer string, audience string, subject string, nonce string) string {

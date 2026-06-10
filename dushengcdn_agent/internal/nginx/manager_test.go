@@ -1285,6 +1285,9 @@ func TestManagerApplyStartsSafeFallbackWhenNoRollbackConfigExists(t *testing.T) 
 	if !strings.Contains(string(mainData), "DuShengCDN: No Valid Configuration") {
 		t.Fatalf("expected safe fallback main config, got %s", string(mainData))
 	}
+	if !strings.Contains(string(mainData), "server_tokens off;") {
+		t.Fatalf("expected fallback to hide OpenResty version tokens, got %s", string(mainData))
+	}
 	if !strings.Contains(string(mainData), "listen 80 default_server") {
 		t.Fatalf("expected fallback to listen on port 80, got %s", string(mainData))
 	}
@@ -1293,6 +1296,11 @@ func TestManagerApplyStartsSafeFallbackWhenNoRollbackConfigExists(t *testing.T) 
 	}
 	if !strings.Contains(string(mainData), "stub_status;") {
 		t.Fatalf("expected fallback to expose stub_status, got %s", string(mainData))
+	}
+	if !strings.Contains(string(mainData), "allow 127.0.0.1;") ||
+		!strings.Contains(string(mainData), "allow ::1;") ||
+		!strings.Contains(string(mainData), "deny all;") {
+		t.Fatalf("expected fallback to restrict stub_status to loopback clients, got %s", string(mainData))
 	}
 	routeData, err := os.ReadFile(routePath)
 	if err != nil {

@@ -208,6 +208,47 @@ func loginRootAndBuildEngine(t *testing.T) (*gin.Engine, []*http.Cookie) {
 	return engine, loginResult.Cookies()
 }
 
+func sessionCookieFromList(t *testing.T, cookies []*http.Cookie) *http.Cookie {
+	t.Helper()
+	for _, cookieValue := range cookies {
+		if cookieValue.Name == "session" {
+			return cookieValue
+		}
+	}
+	t.Fatal("expected session cookie")
+	return nil
+}
+
+func csrfTokenFromCookies(t *testing.T, engine http.Handler, cookies []*http.Cookie) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/user/self", nil)
+	for _, cookieValue := range cookies {
+		req.AddCookie(cookieValue)
+	}
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected csrf bootstrap status: %d", recorder.Code)
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode csrf bootstrap response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("csrf bootstrap failed: %s", resp.Message)
+	}
+	var data struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode csrf bootstrap data: %v", err)
+	}
+	if data.CSRFToken == "" {
+		t.Fatal("expected csrf token")
+	}
+	return data.CSRFToken
+}
+
 func fakeManualServerBinary(version string) (string, []byte) {
 	if runtime.GOOS == "windows" {
 		return "dushengcdn-server-test.cmd", []byte("@echo off\r\necho " + version + "\r\n")
@@ -284,6 +325,7 @@ func TestManualUploadRoute(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/update/manual-upload", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-CSRF-Token", csrfTokenFromCookies(t, engine, cookies))
 	for _, cookieValue := range cookies {
 		req.AddCookie(cookieValue)
 	}
@@ -341,6 +383,7 @@ func TestManualUploadRouteRejectsOversizedBody(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/update/manual-upload", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-CSRF-Token", csrfTokenFromCookies(t, engine, cookies))
 	for _, cookieValue := range cookies {
 		req.AddCookie(cookieValue)
 	}
@@ -399,6 +442,7 @@ func TestManualUpgradeConfirmRoute(t *testing.T) {
 
 	uploadReq := httptest.NewRequest(http.MethodPost, "/api/update/manual-upload", body)
 	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	uploadReq.Header.Set("X-CSRF-Token", csrfTokenFromCookies(t, engine, cookies))
 	for _, cookieValue := range cookies {
 		uploadReq.AddCookie(cookieValue)
 	}
@@ -432,6 +476,7 @@ func TestManualUpgradeConfirmRoute(t *testing.T) {
 	}
 	confirmReq := httptest.NewRequest(http.MethodPost, "/api/update/manual-upgrade", bytes.NewReader(confirmBody))
 	confirmReq.Header.Set("Content-Type", "application/json")
+	confirmReq.Header.Set("X-CSRF-Token", csrfTokenFromCookies(t, engine, cookies))
 	for _, cookieValue := range cookies {
 		confirmReq.AddCookie(cookieValue)
 	}

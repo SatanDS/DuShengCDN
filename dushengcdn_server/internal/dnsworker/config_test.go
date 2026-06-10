@@ -1,6 +1,10 @@
 package dnsworker
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestLoadConfigAppliesDNSProtectionOptions(t *testing.T) {
 	t.Setenv("DUSHENGCDN_DNS_WORKER_SERVER_URL", "https://cdn.example.com")
@@ -47,5 +51,51 @@ func TestLoadConfigAppliesDNSProtectionOptions(t *testing.T) {
 	}
 	if cfg.OperatorCIDRDatabasePath != "/tmp/operators" {
 		t.Fatalf("expected arg operator CIDR database path, got %q", cfg.OperatorCIDRDatabasePath)
+	}
+}
+
+func TestLoadConfigRejectsRemoteHTTPServerURL(t *testing.T) {
+	t.Setenv("DUSHENGCDN_DNS_WORKER_SERVER_URL", "http://cdn.example.com")
+	t.Setenv("DUSHENGCDN_DNS_WORKER_TOKEN", "token")
+
+	if _, err := LoadConfig(nil, "test"); err == nil {
+		t.Fatal("expected remote http server-url to be rejected")
+	}
+}
+
+func TestLoadConfigAllowsLoopbackHTTPServerURL(t *testing.T) {
+	t.Setenv("DUSHENGCDN_DNS_WORKER_SERVER_URL", "http://127.0.0.1:3000")
+	t.Setenv("DUSHENGCDN_DNS_WORKER_TOKEN", "token")
+
+	if _, err := LoadConfig(nil, "test"); err != nil {
+		t.Fatalf("expected loopback http server-url to be allowed: %v", err)
+	}
+}
+
+func TestLoadConfigReadsTokenFile(t *testing.T) {
+	t.Setenv("DUSHENGCDN_DNS_WORKER_SERVER_URL", "https://cdn.example.com")
+	tokenPath := filepath.Join(t.TempDir(), "dns-worker-token")
+	if err := os.WriteFile(tokenPath, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	cfg, err := LoadConfig([]string{"--token-file", tokenPath}, "test")
+	if err != nil {
+		t.Fatalf("load config with token file: %v", err)
+	}
+	if cfg.Token != "file-token" {
+		t.Fatalf("expected token from file, got %q", cfg.Token)
+	}
+}
+
+func TestLoadConfigRejectsTokenAndTokenFileTogether(t *testing.T) {
+	t.Setenv("DUSHENGCDN_DNS_WORKER_SERVER_URL", "https://cdn.example.com")
+	tokenPath := filepath.Join(t.TempDir(), "dns-worker-token")
+	if err := os.WriteFile(tokenPath, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	if _, err := LoadConfig([]string{"--token", "argv-token", "--token-file", tokenPath}, "test"); err == nil {
+		t.Fatal("expected --token and --token-file together to be rejected")
 	}
 }

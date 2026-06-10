@@ -66,7 +66,7 @@ bash scripts/diagnose-server.sh
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 脚本会优先下载 GitHub Release 中的 Agent 二进制；没有匹配资产时会从源码构建，并写入当前 Git 版本，避免节点版本显示为 `dev`。这个源码构建回退只发生在你手动重新执行安装脚本时，不等同于 Agent 自动跟随 `main` 分支更新。

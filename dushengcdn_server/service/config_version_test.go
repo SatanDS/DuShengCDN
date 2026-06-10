@@ -92,6 +92,29 @@ func TestCleanupConfigVersionsDeletesOnlyOldInactiveRows(t *testing.T) {
 	}
 }
 
+func TestRedactRenderedConfigForAdminScrubsBasicAuthHash(t *testing.T) {
+	rendered := `server {
+    location / {
+        rewrite_by_lua_block {
+            local expected_hash = "abcdef123456"
+        }
+        proxy_set_header Authorization "Bearer origin-token";
+        proxy_set_header X-API-Key "origin-api-key";
+        proxy_set_header X-Safe "safe-value";
+    }
+}`
+
+	redacted := redactRenderedConfigForAdmin(rendered)
+	for _, leaked := range []string{"abcdef123456", "origin-token", "origin-api-key"} {
+		if strings.Contains(redacted, leaked) {
+			t.Fatalf("expected %q to be redacted from %s", leaked, redacted)
+		}
+	}
+	if !strings.Contains(redacted, `proxy_set_header X-Safe "safe-value";`) {
+		t.Fatalf("expected non-sensitive header to remain, got %s", redacted)
+	}
+}
+
 func TestPublishConfigVersionCreatesArtifactsPerNodePool(t *testing.T) {
 	setupServiceTestDB(t)
 

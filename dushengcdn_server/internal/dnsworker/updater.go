@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -72,6 +73,9 @@ func (r *Runner) runUpdate(settings WorkerSettings) error {
 	if info.IsDir() {
 		return errors.New("dns worker update script path is a directory")
 	}
+	if err := r.validateInstallScript(cleanScript, info, "dns worker update script"); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -106,6 +110,43 @@ func (r *Runner) runUpdate(settings WorkerSettings) error {
 	return nil
 }
 
+func (r *Runner) validateInstallScript(cleanScript string, info os.FileInfo, label string) error {
+	if r == nil || r.Config == nil {
+		return errors.New("dns worker config is not available")
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "dns worker script"
+	}
+	installDir := strings.TrimSpace(r.Config.InstallDir)
+	if installDir == "" {
+		return errors.New("dns worker install directory is not configured")
+	}
+	cleanInstallDir := filepath.Clean(installDir)
+	if !filepath.IsAbs(cleanInstallDir) {
+		return errors.New("dns worker install directory must be an absolute path")
+	}
+	resolvedInstallDir, err := filepath.EvalSymlinks(cleanInstallDir)
+	if err == nil {
+		cleanInstallDir = filepath.Clean(resolvedInstallDir)
+	}
+	resolvedScript, err := filepath.EvalSymlinks(cleanScript)
+	if err == nil {
+		cleanScript = filepath.Clean(resolvedScript)
+	}
+	relative, err := filepath.Rel(cleanInstallDir, cleanScript)
+	if err != nil {
+		return err
+	}
+	if relative == "." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) || relative == ".." || filepath.IsAbs(relative) {
+		return fmt.Errorf("%s must be inside the install directory", label)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s must not be writable by group or others", label)
+	}
+	return nil
+}
+
 func (r *Runner) runUninstall() error {
 	installDir := strings.TrimSpace(r.Config.InstallDir)
 	if installDir == "" {
@@ -122,6 +163,9 @@ func (r *Runner) runUninstall() error {
 	}
 	if info.IsDir() {
 		return errors.New("dns worker uninstall script path is a directory")
+	}
+	if err := r.validateInstallScript(script, info, "dns worker uninstall script"); err != nil {
+		return err
 	}
 
 	serviceName := strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_WORKER_SERVICE_NAME"))

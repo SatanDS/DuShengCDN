@@ -1,12 +1,17 @@
 package model
 
 import (
+	"bytes"
 	"dushengcdn/common"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -755,7 +760,9 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 		"dns_records",
 		"dns_worker_node_probes",
 		"dns_workers",
+		"dns_zone_worker_assignments",
 		"dns_zones",
+		"dnssec_keys",
 		"external_accounts",
 		"files",
 		"gslb_scheduling_states",
@@ -1997,6 +2004,61 @@ func TestResetUserPasswordByUsername(t *testing.T) {
 	}
 }
 
+func TestResetUserPasswordByIDOnlyUpdatesOneUserAndClearsToken(t *testing.T) {
+	db := openTestSQLiteDB(t, "reset-password-by-id.db")
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	first := &User{
+		Username:    "first",
+		Password:    "old-password",
+		DisplayName: "First User",
+		Email:       "shared@example.com",
+		Token:       "old-token",
+		Role:        1,
+		Status:      1,
+	}
+	second := &User{
+		Username:    "second",
+		Password:    "old-password",
+		DisplayName: "Second User",
+		Email:       "shared@example.com",
+		Token:       "second-token",
+		Role:        1,
+		Status:      1,
+	}
+	if err := first.Insert(); err != nil {
+		t.Fatalf("insert first user: %v", err)
+	}
+	if err := second.Insert(); err != nil {
+		t.Fatalf("insert second user: %v", err)
+	}
+	if _, err := GetSingleUserByEmail("shared@example.com"); err == nil {
+		t.Fatal("expected duplicate email lookup to fail")
+	}
+
+	if err := ResetUserPasswordByID(first.Id, "new-password"); err != nil {
+		t.Fatalf("reset password by id: %v", err)
+	}
+	resetFirst := &User{Username: "first", Password: "new-password"}
+	if err := resetFirst.ValidateAndFill(); err != nil {
+		t.Fatalf("expected first user new password to validate: %v", err)
+	}
+	if resetFirst.Token != "" {
+		t.Fatalf("expected first user token to be cleared, got %q", resetFirst.Token)
+	}
+	oldSecond := &User{Username: "second", Password: "old-password"}
+	if err := oldSecond.ValidateAndFill(); err != nil {
+		t.Fatalf("expected second user old password to remain valid: %v", err)
+	}
+	if oldSecond.Token != "second-token" {
+		t.Fatalf("expected second user token to remain unchanged, got %q", oldSecond.Token)
+	}
+}
+
 func TestUserFillMethodsReturnRecordNotFound(t *testing.T) {
 	db := openTestSQLiteDB(t, "user-fill-missing.db")
 	previousDB := DB
@@ -2089,10 +2151,13 @@ func TestCreateRootAccountUsesConfiguredInitialPassword(t *testing.T) {
 	previousDB := DB
 	DB = db
 	previousInitialPassword := common.InitialRootPassword
+	previousInitialRootPasswordFile := common.InitialRootPasswordFile
 	common.InitialRootPassword = "configured-root-password"
+	common.InitialRootPasswordFile = filepath.Join(t.TempDir(), "should-not-be-created.txt")
 	t.Cleanup(func() {
 		DB = previousDB
 		common.InitialRootPassword = previousInitialPassword
+		common.InitialRootPasswordFile = previousInitialRootPasswordFile
 	})
 
 	if err := createRootAccountIfNeed(); err != nil {
@@ -2106,6 +2171,62 @@ func TestCreateRootAccountUsesConfiguredInitialPassword(t *testing.T) {
 	defaultPasswordUser := &User{Username: "root", Password: "123456"}
 	if err := defaultPasswordUser.ValidateAndFill(); err == nil {
 		t.Fatal("fixed default root password should not validate")
+	}
+	if _, err := os.Stat(common.InitialRootPasswordFile); !os.IsNotExist(err) {
+		t.Fatalf("configured initial root password should not create password file, stat err=%v", err)
+	}
+}
+
+func TestCreateRootAccountWritesGeneratedInitialPasswordFile(t *testing.T) {
+	db := openTestSQLiteDB(t, "generated-initial-root-password.db")
+	previousDB := DB
+	DB = db
+	previousInitialPassword := common.InitialRootPassword
+	previousInitialRootPasswordFile := common.InitialRootPasswordFile
+	passwordFile := filepath.Join(t.TempDir(), "bootstrap", "initial-root-password.txt")
+	common.InitialRootPassword = ""
+	common.InitialRootPasswordFile = passwordFile
+	var logBuffer bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuffer, nil)))
+	t.Cleanup(func() {
+		DB = previousDB
+		common.InitialRootPassword = previousInitialPassword
+		common.InitialRootPasswordFile = previousInitialRootPasswordFile
+		slog.SetDefault(previousLogger)
+	})
+
+	if err := createRootAccountIfNeed(); err != nil {
+		t.Fatalf("create root account: %v", err)
+	}
+
+	info, err := os.Stat(passwordFile)
+	if err != nil {
+		t.Fatalf("expected generated initial root password file: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("unexpected initial root password file mode: %o", info.Mode().Perm())
+	}
+	password, ok, err := readInitialRootPasswordFile(passwordFile)
+	if err != nil {
+		t.Fatalf("read generated initial root password file: %v", err)
+	}
+	if !ok || password == "" {
+		t.Fatal("expected generated initial root password in file")
+	}
+	user := &User{Username: "root", Password: password}
+	if err := user.ValidateAndFill(); err != nil {
+		t.Fatalf("expected generated initial root password to validate: %v", err)
+	}
+	logs := logBuffer.String()
+	if strings.Contains(logs, password) {
+		t.Fatal("generated initial root password leaked into logs")
+	}
+	if strings.Contains(logs, "initial_password") {
+		t.Fatal("generated initial root password log should not include initial_password field")
+	}
+	if !strings.Contains(logs, "password_file") {
+		t.Fatal("generated initial root password log should include password file path")
 	}
 }
 

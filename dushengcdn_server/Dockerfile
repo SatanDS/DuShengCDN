@@ -31,9 +31,14 @@ FROM alpine
 RUN apk update \
     && apk upgrade \
     && apk add --no-cache ca-certificates tzdata \
+    && addgroup -S dushengcdn \
+    && adduser -S -D -H -G dushengcdn -h /data dushengcdn \
+    && mkdir -p /data \
+    && chown -R dushengcdn:dushengcdn /data \
     && update-ca-certificates 2>/dev/null || true
 ENV PORT=3000
 COPY --from=builder2 /build/dushengcdn /
 EXPOSE 3000
 WORKDIR /data
+USER dushengcdn
 ENTRYPOINT ["/dushengcdn"]

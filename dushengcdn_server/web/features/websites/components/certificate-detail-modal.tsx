@@ -196,18 +196,21 @@ export function CertificateDetailModal({
                 <p className="text-sm font-medium text-[var(--foreground-primary)]">
                   私钥内容
                 </p>
-                <SecondaryButton
-                  type="button"
-                  className="px-3 py-2 text-xs"
-                  onClick={() =>
-                    void handleCopy(content.key_pem, '私钥内容已复制。')
-                  }
-                >
-                  复制
-                </SecondaryButton>
+                {content.key_pem ? (
+                  <SecondaryButton
+                    type="button"
+                    className="px-3 py-2 text-xs"
+                    onClick={() =>
+                      void handleCopy(content.key_pem, '私钥内容已复制。')
+                    }
+                  >
+                    复制
+                  </SecondaryButton>
+                ) : null}
               </div>
               <CodeBlock className="max-h-56 overflow-y-auto whitespace-pre-wrap break-all">
-                {content.key_pem}
+                {content.key_pem ||
+                  'Private key is hidden. Use certificate edit as a Root user to reveal or replace it.'}
               </CodeBlock>
             </div>
           </div>

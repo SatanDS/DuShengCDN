@@ -213,6 +213,30 @@ func RequestNodeForceSync(c *gin.Context) {
 	respondSuccess(c, node)
 }
 
+// RotateNodeAgentToken godoc
+// @Summary Rotate node agent token
+// @Tags Nodes
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Node ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/nodes/{id}/agent-token/rotate [post]
+func RotateNodeAgentToken(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		respondBadRequest(c, "")
+		return
+	}
+
+	token, err := service.RotateNodeAgentToken(uint(id))
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, token)
+}
+
 // GetNodeAgentRelease godoc
 // @Summary Check latest agent release for node
 // @Tags Nodes

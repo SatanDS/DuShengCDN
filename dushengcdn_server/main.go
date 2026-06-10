@@ -10,12 +10,14 @@ import (
 	"dushengcdn/router"
 	"dushengcdn/service"
 	"dushengcdn/utils/geoip"
+	"dushengcdn/utils/security"
 	"embed"
 	"fmt"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-contrib/sessions/redis"
 	"github.com/gin-gonic/gin"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -38,7 +40,7 @@ var indexPage []byte
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-// @description 管理端可使用 Bearer Token，例如：Bearer <token>
+// @description 仅部分兼容接口支持长期 Bearer 用户 Token；高危管理接口要求浏览器 session cookie 和 CSRF Token
 // @securityDefinitions.apikey AgentTokenAuth
 // @in header
 // @name X-Agent-Token
@@ -63,8 +65,13 @@ func main() {
 		}
 	}()
 
-	if *common.ResetRootPassword != "" {
-		if err := model.ResetRootPassword(*common.ResetRootPassword); err != nil {
+	if rootPasswordResetRequested() {
+		password, err := readRootPasswordResetPassword()
+		if err != nil {
+			slog.Error("read root password reset input failed", "error", err)
+			os.Exit(1)
+		}
+		if err := model.ResetRootPassword(password); err != nil {
 			slog.Error("reset root password failed", "error", err)
 			os.Exit(1)
 		}
@@ -110,7 +117,8 @@ func main() {
 	}
 
 	// Initialize HTTP server
-	server := gin.Default()
+	server := gin.New()
+	server.Use(ginSanitizedLogger(), gin.Recovery())
 	configureTrustedProxies(server)
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.CORS())
@@ -163,12 +171,58 @@ func main() {
 	if common.SQLDSN != "" {
 		dbBackend = "postgres"
 	}
-	slog.Info("server config", "port", port, "gin_mode", gin.Mode(), "log_level", common.GetLogLevel(), "db_backend", dbBackend, "sqlite_path", common.SQLitePath, "redis_enabled", common.RedisEnabled, "upload_path", common.UploadPath, "log_dir", valueOrDefault(*common.LogDir, "stdout"), "agent_token_configured", common.AgentToken != "", "node_offline_threshold", common.NodeOfflineThreshold)
-	slog.Info("server listening", "address", fmt.Sprintf(":%s", port))
-	err = server.Run(":" + port)
+	listenAddress := net.JoinHostPort(strings.TrimSpace(common.ListenAddress), port)
+	slog.Info("server config", "listen_address", common.ListenAddress, "port", port, "gin_mode", gin.Mode(), "log_level", common.GetLogLevel(), "db_backend", dbBackend, "sqlite_path", common.SQLitePath, "redis_enabled", common.RedisEnabled, "upload_path", common.UploadPath, "log_dir", valueOrDefault(*common.LogDir, "stdout"), "agent_token_configured", common.AgentToken != "", "node_offline_threshold", common.NodeOfflineThreshold)
+	slog.Info("server listening", "address", listenAddress)
+	err = server.Run(listenAddress)
 	if err != nil {
 		slog.Error("server run failed", "error", err)
 	}
+}
+
+func rootPasswordResetRequested() bool {
+	return *common.ResetRootPassword != "" ||
+		strings.TrimSpace(*common.ResetRootPasswordFile) != "" ||
+		*common.ResetRootPasswordStdin
+}
+
+func readRootPasswordResetPassword() (string, error) {
+	sources := 0
+	if *common.ResetRootPassword != "" {
+		sources++
+	}
+	if strings.TrimSpace(*common.ResetRootPasswordFile) != "" {
+		sources++
+	}
+	if *common.ResetRootPasswordStdin {
+		sources++
+	}
+	if sources != 1 {
+		return "", fmt.Errorf("exactly one root password reset input source is required")
+	}
+
+	var password string
+	switch {
+	case strings.TrimSpace(*common.ResetRootPasswordFile) != "":
+		raw, err := os.ReadFile(strings.TrimSpace(*common.ResetRootPasswordFile))
+		if err != nil {
+			return "", err
+		}
+		password = strings.TrimRight(string(raw), "\r\n")
+	case *common.ResetRootPasswordStdin:
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", err
+		}
+		password = strings.TrimRight(string(raw), "\r\n")
+	default:
+		slog.Warn("reset-root-password was supplied on argv; prefer --reset-root-password-file or --reset-root-password-stdin to avoid shell history and process-list exposure")
+		password = *common.ResetRootPassword
+	}
+	if password == "" {
+		return "", fmt.Errorf("root password reset input is empty")
+	}
+	return password, nil
 }
 
 func valueOrDefault(value string, fallback string) string {
@@ -245,6 +299,31 @@ func isGlobalTrustedProxy(proxy string) bool {
 	}
 	ones, bits := ipNet.Mask.Size()
 	return ones == 0 && (bits == net.IPv4len*8 || bits == net.IPv6len*8)
+}
+
+func ginSanitizedLogger() gin.HandlerFunc {
+	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		path := ""
+		if param.Request != nil && param.Request.URL != nil {
+			path = param.Request.URL.EscapedPath()
+			if path == "" {
+				path = "/"
+			}
+		}
+		errorMessage := security.RedactSensitiveText(param.ErrorMessage)
+		if errorMessage != "" {
+			errorMessage = " " + errorMessage
+		}
+		return fmt.Sprintf("[GIN] %v | %3d | %13v | %15s | %-7s %#v%s\n",
+			param.TimeStamp.Format("2006/01/02 - 15:04:05"),
+			param.StatusCode,
+			param.Latency,
+			param.ClientIP,
+			param.Method,
+			path,
+			errorMessage,
+		)
+	})
 }
 
 func validateRuntimeSecurityConfig(ginMode string) error {

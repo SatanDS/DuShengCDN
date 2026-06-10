@@ -1,4 +1,4 @@
-import { ApiError, apiRequest, getApiUrl } from '@/lib/api/client';
+import { ApiError, apiRequest, getApiUrl, getCSRFToken } from '@/lib/api/client';
 import type { ApiEnvelope } from '@/types/api';
 
 import type {
@@ -43,6 +43,10 @@ export function uploadServerBinary(
     const xhr = new XMLHttpRequest();
     xhr.open('POST', getApiUrl('/update/manual-upload'));
     xhr.withCredentials = true;
+    const csrfToken = getCSRFToken();
+    if (csrfToken) {
+      xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+    }
 
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) {

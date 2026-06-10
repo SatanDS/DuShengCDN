@@ -7,11 +7,11 @@ import (
 	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/service"
+	"dushengcdn/utils/security"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -24,6 +24,8 @@ import (
 
 const legacyGitHubOAuthStateSessionKey = "legacy_github_oauth_state"
 
+var legacyGitHubHTTPClient = security.NewPublicHTTPClient(5*time.Second, true)
+
 type GitHubOAuthResponse struct {
 	AccessToken string `json:"access_token"`
 	Scope       string `json:"scope"`
@@ -31,6 +33,7 @@ type GitHubOAuthResponse struct {
 }
 
 type GitHubUser struct {
+	ID    int64  `json:"id"`
 	Login string `json:"login"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
@@ -58,18 +61,14 @@ func getGitHubUserInfoByCode(code string, redirectURL string) (*GitHubUser, erro
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	client := http.Client{
-		Timeout: 5 * time.Second,
-	}
-	res, err := client.Do(req)
+	res, err := legacyGitHubHTTPClient.Do(req)
 	if err != nil {
 		slog.Error("github oauth access token request failed", "error", err)
 		return nil, errors.New("无法连接至 GitHub 服务器，请稍后重试！")
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
-		return nil, fmt.Errorf("GitHub token 接口返回异常状态: %s %s", res.Status, strings.TrimSpace(string(raw)))
+		return nil, fmt.Errorf("GitHub token 接口返回异常状态: %s", res.Status)
 	}
 	var oAuthResponse GitHubOAuthResponse
 	if err := json.NewDecoder(res.Body).Decode(&oAuthResponse); err != nil {
@@ -84,15 +83,14 @@ func getGitHubUserInfoByCode(code string, redirectURL string) (*GitHubUser, erro
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", oAuthResponse.AccessToken))
 	req.Header.Set("Accept", "application/vnd.github+json")
-	res2, err := client.Do(req)
+	res2, err := legacyGitHubHTTPClient.Do(req)
 	if err != nil {
 		slog.Error("github user info request failed", "error", err)
 		return nil, errors.New("无法连接至 GitHub 服务器，请稍后重试！")
 	}
 	defer res2.Body.Close()
 	if res2.StatusCode < 200 || res2.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(res2.Body, 1024))
-		return nil, fmt.Errorf("GitHub 用户接口返回异常状态: %s %s", res2.Status, strings.TrimSpace(string(raw)))
+		return nil, fmt.Errorf("GitHub 用户接口返回异常状态: %s", res2.Status)
 	}
 	var githubUser GitHubUser
 	if err := json.NewDecoder(res2.Body).Decode(&githubUser); err != nil {
@@ -110,12 +108,15 @@ func GitHubOAuth(c *gin.Context) {
 		return
 	}
 	if oauthError := strings.TrimSpace(c.Query("error")); oauthError != "" {
-		clearLegacyGitHubOAuthState(c)
-		description := strings.TrimSpace(c.Query("error_description"))
-		if description == "" {
-			description = oauthError
+		if err := validateLegacyGitHubOAuthState(c); err != nil {
+			legacyGitHubOAuthFailure(c, err.Error())
+			return
 		}
-		legacyGitHubOAuthFailure(c, description)
+		slog.Warn("legacy github oauth provider returned an error",
+			"oauth_error", oauthError,
+			"description_present", strings.TrimSpace(c.Query("error_description")) != "",
+		)
+		legacyGitHubOAuthFailure(c, "GitHub 授权失败，请返回登录页重试")
 		return
 	}
 	code := strings.TrimSpace(c.Query("code"))
@@ -129,11 +130,11 @@ func GitHubOAuth(c *gin.Context) {
 	}
 	githubUser, err := getGitHubUserInfoByCode(code, legacyGitHubOAuthFrontendCallbackURL(c))
 	if err != nil {
-		legacyGitHubOAuthFailure(c, err.Error())
+		slog.Warn("legacy github oauth profile exchange failed", "error", err)
+		legacyGitHubOAuthFailure(c, "GitHub 授权失败，请返回登录页重试")
 		return
 	}
-	session := sessions.Default(c)
-	if session.Get("username") != nil {
+	if _, ok := authenticatedSessionUser(c); ok {
 		completeGitHubBind(c, githubUser)
 		return
 	}
@@ -175,8 +176,13 @@ func GitHubOAuthAuthorize(c *gin.Context) {
 }
 
 func completeGitHubLogin(c *gin.Context, githubUser *GitHubUser) {
+	githubID, err := stableGitHubUserID(githubUser)
+	if err != nil {
+		legacyGitHubOAuthFailure(c, err.Error())
+		return
+	}
 	user := model.User{
-		GitHubId: githubUser.Login,
+		GitHubId: githubID,
 	}
 	if model.IsGitHubIdAlreadyTaken(user.GitHubId) {
 		if err := user.FillUserByGitHubId(); err != nil {
@@ -233,32 +239,33 @@ func GitHubBind(c *gin.Context) {
 	}
 	githubUser, err := getGitHubUserInfoByCode(code, legacyGitHubOAuthFrontendCallbackURL(c))
 	if err != nil {
-		legacyGitHubOAuthFailure(c, err.Error())
+		slog.Warn("legacy github bind profile exchange failed", "error", err)
+		legacyGitHubOAuthFailure(c, "GitHub 授权失败，请返回登录页重试")
 		return
 	}
 	completeGitHubBind(c, githubUser)
 }
 
 func completeGitHubBind(c *gin.Context, githubUser *GitHubUser) {
+	githubID, err := stableGitHubUserID(githubUser)
+	if err != nil {
+		legacyGitHubOAuthFailure(c, err.Error())
+		return
+	}
 	user := model.User{
-		GitHubId: githubUser.Login,
+		GitHubId: githubID,
 	}
 	if model.IsGitHubIdAlreadyTaken(user.GitHubId) {
 		legacyGitHubOAuthFailure(c, "该 GitHub 账户已被绑定")
 		return
 	}
-	session := sessions.Default(c)
-	id, ok := session.Get("id").(int)
-	if !ok || id <= 0 {
+	currentUser, ok := authenticatedSessionUser(c)
+	if !ok {
 		legacyGitHubOAuthFailure(c, "登录状态已失效，请重新登录后再绑定 GitHub")
 		return
 	}
-	user.Id = id
-	if err := user.FillUserById(); err != nil {
-		legacyGitHubOAuthFailure(c, err.Error())
-		return
-	}
-	user.GitHubId = githubUser.Login
+	user = *currentUser
+	user.GitHubId = githubID
 	if err := user.Update(false); err != nil {
 		legacyGitHubOAuthFailure(c, err.Error())
 		return
@@ -267,6 +274,13 @@ func completeGitHubBind(c *gin.Context, githubUser *GitHubUser) {
 		"success": true,
 		"message": "bind",
 	})
+}
+
+func stableGitHubUserID(githubUser *GitHubUser) (string, error) {
+	if githubUser == nil || githubUser.ID == 0 {
+		return "", errors.New("GitHub user profile is missing numeric id")
+	}
+	return fmt.Sprintf("%d", githubUser.ID), nil
 }
 
 func validateLegacyGitHubOAuthState(c *gin.Context) error {

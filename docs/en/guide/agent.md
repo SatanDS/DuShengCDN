@@ -16,7 +16,7 @@ At least one of them is required.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 Or with discovery:
@@ -24,7 +24,7 @@ Or with discovery:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --discovery-token YOUR_DISCOVERY_TOKEN
+  --discovery-token-file /run/secrets/dushengcdn-discovery-token
 ```
 
 The script prefers GitHub Release binaries. If no matching asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.
@@ -44,6 +44,8 @@ The script prefers GitHub Release binaries. If no matching asset exists, it buil
 }
 ```
 
+`openresty_observability_port` is only for local Agent health checks and `stub_status`. Keep it bound to loopback; do not publish `18081` to the public Internet in Docker or firewall rules.
+
 Without `openresty_path`, Agent runs `openresty` by default.
 
 Agent self-update and the install script require the GitHub Release to include the target binary plus matching `.sha256` and `.sig` files. The downloaded binary is verified before it replaces or installs the local executable.
@@ -54,8 +56,9 @@ Agent self-update and the install script require the GitHub Release to include t
 DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
+  -v /run/secrets/dushengcdn-agent-token:/run/secrets/dushengcdn_agent_token:ro \
   -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
-  -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
+  -e DUSHENGCDN_AGENT_TOKEN_FILE=/run/secrets/dushengcdn_agent_token \
   ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 

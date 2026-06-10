@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +21,7 @@ func TestCreateDNSWorkerCLI(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "create-dns-worker-cli.db")
-	output := runCreateDNSWorkerCLI(t, dbPath, "DNS服务响应端", "203.0.113.10")
+	output := runCreateDNSWorkerCLI(t, dbPath, "DNS服务响应端", "8.8.8.8")
 	token := lastNonEmptyLine(output)
 	if token == "" {
 		t.Fatalf("expected CLI to print DNS Worker token, got %q", output)
@@ -30,11 +32,17 @@ func TestCreateDNSWorkerCLI(t *testing.T) {
 	if err := db.Where("name = ?", "DNS服务响应端").First(&worker).Error; err != nil {
 		t.Fatalf("load created DNS worker: %v", err)
 	}
-	if worker.PublicAddress != "203.0.113.10" {
-		t.Fatalf("public address = %q, want 203.0.113.10", worker.PublicAddress)
+	if worker.PublicAddress != "8.8.8.8:53" {
+		t.Fatalf("public address = %q, want 8.8.8.8:53", worker.PublicAddress)
 	}
-	if worker.Token != token {
-		t.Fatalf("stored token = %q, CLI token = %q", worker.Token, token)
+	if worker.Token != "" {
+		t.Fatalf("expected stored plaintext token to be empty, got %q", worker.Token)
+	}
+	if want := sha256Hex(token); worker.TokenHash != want {
+		t.Fatalf("stored token hash = %q, want %q", worker.TokenHash, want)
+	}
+	if want := tokenPrefix(token); worker.TokenPrefix != want {
+		t.Fatalf("stored token prefix = %q, want %q", worker.TokenPrefix, want)
 	}
 	if worker.WorkerID == "" {
 		t.Fatal("expected worker id to be generated")
@@ -87,4 +95,17 @@ func lastNonEmptyLine(output string) string {
 		}
 	}
 	return ""
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(sum[:])
+}
+
+func tokenPrefix(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 12 {
+		return value[:12]
+	}
+	return value
 }

@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm/schema"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -98,9 +99,21 @@ func createRootAccountIfNeed() error {
 	}
 	password := strings.TrimSpace(common.InitialRootPassword)
 	generated := false
+	passwordFromFile := false
+	passwordFilePath := ""
 	if password == "" {
-		password = security.GenerateRandomString(24)
-		generated = true
+		passwordFilePath = initialRootPasswordFilePath()
+		filePassword, ok, err := readInitialRootPasswordFile(passwordFilePath)
+		if err != nil {
+			return fmt.Errorf("read initial root password file failed: %w", err)
+		}
+		if ok {
+			password = filePassword
+			passwordFromFile = true
+		} else {
+			password = security.GenerateRandomString(24)
+			generated = true
+		}
 	}
 	if password == "" {
 		return fmt.Errorf("generate initial root password failed")
@@ -108,6 +121,11 @@ func createRootAccountIfNeed() error {
 	hashedPassword, err := security.Password2Hash(password)
 	if err != nil {
 		return err
+	}
+	if generated {
+		if err := writeInitialRootPasswordFile(passwordFilePath, password); err != nil {
+			return fmt.Errorf("write initial root password file failed: %w", err)
+		}
 	}
 	rootUser := User{
 		Username:    "root",
@@ -117,14 +135,81 @@ func createRootAccountIfNeed() error {
 		DisplayName: "Root User",
 	}
 	if err := DB.Create(&rootUser).Error; err != nil {
+		if generated && passwordFilePath != "" {
+			_ = os.Remove(passwordFilePath)
+		}
 		return err
 	}
 	if generated {
-		slog.Warn("no user exists; created root user with a generated one-time password", "username", "root", "initial_password", password, "reset_hint", "run with --reset-root-password if this password was not captured")
+		slog.Warn("no user exists; created root user with a generated one-time password file", "username", "root", "password_file", passwordFilePath, "reset_hint", "run with --reset-root-password-file or --reset-root-password-stdin if this file is not available")
+	} else if passwordFromFile {
+		slog.Warn("no user exists; created root user with password from file", "username", "root", "password_file", passwordFilePath, "reset_hint", "remove or rotate this bootstrap password after first login")
 	} else {
 		slog.Warn("no user exists; created root user with DUSHENGCDN_INITIAL_ROOT_PASSWORD", "username", "root", "reset_hint", "remove or rotate this bootstrap password after first login")
 	}
 	return nil
+}
+
+func initialRootPasswordFilePath() string {
+	path := strings.TrimSpace(common.InitialRootPasswordFile)
+	if path != "" {
+		return path
+	}
+	sqlitePath := strings.TrimSpace(common.SQLitePath)
+	if sqlitePath != "" {
+		dir := filepath.Dir(sqlitePath)
+		if dir != "" && dir != "." {
+			return filepath.Join(dir, "initial-root-password.txt")
+		}
+	}
+	return "initial-root-password.txt"
+}
+
+func readInitialRootPasswordFile(path string) (string, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", false, nil
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	content := strings.TrimSpace(string(raw))
+	if content == "" {
+		return "", true, fmt.Errorf("initial root password file is empty")
+	}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "password=") {
+			password := strings.TrimSpace(strings.TrimPrefix(line, "password="))
+			if password == "" {
+				return "", true, fmt.Errorf("initial root password file has an empty password field")
+			}
+			return password, true, nil
+		}
+	}
+	return content, true, nil
+}
+
+func writeInitialRootPasswordFile(path string, password string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("initial root password file path is empty")
+	}
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = fmt.Fprintf(file, "username=root\npassword=%s\n", password)
+	return err
 }
 
 func CountTable(tableName string) (num int64) {

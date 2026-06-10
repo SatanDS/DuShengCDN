@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+
+	"dushengcdn-agent/internal/security"
 )
 
 type customTextHandler struct {
@@ -39,7 +41,7 @@ func (h *customTextHandler) Handle(_ context.Context, record slog.Record) error 
 	builder.WriteString(" | ")
 	builder.WriteString(sourceLocation(record.PC))
 	builder.WriteString(" - ")
-	builder.WriteString(record.Message)
+	builder.WriteString(security.RedactSensitiveText(record.Message))
 
 	attrs := make([]slog.Attr, 0, len(h.attrs)+record.NumAttrs())
 	attrs = append(attrs, h.attrs...)
@@ -127,7 +129,35 @@ func formatAttrs(groups []string, attrs []slog.Attr) string {
 		if len(groups) > 0 {
 			key = strings.Join(append(slices.Clone(groups), key), ".")
 		}
-		parts = append(parts, fmt.Sprintf("%s=%v", key, attr.Value.Any()))
+		parts = append(parts, fmt.Sprintf("%s=%v", key, redactLogValue(key, attr.Value.Any())))
 	}
 	return strings.Join(parts, " ")
+}
+
+func redactLogValue(key string, value any) any {
+	normalized := strings.ToLower(key)
+	sensitiveFragments := []string{
+		"authorization",
+		"credential",
+		"password",
+		"secret",
+		"token",
+		"private_key",
+		"privatekey",
+		"client_secret",
+		"access_key",
+		"api_key",
+		"dsn",
+	}
+	for _, fragment := range sensitiveFragments {
+		if strings.Contains(normalized, fragment) {
+			return "<redacted>"
+		}
+	}
+	if normalized == "message" || normalized == "error" {
+		if text, ok := value.(string); ok {
+			return security.RedactSensitiveText(text)
+		}
+	}
+	return value
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -11,6 +12,7 @@ import (
 	"encoding/pem"
 	"io"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,8 +110,10 @@ func TestCreateTLSCertificateAndRenderHTTPSConfig(t *testing.T) {
 	if !strings.Contains(result.Version.MainConfig, "proxy_connect_timeout 3;") {
 		t.Fatal("expected main config to default proxy_connect_timeout to 3")
 	}
-	if strings.Contains(result.Version.MainConfig, "allow 127.0.0.1;") {
-		t.Fatal("expected main config to avoid hard-coded allow rules on observability server")
+	if !strings.Contains(result.Version.MainConfig, "allow 127.0.0.1;") ||
+		!strings.Contains(result.Version.MainConfig, "allow ::1;") ||
+		!strings.Contains(result.Version.MainConfig, "deny all;") {
+		t.Fatal("expected main config to restrict observability server to loopback clients")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "listen 443 ssl;") {
 		t.Fatal("expected rendered config to include https ssl listener")
@@ -128,6 +132,118 @@ func TestCreateTLSCertificateAndRenderHTTPSConfig(t *testing.T) {
 	}
 	if !strings.Contains(result.Version.SupportFilesJSON, ".crt") || !strings.Contains(result.Version.SupportFilesJSON, ".key") {
 		t.Fatal("expected support files to contain certificate and key")
+	}
+}
+
+func TestConfigVersionAdminViewsRedactPrivateKeySupportFiles(t *testing.T) {
+	setupServiceTestDB(t)
+
+	certPEM, keyPEM := generateCertificatePair(t, []string{"redact.example.com"})
+	certificate, err := CreateTLSCertificate(TLSCertificateInput{
+		Name:    "redact-example",
+		CertPEM: certPEM,
+		KeyPEM:  keyPEM,
+	})
+	if err != nil {
+		t.Fatalf("CreateTLSCertificate failed: %v", err)
+	}
+	if _, err = CreateProxyRoute(ProxyRouteInput{
+		Domain:      "redact.example.com",
+		OriginURL:   "https://origin.internal",
+		Enabled:     true,
+		EnableHTTPS: true,
+		CertID:      &certificate.ID,
+	}); err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	preview, err := PreviewConfigVersion()
+	if err != nil {
+		t.Fatalf("PreviewConfigVersion failed: %v", err)
+	}
+	for _, file := range preview.SupportFiles {
+		if strings.Contains(file.Content, "PRIVATE KEY") || strings.Contains(file.Content, keyPEM) {
+			t.Fatalf("expected preview support file %s to redact private key", file.Path)
+		}
+	}
+
+	result, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if !strings.Contains(result.Version.SupportFilesJSON, "PRIVATE KEY") {
+		t.Fatal("expected stored config version to retain private key for agent delivery")
+	}
+	detail, err := GetConfigVersionDetail(result.Version.ID)
+	if err != nil {
+		t.Fatalf("GetConfigVersionDetail failed: %v", err)
+	}
+	if strings.Contains(detail.SupportFilesJSON, "PRIVATE KEY") || strings.Contains(detail.SupportFilesJSON, keyPEM) {
+		t.Fatal("expected admin config version detail to redact private key")
+	}
+	if !strings.Contains(detail.SupportFilesJSON, `"redacted":true`) {
+		t.Fatal("expected admin support file detail to mark private key as redacted")
+	}
+}
+
+func TestConfigVersionAdminViewsRedactSensitiveCustomHeadersAndRenderedConfig(t *testing.T) {
+	setupServiceTestDB(t)
+
+	if _, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:    "headers.example.com",
+		OriginURL: "https://origin.internal",
+		Enabled:   true,
+		CustomHeaders: []ProxyRouteCustomHeaderInput{
+			{Key: "Authorization", Value: "Bearer secret-token"},
+			{Key: "X-Api-Key", Value: "secret-api-key"},
+			{Key: "X-Trace-Id", Value: "$request_id"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	result, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if !strings.Contains(result.Version.SnapshotJSON, "Bearer secret-token") {
+		t.Fatal("expected stored snapshot to retain sensitive custom header for agent delivery")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, `proxy_set_header Authorization "Bearer secret-token";`) {
+		t.Fatal("expected stored rendered config to retain sensitive custom header for agent delivery")
+	}
+
+	detail, err := GetConfigVersionDetail(result.Version.ID)
+	if err != nil {
+		t.Fatalf("GetConfigVersionDetail failed: %v", err)
+	}
+	for _, value := range []string{"Bearer secret-token", "secret-api-key"} {
+		if strings.Contains(detail.SnapshotJSON, value) {
+			t.Fatalf("expected admin snapshot detail to redact %q", value)
+		}
+		if strings.Contains(detail.RenderedConfig, value) {
+			t.Fatalf("expected admin rendered config detail to redact %q", value)
+		}
+	}
+	if !strings.Contains(detail.SnapshotJSON, redactedProxyRouteCustomHeaderValue) {
+		t.Fatal("expected admin snapshot detail to include custom header redaction placeholder")
+	}
+	if !strings.Contains(detail.RenderedConfig, `proxy_set_header Authorization "[redacted sensitive header; preserved on save]";`) {
+		t.Fatal("expected admin rendered config detail to include redacted Authorization header")
+	}
+	if !strings.Contains(detail.RenderedConfig, `proxy_set_header X-Trace-Id "$request_id";`) {
+		t.Fatal("expected admin rendered config detail to keep non-sensitive custom header")
+	}
+
+	preview, err := PreviewConfigVersion()
+	if err != nil {
+		t.Fatalf("PreviewConfigVersion failed: %v", err)
+	}
+	if strings.Contains(preview.RenderedConfig, "Bearer secret-token") || !strings.Contains(preview.RenderedConfig, redactedProxyRouteCustomHeaderValue) {
+		t.Fatalf("expected preview rendered config to redact sensitive custom header, got %s", preview.RenderedConfig)
+	}
+	if strings.Contains(preview.RouteConfig, "Bearer secret-token") || !strings.Contains(preview.RouteConfig, redactedProxyRouteCustomHeaderValue) {
+		t.Fatalf("expected preview route config to redact sensitive custom header, got %s", preview.RouteConfig)
 	}
 }
 
@@ -279,14 +395,70 @@ func TestPublishConfigVersionRendersCustomHeaders(t *testing.T) {
 	if !strings.Contains(result.Version.RenderedConfig, "upstream backend_custom_example_com_1 {") {
 		t.Fatal("expected hostname origin to render named upstream")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "server origin.internal max_fails=3 fail_timeout=10s;") {
-		t.Fatal("expected hostname origin to render upstream server entry")
+	if !strings.Contains(result.Version.RenderedConfig, "server 8.8.4.4:443 max_fails=3 fail_timeout=10s;") {
+		t.Fatal("expected hostname origin to render public IP upstream server entry")
+	}
+	if strings.Contains(result.Version.RenderedConfig, "server origin.internal") {
+		t.Fatal("expected hostname origin upstream to avoid runtime DNS resolution")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "keepalive 128;") {
 		t.Fatal("expected named upstream to enable keepalive")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "proxy_pass https://backend_custom_example_com_1;") {
 		t.Fatal("expected hostname origin to proxy through named upstream")
+	}
+}
+
+func TestProxyRouteViewRedactsSensitiveCustomHeadersAndPreservesOnSave(t *testing.T) {
+	setupServiceTestDB(t)
+
+	route, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:    "secret-header.example.com",
+		OriginURL: "https://origin.internal",
+		Enabled:   true,
+		CustomHeaders: []ProxyRouteCustomHeaderInput{
+			{Key: "Authorization", Value: "Bearer origin-secret"},
+			{Key: "X-Trace-Id", Value: "$request_id"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+	if len(route.CustomHeaderList) != 2 {
+		t.Fatalf("expected two custom headers, got %#v", route.CustomHeaderList)
+	}
+	if route.CustomHeaderList[0].Value != redactedProxyRouteCustomHeaderValue {
+		t.Fatalf("expected sensitive custom header to be redacted in route view, got %#v", route.CustomHeaderList)
+	}
+	if route.CustomHeaderList[1].Value != "$request_id" {
+		t.Fatalf("expected non-sensitive custom header to remain visible, got %#v", route.CustomHeaderList)
+	}
+	if strings.Contains(route.CustomHeaders, "origin-secret") {
+		t.Fatal("expected raw custom_headers view field to redact sensitive values")
+	}
+
+	updated, err := UpdateProxyRoute(route.ID, ProxyRouteInput{
+		Domain:    route.Domain,
+		OriginURL: route.OriginURL,
+		Enabled:   route.Enabled,
+		CustomHeaders: []ProxyRouteCustomHeaderInput{
+			{Key: "Authorization", Value: redactedProxyRouteCustomHeaderValue},
+			{Key: "X-Trace-Id", Value: "$request_id"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateProxyRoute failed: %v", err)
+	}
+	if updated.CustomHeaderList[0].Value != redactedProxyRouteCustomHeaderValue {
+		t.Fatalf("expected updated route view to keep redacting sensitive header, got %#v", updated.CustomHeaderList)
+	}
+
+	stored, err := model.GetProxyRouteByID(route.ID)
+	if err != nil {
+		t.Fatalf("GetProxyRouteByID failed: %v", err)
+	}
+	if !strings.Contains(stored.CustomHeaders, "Bearer origin-secret") {
+		t.Fatalf("expected redacted placeholder save to preserve stored secret, got %s", stored.CustomHeaders)
 	}
 }
 
@@ -491,15 +663,15 @@ func TestPublishConfigVersionRendersMultipleUpstreams(t *testing.T) {
 
 	route, err := CreateProxyRoute(ProxyRouteInput{
 		Domain:     "lb.example.com",
-		OriginURL:  "http://10.0.0.11:39010",
-		Upstreams:  []string{"http://10.0.0.12:39010", "http://10.0.0.13:39010"},
+		OriginURL:  "http://8.8.8.11:39010",
+		Upstreams:  []string{"http://8.8.8.12:39010", "http://8.8.8.13:39010"},
 		Enabled:    true,
 		OriginHost: "lb.example.com",
 	})
 	if err != nil {
 		t.Fatalf("CreateProxyRoute failed: %v", err)
 	}
-	if !strings.Contains(route.Upstreams, "10.0.0.12:39010") {
+	if !strings.Contains(route.Upstreams, "8.8.8.12:39010") {
 		t.Fatalf("expected route upstreams to persist, got %s", route.Upstreams)
 	}
 
@@ -513,19 +685,19 @@ func TestPublishConfigVersionRendersMultipleUpstreams(t *testing.T) {
 	if strings.Count(result.Version.RenderedConfig, "max_fails=3 fail_timeout=10s;") < 3 {
 		t.Fatal("expected rendered config to include every upstream server")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "server 10.0.0.11:39010 max_fails=3 fail_timeout=10s;") {
+	if !strings.Contains(result.Version.RenderedConfig, "server 8.8.8.11:39010 max_fails=3 fail_timeout=10s;") {
 		t.Fatal("expected rendered config to include primary upstream server")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "server 10.0.0.12:39010 max_fails=3 fail_timeout=10s;") {
+	if !strings.Contains(result.Version.RenderedConfig, "server 8.8.8.12:39010 max_fails=3 fail_timeout=10s;") {
 		t.Fatal("expected rendered config to include secondary upstream server")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "server 10.0.0.13:39010 max_fails=3 fail_timeout=10s;") {
+	if !strings.Contains(result.Version.RenderedConfig, "server 8.8.8.13:39010 max_fails=3 fail_timeout=10s;") {
 		t.Fatal("expected rendered config to include tertiary upstream server")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "proxy_pass http://backend_lb_example_com_1;") {
 		t.Fatal("expected rendered config to proxy through load balancing upstream")
 	}
-	if !strings.Contains(result.Version.SnapshotJSON, `"upstreams":["http://10.0.0.11:39010","http://10.0.0.12:39010","http://10.0.0.13:39010"]`) {
+	if !strings.Contains(result.Version.SnapshotJSON, `"upstreams":["http://8.8.8.11:39010","http://8.8.8.12:39010","http://8.8.8.13:39010"]`) {
 		t.Fatal("expected snapshot to include upstream list")
 	}
 }
@@ -926,7 +1098,7 @@ func TestDiffConfigVersionSeparatesSnapshotOnlyChanges(t *testing.T) {
 	route, err := CreateProxyRoute(ProxyRouteInput{
 		SiteName:  "panel-name",
 		Domains:   []string{"panel-only.example.com"},
-		OriginURL: "http://10.0.0.8:8080",
+		OriginURL: "http://8.8.8.8:8080",
 		Enabled:   true,
 	})
 	if err != nil {
@@ -940,7 +1112,7 @@ func TestDiffConfigVersionSeparatesSnapshotOnlyChanges(t *testing.T) {
 	if _, err = UpdateProxyRoute(route.ID, ProxyRouteInput{
 		SiteName:  "panel-name",
 		Domains:   []string{"panel-only.example.com"},
-		OriginURL: "http://10.0.0.8:8080",
+		OriginURL: "http://8.8.8.8:8080",
 		Enabled:   true,
 		Remark:    "only visible in the control panel",
 	}); err != nil {
@@ -1062,11 +1234,12 @@ func TestPublishConfigVersionRendersHostnameLoadBalancingUpstream(t *testing.T) 
 	if !strings.Contains(result.Version.RenderedConfig, "upstream backend_hostname_lb_example_com_1 {") {
 		t.Fatal("expected hostname load balancing route to define named upstream")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "server c1:39010 max_fails=3 fail_timeout=10s;") {
-		t.Fatal("expected rendered config to include primary hostname upstream")
+	if !strings.Contains(result.Version.RenderedConfig, "server 8.8.4.4:39010 max_fails=3 fail_timeout=10s;") {
+		t.Fatal("expected rendered config to include pinned hostname upstream")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "server c2:39010 max_fails=3 fail_timeout=10s;") {
-		t.Fatal("expected rendered config to include secondary hostname upstream")
+	if strings.Contains(result.Version.RenderedConfig, "server c1:39010") ||
+		strings.Contains(result.Version.RenderedConfig, "server c2:39010") {
+		t.Fatal("expected rendered config to avoid runtime hostname upstream resolution")
 	}
 	if strings.Contains(result.Version.RenderedConfig, " resolve ") {
 		t.Fatal("expected hostname upstreams to avoid resolver-based server parameters")
@@ -1101,6 +1274,12 @@ func TestPublishConfigVersionOverridesOriginHostHeader(t *testing.T) {
 	}
 	if !strings.Contains(result.Version.RenderedConfig, `proxy_ssl_name "git.arctel.net";`) {
 		t.Fatal("expected rendered config to set proxy ssl name from origin host override")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, "proxy_ssl_verify on;") {
+		t.Fatal("expected rendered config to verify upstream TLS certificates")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, "proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;") {
+		t.Fatal("expected rendered config to use the system CA bundle for upstream TLS")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "upstream backend_git_arctel_de_1 {") {
 		t.Fatal("expected hostname origin to render named upstream")
@@ -1156,8 +1335,11 @@ func TestPublishConfigVersionUsesNamedUpstreamForHostnameOrigins(t *testing.T) {
 	if !strings.Contains(result.Version.RenderedConfig, "upstream backend_resolver_upstream_example_com_1 {") {
 		t.Fatal("expected rendered config to define named upstream for hostname origin")
 	}
-	if !strings.Contains(result.Version.RenderedConfig, "server origin.internal max_fails=3 fail_timeout=10s;") {
-		t.Fatal("expected rendered config to include hostname upstream server entry")
+	if !strings.Contains(result.Version.RenderedConfig, "server 8.8.4.4:443 max_fails=3 fail_timeout=10s;") {
+		t.Fatal("expected rendered config to include pinned public IP upstream server entry")
+	}
+	if strings.Contains(result.Version.RenderedConfig, "server origin.internal") {
+		t.Fatal("expected rendered config to avoid runtime hostname upstream resolution")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "proxy_pass https://backend_resolver_upstream_example_com_1;") {
 		t.Fatal("expected rendered config to proxy through named upstream for hostname origin")
@@ -1169,7 +1351,7 @@ func TestPublishConfigVersionUsesNamedUpstreamForIPOrigins(t *testing.T) {
 
 	_, err := CreateProxyRoute(ProxyRouteInput{
 		Domain:    "ip-origin.example.com",
-		OriginURL: "http://10.0.0.8:8080",
+		OriginURL: "http://8.8.8.8:8080",
 		Enabled:   true,
 	})
 	if err != nil {
@@ -1186,7 +1368,7 @@ func TestPublishConfigVersionUsesNamedUpstreamForIPOrigins(t *testing.T) {
 	if !strings.Contains(result.Version.RenderedConfig, "proxy_pass http://backend_ip_origin_example_com_1;") {
 		t.Fatal("expected rendered config to proxy through named upstream for IP origin")
 	}
-	if strings.Contains(result.Version.RenderedConfig, `set $dushengcdn_upstream "http://10.0.0.8:8080"`) {
+	if strings.Contains(result.Version.RenderedConfig, `set $dushengcdn_upstream "http://8.8.8.8:8080"`) {
 		t.Fatal("expected rendered config to avoid runtime resolver variables for IP origin")
 	}
 }
@@ -1509,8 +1691,14 @@ func TestPublishConfigVersionRendersBasicAuthWithPoW(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishConfigVersion failed: %v", err)
 	}
-	if !strings.Contains(result.Version.RenderedConfig, `if auth ~= "Basic YWRtaW46MTIz" then`) {
-		t.Fatal("expected rendered config to include encoded basic auth credentials")
+	if strings.Contains(result.Version.RenderedConfig, "YWRtaW46MTIz") || strings.Contains(result.Version.RenderedConfig, "admin:123") {
+		t.Fatal("expected rendered config not to include reversible basic auth credentials")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, `local expected_hash = "`) {
+		t.Fatal("expected rendered config to include basic auth credential hash")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, `local sha256 = require "resty.sha256"`) {
+		t.Fatal("expected rendered config to verify basic auth with sha256")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, "                return ngx.exit(401)\n            end\n        }\n") {
 		t.Fatal("expected rendered basic auth Lua block to close the if statement before the nginx block")
@@ -1527,8 +1715,11 @@ func TestPublishConfigVersionRendersBasicAuthWithPoW(t *testing.T) {
 	if !strings.Contains(result.Version.SnapshotJSON, `"basic_auth_username":"admin"`) {
 		t.Fatal("expected snapshot to include basic auth username")
 	}
-	if !strings.Contains(result.Version.SnapshotJSON, `"basic_auth_password":"123"`) {
-		t.Fatal("expected snapshot to include basic auth password")
+	if strings.Contains(result.Version.SnapshotJSON, `"basic_auth_password":"123"`) {
+		t.Fatal("expected snapshot not to include basic auth password")
+	}
+	if !strings.Contains(result.Version.SnapshotJSON, `"basic_auth_password_hash":"`) {
+		t.Fatal("expected snapshot to include basic auth password hash")
 	}
 }
 
@@ -1629,7 +1820,7 @@ func TestRenderConfigUsesDefaultServerFallback(t *testing.T) {
 
 	_, err := CreateProxyRoute(ProxyRouteInput{
 		Domain:    "git.arctel.net",
-		OriginURL: "http://127.0.0.1:8080",
+		OriginURL: "http://8.8.4.4:8080",
 		Enabled:   true,
 	})
 	if err != nil {
@@ -1649,6 +1840,9 @@ func TestRenderConfigUsesDefaultServerFallback(t *testing.T) {
 	}
 	if !strings.Contains(preview.MainConfig, "listen 80 default_server;") {
 		t.Fatal("expected preview main config to include default http server")
+	}
+	if !strings.Contains(preview.MainConfig, "server_tokens off;") {
+		t.Fatal("expected preview main config to hide OpenResty version tokens")
 	}
 	if !strings.Contains(preview.MainConfig, "listen 443 ssl default_server;") {
 		t.Fatal("expected preview main config to include default https server")
@@ -1707,6 +1901,9 @@ func TestOpenRestyMainConfigTemplateRenderAndValidate(t *testing.T) {
 	}
 	if !strings.Contains(preview.MainConfig, "access_log __DUSHENGCDN_ACCESS_LOG__ dushengcdn_json;") {
 		t.Fatal("expected preview main config to preserve managed access log placeholder")
+	}
+	if !strings.Contains(preview.MainConfig, "server_tokens off;") {
+		t.Fatal("expected preview main config to preserve version token suppression")
 	}
 	if !strings.Contains(preview.MainConfig, "map $http_upgrade $connection_upgrade {") {
 		t.Fatal("expected preview main config to preserve managed websocket upgrade map")
@@ -1798,6 +1995,8 @@ func setupServiceTestDB(t *testing.T) {
 	common.SQLDSN = ""
 	common.SQLitePath = filepath.Join(t.TempDir(), "service.db")
 	common.InitialRootPassword = "123456"
+	previousRouteUpstreamLookupIPAddr := routeUpstreamLookupIPAddr
+	routeUpstreamLookupIPAddr = serviceTestLookupPublicIPAddr
 	if err := copyServiceTestDBTemplate(common.SQLitePath); err != nil {
 		t.Fatalf("failed to copy test db template: %v", err)
 	}
@@ -1812,7 +2011,12 @@ func setupServiceTestDB(t *testing.T) {
 		common.SQLitePath = previousSQLitePath
 		common.SQLDSN = previousSQLDSN
 		common.InitialRootPassword = previousInitialRootPassword
+		routeUpstreamLookupIPAddr = previousRouteUpstreamLookupIPAddr
 	})
+}
+
+func serviceTestLookupPublicIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	return []net.IPAddr{{IP: net.ParseIP("8.8.4.4")}}, nil
 }
 
 func copyServiceTestDBTemplate(destination string) error {

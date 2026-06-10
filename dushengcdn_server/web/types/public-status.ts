@@ -8,8 +8,8 @@ export interface PublicAuthSource {
 }
 
 export interface PublicStatus {
-  version: string;
-  start_time: number;
+  version?: string;
+  start_time?: number;
   email_verification: boolean;
   github_oauth: boolean;
   github_client_id: string;
@@ -18,7 +18,7 @@ export interface PublicStatus {
   footer_html: string;
   wechat_qrcode: string;
   wechat_login: boolean;
-  server_address: string;
+  server_address?: string;
   turnstile_check: boolean;
   turnstile_site_key: string;
   register_enabled: boolean;

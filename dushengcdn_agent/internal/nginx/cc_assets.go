@@ -234,7 +234,7 @@ function M.run()
     local path_key = "path:" .. host .. ":" .. ip .. ":" .. safe_key(uri) .. ":" .. tostring(path_bucket)
     local path_count = incr_counter(path_key, path_window + 2)
     if path_count > path_max_requests then
-        return handle_hit(mode, "CC 防护：同一来源访问路径 " .. uri .. " 在 " .. tostring(path_window) .. " 秒内请求 " .. tostring(path_count) .. " 次，超过阈值 " .. tostring(path_max_requests), tonumber(config.block_duration_seconds) or 300)
+        return handle_hit(mode, "CC 防护：同一来源访问同一路径在 " .. tostring(path_window) .. " 秒内请求 " .. tostring(path_count) .. " 次，超过阈值 " .. tostring(path_max_requests), tonumber(config.block_duration_seconds) or 300)
     end
 end
 

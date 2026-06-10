@@ -5,6 +5,7 @@ import (
 	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip/iputil"
+	"dushengcdn/utils/security"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -443,7 +444,7 @@ func recordProxyRouteDNSSyncFailure(route *model.ProxyRoute, syncErr error) {
 	}
 	now := time.Now()
 	route.DNSLastSyncStatus = DNSRecordSyncStatusFailed
-	route.DNSLastSyncMessage = syncErr.Error()
+	route.DNSLastSyncMessage = security.RedactSensitiveText(syncErr.Error())
 	route.DNSLastSyncedAt = &now
 	if err := model.DB.Model(route).Select("dns_last_sync_status", "dns_last_sync_message", "dns_last_synced_at").Updates(route).Error; err != nil {
 		slog.Warn("record dns sync failure failed", "route_id", route.ID, "error", err)

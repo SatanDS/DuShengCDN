@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"dushengcdn/common"
+	"dushengcdn/utils/security"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,9 +28,22 @@ const (
 )
 
 var (
-	dnsSourceDatabaseMirrorHTTPClient = &http.Client{Timeout: 5 * time.Minute}
+	dnsSourceDatabaseMirrorHTTPClient       = security.NewPublicHTTPClient(5*time.Minute, true)
+	maxDNSSourceDatabaseMirrorBytes   int64 = 256 * 1024 * 1024
 	dnsSourceDatabaseMirrorMutex      sync.Mutex
 )
+
+func SetDNSSourceDatabaseMirrorHTTPClientForTest(client *http.Client) func() {
+	previous := dnsSourceDatabaseMirrorHTTPClient
+	if client == nil {
+		dnsSourceDatabaseMirrorHTTPClient = security.NewPublicHTTPClient(5*time.Minute, true)
+	} else {
+		dnsSourceDatabaseMirrorHTTPClient = client
+	}
+	return func() {
+		dnsSourceDatabaseMirrorHTTPClient = previous
+	}
+}
 
 type DNSSourceDatabaseMirrorManifest struct {
 	UpdatedAt time.Time                               `json:"updated_at"`
@@ -264,7 +278,10 @@ func OpenDNSSourceDatabaseMirrorFile(kind string, name string) (*os.File, DNSSou
 		if item.Name != name {
 			continue
 		}
-		path := filepath.Join(DNSSourceDatabaseMirrorRoot(), "current", filepath.FromSlash(item.Path))
+		path, err := safeDNSSourceDatabaseMirrorFilePath(DNSSourceDatabaseMirrorRoot(), item.Path)
+		if err != nil {
+			return nil, DNSSourceDatabaseMirrorFile{}, err
+		}
 		file, err := os.Open(path)
 		if err != nil {
 			return nil, DNSSourceDatabaseMirrorFile{}, err
@@ -272,6 +289,33 @@ func OpenDNSSourceDatabaseMirrorFile(kind string, name string) (*os.File, DNSSou
 		return file, item, nil
 	}
 	return nil, DNSSourceDatabaseMirrorFile{}, errors.New("source database file is not mirrored")
+}
+
+func safeDNSSourceDatabaseMirrorFilePath(root string, manifestPath string) (string, error) {
+	manifestPath = strings.TrimSpace(manifestPath)
+	if manifestPath == "" {
+		return "", errors.New("source database file path is empty")
+	}
+	localPath := filepath.FromSlash(manifestPath)
+	if filepath.IsAbs(localPath) {
+		return "", errors.New("source database file path is not allowed")
+	}
+	cleanPath := filepath.Clean(localPath)
+	if cleanPath == "." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) || cleanPath == ".." {
+		return "", errors.New("source database file path is not allowed")
+	}
+	currentRoot, err := filepath.Abs(filepath.Join(root, "current"))
+	if err != nil {
+		return "", err
+	}
+	target, err := filepath.Abs(filepath.Join(currentRoot, cleanPath))
+	if err != nil {
+		return "", err
+	}
+	if target != currentRoot && !strings.HasPrefix(target, currentRoot+string(filepath.Separator)) {
+		return "", errors.New("source database file path escapes mirror root")
+	}
+	return target, nil
 }
 
 func DNSSourceDatabaseMirrorRoot() string {
@@ -359,6 +403,9 @@ func downloadDNSSourceDatabaseSource(ctx context.Context, root string, source dn
 }
 
 func downloadDNSSourceDatabaseFile(ctx context.Context, root string, item dnsSourceDatabaseDownload, updatedAt time.Time) (DNSSourceDatabaseMirrorFile, error) {
+	if _, err := security.ValidatePublicHTTPURL(item.url, true); err != nil {
+		return DNSSourceDatabaseMirrorFile{}, fmt.Errorf("download %s URL is not allowed: %w", item.name, err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, item.url, nil)
 	if err != nil {
 		return DNSSourceDatabaseMirrorFile{}, err
@@ -371,6 +418,9 @@ func downloadDNSSourceDatabaseFile(ctx context.Context, root string, item dnsSou
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return DNSSourceDatabaseMirrorFile{}, fmt.Errorf("download %s returned %s", item.name, resp.Status)
 	}
+	if resp.ContentLength > maxDNSSourceDatabaseMirrorBytes {
+		return DNSSourceDatabaseMirrorFile{}, fmt.Errorf("download %s exceeds %d bytes", item.name, maxDNSSourceDatabaseMirrorBytes)
+	}
 
 	target := filepath.Join(root, filepath.FromSlash(item.path))
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -382,7 +432,7 @@ func downloadDNSSourceDatabaseFile(ctx context.Context, root string, item dnsSou
 	}
 	tmpPath := tmp.Name()
 	hasher := sha256.New()
-	size, copyErr := io.Copy(io.MultiWriter(tmp, hasher), resp.Body)
+	size, copyErr := io.Copy(io.MultiWriter(tmp, hasher), io.LimitReader(resp.Body, maxDNSSourceDatabaseMirrorBytes+1))
 	closeErr := tmp.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmpPath)
@@ -391,6 +441,10 @@ func downloadDNSSourceDatabaseFile(ctx context.Context, root string, item dnsSou
 	if closeErr != nil {
 		_ = os.Remove(tmpPath)
 		return DNSSourceDatabaseMirrorFile{}, closeErr
+	}
+	if size > maxDNSSourceDatabaseMirrorBytes {
+		_ = os.Remove(tmpPath)
+		return DNSSourceDatabaseMirrorFile{}, fmt.Errorf("download %s exceeds %d bytes", item.name, maxDNSSourceDatabaseMirrorBytes)
 	}
 	if min := minimumDNSSourceDatabaseFileSize(item.name); size < min {
 		_ = os.Remove(tmpPath)

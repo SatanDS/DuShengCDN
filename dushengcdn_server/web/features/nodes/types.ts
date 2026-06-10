@@ -15,7 +15,9 @@ export interface NodeItem {
   geo_latitude?: number | null;
   geo_longitude?: number | null;
   geo_manual_override: boolean;
-  agent_token: string;
+  agent_token?: string;
+  agent_token_prefix: string;
+  agent_token_available: boolean;
   auto_update_enabled: boolean;
   update_requested: boolean;
   update_channel: ReleaseChannel;
@@ -47,7 +49,15 @@ export interface NodeItem {
 }
 
 export interface NodeBootstrapToken {
-  discovery_token: string;
+  discovery_token?: string;
+  discovery_token_prefix: string;
+  discovery_token_available: boolean;
+}
+
+export interface NodeAgentToken {
+  agent_token?: string;
+  agent_token_prefix: string;
+  agent_token_available: boolean;
 }
 
 export interface NodeDeleteResult {

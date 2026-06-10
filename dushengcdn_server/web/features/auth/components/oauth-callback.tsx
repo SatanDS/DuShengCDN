@@ -10,6 +10,7 @@ import { LoadingState } from '@/components/feedback/loading-state';
 import { useAuth } from '@/components/providers/auth-provider';
 import { AppCard } from '@/components/ui/app-card';
 import { exchangeOAuthCode } from '@/features/auth/api/auth';
+import { setCSRFToken } from '@/lib/api/client';
 
 function parseOAuthSource(pathname: string | null, sourceParam: string) {
   const normalizedParam = sourceParam.trim();
@@ -48,6 +49,7 @@ export function OAuthCallback({ sourceId }: { sourceId?: number }) {
     mutationFn: () => exchangeOAuthCode(resolvedSource, code, state),
     onSuccess: (result) => {
       if (result.status === 'link_required') {
+        setCSRFToken(result.csrf_token);
         setMessage({ tone: 'success', text: '请绑定已有账号以完成登录。' });
         router.replace('/oauth/link');
         return;
@@ -75,7 +77,7 @@ export function OAuthCallback({ sourceId }: { sourceId?: number }) {
       setPrompt('授权处理失败');
       setMessage({
         tone: 'danger',
-        text: oauthErrorDescription || oauthError,
+        text: '第三方授权失败，请返回登录页重试。',
       });
       return;
     }

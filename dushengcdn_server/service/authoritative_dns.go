@@ -7,6 +7,7 @@ import (
 	"dushengcdn/internal/dnsworker"
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip/iputil"
+	"dushengcdn/utils/security"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -50,11 +51,13 @@ const (
 	defaultDNSMaxRollupWindowMinutes = 1440
 	defaultDNSMaxHeartbeatRollups    = 5000
 	defaultDNSMaxRollupTargetSummary = 64
+	defaultDNSRollupFutureTolerance  = time.Minute
 	dnsWorkerAgentUpdateAckDelay     = 2 * time.Minute
 )
 
 var dnsLookupNS = net.LookupNS
 var dnsWorkerProbeExchange = exchangeDNSWorkerProbe
+var dnsWorkerAddressLookupIP = net.DefaultResolver.LookupIPAddr
 var dnsObservabilityHeavyCounterScanLimit = 5000
 
 type DNSZoneInput struct {
@@ -1446,6 +1449,10 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 	if len(remark) > 255 {
 		return nil, errors.New("DNS worker remark is too long")
 	}
+	publicAddress, err := validateDNSWorkerPublicAddressForStorage(input.PublicAddress)
+	if err != nil {
+		return nil, err
+	}
 	token, err := newRandomToken()
 	if err != nil {
 		return nil, err
@@ -1461,7 +1468,7 @@ func CreateAuthoritativeDNSWorker(input DNSWorkerInput) (*DNSWorkerView, error) 
 		Token:         "",
 		TokenHash:     dnsWorkerTokenHash(token),
 		TokenPrefix:   dnsWorkerTokenPrefix(token),
-		PublicAddress: strings.TrimSpace(input.PublicAddress),
+		PublicAddress: publicAddress,
 		Status:        dnsWorkerStatusOffline,
 	}
 	if err := worker.Insert(); err != nil {
@@ -1770,7 +1777,7 @@ func ProbeAuthoritativeDNSWorker(id uint, input DNSWorkerProbeInput) (*DNSWorker
 	if err != nil {
 		return nil, err
 	}
-	target, err := normalizeDNSWorkerProbeAddress(worker.PublicAddress)
+	target, err := normalizeDNSWorkerProbeAddress(context.Background(), worker.PublicAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -1857,19 +1864,19 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	if remoteIP := iputil.NormalizeIP(input.RemoteIP); remoteIP != "" {
 		worker.LastRemoteIP = remoteIP
 	}
-	worker.LastError = truncateForDatabase(strings.TrimSpace(input.LastError), 16000)
+	worker.LastError = truncateForDatabase(security.RedactSensitiveText(strings.TrimSpace(input.LastError)), 16000)
 	worker.GeoIPEnabled = input.GeoIPEnabled
 	worker.GeoIPDatabasePath = truncateForDatabase(strings.TrimSpace(input.GeoIPDatabasePath), 512)
 	worker.ASNDatabasePath = truncateForDatabase(strings.TrimSpace(input.ASNDatabasePath), 512)
-	worker.GeoIPLastError = truncateForDatabase(strings.TrimSpace(input.GeoIPLastError), 16000)
-	worker.ASNLastError = truncateForDatabase(strings.TrimSpace(input.ASNLastError), 16000)
+	worker.GeoIPLastError = truncateForDatabase(security.RedactSensitiveText(strings.TrimSpace(input.GeoIPLastError)), 16000)
+	worker.ASNLastError = truncateForDatabase(security.RedactSensitiveText(strings.TrimSpace(input.ASNLastError)), 16000)
 	worker.GeoIPDatabaseType = truncateForDatabase(strings.TrimSpace(input.GeoIPDatabaseType), 128)
 	worker.ASNDatabaseType = truncateForDatabase(strings.TrimSpace(input.ASNDatabaseType), 128)
 	worker.GeoIPCountryEnabled = input.GeoIPCountryEnabled
 	worker.GeoIPASNEnabled = input.GeoIPASNEnabled
 	worker.GeoIPOperatorEnabled = input.GeoIPOperatorEnabled
 	worker.OperatorCIDRDatabasePath = truncateForDatabase(strings.TrimSpace(input.OperatorCIDRDatabasePath), 512)
-	worker.OperatorCIDRLastError = truncateForDatabase(strings.TrimSpace(input.OperatorCIDRLastError), 16000)
+	worker.OperatorCIDRLastError = truncateForDatabase(security.RedactSensitiveText(strings.TrimSpace(input.OperatorCIDRLastError)), 16000)
 	worker.UpdateSupported = input.UpdateSupported
 	if input.UpdateSupported {
 		worker.LastUpdateSupportedAt = &now
@@ -1878,13 +1885,18 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 	if input.UninstallSupported {
 		worker.LastUninstallSupportedAt = &now
 	}
-	rollupMeta := summarizeDNSQueryRollupInputs(input.Rollups)
-	if rollupMeta.count > 0 {
-		worker.LastRollupAt = &rollupMeta.lastRollupAt
-		worker.LastRollupCount = rollupMeta.count
-	}
 	db := model.DB.Session(&gorm.Session{DisableNestedTransaction: true})
 	if err := db.Transaction(func(tx *gorm.DB) error {
+		acl, err := buildDNSWorkerHeartbeatACL(tx, worker)
+		if err != nil {
+			return err
+		}
+		filteredRollups := filterDNSQueryRollupInputsForACL(input.Rollups, acl)
+		rollupMeta := summarizeDNSQueryRollupInputs(filteredRollups)
+		if rollupMeta.count > 0 {
+			worker.LastRollupAt = &rollupMeta.lastRollupAt
+			worker.LastRollupCount = rollupMeta.count
+		}
 		if uninstallNow {
 			if err := deleteDNSWorkerRuntimeDataWithDB(tx, worker.WorkerID); err != nil {
 				return err
@@ -1894,10 +1906,10 @@ func RecordDNSWorkerHeartbeat(worker *model.DNSWorker, input DNSWorkerHeartbeatI
 		if err := tx.Save(worker).Error; err != nil {
 			return err
 		}
-		if err := persistDNSWorkerSchedulingStatesWithDB(tx, input.SchedulingStates); err != nil {
+		if err := persistDNSWorkerSchedulingStatesWithDB(tx, worker, input.SchedulingStates); err != nil {
 			return err
 		}
-		return persistDNSQueryRollupsWithDB(tx, worker.WorkerID, input.Rollups)
+		return persistDNSQueryRollupsWithACL(tx, worker, filteredRollups, acl)
 	}); err != nil {
 		return nil, err
 	}
@@ -2015,6 +2027,15 @@ func applyDNSWorkerHeartbeatUpdateAck(worker *model.DNSWorker, input DNSWorkerHe
 func GetAuthoritativeDNSSnapshot(worker *model.DNSWorker) (*AuthoritativeDNSSnapshot, error) {
 	return getAuthoritativeDNSSnapshotWithQueries(worker, defaultGSLBDNSSchedulingDataQueries)
 }
+
+func GetSignedAuthoritativeDNSSnapshot(worker *model.DNSWorker, token string) (*dnsworker.SignedSnapshot, error) {
+	snapshot, err := GetAuthoritativeDNSSnapshot(worker)
+	if err != nil {
+		return nil, err
+	}
+	return dnsworker.SignSnapshot(convertAuthoritativeSnapshotToWorker(snapshot), token)
+}
+
 func authoritativeDNSWorkerPolicy() dnsworker.WorkerPolicy {
 	return dnsworker.WorkerPolicy{
 		QueryRateLimit:    nonNegativeInt(common.AuthoritativeDNSWorkerQueryRateLimit),
@@ -2100,7 +2121,11 @@ func filterAuthoritativeDNSSnapshotForWorker(snapshot *AuthoritativeDNSSnapshot,
 		}
 	}
 	assignments, err := model.ListDNSZoneWorkerAssignmentsByZoneIDs(zoneIDs)
-	if err != nil || len(assignments) == 0 {
+	if err != nil {
+		snapshot.Zones = []AuthoritativeDNSSnapshotZone{}
+		snapshot.Routes = []AuthoritativeDNSSnapshotRoute{}
+		snapshot.Nodes = []AuthoritativeDNSSnapshotNode{}
+		snapshot.SchedulingStates = []AuthoritativeDNSSnapshotSchedulingState{}
 		return
 	}
 	assignedByZone := make(map[uint]map[uint]struct{}, len(assignments))
@@ -2113,9 +2138,6 @@ func filterAuthoritativeDNSSnapshotForWorker(snapshot *AuthoritativeDNSSnapshot,
 		}
 		assignedByZone[assignment.ZoneID][assignment.WorkerID] = struct{}{}
 	}
-	if len(assignedByZone) == 0 {
-		return
-	}
 	allowedZones := map[uint]struct{}{}
 	filteredZones := make([]AuthoritativeDNSSnapshotZone, 0, len(snapshot.Zones))
 	for _, zone := range snapshot.Zones {
@@ -2124,6 +2146,8 @@ func filterAuthoritativeDNSSnapshotForWorker(snapshot *AuthoritativeDNSSnapshot,
 			if _, ok := assignmentsForZone[worker.ID]; !ok {
 				continue
 			}
+		} else if !common.AuthoritativeDNSWorkerAllowUnassignedZones {
+			continue
 		}
 		allowedZones[zone.ID] = struct{}{}
 		filteredZones = append(filteredZones, zone)
@@ -2143,9 +2167,89 @@ func filterAuthoritativeDNSSnapshotForWorker(snapshot *AuthoritativeDNSSnapshot,
 			filteredStates = append(filteredStates, state)
 		}
 	}
+	snapshot.Nodes = filterAuthoritativeDNSSnapshotNodesForRoutes(snapshot.Nodes, filteredRoutes)
 	snapshot.Zones = filteredZones
 	snapshot.Routes = filteredRoutes
 	snapshot.SchedulingStates = filteredStates
+}
+
+func filterAuthoritativeDNSSnapshotNodesForRoutes(nodes []AuthoritativeDNSSnapshotNode, routes []AuthoritativeDNSSnapshotRoute) []AuthoritativeDNSSnapshotNode {
+	if len(nodes) == 0 || len(routes) == 0 {
+		return []AuthoritativeDNSSnapshotNode{}
+	}
+	allowedPools := map[string]struct{}{}
+	allowedNodeIDs := map[string]struct{}{}
+	for _, route := range routes {
+		for _, pool := range authoritativeDNSRouteCandidatePools(route) {
+			if pool != "" {
+				allowedPools[pool] = struct{}{}
+			}
+		}
+		for _, nodeID := range authoritativeDNSRouteCandidateNodeIDs(route) {
+			if nodeID != "" {
+				allowedNodeIDs[nodeID] = struct{}{}
+			}
+		}
+	}
+	if len(allowedPools) == 0 && len(allowedNodeIDs) == 0 {
+		return []AuthoritativeDNSSnapshotNode{}
+	}
+	filtered := make([]AuthoritativeDNSSnapshotNode, 0, len(nodes))
+	for _, node := range nodes {
+		if _, ok := allowedNodeIDs[strings.TrimSpace(node.NodeID)]; ok {
+			filtered = append(filtered, node)
+			continue
+		}
+		if _, ok := allowedPools[normalizeNodePoolName(node.PoolName)]; ok {
+			filtered = append(filtered, node)
+		}
+	}
+	return filtered
+}
+
+func authoritativeDNSRouteCandidatePools(route AuthoritativeDNSSnapshotRoute) []string {
+	pools := map[string]struct{}{}
+	if route.DDOSActive && route.DDOSTarget != "" {
+		pools[normalizeNodePoolName(route.DDOSTarget)] = struct{}{}
+	} else if route.NodePool != "" {
+		pools[normalizeNodePoolName(route.NodePool)] = struct{}{}
+	}
+	if route.GSLBEnabled {
+		for _, pool := range route.GSLBPolicy.Pools {
+			if !pool.Enabled {
+				continue
+			}
+			name := normalizeNodePoolName(pool.Name)
+			if name != "" {
+				pools[name] = struct{}{}
+			}
+		}
+	}
+	result := make([]string, 0, len(pools))
+	for pool := range pools {
+		result = append(result, pool)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func authoritativeDNSRouteCandidateNodeIDs(route AuthoritativeDNSSnapshotRoute) []string {
+	nodeIDs := map[string]struct{}{}
+	if route.GSLBEnabled {
+		for _, pool := range route.GSLBPolicy.Pools {
+			for _, nodeID := range pool.NodeIDs {
+				if trimmed := strings.TrimSpace(nodeID); trimmed != "" {
+					nodeIDs[trimmed] = struct{}{}
+				}
+			}
+		}
+	}
+	result := make([]string, 0, len(nodeIDs))
+	for nodeID := range nodeIDs {
+		result = append(result, nodeID)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func SimulateAuthoritativeDNSGSLB(input DNSGSLBSimulationInput) (*DNSGSLBSimulationView, error) {
@@ -4390,7 +4494,7 @@ func persistDNSWorkerProbeResult(worker *model.DNSWorker, view *DNSWorkerProbeVi
 }
 
 func persistDNSQueryRollups(workerID string, inputs []DNSQueryRollupInput) error {
-	return persistDNSQueryRollupsWithDB(model.DB, workerID, inputs)
+	return persistDNSQueryRollupsWithDB(model.DB, &model.DNSWorker{WorkerID: workerID}, inputs)
 }
 
 type dnsQueryRollupInputSummary struct {
@@ -4400,15 +4504,11 @@ type dnsQueryRollupInputSummary struct {
 
 func summarizeDNSQueryRollupInputs(inputs []DNSQueryRollupInput) dnsQueryRollupInputSummary {
 	summary := dnsQueryRollupInputSummary{}
-	fallbackWindowStart := time.Now().UTC().Truncate(time.Minute)
 	for _, input := range inputs {
 		if input.QueryCount <= 0 {
 			continue
 		}
 		windowStart := input.WindowStart
-		if windowStart.IsZero() {
-			windowStart = fallbackWindowStart
-		}
 		rollupEnd := windowStart.UTC().Add(time.Duration(normalizeDNSRollupWindow(input.WindowMinutes)) * time.Minute)
 		summary.count += input.QueryCount
 		if summary.lastRollupAt.IsZero() || rollupEnd.After(summary.lastRollupAt) {
@@ -4418,12 +4518,84 @@ func summarizeDNSQueryRollupInputs(inputs []DNSQueryRollupInput) dnsQueryRollupI
 	return summary
 }
 
-func persistDNSQueryRollupsWithDB(db *gorm.DB, workerID string, inputs []DNSQueryRollupInput) error {
+func filterDNSQueryRollupInputsForACL(inputs []DNSQueryRollupInput, acl *dnsWorkerHeartbeatACL) []DNSQueryRollupInput {
+	filtered := make([]DNSQueryRollupInput, 0, len(inputs))
+	now := time.Now().UTC()
+	for _, input := range inputs {
+		if input.QueryCount <= 0 {
+			continue
+		}
+		if acl != nil && acl.enforce && !acl.allowsRollup(input) {
+			continue
+		}
+		windowStart, ok := normalizeDNSRollupWindowStart(input.WindowStart, now)
+		if !ok {
+			continue
+		}
+		input.WindowStart = windowStart
+		filtered = append(filtered, input)
+	}
+	return filtered
+}
+
+func normalizeDNSRollupWindowStart(value time.Time, now time.Time) (time.Time, bool) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	if value.IsZero() {
+		return now.Truncate(time.Minute), true
+	}
+	windowStart := value.UTC().Truncate(time.Minute)
+	if windowStart.After(now.Add(defaultDNSRollupFutureTolerance)) {
+		return time.Time{}, false
+	}
+	if windowStart.After(now) {
+		return now.Truncate(time.Minute), true
+	}
+	if windowStart.Before(now.Add(-dnsRollupAcceptedHistoryWindow())) {
+		return time.Time{}, false
+	}
+	return windowStart, true
+}
+
+func dnsRollupAcceptedHistoryWindow() time.Duration {
+	retentionDays := common.DatabaseAutoCleanupRetentionDays
+	if retentionDays < 1 {
+		retentionDays = 30
+	}
+	return time.Duration(retentionDays) * 24 * time.Hour
+}
+
+func persistDNSQueryRollupsWithDB(db *gorm.DB, worker *model.DNSWorker, inputs []DNSQueryRollupInput) error {
 	if db == nil {
 		db = model.DB
 	}
 	if len(inputs) > defaultDNSMaxHeartbeatRollups {
 		return fmt.Errorf("DNS Worker heartbeat rollups exceed limit %d", defaultDNSMaxHeartbeatRollups)
+	}
+	acl, err := buildDNSWorkerHeartbeatACL(db, worker)
+	if err != nil {
+		return err
+	}
+	return persistDNSQueryRollupsWithACL(db, worker, inputs, acl)
+}
+
+func persistDNSQueryRollupsWithACL(db *gorm.DB, worker *model.DNSWorker, inputs []DNSQueryRollupInput, acl *dnsWorkerHeartbeatACL) error {
+	if db == nil {
+		db = model.DB
+	}
+	if acl == nil {
+		var err error
+		acl, err = buildDNSWorkerHeartbeatACL(db, worker)
+		if err != nil {
+			return err
+		}
+	}
+	inputs = filterDNSQueryRollupInputsForACL(inputs, acl)
+	workerID := ""
+	if worker != nil {
+		workerID = strings.TrimSpace(worker.WorkerID)
 	}
 	rollups := make([]*model.DNSQueryRollup, 0, len(inputs))
 	for _, input := range inputs {
@@ -4454,9 +4626,6 @@ func persistDNSQueryRollupsWithDB(db *gorm.DB, workerID string, inputs []DNSQuer
 			MaxDurationMs:   maxDurationMs,
 			TargetSummary:   string(targetSummaryJSON),
 		}
-		if rollup.WindowStart.IsZero() {
-			rollup.WindowStart = time.Now().UTC().Truncate(time.Minute)
-		}
 		rollups = append(rollups, rollup)
 	}
 	if len(rollups) == 0 {
@@ -4466,10 +4635,10 @@ func persistDNSQueryRollupsWithDB(db *gorm.DB, workerID string, inputs []DNSQuer
 }
 
 func persistDNSWorkerSchedulingStates(inputs []AuthoritativeDNSSnapshotSchedulingState) error {
-	return persistDNSWorkerSchedulingStatesWithDB(model.DB, inputs)
+	return persistDNSWorkerSchedulingStatesWithDB(model.DB, nil, inputs)
 }
 
-func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeDNSSnapshotSchedulingState) error {
+func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, worker *model.DNSWorker, inputs []AuthoritativeDNSSnapshotSchedulingState) error {
 	if db == nil {
 		db = model.DB
 	}
@@ -4491,16 +4660,24 @@ func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeD
 	if len(routeIDs) == 0 {
 		return nil
 	}
+	acl, err := buildDNSWorkerHeartbeatACL(db, worker)
+	if err != nil {
+		return err
+	}
 	var routes []*model.ProxyRoute
 	if err := db.
-		Select("id", "dns_record_type").
+		Select("id", "dns_record_type", "dns_record_content", "dns_zone_id_ref", "node_pool", "gslb_enabled", "gslb_policy", "ddos_protection_mode", "ddos_protection_provider", "ddos_protection_target").
 		Where("id IN ? AND enabled = ? AND dns_provider_mode = ? AND dns_zone_id_ref IS NOT NULL", routeIDs, true, DNSProviderModeAuthoritative).
 		Find(&routes).Error; err != nil {
 		return err
 	}
 	routeRecordTypes := make(map[uint]string, len(routes))
+	routeAllowedTargets := make(map[uint]map[string]struct{}, len(routes))
 	for _, route := range routes {
 		if route == nil || route.ID == 0 {
+			continue
+		}
+		if !acl.allowsRoute(route.ID) {
 			continue
 		}
 		recordType := normalizeDNSRecordType(route.DNSRecordType)
@@ -4508,6 +4685,7 @@ func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeD
 			continue
 		}
 		routeRecordTypes[route.ID] = recordType
+		routeAllowedTargets[route.ID] = allowedDNSSchedulingTargetsForRoute(db, route, recordType)
 	}
 	now := time.Now().UTC()
 	updates := make([]dnsWorkerSchedulingStateUpdate, 0, len(inputs))
@@ -4525,10 +4703,17 @@ func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeD
 		if err != nil || len(selectedTargets) == 0 {
 			continue
 		}
+		allowedTargets := routeAllowedTargets[input.RouteID]
+		if acl.enforce && (len(allowedTargets) == 0 || !allTargetsEligible(selectedTargets, allowedTargets)) {
+			continue
+		}
 		desiredTargets := input.DesiredTargets
 		if len(desiredTargets) > 0 {
 			desiredTargets, err = normalizeDNSRecordContents(recordType, desiredTargets)
 			if err != nil {
+				desiredTargets = []string{}
+			}
+			if acl.enforce && len(desiredTargets) > 0 && !allTargetsEligible(desiredTargets, allowedTargets) {
 				desiredTargets = []string{}
 			}
 		}
@@ -4619,6 +4804,233 @@ func persistDNSWorkerSchedulingStatesWithDB(db *gorm.DB, inputs []AuthoritativeD
 			"updated_at",
 		}),
 	}).CreateInBatches(rows, 100).Error
+}
+
+type dnsWorkerHeartbeatACL struct {
+	enforce         bool
+	allowedZones    map[uint]struct{}
+	allowedRoutes   map[uint]struct{}
+	routeToZone     map[uint]uint
+	routeRecordType map[uint]string
+}
+
+func buildDNSWorkerHeartbeatACL(db *gorm.DB, worker *model.DNSWorker) (*dnsWorkerHeartbeatACL, error) {
+	acl := &dnsWorkerHeartbeatACL{
+		enforce:         worker != nil && worker.ID != 0,
+		allowedZones:    map[uint]struct{}{},
+		allowedRoutes:   map[uint]struct{}{},
+		routeToZone:     map[uint]uint{},
+		routeRecordType: map[uint]string{},
+	}
+	if db == nil {
+		db = model.DB
+	}
+	var zones []*model.DNSZone
+	if err := db.Select("id").Where("enabled = ?", true).Find(&zones).Error; err != nil {
+		return nil, err
+	}
+	zoneIDs := make([]uint, 0, len(zones))
+	for _, zone := range zones {
+		if zone == nil || zone.ID == 0 {
+			continue
+		}
+		zoneIDs = append(zoneIDs, zone.ID)
+	}
+	var assignments []*model.DNSZoneWorkerAssignment
+	if len(zoneIDs) > 0 {
+		err := db.Where("zone_id IN ?", zoneIDs).Order("zone_id asc").Order("worker_id asc").Find(&assignments).Error
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(zoneIDs) == 0 {
+		assignments = []*model.DNSZoneWorkerAssignment{}
+	}
+	assignedByZone := make(map[uint]map[uint]struct{}, len(assignments))
+	for _, assignment := range assignments {
+		if assignment == nil || assignment.ZoneID == 0 || assignment.WorkerID == 0 {
+			continue
+		}
+		if _, ok := assignedByZone[assignment.ZoneID]; !ok {
+			assignedByZone[assignment.ZoneID] = map[uint]struct{}{}
+		}
+		assignedByZone[assignment.ZoneID][assignment.WorkerID] = struct{}{}
+	}
+	for _, zoneID := range zoneIDs {
+		assignmentsForZone := assignedByZone[zoneID]
+		if acl.enforce && len(assignmentsForZone) > 0 {
+			if _, ok := assignmentsForZone[worker.ID]; !ok {
+				continue
+			}
+		} else if acl.enforce && len(assignmentsForZone) == 0 && !common.AuthoritativeDNSWorkerAllowUnassignedZones {
+			continue
+		}
+		acl.allowedZones[zoneID] = struct{}{}
+	}
+	var routes []*model.ProxyRoute
+	if err := db.
+		Select("id", "dns_zone_id_ref", "dns_record_type").
+		Where("enabled = ? AND dns_provider_mode = ? AND dns_zone_id_ref IS NOT NULL", true, DNSProviderModeAuthoritative).
+		Find(&routes).Error; err != nil {
+		return nil, err
+	}
+	for _, route := range routes {
+		if route == nil || route.ID == 0 || route.DNSZoneIDRef == nil || *route.DNSZoneIDRef == 0 {
+			continue
+		}
+		if _, ok := acl.allowedZones[*route.DNSZoneIDRef]; !ok {
+			continue
+		}
+		acl.allowedRoutes[route.ID] = struct{}{}
+		acl.routeToZone[route.ID] = *route.DNSZoneIDRef
+		acl.routeRecordType[route.ID] = normalizeDNSRecordType(route.DNSRecordType)
+	}
+	return acl, nil
+}
+
+func (acl *dnsWorkerHeartbeatACL) allowsRoute(routeID uint) bool {
+	if acl == nil || !acl.enforce {
+		return true
+	}
+	_, ok := acl.allowedRoutes[routeID]
+	return ok
+}
+
+func (acl *dnsWorkerHeartbeatACL) allowsZone(zoneID uint) bool {
+	if acl == nil || !acl.enforce {
+		return true
+	}
+	if zoneID == 0 {
+		return false
+	}
+	_, ok := acl.allowedZones[zoneID]
+	return ok
+}
+
+func (acl *dnsWorkerHeartbeatACL) allowsRollup(input DNSQueryRollupInput) bool {
+	if acl == nil || !acl.enforce {
+		return true
+	}
+	if input.ProxyRouteID != 0 {
+		if !acl.allowsRoute(input.ProxyRouteID) {
+			return false
+		}
+		if input.ZoneID != 0 && acl.routeToZone[input.ProxyRouteID] != 0 && input.ZoneID != acl.routeToZone[input.ProxyRouteID] {
+			return false
+		}
+		expectedType := acl.routeRecordType[input.ProxyRouteID]
+		if expectedType != "" {
+			qtype := normalizeAuthoritativeDNSRecordTypeOrDefault(input.QType)
+			if qtype != expectedType {
+				return false
+			}
+		}
+		return true
+	}
+	return acl.allowsZone(input.ZoneID)
+}
+
+func allowedDNSSchedulingTargetsForRoute(db *gorm.DB, route *model.ProxyRoute, recordType string) map[string]struct{} {
+	allowed := map[string]struct{}{}
+	if route == nil {
+		return allowed
+	}
+	if db == nil {
+		db = model.DB
+	}
+	for _, target := range splitDNSRecordContent(route.DNSRecordContent) {
+		normalized, err := normalizeDNSRecordContents(recordType, []string{target})
+		if err == nil {
+			for _, value := range normalized {
+				allowed[value] = struct{}{}
+			}
+		}
+	}
+	pools := allowedDNSSchedulingPoolsForRoute(route)
+	nodeIDs := allowedDNSSchedulingNodeIDsForRoute(route)
+	if len(pools) == 0 && len(nodeIDs) == 0 {
+		return allowed
+	}
+	var nodes []*model.Node
+	if err := db.Find(&nodes).Error; err != nil {
+		return allowed
+	}
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		nodeID := strings.TrimSpace(node.NodeID)
+		poolName := normalizeNodePoolName(node.PoolName)
+		if _, ok := nodeIDs[nodeID]; !ok {
+			if _, ok := pools[poolName]; !ok {
+				continue
+			}
+		}
+		for _, value := range resolveNodePublicIPs(node) {
+			normalized, err := normalizeDNSRecordContents(recordType, []string{value})
+			if err == nil {
+				for _, target := range normalized {
+					allowed[target] = struct{}{}
+				}
+			}
+		}
+	}
+	return allowed
+}
+
+func allowedDNSSchedulingPoolsForRoute(route *model.ProxyRoute) map[string]struct{} {
+	allowed := map[string]struct{}{}
+	if route == nil {
+		return allowed
+	}
+	if routeDDOSProtectionActive(route) && normalizeDDOSProtectionProvider(route.DDOSProtectionProvider) == DDOSProtectionProviderCustom {
+		if pool := normalizeNodePoolName(route.DDOSProtectionTarget); pool != "" {
+			allowed[pool] = struct{}{}
+		}
+	} else if pool := normalizeNodePoolName(route.NodePool); pool != "" {
+		allowed[pool] = struct{}{}
+	}
+	if route.GSLBEnabled {
+		policy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
+		if err == nil {
+			if normalized, err := normalizeGSLBPolicy(policy, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, route.DNSTTL); err == nil {
+				for _, pool := range normalized.Pools {
+					if pool.Enabled {
+						if name := normalizeNodePoolName(pool.Name); name != "" {
+							allowed[name] = struct{}{}
+						}
+					}
+				}
+			}
+		}
+	}
+	return allowed
+}
+
+func allowedDNSSchedulingNodeIDsForRoute(route *model.ProxyRoute) map[string]struct{} {
+	allowed := map[string]struct{}{}
+	if route == nil || !route.GSLBEnabled {
+		return allowed
+	}
+	policy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
+	if err != nil {
+		return allowed
+	}
+	normalized, err := normalizeGSLBPolicy(policy, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, route.DNSTTL)
+	if err != nil {
+		return allowed
+	}
+	for _, pool := range normalized.Pools {
+		if !pool.Enabled {
+			continue
+		}
+		for _, nodeID := range pool.NodeIDs {
+			if trimmed := strings.TrimSpace(nodeID); trimmed != "" {
+				allowed[trimmed] = struct{}{}
+			}
+		}
+	}
+	return allowed
 }
 
 type dnsWorkerSchedulingStateKey struct {
@@ -5058,7 +5470,25 @@ func dnsRouteLabels(counts map[uint]int64) (map[string]string, error) {
 	return labels, nil
 }
 
-func normalizeDNSWorkerProbeAddress(raw string) (string, error) {
+func normalizeDNSWorkerProbeAddress(ctx context.Context, raw string) (string, error) {
+	address, err := normalizeDNSWorkerProbeAddressForStorage(raw)
+	if err != nil {
+		return "", err
+	}
+	if err := validateDNSWorkerProbeAddress(ctx, address); err != nil {
+		return "", err
+	}
+	return address, nil
+}
+
+func validateDNSWorkerPublicAddressForStorage(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	return normalizeDNSWorkerProbeAddressForStorage(raw)
+}
+
+func normalizeDNSWorkerProbeAddressForStorage(raw string) (string, error) {
 	address := strings.TrimSpace(raw)
 	if address == "" {
 		return "", errors.New("DNS Worker public address is empty")
@@ -5077,11 +5507,11 @@ func normalizeDNSWorkerProbeAddress(raw string) (string, error) {
 		if strings.TrimSpace(port) == "" {
 			port = "53"
 		}
-		return net.JoinHostPort(host, port), nil
+		return normalizeDNSWorkerPublicAddressHostPort(host, port)
 	}
 	if strings.Count(address, ":") > 1 {
 		if ip := net.ParseIP(strings.Trim(address, "[]")); ip != nil {
-			return net.JoinHostPort(ip.String(), "53"), nil
+			return normalizeDNSWorkerPublicAddressHostPort(ip.String(), "53")
 		}
 		return "", errors.New("DNS Worker IPv6 address must be wrapped as [addr]:port or be a valid IPv6 literal")
 	}
@@ -5093,9 +5523,74 @@ func normalizeDNSWorkerProbeAddress(raw string) (string, error) {
 		if strings.TrimSpace(port) == "" {
 			port = "53"
 		}
-		return net.JoinHostPort(strings.TrimSpace(host), strings.TrimSpace(port)), nil
+		return normalizeDNSWorkerPublicAddressHostPort(host, port)
 	}
-	return net.JoinHostPort(address, "53"), nil
+	return normalizeDNSWorkerPublicAddressHostPort(address, "53")
+}
+
+func normalizeDNSWorkerPublicAddressHostPort(host string, port string) (string, error) {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	port = strings.TrimSpace(port)
+	if host == "" {
+		return "", errors.New("DNS Worker public address host is empty")
+	}
+	if err := security.ValidatePublicHostname(host); err != nil {
+		return "", fmt.Errorf("DNS Worker public address host is not public: %w", err)
+	}
+	if port == "" {
+		port = "53"
+	}
+	if port != "53" {
+		return "", errors.New("DNS Worker public address port must be 53")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
+func validateDNSWorkerProbeAddress(ctx context.Context, address string) error {
+	_, err := resolveDNSWorkerProbeTargets(ctx, address)
+	return err
+}
+
+func resolveDNSWorkerProbeTargets(ctx context.Context, address string) ([]string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	if port != "53" {
+		return nil, errors.New("DNS Worker public address port must be 53")
+	}
+	if err := security.ValidatePublicHostname(host); err != nil {
+		return nil, fmt.Errorf("DNS Worker public address host is not public: %w", err)
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		if err := security.ValidatePublicIP(ip); err != nil {
+			return nil, err
+		}
+		return []string{net.JoinHostPort(ip.String(), port)}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, defaultDNSWorkerProbeTimeout)
+	defer cancel()
+	addresses, err := dnsWorkerAddressLookupIP(lookupCtx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("DNS Worker public address host %s has no addresses", host)
+	}
+	targets := make([]string, 0, len(addresses))
+	for _, resolved := range addresses {
+		if err := security.ValidatePublicIP(resolved.IP); err != nil {
+			return nil, fmt.Errorf("DNS Worker public address host %s resolved to unsafe ip: %w", host, err)
+		}
+		targets = append(targets, net.JoinHostPort(resolved.IP.String(), port))
+	}
+	return targets, nil
 }
 
 func dnsWorkerProbeURLHost(raw string) (string, error) {
@@ -5133,6 +5628,11 @@ func exchangeDNSWorkerProbe(ctx context.Context, target string, network string, 
 	if timeout <= 0 {
 		timeout = defaultDNSWorkerProbeTimeout
 	}
+	targets, err := resolveDNSWorkerProbeTargets(ctx, target)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
 	message := new(dns.Msg)
 	message.SetQuestion(dns.Fqdn(qname), qtype)
 	client := &dns.Client{
@@ -5140,22 +5640,32 @@ func exchangeDNSWorkerProbe(ctx context.Context, target string, network string, 
 		Timeout: timeout,
 	}
 	startedAt := time.Now()
-	response, _, err := client.ExchangeContext(ctx, message, target)
+	var lastErr error
+	for _, resolvedTarget := range targets {
+		response, _, err := client.ExchangeContext(ctx, message, resolvedTarget)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		result.DurationMs = time.Since(startedAt).Milliseconds()
+		if response == nil {
+			result.Error = "empty DNS response"
+			return result
+		}
+		result.Reachable = true
+		result.RCode = dns.RcodeToString[response.Rcode]
+		if result.RCode == "" {
+			result.RCode = fmt.Sprintf("RCODE%d", response.Rcode)
+		}
+		result.AnswerCount = len(response.Answer)
+		return result
+	}
 	result.DurationMs = time.Since(startedAt).Milliseconds()
-	if err != nil {
-		result.Error = err.Error()
+	if lastErr != nil {
+		result.Error = lastErr.Error()
 		return result
 	}
-	if response == nil {
-		result.Error = "empty DNS response"
-		return result
-	}
-	result.Reachable = true
-	result.RCode = dns.RcodeToString[response.Rcode]
-	if result.RCode == "" {
-		result.RCode = fmt.Sprintf("RCODE%d", response.Rcode)
-	}
-	result.AnswerCount = len(response.Answer)
+	result.Error = "DNS Worker public address has no dialable addresses"
 	return result
 }
 

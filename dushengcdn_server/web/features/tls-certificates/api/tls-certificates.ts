@@ -24,9 +24,13 @@ export function getTlsCertificate(id: number) {
   return apiRequest<TlsCertificateDetailItem>(`/tls-certificates/${id}`);
 }
 
-export function getTlsCertificateContent(id: number) {
+export function getTlsCertificateContent(id: number, revealKey = false) {
+  const query = revealKey ? '?reveal_key=true' : '';
   return apiRequest<TlsCertificateContentItem>(
-    `/tls-certificates/${id}/content`,
+    `/tls-certificates/${id}/content${query}`,
+    {
+      method: 'POST',
+    },
   );
 }
 

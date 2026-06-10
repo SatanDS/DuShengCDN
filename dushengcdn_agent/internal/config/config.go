@@ -1,11 +1,13 @@
 package config
 
 import (
+	"dushengcdn-agent/internal/security"
 	"dushengcdn/utils/geoip/iputil"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -61,6 +63,7 @@ type Config struct {
 	GeoIPUpdateInterval        MillisecondDuration `json:"geoip_update_interval"`
 	GeoIPLookupAPIURL          string              `json:"geoip_lookup_api_url,omitempty"`
 	GeoIPLookupAPIToken        string              `json:"geoip_lookup_api_token,omitempty"`
+	GeoIPLookupAPITokenFile    string              `json:"geoip_lookup_api_token_file,omitempty"`
 	GeoIPLookupAPITimeout      MillisecondDuration `json:"geoip_lookup_api_timeout,omitempty"`
 	StatePath                  string              `json:"state_path"`
 	HeartbeatInterval          MillisecondDuration `json:"heartbeat_interval"`
@@ -97,6 +100,7 @@ type configFile struct {
 	GeoIPUpdateInterval        MillisecondDuration `json:"geoip_update_interval"`
 	GeoIPLookupAPIURL          string              `json:"geoip_lookup_api_url"`
 	GeoIPLookupAPIToken        string              `json:"geoip_lookup_api_token"`
+	GeoIPLookupAPITokenFile    string              `json:"geoip_lookup_api_token_file"`
 	GeoIPLookupAPITimeout      MillisecondDuration `json:"geoip_lookup_api_timeout"`
 	StatePath                  string              `json:"state_path"`
 	HeartbeatInterval          MillisecondDuration `json:"heartbeat_interval"`
@@ -115,6 +119,9 @@ func Load(path string) (*Config, error) {
 	if err == nil {
 		if err = json.Unmarshal(data, file); err != nil {
 			return nil, err
+		}
+		if strings.TrimSpace(file.GeoIPLookupAPIToken) != "" && strings.TrimSpace(file.GeoIPLookupAPITokenFile) != "" {
+			return nil, errors.New("use only one of geoip_lookup_api_token and geoip_lookup_api_token_file")
 		}
 	}
 	if err != nil && !hasEnvConfig() {
@@ -149,13 +156,16 @@ func Load(path string) (*Config, error) {
 		GeoIPUpdateInterval:        file.GeoIPUpdateInterval,
 		GeoIPLookupAPIURL:          file.GeoIPLookupAPIURL,
 		GeoIPLookupAPIToken:        file.GeoIPLookupAPIToken,
+		GeoIPLookupAPITokenFile:    file.GeoIPLookupAPITokenFile,
 		GeoIPLookupAPITimeout:      file.GeoIPLookupAPITimeout,
 		StatePath:                  file.StatePath,
 		HeartbeatInterval:          file.HeartbeatInterval,
 		RequestTimeout:             file.RequestTimeout,
 	}
 	cfg.configPath = path
-	applyEnvOverrides(cfg)
+	if err = applyEnvOverrides(cfg); err != nil {
+		return nil, err
+	}
 	applyDefaults(cfg, filepath.Dir(path))
 	if err = validate(cfg); err != nil {
 		return nil, err
@@ -282,6 +292,10 @@ func normalizeManagedPaths(cfg *Config) {
 	if usesSlashPath(cfg.OpenrestyGeoIPDatabasePath) {
 		cfg.OpenrestyGeoIPDatabasePath = filepath.ToSlash(cfg.OpenrestyGeoIPDatabasePath)
 	}
+	cfg.GeoIPLookupAPITokenFile = strings.TrimSpace(cfg.GeoIPLookupAPITokenFile)
+	if usesSlashPath(cfg.GeoIPLookupAPITokenFile) {
+		cfg.GeoIPLookupAPITokenFile = filepath.ToSlash(cfg.GeoIPLookupAPITokenFile)
+	}
 	cfg.GeoIPLookupAPIURL = strings.TrimSpace(cfg.GeoIPLookupAPIURL)
 	cfg.GeoIPLookupAPIToken = strings.TrimSpace(cfg.GeoIPLookupAPIToken)
 }
@@ -290,7 +304,9 @@ func hasEnvConfig() bool {
 	for _, key := range []string{
 		"DUSHENGCDN_SERVER_URL",
 		"DUSHENGCDN_AGENT_TOKEN",
+		"DUSHENGCDN_AGENT_TOKEN_FILE",
 		"DUSHENGCDN_DISCOVERY_TOKEN",
+		"DUSHENGCDN_DISCOVERY_TOKEN_FILE",
 		"DUSHENGCDN_NODE_NAME",
 		"DUSHENGCDN_NODE_IP",
 		"DUSHENGCDN_DATA_DIR",
@@ -300,6 +316,7 @@ func hasEnvConfig() bool {
 		"DUSHENGCDN_OPENRESTY_GEOIP_DATABASE_PATH",
 		"DUSHENGCDN_GEOIP_LOOKUP_API_URL",
 		"DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN",
+		"DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN_FILE",
 		"DUSHENGCDN_HEARTBEAT_INTERVAL",
 		"DUSHENGCDN_GEOIP_UPDATE_INTERVAL",
 		"DUSHENGCDN_GEOIP_LOOKUP_API_TIMEOUT",
@@ -313,9 +330,9 @@ func hasEnvConfig() bool {
 	return false
 }
 
-func applyEnvOverrides(cfg *Config) {
+func applyEnvOverrides(cfg *Config) error {
 	if cfg == nil {
-		return
+		return nil
 	}
 	overrideString := func(key string, target *string) {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
@@ -323,8 +340,12 @@ func applyEnvOverrides(cfg *Config) {
 		}
 	}
 	overrideString("DUSHENGCDN_SERVER_URL", &cfg.ServerURL)
-	overrideString("DUSHENGCDN_AGENT_TOKEN", &cfg.AgentToken)
-	overrideString("DUSHENGCDN_DISCOVERY_TOKEN", &cfg.DiscoveryToken)
+	if err := overrideSecretFromEnvOrFile("DUSHENGCDN_AGENT_TOKEN", "DUSHENGCDN_AGENT_TOKEN_FILE", &cfg.AgentToken); err != nil {
+		return err
+	}
+	if err := overrideSecretFromEnvOrFile("DUSHENGCDN_DISCOVERY_TOKEN", "DUSHENGCDN_DISCOVERY_TOKEN_FILE", &cfg.DiscoveryToken); err != nil {
+		return err
+	}
 	overrideString("DUSHENGCDN_NODE_NAME", &cfg.NodeName)
 	overrideString("DUSHENGCDN_NODE_IP", &cfg.NodeIP)
 	overrideString("DUSHENGCDN_DATA_DIR", &cfg.DataDir)
@@ -333,7 +354,12 @@ func applyEnvOverrides(cfg *Config) {
 	overrideString("DUSHENGCDN_GEOIP_DATABASE_PATH", &cfg.GeoIPDatabasePath)
 	overrideString("DUSHENGCDN_OPENRESTY_GEOIP_DATABASE_PATH", &cfg.OpenrestyGeoIPDatabasePath)
 	overrideString("DUSHENGCDN_GEOIP_LOOKUP_API_URL", &cfg.GeoIPLookupAPIURL)
-	overrideString("DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN", &cfg.GeoIPLookupAPIToken)
+	if value := strings.TrimSpace(os.Getenv("DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN_FILE")); value != "" {
+		cfg.GeoIPLookupAPITokenFile = value
+	}
+	if err := applySecretValueOrFile("DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN", cfg.GeoIPLookupAPITokenFile, &cfg.GeoIPLookupAPIToken); err != nil {
+		return err
+	}
 	if value := strings.TrimSpace(os.Getenv("DUSHENGCDN_HEARTBEAT_INTERVAL")); value != "" {
 		if duration, err := parseDurationValue(value); err == nil {
 			cfg.HeartbeatInterval = duration
@@ -360,6 +386,41 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.OpenrestyObservabilityPort = port
 		}
 	}
+	return nil
+}
+
+func overrideSecretFromEnvOrFile(valueKey string, fileKey string, target *string) error {
+	filePath := strings.TrimSpace(os.Getenv(fileKey))
+	return applySecretValueOrFile(valueKey, filePath, target)
+}
+
+func applySecretValueOrFile(valueKey string, filePath string, target *string) error {
+	value := strings.TrimSpace(os.Getenv(valueKey))
+	filePath = strings.TrimSpace(filePath)
+	if value != "" && filePath != "" {
+		return fmt.Errorf("use only one of %s and a token file", valueKey)
+	}
+	if value != "" {
+		*target = value
+		return nil
+	}
+	if filePath == "" {
+		return nil
+	}
+	return readSecretFile(filePath, target)
+}
+
+func readSecretFile(filePath string, target *string) error {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return nil
+	}
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+	*target = strings.TrimSpace(string(content))
+	return nil
 }
 
 func parseDurationValue(value string) (MillisecondDuration, error) {
@@ -389,6 +450,9 @@ func joinManagedPath(base string, relative string) string {
 }
 
 func validate(cfg *Config) error {
+	if err := validateServerURL(cfg.ServerURL); err != nil {
+		return err
+	}
 	if cfg.ServerURL == "" {
 		return errors.New("server_url 不能为空")
 	}
@@ -410,6 +474,9 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.GeoIPDatabaseURL) == "" {
 		return errors.New("geoip_database_url cannot be empty")
 	}
+	if _, err := security.ValidatePublicHTTPURL(cfg.GeoIPDatabaseURL, true); err != nil {
+		return fmt.Errorf("geoip_database_url is unsafe: %w", err)
+	}
 	if strings.TrimSpace(cfg.GeoIPDatabasePath) == "" {
 		return errors.New("geoip_database_path cannot be empty")
 	}
@@ -422,7 +489,40 @@ func validate(cfg *Config) error {
 	if cfg.GeoIPLookupAPITimeout <= 0 {
 		return errors.New("geoip_lookup_api_timeout must be greater than 0")
 	}
+	if strings.TrimSpace(cfg.GeoIPLookupAPIURL) != "" {
+		if _, err := security.ValidatePublicHTTPURL(cfg.GeoIPLookupAPIURL, true); err != nil {
+			return fmt.Errorf("geoip_lookup_api_url is unsafe: %w", err)
+		}
+	}
 	return nil
+}
+
+func validateServerURL(value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New("server_url format is invalid")
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	switch scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackServerHost(parsed.Hostname()) {
+			return nil
+		}
+		return errors.New("server_url must use https unless it points to localhost or a loopback IP")
+	default:
+		return errors.New("server_url scheme must be https")
+	}
+}
+
+func isLoopbackServerHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (cfg *Config) InitialAuthToken() string {
@@ -442,10 +542,11 @@ func (cfg *Config) Save() error {
 	if cfg.configPath == "" {
 		return errors.New("config path 未初始化")
 	}
-	if cfg.GeoIPLookupAPIToken == "" {
-		cfg.GeoIPLookupAPIToken = os.Getenv("DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN")
+	saved := *cfg
+	if strings.TrimSpace(saved.GeoIPLookupAPITokenFile) != "" {
+		saved.GeoIPLookupAPIToken = ""
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(&saved, "", "  ")
 	if err != nil {
 		return err
 	}

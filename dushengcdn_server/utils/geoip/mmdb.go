@@ -2,6 +2,7 @@ package geoip
 
 import (
 	"context"
+	"dushengcdn/utils/security"
 	"fmt"
 	"io"
 	"net"
@@ -18,7 +19,7 @@ var GeoIpUrl = "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/Geo
 var GeoIpFilePath = "./data/GeoLite2-Country.mmdb"
 
 var maxGeoIPDatabaseDownloadBytes int64 = 128 * 1024 * 1024
-var geoIPDownloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var geoIPDownloadHTTPClient = security.NewPublicHTTPClient(30*time.Second, true)
 
 type GeoIpRecord struct {
 	Country struct {
@@ -42,7 +43,7 @@ func NewMaxMindGeoIPService() (*MaxMindGeoIPService, error) {
 		dbFilePath: GeoIpFilePath,
 	}
 
-	if err := os.MkdirAll(filepath.Dir(service.dbFilePath), os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(service.dbFilePath), 0750); err != nil {
 		return nil, fmt.Errorf("failed to create data directory for MaxMind database: %w", err)
 	}
 
@@ -104,9 +105,13 @@ func (s *MaxMindGeoIPService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 }
 
 func (s *MaxMindGeoIPService) UpdateDatabase() error {
+	parsedURL, err := security.ValidatePublicHTTPURL(GeoIpUrl, true)
+	if err != nil {
+		return fmt.Errorf("MaxMind database URL is not allowed: %w", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GeoIpUrl, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
 		return fmt.Errorf("failed to create MaxMind database download request: %w", err)
 	}
@@ -124,12 +129,12 @@ func (s *MaxMindGeoIPService) UpdateDatabase() error {
 		return fmt.Errorf("failed to download MaxMind database: response exceeds %d bytes", maxGeoIPDatabaseDownloadBytes)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(s.dbFilePath), os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.dbFilePath), 0750); err != nil {
 		return fmt.Errorf("failed to create data directory for MaxMind database update: %w", err)
 	}
 
 	tempPath := s.dbFilePath + ".download"
-	out, err := os.Create(tempPath)
+	out, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create MaxMind database file at %s: %w", tempPath, err)
 	}

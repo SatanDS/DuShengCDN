@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"dushengcdn-agent/internal/protocol"
+	"dushengcdn-agent/internal/security"
 )
 
 const CertDirPlaceholder = "__DUSHENGCDN_CERT_DIR__"
@@ -108,7 +109,7 @@ func (e *PathExecutor) Test(ctx context.Context) error {
 	slog.Debug("running openresty test with binary", "path", e.Path, "config", e.ConfigPath)
 	output, err := e.Runner.Run(ctx, e.Path, "-t", "-c", e.ConfigPath)
 	if err != nil {
-		return fmt.Errorf("openresty -t failed: %w: %s", err, string(output))
+		return fmt.Errorf("openresty -t failed: %w: %s", err, sanitizeOpenRestyCommandOutput(output))
 	}
 	slog.Debug("openresty test succeeded with binary", "path", e.Path)
 	return nil
@@ -118,15 +119,16 @@ func (e *PathExecutor) Reload(ctx context.Context) error {
 	slog.Debug("running openresty reload with binary", "path", e.Path, "config", e.ConfigPath)
 	output, err := e.Runner.Run(ctx, e.Path, "-s", "reload", "-c", e.ConfigPath)
 	if err != nil {
+		outputText := sanitizeOpenRestyCommandOutput(output)
 		if isOpenrestyNotRunningError(string(output)) {
 			slog.Warn("openresty reload reported runtime is not running, starting binary", "path", e.Path)
 			startOutput, startErr := e.Runner.Run(ctx, e.Path, "-c", e.ConfigPath)
 			if startErr != nil {
-				return fmt.Errorf("openresty reload failed: %w: %s; start failed: %v: %s", err, string(output), startErr, string(startOutput))
+				return fmt.Errorf("openresty reload failed: %w: %s; start failed: %v: %s", err, outputText, startErr, sanitizeOpenRestyCommandOutput(startOutput))
 			}
 			return nil
 		}
-		return fmt.Errorf("openresty reload failed: %w: %s", err, string(output))
+		return fmt.Errorf("openresty reload failed: %w: %s", err, outputText)
 	}
 	slog.Debug("openresty reload succeeded with binary", "path", e.Path)
 	return nil
@@ -147,14 +149,14 @@ func (e *PathExecutor) Restart(ctx context.Context) error {
 	slog.Info("restarting openresty with binary", "path", e.Path, "config", e.ConfigPath)
 	output, err := e.Runner.Run(ctx, e.Path, "-s", "quit", "-c", e.ConfigPath)
 	if err != nil {
-		text := string(output)
+		text := sanitizeOpenRestyCommandOutput(output)
 		if !isIgnorableOpenrestyStopError(text) {
 			return fmt.Errorf("openresty stop failed: %w: %s", err, text)
 		}
 	}
 	output, err = e.Runner.Run(ctx, e.Path, "-c", e.ConfigPath)
 	if err != nil {
-		return fmt.Errorf("openresty start failed: %w: %s", err, string(output))
+		return fmt.Errorf("openresty start failed: %w: %s", err, sanitizeOpenRestyCommandOutput(output))
 	}
 	slog.Info("openresty restart succeeded with binary", "path", e.Path)
 	return nil
@@ -197,6 +199,7 @@ events {
 }
 
 http {
+    server_tokens off;
     default_type text/plain;
 
     server {
@@ -213,6 +216,9 @@ const safeDefaultFallbackObservabilityServerBlock = `
         listen %s;
         server_name dushengcdn-observability;
         access_log off;
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
 
         location = /dushengcdn/stub_status {
             stub_status;
@@ -323,8 +329,12 @@ func fatalApplyOutcome(err error) ApplyOutcome {
 	}
 	return ApplyOutcome{
 		Status:  ApplyStatusFatal,
-		Message: strings.TrimSpace(err.Error()),
+		Message: security.RedactSensitiveText(strings.TrimSpace(err.Error())),
 	}
+}
+
+func sanitizeOpenRestyCommandOutput(output []byte) string {
+	return security.RedactSensitiveText(strings.TrimSpace(string(output)))
 }
 
 func (m *Manager) EnsureLuaAssets() error {
@@ -2041,7 +2051,7 @@ func checksum(content string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func bundleChecksum(mainConfig string, routeConfig string, supportFiles []protocol.SupportFile) string {
+func BundleChecksum(mainConfig string, routeConfig string, supportFiles []protocol.SupportFile) string {
 	files := append([]protocol.SupportFile(nil), supportFiles...)
 	sort.Slice(files, func(i int, j int) bool {
 		return files[i].Path < files[j].Path
@@ -2058,4 +2068,8 @@ func bundleChecksum(mainConfig string, routeConfig string, supportFiles []protoc
 		builder.WriteString("\n")
 	}
 	return checksum(builder.String())
+}
+
+func bundleChecksum(mainConfig string, routeConfig string, supportFiles []protocol.SupportFile) string {
+	return BundleChecksum(mainConfig, routeConfig, supportFiles)
 }

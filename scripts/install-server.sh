@@ -167,16 +167,25 @@ existing_postgres_data_dir() {
   [[ -n "$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]
 }
 
+harden_env_file_permissions() {
+  [[ -n "$ENV_FILE" && -f "$ENV_FILE" ]] || return 0
+  if ! chmod 0600 "$ENV_FILE" 2>/dev/null; then
+    warn "could not set ${ENV_FILE} to 0600; ensure it is only readable by trusted users."
+  fi
+}
+
 initialize_env_file() {
-  local postgres_db postgres_user postgres_password session_secret initial_root_password dsn
+  local postgres_db postgres_user postgres_password session_secret initial_root_password initial_root_password_file dsn
 
   if [[ -f "$ENV_FILE" ]]; then
+    harden_env_file_permissions
     return
   fi
   [[ -f "${SERVER_DIR}/.env.example" ]] || return
 
   log "Creating ${ENV_FILE} from .env.example..."
-  cp -n "${SERVER_DIR}/.env.example" "$ENV_FILE"
+  (umask 077 && cp "${SERVER_DIR}/.env.example" "$ENV_FILE")
+  harden_env_file_permissions
 
   session_secret="$(random_hex 32 || true)"
   if [[ -n "$session_secret" ]]; then
@@ -186,23 +195,35 @@ initialize_env_file() {
   fi
   initial_root_password="$(random_hex 16 || true)"
   if [[ -n "$initial_root_password" ]]; then
-    write_env_key DUSHENGCDN_INITIAL_ROOT_PASSWORD "$initial_root_password"
+    initial_root_password_file="${SERVER_DIR}/dushengcdn-data/initial-root-password.txt"
+    mkdir -p "$(dirname "$initial_root_password_file")"
+    chmod 0700 "$(dirname "$initial_root_password_file")" 2>/dev/null || true
+    if [[ ! -f "$initial_root_password_file" ]]; then
+      (umask 077 && printf 'username=root\npassword=%s\n' "$initial_root_password" > "$initial_root_password_file")
+    else
+      warn "initial root password file already exists at ${initial_root_password_file}; preserving it."
+    fi
+    chmod 0600 "$initial_root_password_file" 2>/dev/null || true
+    write_env_key DUSHENGCDN_INITIAL_ROOT_PASSWORD ""
+    write_env_key DUSHENGCDN_INITIAL_ROOT_PASSWORD_FILE "/data/initial-root-password.txt"
   else
-    warn "could not generate DUSHENGCDN_INITIAL_ROOT_PASSWORD; Server will print a generated one-time password on first empty-database startup."
+    warn "could not generate initial root password file; Server will create a root-only one-time password file on first empty-database startup."
   fi
 
   if existing_postgres_data_dir; then
     warn "existing PostgreSQL data directory detected at ${SERVER_DIR}/postgres-data."
     warn "preserving POSTGRES_PASSWORD and DSN copied from .env.example to avoid breaking existing database authentication."
     warn "after the panel is healthy, rotate the PostgreSQL password deliberately if needed."
-    log "Generated SESSION_SECRET and DUSHENGCDN_INITIAL_ROOT_PASSWORD in ${ENV_FILE}; preserved existing PostgreSQL credentials."
+    harden_env_file_permissions
+    log "Generated SESSION_SECRET in ${ENV_FILE} and initial root password file; preserved existing PostgreSQL credentials."
     return
   fi
 
   postgres_password="$(random_hex 18 || true)"
   if [[ -z "$postgres_password" ]]; then
     warn "could not generate POSTGRES_PASSWORD; edit ${ENV_FILE} before production use."
-    log "Generated SESSION_SECRET and DUSHENGCDN_INITIAL_ROOT_PASSWORD in ${ENV_FILE}."
+    harden_env_file_permissions
+    log "Generated SESSION_SECRET in ${ENV_FILE} and initial root password file."
     return
   fi
 
@@ -211,7 +232,8 @@ initialize_env_file() {
   dsn="postgres://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}?sslmode=disable"
   write_env_key POSTGRES_PASSWORD "$postgres_password"
   write_env_key DSN "$dsn"
-  log "Generated POSTGRES_PASSWORD, SESSION_SECRET, DUSHENGCDN_INITIAL_ROOT_PASSWORD, and DSN in ${ENV_FILE}."
+  harden_env_file_permissions
+  log "Generated POSTGRES_PASSWORD, SESSION_SECRET, and DSN in ${ENV_FILE}; initial root password was written to a root-only file."
 }
 
 detect_public_ip() {
@@ -342,15 +364,22 @@ check_server_http_health() {
 }
 
 print_initial_login_hint() {
-  local password
+  local password password_file host_password_file
 
-  password="$(env_value DUSHENGCDN_INITIAL_ROOT_PASSWORD "")"
-  if [[ -n "$password" ]]; then
+  password_file="$(env_value DUSHENGCDN_INITIAL_ROOT_PASSWORD_FILE "")"
+  if [[ -n "$password_file" ]]; then
     log "Initial login username: root"
-    log "Initial root password from ${ENV_FILE}: ${password}"
-    warn "DUSHENGCDN_INITIAL_ROOT_PASSWORD is only used when the database has no users. Change the root password after first login and remove or rotate this value."
+    host_password_file="$password_file"
+    if [[ "$password_file" == /data/* ]]; then
+      host_password_file="${SERVER_DIR}/dushengcdn-data/${password_file#/data/}"
+    fi
+    log "Initial root password file: ${host_password_file}"
+    warn "The bootstrap password is only used when the database has no users. Change the root password after first login and remove or rotate this file."
+  elif password="$(env_value DUSHENGCDN_INITIAL_ROOT_PASSWORD "")" && [[ -n "$password" ]]; then
+    log "Initial login username: root"
+    warn "DUSHENGCDN_INITIAL_ROOT_PASSWORD is configured in ${ENV_FILE}; the password will not be printed. Change the root password after first login and remove or rotate this value."
   else
-    warn "No DUSHENGCDN_INITIAL_ROOT_PASSWORD is configured. For a brand-new empty database, read the one-time generated root password from Server logs or run --reset-root-password."
+    warn "No bootstrap root password is configured. For a brand-new empty database, read the generated root-only password file or use --reset-root-password-file/--reset-root-password-stdin."
   fi
 }
 
@@ -418,15 +447,25 @@ create_dns_worker_token() {
 install_dns_worker() {
   local token="$1"
   local listen_addr="$DNS_WORKER_LISTEN"
+  local token_file
+  local status
   local install_args
 
   if [[ -z "$listen_addr" ]]; then
     listen_addr="${PUBLIC_IP}:53"
   fi
 
+  token_file="$(mktemp)"
+  cleanup_install_dns_worker_token_file() {
+    rm -f "$token_file"
+  }
+  trap cleanup_install_dns_worker_token_file RETURN
+  chmod 0600 "$token_file"
+  printf '%s\n' "$token" > "$token_file"
+
   install_args=(
     --server-url "$SERVER_URL"
-    --token "$token"
+    --token-file "$token_file"
     --install-dir "$DNS_WORKER_INSTALL_DIR"
     --listen "$listen_addr"
     --query-rate-limit "$DNS_WORKER_QUERY_RATE_LIMIT"
@@ -443,7 +482,13 @@ install_dns_worker() {
   fi
 
   log "Installing DNS Worker on ${listen_addr}..."
+  set +e
   bash "${SCRIPT_DIR}/install-dns-worker.sh" "${install_args[@]}"
+  status=$?
+  set -e
+  cleanup_install_dns_worker_token_file
+  trap - RETURN
+  return "$status"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -509,10 +554,13 @@ compose_run ps
 ensure_server_running
 check_server_http_health
 print_initial_login_hint
+log "Server deployment completed."
+log "Panel URL for local access: ${SERVER_URL}"
+log "The default Compose binding is 127.0.0.1; publish the panel through a local HTTPS reverse proxy instead of exposing the host panel port directly."
 
 if [[ "$INSTALL_DNS_WORKER" != "true" ]]; then
-  log "DNS Worker installation skipped."
-  exit 0
+	log "DNS Worker installation skipped."
+	exit 0
 fi
 
 log "Checking whether DNS Worker is already deployed locally..."
@@ -534,6 +582,4 @@ fi
 token="$(create_dns_worker_token)"
 install_dns_worker "$token"
 
-log "Server deployment completed."
-log "Panel URL for local access: ${SERVER_URL}"
 log "DNS Worker public address: ${PUBLIC_IP}"

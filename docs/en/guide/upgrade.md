@@ -82,7 +82,7 @@ The installation script can be executed repeatedly to reinstall or upgrade the A
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 The script prefers GitHub Release binaries and requires same-name `.sha256` and `.sig` files. If no matching binary asset exists, it builds from source and embeds the current Git version instead of reporting `dev`.

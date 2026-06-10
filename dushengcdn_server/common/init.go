@@ -16,7 +16,9 @@ var (
 	PrintVersion                 = flag.Bool("version", false, "print version and exit")
 	PrintHelp                    = flag.Bool("help", false, "print help and exit")
 	LogDir                       = flag.String("log-dir", "", "specify the log directory")
-	ResetRootPassword            = flag.String("reset-root-password", "", "reset root password and exit without starting the HTTP server")
+	ResetRootPassword            = flag.String("reset-root-password", "", "reset root password and exit without starting the HTTP server; prefer --reset-root-password-file or --reset-root-password-stdin to avoid argv exposure")
+	ResetRootPasswordFile        = flag.String("reset-root-password-file", "", "read the new root password from FILE, reset root password, and exit without starting the HTTP server")
+	ResetRootPasswordStdin       = flag.Bool("reset-root-password-stdin", false, "read the new root password from stdin, reset root password, and exit without starting the HTTP server")
 	CreateDNSWorkerName          = flag.String("create-dns-worker-name", "", "create a DNS Worker with this name, print its token, and exit without starting the HTTP server")
 	CreateDNSWorkerPublicAddress = flag.String("create-dns-worker-public-address", "", "public address saved for --create-dns-worker-name")
 )
@@ -28,7 +30,7 @@ func printHelp() {
 	fmt.Println("DuShengCDN " + Version + " - Internal OpenResty Control Plane.")
 	fmt.Println("Copyright (C) 2023 JustSong. All rights reserved.")
 	fmt.Println("GitHub: https://github.com/SatanDS/DuShengCDN")
-	fmt.Println("Usage: dushengcdn [--port <port>] [--log-dir <log directory>] [--reset-root-password <password>] [--create-dns-worker-name <name>] [--create-dns-worker-public-address <address>] [--version] [--help]")
+	fmt.Println("Usage: dushengcdn [--port <port>] [--log-dir <log directory>] [--reset-root-password-file <file>|--reset-root-password-stdin] [--create-dns-worker-name <name>] [--create-dns-worker-public-address <address>] [--version] [--help]")
 }
 
 func init() {
@@ -60,13 +62,24 @@ func init() {
 	if os.Getenv("DUSHENGCDN_INITIAL_ROOT_PASSWORD") != "" {
 		InitialRootPassword = os.Getenv("DUSHENGCDN_INITIAL_ROOT_PASSWORD")
 	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_INITIAL_ROOT_PASSWORD_FILE")) != "" {
+		InitialRootPasswordFile = strings.TrimSpace(os.Getenv("DUSHENGCDN_INITIAL_ROOT_PASSWORD_FILE"))
+	}
 	if os.Getenv("TRUSTED_PROXIES") != "" {
 		TrustedProxies = os.Getenv("TRUSTED_PROXIES")
+	}
+	if strings.TrimSpace(os.Getenv("DUSHENGCDN_LISTEN_ADDRESS")) != "" {
+		ListenAddress = strings.TrimSpace(os.Getenv("DUSHENGCDN_LISTEN_ADDRESS"))
+	} else if strings.TrimSpace(os.Getenv("LISTEN_ADDRESS")) != "" {
+		ListenAddress = strings.TrimSpace(os.Getenv("LISTEN_ADDRESS"))
 	}
 	if value := readPositiveInt64Env("DUSHENGCDN_JSON_BODY_MAX_BYTES"); value > 0 {
 		JSONBodyMaxBytes = value
 	} else if value := readPositiveInt64Env("JSON_BODY_MAX_BYTES"); value > 0 {
 		JSONBodyMaxBytes = value
+	}
+	if os.Getenv("DUSHENGCDN_PUBLIC_STATUS_RUNTIME_METADATA") != "" {
+		PublicStatusRuntimeMetadataEnabled = readBoolEnv("DUSHENGCDN_PUBLIC_STATUS_RUNTIME_METADATA")
 	}
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")
@@ -167,7 +180,7 @@ func init() {
 			os.Exit(1)
 		}
 		if _, err := os.Stat(*LogDir); os.IsNotExist(err) {
-			err = os.Mkdir(*LogDir, 0777)
+			err = os.Mkdir(*LogDir, 0750)
 			if err != nil {
 				slog.Error("create log directory failed", "error", err)
 				os.Exit(1)
@@ -175,7 +188,7 @@ func init() {
 		}
 	}
 	if _, err := os.Stat(UploadPath); os.IsNotExist(err) {
-		_ = os.Mkdir(UploadPath, 0777)
+		_ = os.Mkdir(UploadPath, 0750)
 	}
 }
 

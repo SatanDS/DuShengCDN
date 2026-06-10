@@ -13,10 +13,10 @@
 | Server | Docker Compose + PostgreSQL |
 | Agent | Docker Agent 镜像，或安装脚本 + 本机 OpenResty |
 | 数据库 | PostgreSQL 优先；SQLite 适合测试或小规模自用 |
-| 端口 | Server 默认 `3000`；Agent 节点对外使用 `80` / `443` |
+| 端口 | Server 容器内默认 `3000`，示例只绑定本机；Agent 节点对外使用 `80` / `443` |
 | 备份 | 升级前备份数据库和 Server 数据目录 |
 
-如果宿主机 `3000` 已被占用，只改宿主机侧端口，例如 `3010:3000`；容器内部仍监听 `3000`。
+如果宿主机本机端口 `3000` 已被占用，只改宿主机侧端口，例如 `127.0.0.1:3010:3000`；容器内部仍监听 `3000`。生产公开访问请通过本机 HTTPS 反向代理，不要把管理面板端口直接发布到公网。
 
 ## 2. 部署 Server
 
@@ -46,7 +46,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: ${DSN:?set DSN in .env}
@@ -74,7 +74,7 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-浏览器访问 `http://服务器IP:3000`。首次登录用户名是 `root`，密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 首次空库启动日志中的一次性随机密码。首次登录后立即修改密码。
+在服务器本机访问 `http://localhost:3000`，或通过已配置 HTTPS 的反向代理访问管理域名。首次登录用户名是 `root`，密码使用 `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`；如果没有配置该值，则查看 Server 日志提示的 `initial-root-password.txt` 文件，日志不会打印密码本身。首次登录后立即修改密码。
 
 ## 3. 初始化运维设置
 
@@ -101,7 +101,7 @@ Agent 可以用两种 Token 接入：
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --discovery-token YOUR_DISCOVERY_TOKEN
+  --discovery-token-file /run/secrets/dushengcdn-discovery-token
 ```
 
 Docker Agent：
@@ -110,8 +110,9 @@ Docker Agent：
 DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-agent --restart unless-stopped \
   -p 80:80 -p 443:443 \
+  -v /run/secrets/dushengcdn-agent-token:/run/secrets/dushengcdn_agent_token:ro \
   -e DUSHENGCDN_SERVER_URL=http://your-server:3000 \
-  -e DUSHENGCDN_AGENT_TOKEN=YOUR_AGENT_TOKEN \
+  -e DUSHENGCDN_AGENT_TOKEN_FILE=/run/secrets/dushengcdn_agent_token \
   ghcr.io/satands/dushengcdn-agent:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
 ```
 
@@ -343,7 +344,11 @@ tar -czf backups/dushengcdn-data-$(date +%F-%H%M%S).tar.gz dushengcdn-data
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
 docker compose stop dushengcdn
-docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /tmp/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+docker compose run --rm -v /tmp/dushengcdn-root-password:/run/secrets/dushengcdn-root-password:ro dushengcdn /dushengcdn --reset-root-password-file /run/secrets/dushengcdn-root-password
+rm -f /tmp/dushengcdn-root-password
 docker compose up -d
 ```
 

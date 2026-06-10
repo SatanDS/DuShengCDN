@@ -4,24 +4,80 @@ import (
 	"crypto/rand"
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"dushengcdn/service"
+	"dushengcdn/utils/security"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/gin-contrib/sessions"
 )
 
 const wechatUsernameMaxAttempts = 20
+const wechatOAuthStateSessionKey = "wechat_oauth_state"
+
+var wechatHTTPClient = security.NewPublicHTTPClient(5*time.Second, true)
+
+func SetWeChatHTTPClientForTest(client *http.Client) func() {
+	previous := wechatHTTPClient
+	if client == nil {
+		wechatHTTPClient = security.NewPublicHTTPClient(5*time.Second, true)
+	} else {
+		wechatHTTPClient = client
+	}
+	return func() {
+		wechatHTTPClient = previous
+	}
+}
 
 type wechatLoginResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 	Data    string `json:"data"`
+}
+
+type wechatBindRequest struct {
+	Code string `json:"code"`
+}
+
+func WeChatOAuthAuthorize(c *gin.Context) {
+	if !common.WeChatAuthEnabled {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "绠＄悊鍛樻湭寮€鍚€氳繃寰俊鐧诲綍浠ュ強娉ㄥ唽",
+			"success": false,
+		})
+		return
+	}
+	state, err := service.GenerateOAuthState()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message": err.Error(),
+			"success": false,
+		})
+		return
+	}
+	session := sessions.Default(c)
+	session.Set(wechatOAuthStateSessionKey, state)
+	if err := session.Save(); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "failed to save oauth state",
+			"success": false,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"state": state,
+		},
+	})
 }
 
 func getWeChatIdByCode(code string) (string, error) {
@@ -31,6 +87,9 @@ func getWeChatIdByCode(code string) (string, error) {
 	wechatServerAddress := strings.TrimSpace(common.WeChatServerAddress)
 	if wechatServerAddress == "" {
 		return "", errors.New("微信登录服务地址未配置")
+	}
+	if _, err := security.ValidatePublicHTTPURL(wechatServerAddress, true); err != nil {
+		return "", fmt.Errorf("微信登录服务地址不安全: %w", err)
 	}
 	endpoint, err := url.JoinPath(wechatServerAddress, "api", "wechat", "user")
 	if err != nil {
@@ -48,17 +107,13 @@ func getWeChatIdByCode(code string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Authorization", common.WeChatServerToken)
-	client := http.Client{
-		Timeout: 5 * time.Second,
-	}
-	httpResponse, err := client.Do(req)
+	httpResponse, err := wechatHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer httpResponse.Body.Close()
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(httpResponse.Body, 1024))
-		return "", fmt.Errorf("微信登录服务返回异常状态: %s %s", httpResponse.Status, strings.TrimSpace(string(raw)))
+		return "", fmt.Errorf("微信登录服务返回异常状态: %s", httpResponse.Status)
 	}
 	var res wechatLoginResponse
 	err = json.NewDecoder(httpResponse.Body).Decode(&res)
@@ -66,7 +121,7 @@ func getWeChatIdByCode(code string) (string, error) {
 		return "", err
 	}
 	if !res.Success {
-		return "", errors.New(res.Message)
+		return "", errors.New("微信登录验证失败")
 	}
 	if res.Data == "" {
 		return "", errors.New("验证码错误或已过期")
@@ -122,6 +177,13 @@ func WeChatAuth(c *gin.Context) {
 		})
 		return
 	}
+	if err := validateWeChatOAuthState(c); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message": err.Error(),
+			"success": false,
+		})
+		return
+	}
 	code := c.Query("code")
 	wechatId, err := getWeChatIdByCode(code)
 	if err != nil {
@@ -173,6 +235,18 @@ func WeChatAuth(c *gin.Context) {
 	setupLogin(&user, c)
 }
 
+func validateWeChatOAuthState(c *gin.Context) error {
+	session := sessions.Default(c)
+	expectedState, _ := session.Get(wechatOAuthStateSessionKey).(string)
+	actualState := strings.TrimSpace(c.Query("state"))
+	session.Delete(wechatOAuthStateSessionKey)
+	_ = session.Save()
+	if expectedState == "" || actualState == "" || actualState != expectedState {
+		return errors.New("wechat oauth state invalid or expired")
+	}
+	return nil
+}
+
 func WeChatBind(c *gin.Context) {
 	if !common.WeChatAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
@@ -182,6 +256,29 @@ func WeChatBind(c *gin.Context) {
 		return
 	}
 	code := c.Query("code")
+	bindWeChatAccountWithCode(c, code)
+}
+
+func WeChatBindPost(c *gin.Context) {
+	if !common.WeChatAuthEnabled {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "绠＄悊鍛樻湭寮€鍚€氳繃寰俊鐧诲綍浠ュ強娉ㄥ唽",
+			"success": false,
+		})
+		return
+	}
+	var req wechatBindRequest
+	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "invalid request",
+			"success": false,
+		})
+		return
+	}
+	bindWeChatAccountWithCode(c, strings.TrimSpace(req.Code))
+}
+
+func bindWeChatAccountWithCode(c *gin.Context, code string) {
 	wechatId, err := getWeChatIdByCode(code)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -222,5 +319,4 @@ func WeChatBind(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
-	return
 }

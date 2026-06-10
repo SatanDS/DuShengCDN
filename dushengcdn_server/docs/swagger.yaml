@@ -2278,7 +2278,7 @@ securityDefinitions:
     name: X-Agent-Token
     type: apiKey
   BearerAuth:
-    description: 管理端可使用 Bearer Token，例如：Bearer <token>
+    description: 仅部分兼容接口支持长期 Bearer 用户 Token；高危管理接口要求浏览器 session cookie 和 CSRF Token
     in: header
     name: Authorization
     type: apiKey

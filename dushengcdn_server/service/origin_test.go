@@ -106,7 +106,7 @@ func TestDeleteOriginRejectsReferencedOrigin(t *testing.T) {
 }
 
 func TestValidateOriginAddressRejectsPortWithHelpfulMessage(t *testing.T) {
-	if err := validateOriginAddress("2001:db8::1"); err != nil {
+	if err := validateOriginAddress("2001:4860:4860::8888"); err != nil {
 		t.Fatalf("expected raw IPv6 origin address to remain valid: %v", err)
 	}
 

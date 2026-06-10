@@ -138,7 +138,8 @@ export interface ProxyRouteItem {
   cc_config: ProxyRouteCCConfig;
   basic_auth_enabled: boolean;
   basic_auth_username: string;
-  basic_auth_password: string;
+  basic_auth_password?: string;
+  basic_auth_password_configured?: boolean;
   region_restriction_enabled: boolean;
   region_restriction_mode: 'allow' | 'block';
   region_restriction_countries: string[];

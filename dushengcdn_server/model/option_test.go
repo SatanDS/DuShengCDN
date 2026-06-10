@@ -66,3 +66,33 @@ func TestAgentLegacyGlobalTokenOptionHotReloads(t *testing.T) {
 		t.Fatal("expected legacy alias option to hot-reload common flag")
 	}
 }
+
+func TestInitOptionMapDefaultsUploadsToAuthenticatedUsers(t *testing.T) {
+	oldDB := DB
+	oldOptionMap := common.OptionMapSnapshot()
+	oldFileUploadPermission := common.FileUploadPermission
+	oldImageUploadPermission := common.ImageUploadPermission
+	t.Cleanup(func() {
+		DB = oldDB
+		common.FileUploadPermission = oldFileUploadPermission
+		common.ImageUploadPermission = oldImageUploadPermission
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = oldOptionMap
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	db := openBareTestSQLiteDB(t, "upload-permission-defaults.db")
+	if err := db.AutoMigrate(&Option{}); err != nil {
+		t.Fatalf("migrate option table: %v", err)
+	}
+	DB = db
+	InitOptionMap()
+
+	expected := "1"
+	if common.GetOptionValue("FileUploadPermission") != expected {
+		t.Fatalf("expected file upload default permission %s, got %q", expected, common.GetOptionValue("FileUploadPermission"))
+	}
+	if common.GetOptionValue("ImageUploadPermission") != expected {
+		t.Fatalf("expected image upload default permission %s, got %q", expected, common.GetOptionValue("ImageUploadPermission"))
+	}
+}

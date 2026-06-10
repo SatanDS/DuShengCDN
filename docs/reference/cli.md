@@ -24,7 +24,10 @@ go run . --port 3000 --log-dir ./logs
 
 ```bash
 cd dushengcdn_server
-./dushengcdn-server --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /run/secrets/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+./dushengcdn-server --reset-root-password-file /run/secrets/dushengcdn-root-password
 ```
 
 创建 DNS Worker 并输出本次创建的 Token：
@@ -242,7 +245,7 @@ GOCACHE=/tmp/dushengcdn-go-cache go test ./...
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 ## 卸载 Agent

@@ -2,9 +2,11 @@ package service
 
 import (
 	"dushengcdn/model"
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -116,7 +118,7 @@ type AgentDNSProbeResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
-func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, reportedAt time.Time) {
+func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, reportedAt time.Time, dnsProbeTargets ...[]AgentDNSProbeTarget) {
 	if strings.TrimSpace(nodeID) == "" {
 		return
 	}
@@ -132,6 +134,7 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 
 	accessLogs := append([]AgentNodeAccessLog(nil), payload.AccessLogs...)
 	bufferedRecords := append([]AgentBufferedObservabilityRecord(nil), payload.BufferedObservability...)
+	allowedDNSProbeTargets, enforceDNSProbeTargets := agentDNSProbeTargetsByWorkerID(dnsProbeTargets...)
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := persistNodeSystemProfile(tx, nodeID, payload.Profile, reportedAt); err != nil {
 			return err
@@ -150,7 +153,7 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 				return err
 			}
 		}
-		if err := persistAgentDNSProbeReports(tx, nodeID, payload.DNSProbeResults, reportedAt); err != nil {
+		if err := persistAgentDNSProbeReports(tx, nodeID, payload.DNSProbeResults, reportedAt, allowedDNSProbeTargets, enforceDNSProbeTargets); err != nil {
 			return err
 		}
 		return nil
@@ -160,7 +163,7 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 	persistAccessLogsBestEffort(nodeID, accessLogs, bufferedRecords, reportedAt)
 }
 
-func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSProbeReport, reportedAt time.Time) error {
+func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSProbeReport, reportedAt time.Time, allowedTargets map[string]AgentDNSProbeTarget, enforceTargets bool) error {
 	nodeID = strings.TrimSpace(nodeID)
 	if nodeID == "" || len(reports) == 0 {
 		return nil
@@ -169,6 +172,24 @@ func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSP
 		workerID := strings.TrimSpace(report.WorkerID)
 		if workerID == "" {
 			continue
+		}
+		target := AgentDNSProbeTarget{
+			WorkerID:      workerID,
+			PublicAddress: strings.TrimSpace(report.PublicAddress),
+			QueryName:     strings.TrimSpace(report.QueryName),
+			QueryType:     normalizeAgentDNSProbeQueryType(report.QueryType),
+		}
+		if enforceTargets {
+			var ok bool
+			target, ok = allowedTargets[workerID]
+			if !ok {
+				slog.Debug("agent dns probe report ignored for unassigned worker", "node_id", nodeID, "worker_id", workerID)
+				continue
+			}
+			if !agentDNSProbeReportMatchesTarget(report, target) {
+				slog.Debug("agent dns probe report ignored for mismatched target", "node_id", nodeID, "worker_id", workerID)
+				continue
+			}
 		}
 		results := normalizeAgentDNSProbeResults(report.Results)
 		checkedAt := timeFromUnix(report.CheckedAtUnix, reportedAt)
@@ -179,9 +200,9 @@ func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSP
 		record := &model.DNSWorkerNodeProbe{
 			WorkerID:       workerID,
 			NodeID:         nodeID,
-			PublicAddress:  strings.TrimSpace(report.PublicAddress),
-			QueryName:      strings.TrimSpace(report.QueryName),
-			QueryType:      normalizeAgentDNSProbeQueryType(report.QueryType),
+			PublicAddress:  strings.TrimSpace(target.PublicAddress),
+			QueryName:      strings.TrimSpace(target.QueryName),
+			QueryType:      normalizeAgentDNSProbeQueryType(target.QueryType),
 			CheckedAt:      checkedAt,
 			ResultsJSON:    marshalJSON(results),
 			Healthy:        healthy,
@@ -198,6 +219,42 @@ func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSP
 		}
 	}
 	return nil
+}
+
+func agentDNSProbeTargetsByWorkerID(targetSets ...[]AgentDNSProbeTarget) (map[string]AgentDNSProbeTarget, bool) {
+	result := map[string]AgentDNSProbeTarget{}
+	enforce := len(targetSets) > 0
+	for _, targets := range targetSets {
+		for _, target := range targets {
+			workerID := strings.TrimSpace(target.WorkerID)
+			if workerID == "" {
+				continue
+			}
+			if _, exists := result[workerID]; exists {
+				continue
+			}
+			target.WorkerID = workerID
+			target.Name = strings.TrimSpace(target.Name)
+			target.PublicAddress = strings.TrimSpace(target.PublicAddress)
+			target.QueryName = strings.TrimSpace(target.QueryName)
+			target.QueryType = normalizeAgentDNSProbeQueryType(target.QueryType)
+			result[workerID] = target
+		}
+	}
+	return result, enforce
+}
+
+func agentDNSProbeReportMatchesTarget(report AgentDNSProbeReport, target AgentDNSProbeTarget) bool {
+	if !strings.EqualFold(strings.TrimSpace(report.WorkerID), strings.TrimSpace(target.WorkerID)) {
+		return false
+	}
+	if strings.TrimSpace(report.PublicAddress) != strings.TrimSpace(target.PublicAddress) {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(report.QueryName), strings.TrimSpace(target.QueryName)) {
+		return false
+	}
+	return normalizeAgentDNSProbeQueryType(report.QueryType) == normalizeAgentDNSProbeQueryType(target.QueryType)
 }
 
 func normalizeAgentDNSProbeResults(results []AgentDNSProbeResult) []AgentDNSProbeResult {
@@ -446,9 +503,9 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 			Region:        "",
 			Operator:      "",
 			Host:          strings.TrimSpace(item.Host),
-			Path:          truncateForDatabase(strings.TrimSpace(item.Path), nodeAccessLogPathMaxLength),
+			Path:          truncateForDatabase(normalizePersistedAccessLogPath(item.Path), nodeAccessLogPathMaxLength),
 			StatusCode:    item.StatusCode,
-			Reason:        truncateForDatabase(strings.TrimSpace(item.Reason), 512),
+			Reason:        truncateForDatabase(security.RedactSensitiveText(strings.TrimSpace(item.Reason)), 512),
 			CacheStatus:   normalizeAccessLogCacheStatus(item.CacheStatus),
 			RequestBytes:  nonNegativeInt64(item.RequestBytes),
 			ResponseBytes: nonNegativeInt64(item.ResponseBytes),
@@ -466,6 +523,25 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 	}
 	_, err = model.DeleteNodeAccessLogsByNodeBefore(tx, nodeID, reportedAt.Add(-nodeAccessLogRetentionWindow))
 	return err
+}
+
+func normalizePersistedAccessLogPath(value string) string {
+	trimmed := strings.TrimSpace(security.RedactSensitiveText(value))
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		parsed, err := url.Parse(trimmed)
+		if err == nil {
+			parsed.RawQuery = ""
+			parsed.Fragment = ""
+			return parsed.String()
+		}
+	}
+	if index := strings.IndexAny(trimmed, "?#"); index >= 0 {
+		return trimmed[:index]
+	}
+	return trimmed
 }
 
 func reconcileNodeHealthEvents(tx *gorm.DB, nodeID string, events []AgentNodeHealthEvent, reportedAt time.Time) error {

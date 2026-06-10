@@ -3,6 +3,7 @@ package service
 import (
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -161,7 +162,9 @@ type NodeView struct {
 	GeoLatitude               *float64   `json:"geo_latitude"`
 	GeoLongitude              *float64   `json:"geo_longitude"`
 	GeoManualOverride         bool       `json:"geo_manual_override"`
-	AgentToken                string     `json:"agent_token"`
+	AgentToken                string     `json:"agent_token,omitempty"`
+	AgentTokenPrefix          string     `json:"agent_token_prefix"`
+	AgentTokenAvailable       bool       `json:"agent_token_available"`
 	AutoUpdateEnabled         bool       `json:"auto_update_enabled"`
 	UpdateRequested           bool       `json:"update_requested"`
 	UpdateChannel             string     `json:"update_channel"`
@@ -223,14 +226,15 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 		return nil, err
 	}
 	refreshAgentTokenCache(node)
-	persistHeartbeatObservability(node.NodeID, payload, node.LastSeenAt)
+	dnsProbeTargets := buildAgentDNSProbeTargets()
+	persistHeartbeatObservability(node.NodeID, payload, node.LastSeenAt, dnsProbeTargets)
 	activeConfig, err := GetActiveConfigMetaForAgentNode(node)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 	return &HeartbeatResponse{
 		Node:             node,
-		AgentSettings:    buildAgentSettings(node, updateNow, updateChannel.String(), updateTag, restartOpenrestyNow),
+		AgentSettings:    buildAgentSettingsWithDNSProbeTargets(node, updateNow, updateChannel.String(), updateTag, restartOpenrestyNow, dnsProbeTargets),
 		ActiveConfig:     activeConfig,
 		DNSWorkerUpdates: pendingAgentDNSWorkerUpdatesForNode(node),
 	}, nil
@@ -269,7 +273,7 @@ func recordAgentDNSWorkerUpdateResults(node *model.Node, results []AgentDNSWorke
 		}
 		if worker.UpdateRequested {
 			worker.UpdateDispatchMode = "agent_result"
-			worker.UpdateDispatchMessage = truncateForDatabase(strings.TrimSpace(result.Message), 16000)
+			worker.UpdateDispatchMessage = truncateForDatabase(security.RedactSensitiveText(strings.TrimSpace(result.Message)), 16000)
 			worker.UpdateDispatchedAt = &now
 			worker.UpdateRequested = false
 			worker.UpdateTag = ""
@@ -309,6 +313,10 @@ func isStaleAgentDNSWorkerUpdateResult(worker *model.DNSWorker, result AgentDNSW
 }
 
 func buildAgentSettings(node *model.Node, updateNow bool, updateChannel string, updateTag string, restartOpenrestyNow bool) *AgentSettings {
+	return buildAgentSettingsWithDNSProbeTargets(node, updateNow, updateChannel, updateTag, restartOpenrestyNow, buildAgentDNSProbeTargets())
+}
+
+func buildAgentSettingsWithDNSProbeTargets(node *model.Node, updateNow bool, updateChannel string, updateTag string, restartOpenrestyNow bool, dnsProbeTargets []AgentDNSProbeTarget) *AgentSettings {
 	if strings.TrimSpace(updateChannel) == "" {
 		updateChannel = ReleaseChannelStable.String()
 	}
@@ -321,7 +329,7 @@ func buildAgentSettings(node *model.Node, updateNow bool, updateChannel string, 
 		UpdateChannel:           updateChannel,
 		UpdateTag:               strings.TrimSpace(updateTag),
 		RestartOpenrestyNow:     restartOpenrestyNow,
-		DNSProbeTargets:         buildAgentDNSProbeTargets(),
+		DNSProbeTargets:         dnsProbeTargets,
 	}
 }
 
@@ -342,10 +350,14 @@ func buildAgentDNSProbeTargets() []AgentDNSProbeTarget {
 		if strings.TrimSpace(worker.WorkerID) == "" || strings.TrimSpace(worker.PublicAddress) == "" {
 			continue
 		}
+		publicAddress, err := validateDNSWorkerPublicAddressForStorage(worker.PublicAddress)
+		if err != nil {
+			continue
+		}
 		targets = append(targets, AgentDNSProbeTarget{
 			WorkerID:      worker.WorkerID,
 			Name:          worker.Name,
-			PublicAddress: worker.PublicAddress,
+			PublicAddress: publicAddress,
 			QueryName:     queryName,
 			QueryType:     "SOA",
 		})
@@ -483,7 +495,7 @@ func ReportApplyLog(payload ApplyLogPayload) (*model.ApplyLog, error) {
 	payload.NodeID = strings.TrimSpace(payload.NodeID)
 	payload.Version = strings.TrimSpace(payload.Version)
 	payload.Result = strings.TrimSpace(strings.ToLower(payload.Result))
-	payload.Message = strings.TrimSpace(payload.Message)
+	payload.Message = security.RedactSensitiveText(strings.TrimSpace(payload.Message))
 	payload.Checksum = strings.TrimSpace(payload.Checksum)
 	payload.MainConfigChecksum = strings.TrimSpace(payload.MainConfigChecksum)
 	payload.RouteConfigChecksum = strings.TrimSpace(payload.RouteConfigChecksum)

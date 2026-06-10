@@ -3,6 +3,7 @@ package geoip
 import (
 	"bytes"
 	"context"
+	"dushengcdn-agent/internal/security"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 
 const minDatabaseSize = 1024 * 1024
 const maxDatabaseMetadataSearchBytes = 128 * 1024
+const defaultDownloadTimeout = 30 * time.Second
 
 var maxDatabaseSize int64 = 128 * 1024 * 1024
 var maxMindMetadataMarker = []byte{0xab, 0xcd, 0xef, 'M', 'a', 'x', 'M', 'i', 'n', 'd', '.', 'c', 'o', 'm'}
@@ -49,6 +51,9 @@ func (u *Updater) Download(ctx context.Context) error {
 	if targetPath == "" {
 		return errors.New("geoip database path is empty")
 	}
+	if _, err := security.ValidatePublicHTTPURL(url, true); err != nil {
+		return fmt.Errorf("geoip database url is unsafe: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return fmt.Errorf("create geoip database directory: %w", err)
 	}
@@ -69,7 +74,7 @@ func (u *Updater) Download(ctx context.Context) error {
 	}
 	client := u.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = security.NewPublicHTTPClient(defaultDownloadTimeout, true)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

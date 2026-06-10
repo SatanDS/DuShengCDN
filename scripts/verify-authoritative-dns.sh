@@ -45,6 +45,7 @@ Behavior:
   3. Confirms the Worker DNS port is listening
   4. Runs UDP/TCP SOA and NS queries against PUBLIC_IP:PORT for ZONE
   5. Checks that a Worker snapshot file exists and is non-empty
+  6. Prints redacted logs unless --skip-logs is set
 
 This script is read-only. It does not restart services, edit files, or change
 Docker/systemd/network resources.
@@ -103,6 +104,22 @@ env_file_value() {
     fi
   fi
   printf '%s' "$fallback"
+}
+
+env_file_present() {
+  local file="$1"
+  local key="$2"
+  [[ -n "${!key:-}" ]] && return 0
+  [[ -f "$file" ]] || return 1
+  grep -Eq "^[[:space:]]*${key}=" "$file"
+}
+
+redact_logs() {
+  sed -E \
+    -e 's#(postgres(ql)?://[^:/@[:space:]]+:)[^@[:space:]]+@#\1<redacted>@#Ig' \
+    -e 's#("[^"]*(password|passwd|pwd|token|secret|authorization)[^"]*"[[:space:]]*:[[:space:]]*")[^"]+"#\1<redacted>"#Ig' \
+    -e 's#((password|passwd|pwd|token|secret|authorization|x-agent-token|x-dns-worker-token)[_[:alnum:] .:-]*[=:][[:space:]]*)[^,;[:space:]\"]+#\1<redacted>#Ig' \
+    -e 's#(Bearer[[:space:]]+)[A-Za-z0-9._~+/=-]+#\1<redacted>#Ig'
 }
 
 abs_path() {
@@ -234,21 +251,25 @@ check_worker_files() {
     fail "Worker env file missing: ${worker_env}"
   fi
 
-  local worker_server_url worker_token listen_addr snapshot_path geoip_path
+  local worker_server_url worker_token_configured listen_addr snapshot_path geoip_path
   worker_server_url="$(env_file_value "$worker_env" DUSHENGCDN_DNS_WORKER_SERVER_URL "")"
-  worker_token="$(env_file_value "$worker_env" DUSHENGCDN_DNS_WORKER_TOKEN "")"
+  if env_file_present "$worker_env" DUSHENGCDN_DNS_WORKER_TOKEN || env_file_present "$worker_env" DUSHENGCDN_DNS_WORKER_TOKEN_FILE; then
+    worker_token_configured="true"
+  else
+    worker_token_configured="false"
+  fi
   listen_addr="$(env_file_value "$worker_env" DUSHENGCDN_DNS_WORKER_LISTEN_ADDR ":53")"
   snapshot_path="$(env_file_value "$worker_env" DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH "${DNS_WORKER_INSTALL_DIR}/data/dns-worker-snapshot.json")"
   geoip_path="$(env_file_value "$worker_env" DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH "")"
 
   echo "worker_server_url=${worker_server_url:-not_configured}"
-  echo "worker_token=$([[ -n "$worker_token" ]] && echo configured || echo not_configured)"
+  echo "worker_token=$([[ "$worker_token_configured" == "true" ]] && echo configured || echo not_configured)"
   echo "worker_listen_addr=${listen_addr}"
   echo "worker_snapshot_path=${snapshot_path}"
   echo "worker_geoip_database=${geoip_path:-not_configured}"
 
   [[ -n "$worker_server_url" ]] && pass "Worker Server URL is configured" || fail "Worker Server URL is not configured"
-  [[ -n "$worker_token" ]] && pass "Worker token is configured" || fail "Worker token is not configured"
+  [[ "$worker_token_configured" == "true" ]] && pass "Worker token is configured" || fail "Worker token is not configured"
 
   if [[ -f "$snapshot_path" && -s "$snapshot_path" ]]; then
     pass "Worker snapshot file exists and is non-empty"
@@ -337,15 +358,15 @@ show_logs() {
   log "Recent logs"
   if docker_compose_available; then
     echo "--- dushengcdn compose logs ---"
-    "${COMPOSE_CMD[@]}" logs --no-color --tail="$LOG_TAIL" dushengcdn 2>/dev/null || true
+    "${COMPOSE_CMD[@]}" logs --no-color --tail="$LOG_TAIL" dushengcdn 2>/dev/null | redact_logs || true
     echo "--- postgres compose logs ---"
-    "${COMPOSE_CMD[@]}" logs --no-color --tail="$LOG_TAIL" postgres 2>/dev/null || true
+    "${COMPOSE_CMD[@]}" logs --no-color --tail="$LOG_TAIL" postgres 2>/dev/null | redact_logs || true
   else
     skip "Server compose logs unavailable"
   fi
   if command -v journalctl >/dev/null 2>&1; then
     echo "--- DNS Worker journal ---"
-    journalctl -u "$DNS_WORKER_SERVICE" -n "$LOG_TAIL" --no-pager 2>/dev/null || true
+    journalctl -u "$DNS_WORKER_SERVICE" -n "$LOG_TAIL" --no-pager 2>/dev/null | redact_logs || true
   else
     skip "journalctl unavailable"
   fi

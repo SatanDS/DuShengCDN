@@ -7,6 +7,7 @@ export interface AuthUser {
   email?: string;
   github_id?: string;
   wechat_id?: string;
+  csrf_token?: string;
 }
 
 export interface LoginPayload {
@@ -24,4 +25,5 @@ export interface RegisterPayload {
 export interface PasswordResetRequestPayload {
   email: string;
   token: string;
+  new_password: string;
 }

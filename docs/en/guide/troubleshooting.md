@@ -100,7 +100,7 @@ cd dushengcdn_server/web
 pnpm build
 ```
 
-3. Check whether the browser URL matches your reverse proxy setup. Nginx, Nginx Proxy Manager, Baota, or another reverse proxy should point to the host-mapped port, for example `3010` for the default source Compose deployment; use `3000` only when you explicitly expose `3000:3000`.
+3. Check whether the browser URL matches your reverse proxy setup. Nginx, Nginx Proxy Manager, Baota, or another reverse proxy should point to the local host-mapped port, for example `3010` for the default source Compose deployment. Direct `3000` access only applies if you manually changed the panel to a public mapping such as `0.0.0.0:3000:3000`, which is not recommended for production.
 
 4. If using the frontend dev server, confirm backend proxy configuration:
 
@@ -111,7 +111,7 @@ NEXT_DEV_BACKEND_URL=http://127.0.0.1:3000 pnpm dev
 
 ## Default Account Cannot Sign In
 
-On an empty database, the first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first Server startup log when that variable is not set. If the password was changed after first login, use the updated password.
+On an empty database, the first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or read the generated one-time password from the `initial-root-password.txt` file named in the Server log. The log prints the file path, not the password. If the password was changed after first login, use the updated password.
 
 Steps:
 
@@ -126,7 +126,11 @@ Docker Compose deployment:
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
 docker compose stop dushengcdn
-docker compose run --rm dushengcdn /dushengcdn --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /tmp/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+docker compose run --rm -v /tmp/dushengcdn-root-password:/run/secrets/dushengcdn-root-password:ro dushengcdn /dushengcdn --reset-root-password-file /run/secrets/dushengcdn-root-password
+rm -f /tmp/dushengcdn-root-password
 docker compose up -d
 ```
 
@@ -135,7 +139,10 @@ Source deployment:
 ```bash
 cd /opt/dushengcdn/dushengcdn_server
 export DSN='postgres://dushengcdn:password@127.0.0.1:5432/dushengcdn?sslmode=disable'
-./dushengcdn --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /run/secrets/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+./dushengcdn --reset-root-password-file /run/secrets/dushengcdn-root-password
 ```
 
 ## Agent Cannot Register or Stays Offline
@@ -167,7 +174,7 @@ Confirm:
 | `heartbeat_interval` | Supports millisecond integers or Go duration strings |
 | `request_timeout` | Increase it for slow networks |
 
-If the log says the token is invalid, prepare a new token in the UI, update `agent.json`, and restart:
+If the log says the token is invalid, prepare a new token in the UI, update `agent.json` or the restricted token file, and restart. When logs contain `Agent authentication failed`, first check `agent_token` / `discovery_token`, `DUSHENGCDN_AGENT_TOKEN_FILE` / `DUSHENGCDN_DISCOVERY_TOKEN_FILE`, or the compatibility variables `DUSHENGCDN_AGENT_TOKEN` / `DUSHENGCDN_DISCOVERY_TOKEN`; first registration must use a Discovery Token, while heartbeat, config pull, and WebSocket should use the node-specific Agent Token.
 
 ```bash
 systemctl restart dushengcdn-agent
@@ -228,7 +235,7 @@ This usually means the server-side repository copy has local edits in Compose fi
 3. Create `dushengcdn_server/.env` from `.env.example` and put real deployment values there.
 4. Start with `DUSHENGCDN_VERSION="$(git describe --tags --always --dirty)" docker compose --env-file .env up -d --build`.
 
-Port conflicts only require changing the host-side mapping, for example `3010:3000`; the container still listens on `3000`.
+Port conflicts only require changing the host-side mapping, for example `127.0.0.1:3010:3000`; the container still listens on `3000`.
 
 ## Automatic DNS Does Not Switch Nodes
 
@@ -300,7 +307,7 @@ If the migration wizard reports stale or inconsistent Worker snapshots:
 
 1. Confirm at least one Worker is online and the latest public UDP/TCP probe is healthy.
 2. Check snapshot consistency for non-empty matching `last_snapshot_version` and fresh `last_snapshot_at`.
-3. Inspect Worker logs for invalid Token, unreachable Server URL, TLS trust failures, or snapshot API errors.
+3. Inspect Worker logs for invalid Token, unreachable Server URL, TLS trust failures, or snapshot API errors. When logs contain `DNS Worker Token authentication failed`, first check `DUSHENGCDN_DNS_WORKER_TOKEN_FILE` / `--token-file`, or the compatibility `DUSHENGCDN_DNS_WORKER_TOKEN` / `--token`.
 4. Confirm the Token is a DNS Worker Token, not an Agent Token or login password.
 5. Restart the Worker or wait for the next heartbeat after fixing the issue.
 

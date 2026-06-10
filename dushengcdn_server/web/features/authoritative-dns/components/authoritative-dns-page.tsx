@@ -103,6 +103,7 @@ import { cn } from '@/lib/utils/cn';
 import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatCountryName } from '@/lib/utils/countries';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
+import { shellQuote } from '@/lib/utils/shell';
 
 type FeedbackState = {
   tone: 'info' | 'success' | 'danger';
@@ -5917,34 +5918,75 @@ function WorkerTokenModal({
     message: string;
   } | null>(null);
   const token = worker.token ?? '';
-  const installCommand = `curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-dns-worker.sh | bash -s -- \\
-  --server-url ${serverUrl} \\
-  --token ${token || 'YOUR_DNS_WORKER_TOKEN'} \\
+  const quotedServerUrl = shellQuote(serverUrl);
+  const quotedWorkerId = shellQuote(worker.worker_id);
+  const installCommand = `token_file="$(mktemp)"
+chmod 600 "$token_file"
+trap 'stty echo 2>/dev/null || true; rm -f "$token_file"' EXIT
+printf 'DNS Worker token: ' >&2
+stty -echo 2>/dev/null || true
+IFS= read -r dns_worker_token
+stty echo 2>/dev/null || true
+printf '\\n' >&2
+printf '%s\\n' "$dns_worker_token" > "$token_file"
+unset dns_worker_token
+curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-dns-worker.sh | bash -s -- \\
+  --server-url ${quotedServerUrl} \\
+  --worker-id ${quotedWorkerId} \\
+  --token-file "$token_file" \\
   --source-database-profile full \\
   --query-rate-limit 200 \\
-  --udp-response-size 1232`;
-  const dockerCommand = `docker run -d --name dushengcdn-dns-worker --restart unless-stopped \\
+  --udp-response-size 1232
+rm -f "$token_file"
+trap - EXIT`;
+  const dockerCommand = `secret_dir="\${XDG_CONFIG_HOME:-$HOME/.config}/dushengcdn-dns-worker"
+mkdir -p "$secret_dir"
+chmod 700 "$secret_dir"
+token_file="$secret_dir/dns-worker-token"
+printf 'DNS Worker token: ' >&2
+stty -echo 2>/dev/null || true
+IFS= read -r dns_worker_token
+stty echo 2>/dev/null || true
+printf '\\n' >&2
+printf '%s\\n' "$dns_worker_token" > "$token_file"
+chmod 600 "$token_file"
+unset dns_worker_token
+docker run -d --name dushengcdn-dns-worker --restart unless-stopped \\
   -p 53:53/udp -p 53:53/tcp \\
   -v dushengcdn-dns-worker-data:/data \\
-  -e DUSHENGCDN_DNS_WORKER_SERVER_URL=${serverUrl} \\
-  -e DUSHENGCDN_DNS_WORKER_TOKEN=${token || 'YOUR_DNS_WORKER_TOKEN'} \\
+  -v "$token_file":/run/secrets/dushengcdn_dns_worker_token:ro \\
+  -e DUSHENGCDN_DNS_WORKER_SERVER_URL=${quotedServerUrl} \\
+  -e DUSHENGCDN_DNS_WORKER_ID=${quotedWorkerId} \\
+  -e DUSHENGCDN_DNS_WORKER_TOKEN_FILE=/run/secrets/dushengcdn_dns_worker_token \\
   -e DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH=/data/geoip/GeoLite2-Country.mmdb \\
   -e DUSHENGCDN_DNS_WORKER_ASN_DATABASE_PATH=/data/geoip/GeoLite2-ASN.mmdb \\
   -e DUSHENGCDN_DNS_WORKER_OPERATOR_CIDR_DATABASE_PATH=/data/operator-cidr \\
   -e DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \\
   -e DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232 \\
   ghcr.io/satands/dushengcdn-dns-worker:latest`;
-  const sourceCommand = `cd dushengcdn_server
+  const sourceCommand = `token_file="$(mktemp)"
+chmod 600 "$token_file"
+trap 'stty echo 2>/dev/null || true; rm -f "$token_file"' EXIT
+printf 'DNS Worker token: ' >&2
+stty -echo 2>/dev/null || true
+IFS= read -r dns_worker_token
+stty echo 2>/dev/null || true
+printf '\\n' >&2
+printf '%s\\n' "$dns_worker_token" > "$token_file"
+unset dns_worker_token
+cd dushengcdn_server
 go run ./cmd/dns-worker \\
-  --server-url ${serverUrl} \\
-  --token ${token || 'YOUR_DNS_WORKER_TOKEN'} \\
+  --server-url ${quotedServerUrl} \\
+  --token-file "$token_file" \\
   --listen :53 \\
   --snapshot-path /var/lib/dushengcdn-dns-worker/snapshot.json \\
   --geoip-database /var/lib/dushengcdn-dns-worker/geoip/GeoLite2-Country.mmdb \\
   --asn-database /var/lib/dushengcdn-dns-worker/geoip/GeoLite2-ASN.mmdb \\
   --operator-cidr-database /var/lib/dushengcdn-dns-worker/operator-cidr \\
   --query-rate-limit 200 \\
-  --udp-response-size 1232`;
+  --udp-response-size 1232
+rm -f "$token_file"
+trap - EXIT`;
 
   const handleCopy = async (value: string, message: string) => {
     try {

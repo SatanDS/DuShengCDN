@@ -542,6 +542,53 @@ func TestCloudflareListDNSRecordsRejectsTooManyPages(t *testing.T) {
 	}
 }
 
+func TestCloudflareNonJSONErrorBodyIsNotReflected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`<html>debug secret token should not be stored</html>`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := &cloudflareClient{
+		apiToken:   "token",
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+	}
+	err := client.VerifyToken(context.Background())
+	if err == nil {
+		t.Fatal("expected Cloudflare error")
+	}
+	message := err.Error()
+	if strings.Contains(message, "debug secret token") || strings.Contains(message, "<html>") {
+		t.Fatalf("expected raw Cloudflare body to be redacted, got %q", message)
+	}
+	if !strings.Contains(message, "Cloudflare API 返回非 JSON 错误响应") {
+		t.Fatalf("expected generic non-json message, got %q", message)
+	}
+}
+
+func TestCloudflareJSONErrorBodyUsesBoundedMessages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"success":false,"errors":[{"code":10000,"message":"authentication failed"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := &cloudflareClient{
+		apiToken:   "token",
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+	}
+	err := client.VerifyToken(context.Background())
+	if err == nil {
+		t.Fatal("expected Cloudflare error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "authentication failed") {
+		t.Fatalf("expected sanitized Cloudflare error message, got %q", message)
+	}
+}
+
 func TestNormalizeGSLBPolicyRejectsHTTPSourceProviderForAuthoritativeDNS(t *testing.T) {
 	_, err := normalizeGSLBPolicy(ProxyRouteGSLBPolicy{
 		SourceIP: ProxyRouteGSLBSourceIPProvider{

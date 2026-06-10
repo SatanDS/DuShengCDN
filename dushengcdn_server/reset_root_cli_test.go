@@ -48,7 +48,11 @@ func TestResetRootPasswordCLI(t *testing.T) {
 func runResetRootPasswordCLI(t *testing.T, dbPath string, password string) {
 	t.Helper()
 
-	cmd := exec.Command("go", "run", ".", "--reset-root-password", password)
+	passwordFile := filepath.Join(t.TempDir(), "root-password.txt")
+	if err := os.WriteFile(passwordFile, []byte(password+"\n"), 0600); err != nil {
+		t.Fatalf("write root password reset file: %v", err)
+	}
+	cmd := exec.Command("go", "run", ".", "--reset-root-password-file", passwordFile)
 	cmd.Dir = "."
 	cmd.Env = append(os.Environ(),
 		"SQLITE_PATH="+dbPath,

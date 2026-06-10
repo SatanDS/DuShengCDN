@@ -150,7 +150,7 @@ func (c *Client) formatHTTPError(path string, statusCode int, status string, raw
 			message = "authentication failed"
 		}
 		return fmt.Errorf(
-			"%s returned %s: %s. Agent authentication failed; check agent_token/discovery_token in agent.json or DUSHENGCDN_AGENT_TOKEN/DUSHENGCDN_DISCOVERY_TOKEN, and make sure registration uses Discovery Token while heartbeat/config pull uses the node Agent Token",
+			"%s returned %s: %s. Agent authentication failed; check agent_token/discovery_token in agent.json, DUSHENGCDN_AGENT_TOKEN_FILE/DUSHENGCDN_DISCOVERY_TOKEN_FILE, or the compatibility DUSHENGCDN_AGENT_TOKEN/DUSHENGCDN_DISCOVERY_TOKEN, and make sure registration uses Discovery Token while heartbeat/config pull uses the node Agent Token",
 			path,
 			status,
 			message,

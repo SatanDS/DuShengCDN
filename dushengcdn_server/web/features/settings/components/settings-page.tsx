@@ -16,10 +16,7 @@ import { useAuth } from '@/components/providers/auth-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { StatusBadge } from '@/components/ui/status-badge';
-import {
-  getOAuthAuthorizeUrl,
-  sendEmailVerification,
-} from '@/features/auth/api/auth';
+import { getOAuthAuthorizeUrl } from '@/features/auth/api/auth';
 import { getPublicStatus } from '@/features/auth/api/public';
 import {
   activateCommercialLicense,
@@ -43,6 +40,7 @@ import {
   lookupGeoIP,
   refreshDNSSourceDatabaseMirror,
   restoreCommercialLicense,
+  sendEmailBindVerification,
   revokeCommercialLicense,
   rotateBootstrapToken,
   updateOptions,
@@ -77,6 +75,7 @@ import { ApiError } from '@/lib/api/client';
 import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime } from '@/lib/utils/date';
 import { normalizeTrustedExternalUrl } from '@/lib/utils/redirect';
+import { shellQuote } from '@/lib/utils/shell';
 
 const settingsQueryKey = ['settings', 'options'] as const;
 const authSourcesQueryKey = ['settings', 'auth-sources'] as const;
@@ -477,10 +476,24 @@ function getActivationStatusBadge(record: CommercialLicenseActivationRecord) {
 }
 
 function buildDiscoveryCommand(serverUrl: string, discoveryToken: string) {
+  void discoveryToken;
+  const quotedServerUrl = shellQuote(normalizeServerUrl(serverUrl));
   return [
+    `token_file="$(mktemp)"`,
+    `chmod 600 "$token_file"`,
+    `trap 'stty echo 2>/dev/null || true; rm -f "$token_file"' EXIT`,
+    `printf 'Discovery token: ' >&2`,
+    `stty -echo 2>/dev/null || true`,
+    `IFS= read -r discovery_token`,
+    `stty echo 2>/dev/null || true`,
+    `printf '\\n' >&2`,
+    `printf '%s\\n' "$discovery_token" > "$token_file"`,
+    `unset discovery_token`,
     `curl -fsSL ${installerScriptUrl} | bash -s -- \\`,
-    `  --server-url ${normalizeServerUrl(serverUrl)} \\`,
-    `  --discovery-token ${discoveryToken}`,
+    `  --server-url ${quotedServerUrl} \\`,
+    `  --discovery-token-file "$token_file"`,
+    `rm -f "$token_file"`,
+    `trap - EXIT`,
   ].join('\n');
 }
 
@@ -1009,7 +1022,7 @@ export function SettingsPage() {
     void runBusyAction(
       'email-send',
       async () => {
-        await sendEmailVerification(
+        await sendEmailBindVerification(
           emailAddress.trim(),
           emailTurnstileToken || undefined,
         );
@@ -2532,7 +2545,7 @@ export function SettingsPage() {
                     服务端版本
                   </p>
                   <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                    {publicStatus.version}
+                    {publicStatus.version || '未公开'}
                   </p>
                 </div>
                 <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
@@ -2540,7 +2553,9 @@ export function SettingsPage() {
                     Server 启动时间
                   </p>
                   <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                    {formatDateTime(new Date(publicStatus.start_time * 1000))}
+                    {publicStatus.start_time
+                      ? formatDateTime(new Date(publicStatus.start_time * 1000))
+                      : '未公开'}
                   </p>
                 </div>
                 <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">

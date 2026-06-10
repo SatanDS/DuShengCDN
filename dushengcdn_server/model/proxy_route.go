@@ -41,7 +41,7 @@ type ProxyRoute struct {
 	CCConfig                   string     `json:"cc_config" gorm:"column:cc_config;type:text;not null;default:'{}'"`
 	BasicAuthEnabled           bool       `json:"basic_auth_enabled" gorm:"not null;default:false"`
 	BasicAuthUsername          string     `json:"basic_auth_username" gorm:"size:255;not null;default:''"`
-	BasicAuthPassword          string     `json:"basic_auth_password" gorm:"size:255;not null;default:''"`
+	BasicAuthPassword          string     `json:"-" gorm:"size:255;not null;default:''"`
 	RegionRestrictionEnabled   bool       `json:"region_restriction_enabled" gorm:"not null;default:false"`
 	RegionRestrictionMode      string     `json:"region_restriction_mode" gorm:"size:16;not null;default:'block'"`
 	RegionRestrictionCountries string     `json:"region_restriction_countries" gorm:"type:text;not null;default:'[]'"`

@@ -6,7 +6,8 @@
 | --- | --- | --- |
 | `--port` | Server listen port | `3000` |
 | `--log-dir` | Log directory | empty |
-| `--reset-root-password` | Reset the `root` password and exit without starting HTTP service | empty |
+| `--reset-root-password-file` / `--reset-root-password-stdin` | Read the new password from a file or stdin, reset the `root` password, and exit without starting HTTP service | empty |
+| `--reset-root-password` | Compatibility argv input; avoid it because it can leak through shell history or process arguments | empty |
 | `--create-dns-worker-name` | Create a DNS Worker, print the newly created Token, then exit without starting HTTP service | empty |
 | `--create-dns-worker-public-address` | Public address saved for the Worker created by `--create-dns-worker-name` | empty |
 | `--version` | Print version and exit | `false` |
@@ -17,6 +18,7 @@
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `PORT` | Server listen port | `3000` |
+| `DUSHENGCDN_LISTEN_ADDRESS` / `LISTEN_ADDRESS` | Server bind address; the commercial systemd installer defaults it to `127.0.0.1`. Use `0.0.0.0` only with firewalling and HTTPS reverse proxy protection | empty, listens on all addresses |
 | `GIN_MODE` | Gin mode | release unless `debug` |
 | `LOG_LEVEL` | Log level | `info` |
 | `SESSION_SECRET` | Session signing secret; release mode requires an explicit value with at least 32 characters | random on startup in debug mode |
@@ -30,6 +32,7 @@
 | `REDIS_CONN_STRING` | Redis connection string | empty |
 | `REDIS_REQUIRED` | Require Redis initialization to succeed; startup fails when Redis is missing or unreachable | `false` |
 | `UPLOAD_PATH` | Upload directory | `upload` |
+| `DUSHENGCDN_PUBLIC_STATUS_RUNTIME_METADATA` | Allow unauthenticated `/api/status` to include the running Server version, start time, and `ServerAddress`; disabled by default to reduce public fingerprinting | `false` |
 | `AGENT_TOKEN` | Legacy global Agent token, ignored unless `DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED=true` | empty |
 | `DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED` | Temporarily allow the legacy global Agent token during old Agent migration | `false` |
 | `DUSHENGCDN_LICENSE_REQUIRED` | Require a valid commercial license for gated commercial capabilities | `false` |
@@ -60,8 +63,10 @@ Production Compose files require `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `DSN
 ```bash
 cd dushengcdn_server
 go run ./cmd/license keygen
+# Save the private_key from keygen outside the repo in a restricted file, for example:
+# install -m 600 /dev/stdin /run/secrets/dushengcdn-license-private-key
 go run ./cmd/license sign \
-  -private-key "$DUSHENGCDN_LICENSE_PRIVATE_KEY" \
+  -private-key-file /run/secrets/dushengcdn-license-private-key \
   -license-id lic-2026-001 \
   -customer-name "Example Ltd." \
   -plan enterprise \
@@ -72,14 +77,14 @@ go run ./cmd/license sign \
 go run ./cmd/license inspect -token "$LICENSE_TOKEN" -public-key "$DUSHENGCDN_LICENSE_PUBLIC_KEY"
 ```
 
-Set the generated `public_key` as `DUSHENGCDN_LICENSE_PUBLIC_KEYS`. Keep the `private_key` offline on the issuing side; do not put it into Server environment variables or Compose files. `features` accepts `all` or a comma-separated set of `acme-automation`, `authoritative-dns`, `cloudflare-dns`, `gslb`, `ddos-protection`, `waf`, `cc-protection`, and `geo-access-control`.
+Set the generated `public_key` as `DUSHENGCDN_LICENSE_PUBLIC_KEYS`. Keep the `private_key` offline on the issuing side and pass it with `-private-key-file` from a restricted file; do not put it into shell history, process arguments, Server environment variables, or Compose files. `features` accepts `all` or a comma-separated set of `acme-automation`, `authoritative-dns`, `cloudflare-dns`, `gslb`, `ddos-protection`, `waf`, `cc-protection`, and `geo-access-control`.
 
 ## Frontend Build Variables
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `NEXT_PUBLIC_API_BASE_URL` | Frontend API base path | `/api` |
-| `NEXT_PUBLIC_APP_VERSION` | Static frontend build version; the dashboard top bar prefers the running Server version returned by `/api/status` | `dev` |
+| `NEXT_PUBLIC_APP_VERSION` | Static frontend build version; unauthenticated `/api/status` does not expose the running Server version unless `DUSHENGCDN_PUBLIC_STATUS_RUNTIME_METADATA=true` is enabled | `dev` |
 | `NEXT_DEV_BACKEND_URL` | Local dev backend proxy target | `http://127.0.0.1:3000` |
 
 ## Docker Compose Build Variables
@@ -160,12 +165,22 @@ Agent environment variables can override config-file values:
 | Variable | Purpose |
 | --- | --- |
 | `DUSHENGCDN_SERVER_URL` | Control plane URL |
-| `DUSHENGCDN_AGENT_TOKEN` | Node-specific Agent Token |
-| `DUSHENGCDN_DISCOVERY_TOKEN` | First-registration Discovery Token |
+| `DUSHENGCDN_AGENT_TOKEN_FILE` | File containing the node-specific Agent Token; preferred |
+| `DUSHENGCDN_DISCOVERY_TOKEN_FILE` | File containing the first-registration Discovery Token; preferred |
+| `DUSHENGCDN_AGENT_TOKEN` | Node-specific Agent Token; compatibility variable, avoid in shared environments |
+| `DUSHENGCDN_DISCOVERY_TOKEN` | First-registration Discovery Token; compatibility variable, avoid in shared environments |
 | `DUSHENGCDN_NODE_NAME` | Node name |
 | `DUSHENGCDN_NODE_IP` | Node IP |
 | `DUSHENGCDN_DATA_DIR` | Agent data directory |
 | `DUSHENGCDN_OPENRESTY_PATH` | OpenResty binary path |
+| `DUSHENGCDN_GEOIP_DATABASE_URL` | Agent GeoIP Country database download URL |
+| `DUSHENGCDN_GEOIP_DATABASE_PATH` | Agent local GeoIP database path |
+| `DUSHENGCDN_OPENRESTY_GEOIP_DATABASE_PATH` | GeoIP database path used by OpenResty/Lua |
+| `DUSHENGCDN_GEOIP_UPDATE_INTERVAL` | Agent GeoIP database update interval |
+| `DUSHENGCDN_GEOIP_LOOKUP_API_URL` | Optional precise online IP lookup API URL |
+| `DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN_FILE` | File containing the optional precise IP lookup API bearer token; preferred |
+| `DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN` | Optional precise IP lookup API bearer token; compatibility variable, avoid in shared environments |
+| `DUSHENGCDN_GEOIP_LOOKUP_API_TIMEOUT` | Optional precise IP lookup API timeout |
 | `DUSHENGCDN_HEARTBEAT_INTERVAL` | Heartbeat interval |
 | `DUSHENGCDN_REQUEST_TIMEOUT` | Request timeout |
 | `DUSHENGCDN_OPENRESTY_OBSERVABILITY_PORT` | Local observability port |
@@ -180,11 +195,19 @@ Agent environment variables can override config-file values:
 | `openresty_path` | OpenResty binary path | no | `openresty` |
 | `openresty_container_name` | Deprecated Docker-control field, read for compatibility only | no | empty |
 | `openresty_docker_image` | Deprecated Docker-control field, read for compatibility only | no | empty |
-| `openresty_observability_port` | Local observability and OpenResty health-check port | no | `18081` |
+| `openresty_observability_port` | Local observability and OpenResty health-check port; keep it loopback-only and never publish it publicly | no | `18081` |
 | `docker_binary` | Deprecated Docker-control field, read for compatibility only | no | empty |
 | `data_dir` | Agent data directory | no | `data` under config directory |
 | `access_log_path` | OpenResty access log path | no | `data_dir/var/log/dushengcdn/access.log` |
 | `runtime_config_dir` | Runtime config directory, including `pow_config.json` | no | `data_dir/etc/dushengcdn` |
+| `geoip_database_url` | GeoIP Country database download URL | no | public GeoLite2 mirror |
+| `geoip_database_path` | Agent local GeoIP database path | no | `data_dir/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb` |
+| `openresty_geoip_database_path` | GeoIP database path used by OpenResty/Lua | no | same as `geoip_database_path` |
+| `geoip_update_interval` | GeoIP database update interval | no | `24h` |
+| `geoip_lookup_api_url` | Optional precise online IP lookup API URL, used only when local GeoIP has no country | no | empty |
+| `geoip_lookup_api_token_file` | File containing the optional precise IP lookup API bearer token; preferred | no | empty |
+| `geoip_lookup_api_token` | Optional precise IP lookup API bearer token; compatibility field, avoid persisting plaintext | no | empty |
+| `geoip_lookup_api_timeout` | Optional precise IP lookup API timeout | no | `250ms` |
 | `heartbeat_interval` | Heartbeat interval | no | `10000` ms |
 | `request_timeout` | HTTP timeout | no | `10000` ms |
 
@@ -197,7 +220,9 @@ DNS Worker can be configured by environment variables or CLI flags. The install 
 | Environment Variable | Purpose | Default |
 | --- | --- | --- |
 | `DUSHENGCDN_DNS_WORKER_SERVER_URL` | Server URL | empty |
-| `DUSHENGCDN_DNS_WORKER_TOKEN` | DNS Worker Token | empty |
+| `DUSHENGCDN_DNS_WORKER_ID` | DNS Worker ID from the panel; used to verify local identity before Agent-mediated updates | empty |
+| `DUSHENGCDN_DNS_WORKER_TOKEN_FILE` | File containing the DNS Worker Token; preferred | empty |
+| `DUSHENGCDN_DNS_WORKER_TOKEN` | DNS Worker Token; compatibility variable, avoid in shared environments | empty |
 | `DUSHENGCDN_DNS_WORKER_LISTEN_ADDR` | UDP/TCP listen address | `:53` |
 | `DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH` | Local snapshot cache path | `data/dns-worker-snapshot.json` |
 | `DUSHENGCDN_DNS_WORKER_HEARTBEAT_INTERVAL` | Heartbeat, snapshot pull, and rollup upload interval | `10s` |
@@ -210,7 +235,9 @@ DNS Worker can be configured by environment variables or CLI flags. The install 
 | Flag | Purpose | Default |
 | --- | --- | --- |
 | `--server-url` | Server URL | environment variable |
-| `--token` | DNS Worker Token | environment variable |
+| `--worker-id` | DNS Worker ID from the panel, used to bind Agent-mediated updates to this local install | environment variable |
+| `--token-file` | Read DNS Worker Token from a file | environment variable |
+| `--token` | DNS Worker Token; compatibility option. Rejected by default unless `--allow-insecure-token-argv` is explicitly passed | environment variable |
 | `--listen` | UDP/TCP listen address | `:53` |
 | `--snapshot-path` | Local snapshot cache path | `data/dns-worker-snapshot.json` |
 | `--heartbeat-interval` | Heartbeat and snapshot pull interval | `10s` |

@@ -3,6 +3,7 @@ package model
 import (
 	"dushengcdn/common"
 	"dushengcdn/utils/security"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -23,6 +24,32 @@ type User struct {
 	GitHubId         string `json:"github_id" gorm:"column:github_id;index"`
 	WeChatId         string `json:"wechat_id" gorm:"column:wechat_id;index"`
 	VerificationCode string `json:"verification_code" gorm:"-:all"` // this field is only for Email verification, don't save it to database!
+	CSRFToken        string `json:"csrf_token,omitempty" gorm:"-:all"`
+}
+
+func (user User) MarshalJSON() ([]byte, error) {
+	type userJSON struct {
+		Id          int    `json:"id"`
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+		Role        int    `json:"role"`
+		Status      int    `json:"status"`
+		Email       string `json:"email"`
+		GitHubId    string `json:"github_id"`
+		WeChatId    string `json:"wechat_id"`
+		CSRFToken   string `json:"csrf_token,omitempty"`
+	}
+	return json.Marshal(userJSON{
+		Id:          user.Id,
+		Username:    user.Username,
+		DisplayName: user.DisplayName,
+		Role:        user.Role,
+		Status:      user.Status,
+		Email:       user.Email,
+		GitHubId:    user.GitHubId,
+		WeChatId:    user.WeChatId,
+		CSRFToken:   user.CSRFToken,
+	})
 }
 
 func GetMaxUserId() int {
@@ -154,15 +181,25 @@ func ValidateUserToken(token string) (user *User) {
 		return nil
 	}
 	token = strings.Replace(token, "Bearer ", "", 1)
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil
+	}
 	user = &User{}
+	tokenHash := security.HashSecretToken(token)
+	if DB.Where("token = ?", tokenHash).First(user).RowsAffected == 1 {
+		return user
+	}
 	if DB.Where("token = ?", token).First(user).RowsAffected == 1 {
+		_ = DB.Model(user).Update("token", tokenHash).Error
+		user.Token = tokenHash
 		return user
 	}
 	return nil
 }
 
 func IsEmailAlreadyTaken(email string) bool {
-	return DB.Where("email = ?", email).Find(&User{}).RowsAffected == 1
+	return DB.Where("email = ?", strings.TrimSpace(email)).Find(&User{}).RowsAffected > 0
 }
 
 func IsWeChatIdAlreadyTaken(wechatId string) bool {
@@ -170,23 +207,58 @@ func IsWeChatIdAlreadyTaken(wechatId string) bool {
 }
 
 func IsGitHubIdAlreadyTaken(githubId string) bool {
-	return DB.Where("github_id = ?", githubId).Find(&User{}).RowsAffected == 1
+	return DB.Where("github_id = ?", strings.TrimSpace(githubId)).Find(&User{}).RowsAffected > 0
 }
 
 func IsUsernameAlreadyTaken(username string) bool {
 	return DB.Where("username = ?", username).Find(&User{}).RowsAffected == 1
 }
 
-func ResetUserPasswordByEmail(email string, password string) error {
-	if email == "" || password == "" {
-		return errors.New("邮箱地址或密码为空！")
+func GetSingleUserByEmail(email string) (*User, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil, errors.New("email is empty")
+	}
+	var users []User
+	if err := DB.Where("email = ?", email).Limit(2).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	if len(users) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if len(users) > 1 {
+		return nil, errors.New("email address is bound to multiple users")
+	}
+	return &users[0], nil
+}
+
+func ResetUserPasswordByID(userID int, password string) error {
+	if userID <= 0 || password == "" {
+		return errors.New("user id or password is empty")
 	}
 	hashedPassword, err := security.Password2Hash(password)
 	if err != nil {
 		return err
 	}
-	err = DB.Model(&User{}).Where("email = ?", email).Update("password", hashedPassword).Error
-	return err
+	result := DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
+		"password": hashedPassword,
+		"token":    "",
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("user does not exist")
+	}
+	return nil
+}
+
+func ResetUserPasswordByEmail(email string, password string) error {
+	user, err := GetSingleUserByEmail(email)
+	if err != nil {
+		return err
+	}
+	return ResetUserPasswordByID(user.Id, password)
 }
 
 func ResetUserPasswordByUsername(username string, password string) error {

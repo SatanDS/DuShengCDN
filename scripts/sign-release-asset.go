@@ -12,20 +12,25 @@ import (
 )
 
 func main() {
-	privateKeyText := flag.String("private-key", "", "base64-encoded Ed25519 seed or private key")
+	privateKeyFile := flag.String("private-key-file", "", "file containing base64-encoded Ed25519 seed or private key")
 	assetName := flag.String("asset", "", "release asset name")
 	tagName := flag.String("tag", "", "release tag name")
 	checksumFile := flag.String("checksum-file", "", "sha256 checksum file")
 	signatureFile := flag.String("signature-file", "", "signature output file")
 	flag.Parse()
 
-	if err := run(*privateKeyText, *assetName, *tagName, *checksumFile, *signatureFile); err != nil {
+	if err := run(*privateKeyFile, *assetName, *tagName, *checksumFile, *signatureFile); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(privateKeyText string, assetName string, tagName string, checksumFile string, signatureFile string) error {
+func run(privateKeyFile string, assetName string, tagName string, checksumFile string, signatureFile string) error {
+	var err error
+	privateKeyText, err := readPrivateKeyText(privateKeyFile)
+	if err != nil {
+		return err
+	}
 	privateKey, err := parsePrivateKey(privateKeyText)
 	if err != nil {
 		return err
@@ -48,6 +53,21 @@ func run(privateKeyText string, assetName string, tagName string, checksumFile s
 		return fmt.Errorf("write signature file: %w", err)
 	}
 	return nil
+}
+
+func readPrivateKeyText(filePath string) (string, error) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		filePath = strings.TrimSpace(os.Getenv("DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY_FILE"))
+	}
+	if filePath != "" {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("read private key file: %w", err)
+		}
+		return strings.TrimSpace(string(content)), nil
+	}
+	return "", fmt.Errorf("release signing private key file is required; use -private-key-file or DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY_FILE")
 }
 
 func parsePrivateKey(value string) (ed25519.PrivateKey, error) {

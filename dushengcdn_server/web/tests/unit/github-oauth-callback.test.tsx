@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { StrictMode, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -99,5 +99,19 @@ describe('GitHubOAuthCallback', () => {
     await waitFor(() => {
       expect(exchangeGitHubCodeMock).not.toHaveBeenCalled();
     });
+  });
+
+  it('does not render provider supplied error descriptions', async () => {
+    searchParams = new URLSearchParams(
+      'error=access_denied&error_description=provider+leaked+detail&legacy=1',
+    );
+
+    renderWithProviders(<GitHubOAuthCallback />);
+
+    await waitFor(() => {
+      expect(exchangeGitHubCodeMock).not.toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/provider leaked detail/)).not.toBeInTheDocument();
+    expect(screen.getByText('GitHub 授权失败，请返回登录页重试。')).toBeInTheDocument();
   });
 });

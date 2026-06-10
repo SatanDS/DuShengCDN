@@ -14,6 +14,7 @@ import (
 	"dushengcdn/common"
 	"dushengcdn/internal/dnsworker"
 	"dushengcdn/model"
+	"dushengcdn/utils/security"
 
 	"github.com/miekg/dns"
 	"gorm.io/gorm"
@@ -58,7 +59,7 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 
 	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
 		Name:          "ns1",
-		PublicAddress: "203.0.113.10:53",
+		PublicAddress: "8.8.8.8:53",
 	})
 	if err != nil {
 		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
@@ -69,6 +70,9 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
 	if err != nil {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker to zone: %v", err)
 	}
 
 	now := time.Now()
@@ -419,10 +423,30 @@ func TestAuthoritativeDNSSnapshotFiltersZonesRoutesAndStatesForAssignedWorker(t 
 	}).Insert(); err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
+	if err := (&model.Node{
+		NodeID:          "node-eu",
+		Name:            "eu",
+		IP:              "1.1.1.1",
+		PoolName:        "eu",
+		PublicIPs:       `["1.1.1.1"]`,
+		Weight:          100,
+		AgentToken:      "token-eu-other",
+		AgentVersion:    "dev",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		Status:          NodeStatusOnline,
+		LastSeenAt:      now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert EU node: %v", err)
+	}
 
 	assignedRoute := seedAuthoritativeSnapshotFilterRoute(t, assignedZone.ID, "www.assigned.example.com")
 	openRoute := seedAuthoritativeSnapshotFilterRoute(t, openZone.ID, "www.open.example.com")
 	otherRoute := seedAuthoritativeSnapshotFilterRoute(t, otherZone.ID, "www.other.example.com")
+	otherRoute.NodePool = "eu"
+	otherRoute.GSLBPolicy = mustJSON(t, defaultGSLBPolicy("eu", 1, "weighted", 30))
+	if err := otherRoute.Update(); err != nil {
+		t.Fatalf("update other route pool: %v", err)
+	}
 	for _, route := range []*model.ProxyRoute{assignedRoute, openRoute, otherRoute} {
 		changedAt := now.Add(-time.Duration(route.ID) * time.Second)
 		if err := model.DB.Create(&model.GSLBSchedulingState{
@@ -448,16 +472,36 @@ func TestAuthoritativeDNSSnapshotFiltersZonesRoutesAndStatesForAssignedWorker(t 
 	}
 
 	gotZones := snapshotZoneNames(snapshot.Zones)
-	if !sameStringSet(gotZones, []string{"assigned.example.com", "open.example.com"}) {
-		t.Fatalf("expected assigned plus unassigned zones, got %v", gotZones)
+	if !sameStringSet(gotZones, []string{"assigned.example.com"}) {
+		t.Fatalf("expected only explicitly assigned zones, got %v", gotZones)
 	}
 	gotRoutes := snapshotRouteDomains(snapshot.Routes)
-	if !sameStringSet(gotRoutes, []string{"www.assigned.example.com", "www.open.example.com"}) {
-		t.Fatalf("expected routes only for allowed zones, got %v", gotRoutes)
+	if !sameStringSet(gotRoutes, []string{"www.assigned.example.com"}) {
+		t.Fatalf("expected routes only for explicitly assigned zones, got %v", gotRoutes)
 	}
 	gotStateRoutes := snapshotStateRouteIDs(snapshot.SchedulingStates)
-	if !sameUintSet(gotStateRoutes, []uint{assignedRoute.ID, openRoute.ID}) {
-		t.Fatalf("expected scheduling states only for allowed routes, got %v", gotStateRoutes)
+	if !sameUintSet(gotStateRoutes, []uint{assignedRoute.ID}) {
+		t.Fatalf("expected scheduling states only for explicitly assigned routes, got %v", gotStateRoutes)
+	}
+	gotNodes := snapshotNodeIDs(snapshot.Nodes)
+	if !sameStringSet(gotNodes, []string{"node-hk"}) {
+		t.Fatalf("expected nodes only for allowed route pools, got %v", gotNodes)
+	}
+
+	oldAllowUnassigned := common.AuthoritativeDNSWorkerAllowUnassignedZones
+	common.AuthoritativeDNSWorkerAllowUnassignedZones = true
+	t.Cleanup(func() {
+		common.AuthoritativeDNSWorkerAllowUnassignedZones = oldAllowUnassigned
+	})
+	compatSnapshot, err := GetAuthoritativeDNSSnapshot(workerModel)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot compat: %v", err)
+	}
+	if !sameStringSet(snapshotZoneNames(compatSnapshot.Zones), []string{"assigned.example.com", "open.example.com"}) {
+		t.Fatalf("expected compatibility switch to include unassigned zones, got %v", snapshotZoneNames(compatSnapshot.Zones))
+	}
+	if !sameUintSet(snapshotStateRouteIDs(compatSnapshot.SchedulingStates), []uint{assignedRoute.ID, openRoute.ID}) {
+		t.Fatalf("expected compatibility switch to include unassigned route states, got %v", snapshotStateRouteIDs(compatSnapshot.SchedulingStates))
 	}
 }
 
@@ -861,6 +905,9 @@ func TestAuthoritativeDNSSnapshotClampsFutureSchedulingStateTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
 	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
 	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
 	if err != nil {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
@@ -1025,7 +1072,7 @@ func TestAuthoritativeDNSSnapshotProbeSchedulingFiltersTargets(t *testing.T) {
 	}
 	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
 		Name:          "ns1",
-		PublicAddress: "203.0.113.10:53",
+		PublicAddress: "8.8.8.8:53",
 	})
 	if err != nil {
 		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
@@ -3218,6 +3265,14 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
 	}
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+	route := seedAuthoritativeSnapshotFilterRoute(t, zone.ID, "www.example.com")
 	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
 	if err != nil {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
@@ -3241,6 +3296,8 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 			{
 				WindowStart:     heartbeatAt,
 				WindowMinutes:   5,
+				ZoneID:          zone.ID,
+				ProxyRouteID:    route.ID,
 				QName:           "www.example.com",
 				QType:           "A",
 				RCode:           "NOERROR",
@@ -3306,6 +3363,300 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerHeartbeatRedactsReportedErrors(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+
+	view, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status:                "online",
+		LastError:             `sync failed Authorization=Bearer node-token password="node-password"`,
+		GeoIPLastError:        `download https://geo.example/db.mmdb?token=geo-token failed`,
+		ASNLastError:          `local expected_hash = "abcdef123456"`,
+		OperatorCIDRLastError: `proxy_set_header Authorization "Basic dXNlcjpwYXNz";`,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	combined := strings.Join([]string{
+		view.Worker.LastError,
+		view.Worker.GeoIPLastError,
+		view.Worker.ASNLastError,
+		view.Worker.OperatorCIDRLastError,
+	}, "\n")
+	for _, leaked := range []string{
+		"node-token",
+		"node-password",
+		"geo-token",
+		"abcdef123456",
+		"dXNlcjpwYXNz",
+	} {
+		if strings.Contains(combined, leaked) {
+			t.Fatalf("expected heartbeat error fields to redact %q, got %q", leaked, combined)
+		}
+	}
+	if !strings.Contains(combined, security.RedactedValue) {
+		t.Fatalf("expected heartbeat errors to contain redaction marker, got %q", combined)
+	}
+
+	var persisted model.DNSWorker
+	if err := model.DB.First(&persisted, worker.ID).Error; err != nil {
+		t.Fatalf("load persisted worker: %v", err)
+	}
+	persistedCombined := strings.Join([]string{
+		persisted.LastError,
+		persisted.GeoIPLastError,
+		persisted.ASNLastError,
+		persisted.OperatorCIDRLastError,
+	}, "\n")
+	for _, leaked := range []string{"node-token", "node-password", "geo-token", "abcdef123456", "dXNlcjpwYXNz"} {
+		if strings.Contains(persistedCombined, leaked) {
+			t.Fatalf("expected persisted heartbeat error fields to redact %q, got %q", leaked, persistedCombined)
+		}
+	}
+}
+
+func TestDNSWorkerHeartbeatRejectsUnauthorizedSchedulingAndRollups(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zoneA, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "a.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone A: %v", err)
+	}
+	zoneB, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "b.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone B: %v", err)
+	}
+	workerA, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-a"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker A: %v", err)
+	}
+	workerB, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-b"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker B: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zoneA.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{workerA.ID}}); err != nil {
+		t.Fatalf("assign zone A: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zoneB.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{workerB.ID}}); err != nil {
+		t.Fatalf("assign zone B: %v", err)
+	}
+
+	routeA := seedAuthoritativeSnapshotFilterRoute(t, zoneA.ID, "www.a.example.com")
+	routeA.DNSRecordContent = "8.8.4.4"
+	if err := routeA.Update(); err != nil {
+		t.Fatalf("update route A targets: %v", err)
+	}
+	routeB := seedAuthoritativeSnapshotFilterRoute(t, zoneB.ID, "www.b.example.com")
+	routeB.DNSRecordContent = "1.1.1.1"
+	if err := routeB.Update(); err != nil {
+		t.Fatalf("update route B targets: %v", err)
+	}
+
+	authenticatedA, err := AuthenticateDNSWorkerToken(workerA.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken A: %v", err)
+	}
+	windowStart := time.Now().UTC().Truncate(time.Minute)
+	changedAt := windowStart.Add(-time.Minute)
+	view, err := RecordDNSWorkerHeartbeat(authenticatedA, DNSWorkerHeartbeatInput{
+		Status: "online",
+		SchedulingStates: []AuthoritativeDNSSnapshotSchedulingState{
+			{
+				RouteID:         routeA.ID,
+				RecordType:      "A",
+				ScopeKey:        "global",
+				SelectedTargets: []string{"8.8.4.4"},
+				DesiredTargets:  []string{"8.8.4.4"},
+				LastChangedAt:   &changedAt,
+			},
+			{
+				RouteID:         routeA.ID,
+				RecordType:      "A",
+				ScopeKey:        "country:TW",
+				SelectedTargets: []string{"1.1.1.1"},
+				DesiredTargets:  []string{"1.1.1.1"},
+				LastChangedAt:   &changedAt,
+			},
+			{
+				RouteID:         routeB.ID,
+				RecordType:      "A",
+				ScopeKey:        "country:JP",
+				SelectedTargets: []string{"1.1.1.1"},
+				DesiredTargets:  []string{"1.1.1.1"},
+				LastChangedAt:   &changedAt,
+			},
+		},
+		Rollups: []DNSQueryRollupInput{
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        zoneA.ID,
+				ProxyRouteID:  routeA.ID,
+				QName:         "www.a.example.com",
+				QType:         "A",
+				RCode:         "NOERROR",
+				QueryCount:    5,
+			},
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        zoneB.ID,
+				ProxyRouteID:  routeB.ID,
+				QName:         "www.b.example.com",
+				QType:         "A",
+				RCode:         "NOERROR",
+				QueryCount:    7,
+			},
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        zoneA.ID,
+				ProxyRouteID:  routeA.ID,
+				QName:         "www.a.example.com",
+				QType:         "AAAA",
+				RCode:         "NOERROR",
+				QueryCount:    11,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if view.Worker.LastRollupCount != 5 {
+		t.Fatalf("expected heartbeat rollup metadata to count only authorized inputs, got %+v", view.Worker)
+	}
+
+	var states []model.GSLBSchedulingState
+	if err := model.DB.Order("proxy_route_id asc, scope_key asc").Find(&states).Error; err != nil {
+		t.Fatalf("list scheduling states: %v", err)
+	}
+	if len(states) != 1 || states[0].ProxyRouteID != routeA.ID || states[0].ScopeKey != "global" || states[0].SelectedTargets != `["8.8.4.4"]` {
+		t.Fatalf("expected only authorized scheduling state, got %+v", states)
+	}
+
+	var rollups []model.DNSQueryRollup
+	if err := model.DB.Order("proxy_route_id asc").Find(&rollups).Error; err != nil {
+		t.Fatalf("list rollups: %v", err)
+	}
+	if len(rollups) != 1 || rollups[0].ProxyRouteID != routeA.ID || rollups[0].ZoneID != zoneA.ID || rollups[0].QueryCount != 5 {
+		t.Fatalf("expected only authorized route rollup, got %+v", rollups)
+	}
+}
+
+func TestDNSWorkerHeartbeatRejectsUnassignedZoneAndGlobalRollupsByDefault(t *testing.T) {
+	setupServiceTestDB(t)
+
+	assignedZone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "assigned.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone assigned: %v", err)
+	}
+	openZone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "open.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone open: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-assigned"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(assignedZone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign zone: %v", err)
+	}
+	assignedRoute := seedAuthoritativeSnapshotFilterRoute(t, assignedZone.ID, "www.assigned.example.com")
+	assignedRoute.DNSRecordContent = "8.8.4.4"
+	if err := assignedRoute.Update(); err != nil {
+		t.Fatalf("update assigned route: %v", err)
+	}
+	openRoute := seedAuthoritativeSnapshotFilterRoute(t, openZone.ID, "www.open.example.com")
+	openRoute.DNSRecordContent = "1.1.1.1"
+	if err := openRoute.Update(); err != nil {
+		t.Fatalf("update open route: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+
+	windowStart := time.Now().UTC().Truncate(time.Minute)
+	changedAt := windowStart.Add(-time.Minute)
+	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status: "online",
+		SchedulingStates: []AuthoritativeDNSSnapshotSchedulingState{
+			{
+				RouteID:         assignedRoute.ID,
+				RecordType:      "A",
+				ScopeKey:        "global",
+				SelectedTargets: []string{"8.8.4.4"},
+				DesiredTargets:  []string{"8.8.4.4"},
+				LastChangedAt:   &changedAt,
+			},
+			{
+				RouteID:         openRoute.ID,
+				RecordType:      "A",
+				ScopeKey:        "global",
+				SelectedTargets: []string{"1.1.1.1"},
+				DesiredTargets:  []string{"1.1.1.1"},
+				LastChangedAt:   &changedAt,
+			},
+		},
+		Rollups: []DNSQueryRollupInput{
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        assignedZone.ID,
+				ProxyRouteID:  assignedRoute.ID,
+				QName:         "www.assigned.example.com",
+				QType:         "A",
+				RCode:         "NOERROR",
+				QueryCount:    5,
+			},
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        openZone.ID,
+				ProxyRouteID:  openRoute.ID,
+				QName:         "www.open.example.com",
+				QType:         "A",
+				RCode:         "NOERROR",
+				QueryCount:    7,
+			},
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				QName:         "global.example.com",
+				QType:         "A",
+				RCode:         "NOERROR",
+				QueryCount:    11,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+
+	var states []model.GSLBSchedulingState
+	if err := model.DB.Order("proxy_route_id asc").Find(&states).Error; err != nil {
+		t.Fatalf("list scheduling states: %v", err)
+	}
+	if len(states) != 1 || states[0].ProxyRouteID != assignedRoute.ID {
+		t.Fatalf("expected only assigned route scheduling state, got %+v", states)
+	}
+	var rollups []model.DNSQueryRollup
+	if err := model.DB.Order("query_count asc").Find(&rollups).Error; err != nil {
+		t.Fatalf("list rollups: %v", err)
+	}
+	if len(rollups) != 1 || rollups[0].ProxyRouteID != assignedRoute.ID || rollups[0].QueryCount != 5 {
+		t.Fatalf("expected only assigned route rollup, got %+v", rollups)
+	}
+}
+
 func TestUpdateDNSWorkerRemarkIsReturnedInHealthSummary(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -3342,6 +3693,40 @@ func TestUpdateDNSWorkerRemarkIsReturnedInHealthSummary(t *testing.T) {
 	}
 	if summary.WorkerHealth.Workers[0].Remark != "hk dns response" {
 		t.Fatalf("expected remark in health summary, got %+v", summary.WorkerHealth.Workers[0])
+	}
+}
+
+func TestCreateDNSWorkerRejectsUnsafePublicAddress(t *testing.T) {
+	setupServiceTestDB(t)
+
+	tests := []string{
+		"127.0.0.1:53",
+		"localhost:53",
+		"169.254.169.254:53",
+		"100.100.100.200:53",
+		"10.0.0.1:53",
+		":53",
+		"8.8.8.8:8053",
+	}
+	for _, publicAddress := range tests {
+		t.Run(publicAddress, func(t *testing.T) {
+			if _, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-" + strings.NewReplacer(".", "-", ":", "-", "[", "", "]", "").Replace(publicAddress), PublicAddress: publicAddress}); err == nil {
+				t.Fatalf("expected unsafe public address %q to fail", publicAddress)
+			}
+		})
+	}
+}
+
+func TestNormalizeDNSWorkerProbeAddressRejectsUnsafeResolvedHost(t *testing.T) {
+	restoreDNSWorkerAddressLookupIP(t, func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		if host != "ns1.example.net" {
+			t.Fatalf("unexpected lookup host %q", host)
+		}
+		return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+	})
+
+	if _, err := normalizeDNSWorkerProbeAddress(context.Background(), "ns1.example.net"); err == nil || !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("expected unsafe resolved ip error, got %v", err)
 	}
 }
 
@@ -3492,7 +3877,7 @@ func TestDNSWorkerManualUpdateRequestMatchesAgentByHeartbeatRemoteIP(t *testing.
 	wsClient := RegisterAgentWSClient(node.NodeID)
 	defer UnregisterAgentWSClient(wsClient)
 
-	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-remote-ip", PublicAddress: ":53"})
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-remote-ip"})
 	if err != nil {
 		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
 	}
@@ -4035,6 +4420,53 @@ func TestPersistDNSQueryRollupsRejectsExcessHeartbeatRollups(t *testing.T) {
 	}
 }
 
+func TestPersistDNSQueryRollupsRejectsOutOfRangeWindows(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now().UTC().Truncate(time.Minute)
+	tooOld := now.Add(-dnsRollupAcceptedHistoryWindow() - time.Minute)
+	futureWithinTolerance := now.Add(30 * time.Second)
+	tooFuture := now.Add(defaultDNSRollupFutureTolerance + time.Minute)
+	if err := persistDNSQueryRollups("ns1", []DNSQueryRollupInput{
+		{
+			WindowStart:   tooOld,
+			WindowMinutes: 1,
+			QName:         "old.example.com",
+			QType:         "A",
+			RCode:         "NOERROR",
+			QueryCount:    1,
+		},
+		{
+			WindowStart:   futureWithinTolerance,
+			WindowMinutes: 1,
+			QName:         "clamped.example.com",
+			QType:         "A",
+			RCode:         "NOERROR",
+			QueryCount:    2,
+		},
+		{
+			WindowStart:   tooFuture,
+			WindowMinutes: 1,
+			QName:         "future.example.com",
+			QType:         "A",
+			RCode:         "NOERROR",
+			QueryCount:    3,
+		},
+	}); err != nil {
+		t.Fatalf("persistDNSQueryRollups: %v", err)
+	}
+	var rollups []model.DNSQueryRollup
+	if err := model.DB.Find(&rollups).Error; err != nil {
+		t.Fatalf("list rollups: %v", err)
+	}
+	if len(rollups) != 1 || rollups[0].QName != "clamped.example.com" {
+		t.Fatalf("expected only in-range rollup, got %+v", rollups)
+	}
+	if !rollups[0].WindowStart.Equal(now) {
+		t.Fatalf("expected near-future rollup to clamp to now, got %s want %s", rollups[0].WindowStart, now)
+	}
+}
+
 func TestNormalizeDNSTargetSummaryKeepsTopTargets(t *testing.T) {
 	values := make(map[string]int64, defaultDNSMaxRollupTargetSummary+5)
 	for index := 0; index < defaultDNSMaxRollupTargetSummary+5; index++ {
@@ -4142,6 +4574,10 @@ func TestDNSWorkerViewsClampHistoricalFutureSnapshotTime(t *testing.T) {
 func TestDNSWorkerHeartbeatNormalizesInconsistentRollupDurations(t *testing.T) {
 	setupServiceTestDB(t)
 
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
 	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
 	if err != nil {
 		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
@@ -4150,6 +4586,9 @@ func TestDNSWorkerHeartbeatNormalizesInconsistentRollupDurations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
 	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker to zone: %v", err)
+	}
 	windowStart := time.Now().UTC().Truncate(time.Minute)
 	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
 		Status: "online",
@@ -4157,6 +4596,7 @@ func TestDNSWorkerHeartbeatNormalizesInconsistentRollupDurations(t *testing.T) {
 			{
 				WindowStart:     windowStart,
 				WindowMinutes:   1,
+				ZoneID:          zone.ID,
 				QName:           "www.example.com",
 				QType:           "A",
 				RCode:           "NOERROR",
@@ -4200,20 +4640,24 @@ func TestDNSWorkerHeartbeatPersistsSchedulingStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
 	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker to zone: %v", err)
+	}
 	route := &model.ProxyRoute{
-		SiteName:        "edge-site",
-		Domain:          "www.example.com",
-		Domains:         `["www.example.com"]`,
-		OriginURL:       "https://origin.internal",
-		Upstreams:       `["https://origin.internal"]`,
-		NodePool:        "hk",
-		Enabled:         true,
-		DNSProviderMode: DNSProviderModeAuthoritative,
-		DNSZoneIDRef:    &zone.ID,
-		DNSRecordType:   "A",
-		DNSAutoTarget:   true,
-		GSLBEnabled:     true,
-		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
+		SiteName:         "edge-site",
+		Domain:           "www.example.com",
+		Domains:          `["www.example.com"]`,
+		OriginURL:        "https://origin.internal",
+		Upstreams:        `["https://origin.internal"]`,
+		NodePool:         "hk",
+		Enabled:          true,
+		DNSProviderMode:  DNSProviderModeAuthoritative,
+		DNSZoneIDRef:     &zone.ID,
+		DNSRecordType:    "A",
+		DNSRecordContent: "8.8.4.4,1.1.1.1,9.9.9.9,8.8.8.8",
+		DNSAutoTarget:    true,
+		GSLBEnabled:      true,
+		GSLBPolicy:       mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
 	}
 	if err := route.Insert(); err != nil {
 		t.Fatalf("insert route: %v", err)
@@ -4333,20 +4777,24 @@ func TestDNSWorkerHeartbeatPersistsLargeSchedulingStateBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
 	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker to zone: %v", err)
+	}
 	route := &model.ProxyRoute{
-		SiteName:        "large-edge-site",
-		Domain:          "www.example.com",
-		Domains:         `["www.example.com"]`,
-		OriginURL:       "https://origin.internal",
-		Upstreams:       `["https://origin.internal"]`,
-		NodePool:        "hk",
-		Enabled:         true,
-		DNSProviderMode: DNSProviderModeAuthoritative,
-		DNSZoneIDRef:    &zone.ID,
-		DNSRecordType:   "A",
-		DNSAutoTarget:   true,
-		GSLBEnabled:     true,
-		GSLBPolicy:      mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
+		SiteName:         "large-edge-site",
+		Domain:           "www.example.com",
+		Domains:          `["www.example.com"]`,
+		OriginURL:        "https://origin.internal",
+		Upstreams:        `["https://origin.internal"]`,
+		NodePool:         "hk",
+		Enabled:          true,
+		DNSProviderMode:  DNSProviderModeAuthoritative,
+		DNSZoneIDRef:     &zone.ID,
+		DNSRecordType:    "A",
+		DNSRecordContent: "8.8.8.8",
+		DNSAutoTarget:    true,
+		GSLBEnabled:      true,
+		GSLBPolicy:       mustJSON(t, defaultGSLBPolicy("hk", 1, "weighted", 30)),
 	}
 	if err := route.Insert(); err != nil {
 		t.Fatalf("insert route: %v", err)
@@ -4630,6 +5078,9 @@ func TestAuthoritativeDNSObservabilitySummaryAggregatesRollups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
 	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker to zone: %v", err)
+	}
 	route := &model.ProxyRoute{
 		SiteName:        "edge-site",
 		Domain:          "www.example.com",
@@ -4813,6 +5264,13 @@ func TestAuthoritativeDNSWorkerHealthIgnoresUnknownWorkerRollups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
 	}
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker to zone: %v", err)
+	}
 	windowStart := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Minute)
 	_, err = RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
 		Status: "online",
@@ -4820,6 +5278,7 @@ func TestAuthoritativeDNSWorkerHealthIgnoresUnknownWorkerRollups(t *testing.T) {
 			{
 				WindowStart:     windowStart,
 				WindowMinutes:   1,
+				ZoneID:          zone.ID,
 				QName:           "www.example.com",
 				QType:           "A",
 				RCode:           "NOERROR",
@@ -5202,6 +5661,12 @@ func TestAuthoritativeDNSZoneDelegationCheckLookupFailureAndNotConfigured(t *tes
 func TestProbeAuthoritativeDNSWorkerChecksUDPAndTCP(t *testing.T) {
 	setupServiceTestDB(t)
 
+	restoreDNSWorkerAddressLookupIP(t, func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		if host != "ns1.example.net" {
+			t.Fatalf("unexpected lookup host %q", host)
+		}
+		return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+	})
 	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
 	if err != nil {
 		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
@@ -6954,6 +7419,15 @@ func restoreDNSWorkerProbeExchange(t *testing.T, exchange func(context.Context, 
 	})
 }
 
+func restoreDNSWorkerAddressLookupIP(t *testing.T, lookup func(context.Context, string) ([]net.IPAddr, error)) {
+	t.Helper()
+	original := dnsWorkerAddressLookupIP
+	dnsWorkerAddressLookupIP = lookup
+	t.Cleanup(func() {
+		dnsWorkerAddressLookupIP = original
+	})
+}
+
 func mustJSON(t *testing.T, value any) string {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -7014,6 +7488,14 @@ func snapshotStateRouteIDs(states []AuthoritativeDNSSnapshotSchedulingState) []u
 		routeIDs = append(routeIDs, state.RouteID)
 	}
 	return routeIDs
+}
+
+func snapshotNodeIDs(nodes []AuthoritativeDNSSnapshotNode) []string {
+	nodeIDs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		nodeIDs = append(nodeIDs, node.NodeID)
+	}
+	return nodeIDs
 }
 
 func sameUintSet(left []uint, right []uint) bool {

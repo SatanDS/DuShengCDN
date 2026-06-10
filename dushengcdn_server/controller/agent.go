@@ -97,15 +97,6 @@ func AgentHeartbeat(c *gin.Context) {
 func AgentGetActiveConfig(c *gin.Context) {
 	authNode, ok := c.Get("agent_node")
 	if !ok {
-		if legacy, _ := c.Get("legacy_agent_token"); legacy == true {
-			config, err := service.GetActiveConfigForAgent()
-			if err != nil {
-				respondFailure(c, err.Error())
-				return
-			}
-			respondSuccess(c, config)
-			return
-		}
 		respondUnauthorized(c, "Agent Token 无效")
 		return
 	}
@@ -158,6 +149,9 @@ func AgentWebSocket(c *gin.Context) {
 		return
 	}
 	node := authNode.(*model.Node)
+	if rejectInvalidWebSocketOrigin(c) {
+		return
+	}
 	slog.Debug("agent ws upgrade requested", "node_id", node.NodeID, "remote", c.Request.RemoteAddr)
 	websocket.Handler(func(conn *websocket.Conn) {
 		client := service.RegisterAgentWSClient(node.NodeID)

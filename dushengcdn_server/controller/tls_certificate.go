@@ -1,12 +1,16 @@
 package controller
 
 import (
+	"dushengcdn/common"
 	"dushengcdn/service"
 	"encoding/json"
+	"errors"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
 )
+
+const tlsCertificateMultipartMaxBytes int64 = 2 * 1024 * 1024
 
 // GetTLSCertificates godoc
 // @Summary List TLS certificates
@@ -73,7 +77,7 @@ func GetTLSCertificate(c *gin.Context) {
 // @Param id path int true "Certificate ID"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {object} map[string]interface{}
-// @Router /api/tls-certificates/{id}/content [get]
+// @Router /api/tls-certificates/{id}/content [post]
 func GetTLSCertificateContent(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || id == 0 {
@@ -84,7 +88,15 @@ func GetTLSCertificateContent(c *gin.Context) {
 		return
 	}
 
-	content, err := service.GetTLSCertificateContent(uint(id))
+	revealKey := c.Query("reveal_key") == "true"
+	if revealKey && c.GetInt("role") < common.RoleRootUser {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "root permission is required to reveal TLS private key",
+		})
+		return
+	}
+	content, err := service.GetTLSCertificateContent(uint(id), revealKey)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -192,6 +204,22 @@ func UpdateTLSCertificate(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/tls-certificates/import-file [post]
 func ImportTLSCertificateFile(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, tlsCertificateMultipartMaxBytes)
+	if err := c.Request.ParseMultipartForm(tlsCertificateMultipartMaxBytes); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"message": "upload body is too large",
+			})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid multipart upload",
+		})
+		return
+	}
 	name := c.PostForm("name")
 	remark := c.PostForm("remark")
 	certFile, err := c.FormFile("cert_file")

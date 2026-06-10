@@ -1,4 +1,4 @@
-# Local Development
+﻿# Local Development
 
 You will learn how to set up a local DuShengCDN development environment, run the Server, Agent, and frontend, execute tests and builds, and understand the boundaries contributors must follow.
 
@@ -67,7 +67,7 @@ Default URL:
 http://localhost:3000
 ```
 
-On an empty database, the first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or the one-time password printed in the first Server startup log when that variable is not set.
+On an empty database, the first-login username is `root`; use `DUSHENGCDN_INITIAL_ROOT_PASSWORD` from `.env`, or read the generated one-time password from the `initial-root-password.txt` file named in the Server log. The log prints the file path, not the password.
 
 ## Run the Frontend Dev Server
 

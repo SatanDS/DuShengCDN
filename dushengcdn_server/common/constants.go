@@ -22,8 +22,11 @@ var SessionCookieSecureConfigured = false
 var SessionCookieSecure = false
 var SessionCookieSameSite = ""
 var InitialRootPassword = ""
+var InitialRootPasswordFile = ""
 var TrustedProxies = ""
+var ListenAddress = ""
 var JSONBodyMaxBytes int64 = 2 * 1024 * 1024
+var PublicStatusRuntimeMetadataEnabled = false
 var SQLitePath = "dushengcdn.db"
 var SQLDSN = ""
 var DatabaseMaxOpenConns = 30
@@ -121,6 +124,7 @@ var AuthoritativeDNSWorkerUDPResponseSize = 1232
 var AuthoritativeDNSWorkerECSEnabled = true
 var AuthoritativeDNSWorkerECSIPv4Prefix = 24
 var AuthoritativeDNSWorkerECSIPv6Prefix = 56
+var AuthoritativeDNSWorkerAllowUnassignedZones = false
 var GSLBMetricFreshnessSeconds = 120
 var GSLBProbeSchedulingEnabled = false
 
@@ -171,7 +175,8 @@ events {
 http {
     include       mime.types;
     default_type  application/octet-stream;
-{{OpenRestyConnectionUpgradeMap}}{{OpenRestyDefaultServerBlock}}    log_format dushengcdn_json escape=json '{"ts":"$time_iso8601","host":"$host","path":"$request_uri","remote_addr":"$remote_addr","status":$status,"reason":"$dushengcdn_request_reason","request_time":$request_time,"bytes_sent":$body_bytes_sent,"request_length":$request_length,"upstream_response_length":"$upstream_response_length","cache_status":"$upstream_cache_status","upstream_status":"$upstream_status","upstream_response_time":"$upstream_response_time"}';
+    server_tokens off;
+{{OpenRestyConnectionUpgradeMap}}{{OpenRestyDefaultServerBlock}}    log_format dushengcdn_json escape=json '{"ts":"$time_iso8601","host":"$host","path":"$uri","remote_addr":"$remote_addr","status":$status,"reason":"$dushengcdn_request_reason","request_time":$request_time,"bytes_sent":$body_bytes_sent,"request_length":$request_length,"upstream_response_length":"$upstream_response_length","cache_status":"$upstream_cache_status","upstream_status":"$upstream_status","upstream_response_time":"$upstream_response_time"}';
     access_log {{OpenRestyAccessLogPath}} dushengcdn_json;
     sendfile on;
     tcp_nopush on;
@@ -206,9 +211,9 @@ const (
 )
 
 var (
-	FileUploadPermission    = RoleGuestUser
+	FileUploadPermission    = RoleCommonUser
 	FileDownloadPermission  = RoleGuestUser
-	ImageUploadPermission   = RoleGuestUser
+	ImageUploadPermission   = RoleCommonUser
 	ImageDownloadPermission = RoleGuestUser
 )
 

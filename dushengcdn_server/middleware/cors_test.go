@@ -4,6 +4,7 @@ import (
 	"dushengcdn/common"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,16 @@ func TestCORSAllowsConfiguredServerOrigin(t *testing.T) {
 	}
 	if recorder.Header().Get("Access-Control-Allow-Origin") != "https://panel.example.com" {
 		t.Fatalf("unexpected allow-origin header: %s", recorder.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
+func TestCORSAllowsCSRFHeader(t *testing.T) {
+	recorder := requestOptionsWithHeaders(t, "https://panel.example.com", "https://panel.example.com", "X-CSRF-Token")
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("expected preflight to pass, got %d", recorder.Code)
+	}
+	if !strings.Contains(strings.ToLower(recorder.Header().Get("Access-Control-Allow-Headers")), "x-csrf-token") {
+		t.Fatalf("expected csrf header to be allowed, got %s", recorder.Header().Get("Access-Control-Allow-Headers"))
 	}
 }
 
@@ -70,6 +81,33 @@ func requestWithOrigin(t *testing.T, serverAddress string, origin string) *httpt
 	request := httptest.NewRequest(http.MethodGet, "/ping", nil)
 	request.Host = "api.example.com"
 	request.Header.Set("Origin", origin)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func requestOptionsWithHeaders(t *testing.T, serverAddress string, origin string, headers string) *httptest.ResponseRecorder {
+	t.Helper()
+	oldServerAddress := common.ServerAddress
+	oldMode := gin.Mode()
+	common.ServerAddress = serverAddress
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() {
+		common.ServerAddress = oldServerAddress
+		gin.SetMode(oldMode)
+	})
+
+	router := gin.New()
+	router.Use(CORS())
+	router.POST("/ping", func(c *gin.Context) {
+		c.String(http.StatusOK, "pong")
+	})
+
+	request := httptest.NewRequest(http.MethodOptions, "/ping", nil)
+	request.Host = "api.example.com"
+	request.Header.Set("Origin", origin)
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", headers)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	return recorder

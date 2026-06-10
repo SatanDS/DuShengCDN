@@ -6,14 +6,112 @@ import (
 	"dushengcdn/utils/security"
 	"dushengcdn/utils/validation"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
+
+const csrfSessionKey = "csrf_token"
+const passwordSessionFingerprintKey = "password_fingerprint"
+const loginFailureMaxAttempts = 5
+const loginFailureWindow = 10 * time.Minute
+const loginFailureLockout = 10 * time.Minute
+
+type loginFailureRecord struct {
+	Count       int
+	FirstAt     time.Time
+	LockedUntil time.Time
+}
+
+var (
+	loginFailureMutex sync.Mutex
+	loginFailures     = map[string]loginFailureRecord{}
+)
+
+type userView struct {
+	Id          int    `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Role        int    `json:"role"`
+	Status      int    `json:"status"`
+	Email       string `json:"email,omitempty"`
+	GitHubId    string `json:"github_id,omitempty"`
+	WeChatId    string `json:"wechat_id,omitempty"`
+	CSRFToken   string `json:"csrf_token,omitempty"`
+}
+
+func ensureSessionCSRFToken(session sessions.Session) (string, error) {
+	token, _ := session.Get(csrfSessionKey).(string)
+	if token != "" {
+		return token, nil
+	}
+	token = security.GenerateCSRFToken()
+	session.Set(csrfSessionKey, token)
+	if err := session.Save(); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func buildUserView(user *model.User, csrfToken string) userView {
+	if user == nil {
+		return userView{}
+	}
+	return userView{
+		Id:          user.Id,
+		Username:    user.Username,
+		DisplayName: user.DisplayName,
+		Role:        user.Role,
+		Status:      user.Status,
+		Email:       user.Email,
+		GitHubId:    user.GitHubId,
+		WeChatId:    user.WeChatId,
+		CSRFToken:   csrfToken,
+	}
+}
+
+func authenticatedSessionUser(c *gin.Context) (*model.User, bool) {
+	session := sessions.Default(c)
+	id, ok := session.Get("id").(int)
+	if !ok || id <= 0 {
+		return nil, false
+	}
+	user := &model.User{Id: id}
+	if err := user.FillUserById(); err != nil {
+		deleteControllerAuthSession(session)
+		return nil, false
+	}
+	expectedFingerprint, _ := session.Get(passwordSessionFingerprintKey).(string)
+	if !security.VerifyPasswordSessionFingerprint(user.Password, common.SessionSecret, expectedFingerprint) {
+		deleteControllerAuthSession(session)
+		return nil, false
+	}
+	if user.Status != common.UserStatusEnabled {
+		deleteControllerAuthSession(session)
+		return nil, false
+	}
+	return user, true
+}
+
+func clearControllerAuthSession(session sessions.Session) {
+	deleteControllerAuthSession(session)
+	_ = session.Save()
+}
+
+func deleteControllerAuthSession(session sessions.Session) {
+	session.Delete("id")
+	session.Delete("username")
+	session.Delete("role")
+	session.Delete("status")
+	session.Delete(csrfSessionKey)
+	session.Delete(passwordSessionFingerprintKey)
+}
 
 type LoginRequest struct {
 	Username string `json:"username"`
@@ -46,28 +144,128 @@ func Login(c *gin.Context) {
 		})
 		return
 	}
+	loginKey := loginFailureKeyForRequest(username, c)
+	if locked, retryAfter := loginAttemptLocked(loginKey, time.Now()); locked {
+		c.JSON(http.StatusOK, gin.H{
+			"message":             "登录失败次数过多，请稍后再试",
+			"success":             false,
+			"retry_after_seconds": int(retryAfter.Seconds()),
+		})
+		return
+	}
 	user := model.User{
 		Username: username,
 		Password: password,
 	}
 	err = user.ValidateAndFill()
 	if err != nil {
+		recordLoginFailure(loginKey, time.Now())
 		c.JSON(http.StatusOK, gin.H{
 			"message": err.Error(),
 			"success": false,
 		})
 		return
 	}
+	clearLoginFailure(loginKey)
 	setupLogin(&user, c)
+}
+
+func loginFailureKeyForRequest(username string, c *gin.Context) string {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" {
+		return ""
+	}
+	source := loginFailureSource(c)
+	if source == "" {
+		source = "unknown"
+	}
+	return username + "|" + source
+}
+
+func loginFailureSource(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return "unknown"
+	}
+	if ip := strings.TrimSpace(c.ClientIP()); ip != "" {
+		return ip
+	}
+	if host, _, err := net.SplitHostPort(c.Request.RemoteAddr); err == nil {
+		return host
+	}
+	return strings.TrimSpace(c.Request.RemoteAddr)
+}
+
+func loginAttemptLocked(key string, now time.Time) (bool, time.Duration) {
+	if key == "" {
+		return false, 0
+	}
+	loginFailureMutex.Lock()
+	defer loginFailureMutex.Unlock()
+	record, ok := loginFailures[key]
+	if !ok {
+		return false, 0
+	}
+	if !record.LockedUntil.IsZero() {
+		if now.Before(record.LockedUntil) {
+			return true, record.LockedUntil.Sub(now)
+		}
+		delete(loginFailures, key)
+		return false, 0
+	}
+	if now.Sub(record.FirstAt) > loginFailureWindow {
+		delete(loginFailures, key)
+	}
+	return false, 0
+}
+
+func recordLoginFailure(key string, now time.Time) {
+	if key == "" {
+		return
+	}
+	loginFailureMutex.Lock()
+	defer loginFailureMutex.Unlock()
+	record := loginFailures[key]
+	if record.FirstAt.IsZero() || now.Sub(record.FirstAt) > loginFailureWindow {
+		record = loginFailureRecord{FirstAt: now}
+	}
+	record.Count++
+	if record.Count >= loginFailureMaxAttempts {
+		record.LockedUntil = now.Add(loginFailureLockout)
+	}
+	loginFailures[key] = record
+}
+
+func clearLoginFailure(key string) {
+	if key == "" {
+		return
+	}
+	loginFailureMutex.Lock()
+	defer loginFailureMutex.Unlock()
+	delete(loginFailures, key)
+}
+
+func ResetLoginFailuresForTest() {
+	loginFailureMutex.Lock()
+	defer loginFailureMutex.Unlock()
+	loginFailures = map[string]loginFailureRecord{}
 }
 
 // setup session & cookies and then return user info
 func setLoginSession(user *model.User, c *gin.Context) (*model.User, error) {
 	session := sessions.Default(c)
+	csrfToken := security.GenerateCSRFToken()
+	currentPasswordHash := user.Password
+	if user.Id > 0 {
+		if currentUser, err := model.GetUserById(user.Id, true); err == nil && currentUser != nil {
+			currentPasswordHash = currentUser.Password
+		}
+	}
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
 	session.Set("role", user.Role)
 	session.Set("status", user.Status)
+	session.Set(csrfSessionKey, csrfToken)
+	session.Set(passwordSessionFingerprintKey, security.PasswordSessionFingerprint(currentPasswordHash, common.SessionSecret))
 	err := session.Save()
 	if err != nil {
 		return nil, err
@@ -79,6 +277,8 @@ func setLoginSession(user *model.User, c *gin.Context) (*model.User, error) {
 		Role:        user.Role,
 		Status:      user.Status,
 	}
+	cleanUser.VerificationCode = csrfToken
+	cleanUser.CSRFToken = csrfToken
 	return cleanUser, nil
 }
 
@@ -94,7 +294,7 @@ func setupLogin(user *model.User, c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
 		"success": true,
-		"data":    *cleanUser,
+		"data":    buildUserView(cleanUser, cleanUser.VerificationCode),
 	})
 }
 
@@ -205,10 +405,17 @@ func GenerateToken(c *gin.Context) {
 		})
 		return
 	}
-	user.Token = uuid.New().String()
-	user.Token = strings.Replace(user.Token, "-", "", -1)
+	token, err := security.GenerateSecretToken()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	user.Token = security.HashSecretToken(token)
 
-	if model.DB.Where("token = ?", user.Token).First(user).RowsAffected != 0 {
+	if model.DB.Where("token = ?", user.Token).First(&model.User{}).RowsAffected != 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "请重试，系统生成的 UUID 竟然重复了！",
@@ -227,7 +434,7 @@ func GenerateToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user.Token,
+		"data":    token,
 	})
 	return
 }
@@ -242,10 +449,18 @@ func GetSelf(c *gin.Context) {
 		})
 		return
 	}
+	csrfToken, err := ensureSessionCSRFToken(sessions.Default(c))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "failed to save CSRF token",
+		})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user,
+		"data":    buildUserView(user, csrfToken),
 	})
 	return
 }
@@ -571,6 +786,68 @@ func ManageUser(c *gin.Context) {
 		"data":    clearUser,
 	})
 	return
+}
+
+type EmailBindRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+
+func EmailBindPost(c *gin.Context) {
+	var req EmailBindRequest
+	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "invalid request",
+		})
+		return
+	}
+	email := strings.TrimSpace(req.Email)
+	code := strings.TrimSpace(req.Code)
+	if err := validation.Validate.Var(email, "required,email"); err != nil || code == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "invalid request",
+		})
+		return
+	}
+	id := c.GetInt("id")
+	if !security.VerifyCodeWithKeyAndDelete(emailBindVerificationKey(id, email), code, security.EmailVerificationPurpose) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "verification code is invalid or expired",
+		})
+		return
+	}
+	user := model.User{
+		Id: id,
+	}
+	if err := user.FillUserById(); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	if model.IsEmailAlreadyTaken(email) && !strings.EqualFold(strings.TrimSpace(user.Email), email) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "email bind failed",
+		})
+		return
+	}
+	user.Email = email
+	if err := user.Update(false); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
 }
 
 func EmailBind(c *gin.Context) {

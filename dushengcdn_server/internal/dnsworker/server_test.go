@@ -810,6 +810,20 @@ func TestResolveUnmanagedNameReturnsNonAuthoritativeRefused(t *testing.T) {
 	}
 }
 
+func TestResolveDoesNotOfferRecursionForRecursiveQueries(t *testing.T) {
+	server := testServer(t, baseSnapshot())
+	query := testQuery("www.example.com", dns.TypeA, "")
+	query.RecursionDesired = true
+
+	response := server.Resolve(query, &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 53000})
+	if response.RecursionAvailable {
+		t.Fatal("authoritative DNS worker must not advertise recursion availability")
+	}
+	if !response.RecursionDesired {
+		t.Fatal("expected response to echo request recursion desired flag")
+	}
+}
+
 func TestResolveManagedMissingNameStillReturnsAuthoritativeNXDOMAIN(t *testing.T) {
 	server := testServer(t, baseSnapshot())
 

@@ -15,14 +15,14 @@ services:
 
     volumes:
       - ./dushengcdn_agent/data/:/data
+      - ./dushengcdn_agent/secrets/agent-token:/run/secrets/dushengcdn_agent_token:ro
+      # Optional precise IP lookup API token:
+      # - ./dushengcdn_agent/secrets/geoip-token:/run/secrets/dushengcdn_geoip_token:ro
 
     environment:
       DUSHENGCDN_SERVER_URL: ${DUSHENGCDN_SERVER_URL:?set DUSHENGCDN_SERVER_URL in .env}
-      DUSHENGCDN_AGENT_TOKEN: ${DUSHENGCDN_AGENT_TOKEN:?set DUSHENGCDN_AGENT_TOKEN in .env}
+      DUSHENGCDN_AGENT_TOKEN_FILE: /run/secrets/dushengcdn_agent_token
       # Optional precise IP lookup API. Local GeoIP is used first; this API is queried only when local GeoIP has no country.
       DUSHENGCDN_GEOIP_LOOKUP_API_URL: ${DUSHENGCDN_GEOIP_LOOKUP_API_URL:-}
-      DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN: ${DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN:-}
-      LOG_LEVEL: ${LOG_LEVEL:-debug}
-
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN_FILE: /run/secrets/dushengcdn_geoip_token
+      LOG_LEVEL: ${LOG_LEVEL:-info}

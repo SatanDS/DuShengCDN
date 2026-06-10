@@ -18,7 +18,11 @@ RUN go build -trimpath -buildvcs=false -ldflags "-s -w -X 'main.version=$VERSION
 FROM alpine
 
 RUN apk add --no-cache ca-certificates tzdata \
-    && mkdir -p /data
+    libcap \
+    && addgroup -S dushengcdn \
+    && adduser -S -D -H -G dushengcdn -h /data dushengcdn \
+    && mkdir -p /data \
+    && chown -R dushengcdn:dushengcdn /data
 
 ENV DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=:53 \
     DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH=/data/dns-worker-snapshot.json \
@@ -26,7 +30,9 @@ ENV DUSHENGCDN_DNS_WORKER_LISTEN_ADDR=:53 \
     DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232
 
 COPY --from=builder /build/dushengcdn-dns-worker /usr/local/bin/dushengcdn-dns-worker
+RUN setcap cap_net_bind_service=+ep /usr/local/bin/dushengcdn-dns-worker
 
 EXPOSE 53/udp 53/tcp
 WORKDIR /data
+USER dushengcdn
 ENTRYPOINT ["/usr/local/bin/dushengcdn-dns-worker"]

@@ -1,6 +1,18 @@
 import { publicEnv } from '@/lib/env/public-env';
 import type { ApiEnvelope } from '@/types/api';
 
+const csrfTokenStore = {
+  value: '',
+};
+
+export function setCSRFToken(token: string | undefined | null) {
+  csrfTokenStore.value = token ?? '';
+}
+
+export function getCSRFToken() {
+  return csrfTokenStore.value;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -23,12 +35,18 @@ export async function apiRequest<T>(path: string, init?: RequestInit) {
   if (!(init?.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
+  if (method !== 'GET' && method !== 'HEAD' && !headers.has('X-CSRF-Token')) {
+    const csrfToken = getCSRFToken();
+    if (csrfToken) {
+      headers.set('X-CSRF-Token', csrfToken);
+    }
+  }
 
   const response = await fetch(getApiUrl(path), {
+    ...init,
     credentials: 'include',
     headers,
     cache: method === 'GET' ? 'no-store' : init?.cache,
-    ...init,
   });
 
   let payload: ApiEnvelope<T> | null = null;

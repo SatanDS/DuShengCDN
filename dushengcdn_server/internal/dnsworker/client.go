@@ -110,14 +110,17 @@ func NewAPIClient(baseURL string, token string, timeout time.Duration) *APIClien
 }
 
 func (c *APIClient) FetchSnapshot(ctx context.Context) (*Snapshot, error) {
-	var response apiResponse[Snapshot]
+	var response apiResponse[SignedSnapshot]
 	if err := c.doJSON(ctx, http.MethodGet, "/api/dns-snapshot", nil, &response); err != nil {
 		return nil, err
 	}
 	if !response.Success {
 		return nil, fmt.Errorf("snapshot request failed: %s", response.Message)
 	}
-	return &response.Data, nil
+	if err := VerifySignedSnapshot(&response.Data, c.token); err != nil {
+		return nil, fmt.Errorf("snapshot signature check failed: %w", err)
+	}
+	return &response.Data.Snapshot, nil
 }
 
 func (c *APIClient) SendHeartbeat(ctx context.Context, input HeartbeatInput) (*HeartbeatResponse, error) {
@@ -152,6 +155,9 @@ func (c *APIClient) doJSON(ctx context.Context, method string, path string, body
 		return err
 	}
 	req.Header.Set("X-DNS-Worker-Token", c.token)
+	if method == http.MethodGet && path == "/api/dns-snapshot" {
+		req.Header.Set(SnapshotSignatureHeader, SnapshotSignatureVersion)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -185,7 +191,7 @@ func (c *APIClient) formatHTTPError(path string, statusCode int, status string, 
 			message = "authentication failed"
 		}
 		return fmt.Errorf(
-			"%s returned %s: %s. DNS Worker Token authentication failed; check DUSHENGCDN_DNS_WORKER_TOKEN/--token uses the DNS Worker Token from 本地自建解析, not an Agent Token or login password",
+			"%s returned %s: %s. DNS Worker Token authentication failed; check DUSHENGCDN_DNS_WORKER_TOKEN_FILE/--token-file, or the compatibility DUSHENGCDN_DNS_WORKER_TOKEN/--token, uses the DNS Worker Token from 本地自建解析, not an Agent Token or login password",
 			path,
 			status,
 			message,

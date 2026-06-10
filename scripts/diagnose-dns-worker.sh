@@ -34,9 +34,11 @@ Options:
 Behavior:
   1. Checks systemd service/unit, install directory, binary, env file, snapshot, and GeoIP file
   2. Shows configured Server URL, listen address, and whether a Worker token is present without printing the token
-  3. Lists TCP/UDP listeners for the Worker DNS port
-  4. Optionally runs dig @PUBLIC_IP ZONE SOA/NS over UDP and TCP
-  5. Prints recent service logs and common failure hints
+  3. Shows local interface addresses to catch public IP/listen address mismatches
+  4. Lists TCP/UDP listeners and likely owners for the Worker DNS port
+  5. Prints a read-only UFW/iptables/nft firewall snapshot when available
+  6. Optionally runs dig @PUBLIC_IP ZONE SOA/NS over UDP and TCP
+  7. Prints recent service logs and common failure hints
 
 This script is read-only. It does not restart services, edit files, or change
 systemd/network resources.
@@ -54,6 +56,30 @@ warn() {
 
 mark_failed() {
   STATUS=1
+}
+
+is_root() {
+  [[ "${EUID:-$(id -u 2>/dev/null || echo 1)}" -eq 0 ]]
+}
+
+run_readonly_command() {
+  local output
+  if output="$("$@" 2>&1)"; then
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  local rc=$?
+  if ! is_root && command -v sudo >/dev/null 2>&1; then
+    if output="$(sudo -n "$@" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    rc=$?
+  fi
+
+  printf '%s\n' "$output"
+  return "$rc"
 }
 
 strip_quotes() {
@@ -168,7 +194,7 @@ show_target_summary() {
     mark_failed
   fi
   echo "server_url=${server_url:-not_configured}"
-  if env_present DUSHENGCDN_DNS_WORKER_TOKEN; then
+  if env_present DUSHENGCDN_DNS_WORKER_TOKEN || env_present DUSHENGCDN_DNS_WORKER_TOKEN_FILE; then
     echo "token=configured"
   else
     echo "token=not_configured"
@@ -178,6 +204,36 @@ show_target_summary() {
   echo "dns_port=${dns_port}"
   echo "snapshot_path=${snapshot_path:-not_configured}"
   echo "geoip_database=${geoip_path:-not_configured}"
+  echo
+}
+
+show_local_addresses() {
+  local output=""
+
+  log "Local network addresses"
+  if command -v ip >/dev/null 2>&1; then
+    output="$(run_readonly_command ip -br addr || true)"
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output"
+    else
+      warn "failed to read local addresses with ip -br addr."
+    fi
+  elif command -v ifconfig >/dev/null 2>&1; then
+    output="$(run_readonly_command ifconfig -a || true)"
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output"
+    else
+      warn "failed to read local addresses with ifconfig."
+    fi
+  else
+    warn "neither ip nor ifconfig was found; cannot show local interface addresses."
+  fi
+
+  if [[ -n "$PUBLIC_IP" && "$PUBLIC_IP" =~ ^([0-9]+\.){3}[0-9]+$|: ]]; then
+    if [[ -n "$output" ]] && ! printf '%s\n' "$output" | grep -Fq "$PUBLIC_IP"; then
+      warn "--public-ip ${PUBLIC_IP} was not found on local interfaces. Check whether the DNS Worker public address, registrar Glue/NS target, and provider NAT address all refer to the same server."
+    fi
+  fi
   echo
 }
 
@@ -236,21 +292,159 @@ show_install_files() {
   echo
 }
 
+analyze_port_listeners() {
+  local port="$1"
+  local listener_text="$2"
+
+  if [[ -z "$(printf '%s' "$listener_text" | tr -d '[:space:]')" ]]; then
+    warn "no TCP/UDP listener was found on port ${port}."
+    mark_failed
+    return
+  fi
+
+  if printf '%s\n' "$listener_text" | grep -Eiq 'dushengcdn'; then
+    echo "listener_owner=dushengcdn-dns-worker"
+  else
+    warn "no DuShengCDN DNS Worker listener was found on port ${port}; another service may own the DNS port."
+    mark_failed
+  fi
+
+  if printf '%s\n' "$listener_text" | grep -Eiq 'systemd-resolve|127\.0\.0\.53|127\.0\.0\.54'; then
+    echo "loopback_resolver=present (systemd-resolved on 127.0.0.53/127.0.0.54 is normal and does not block a Worker bound to a public IP)"
+  fi
+
+  if printf '%s\n' "$listener_text" | grep -Eiq 'named|dnsmasq|coredns|adguard|pihole|unbound|docker-proxy'; then
+    warn "another DNS or port-forwarding service appears in the port ${port} listener list. Confirm it is not bound to the same public address."
+  fi
+
+  if [[ -n "$PUBLIC_IP" ]]; then
+    if printf '%s\n' "$listener_text" | grep -Fq "$PUBLIC_IP"; then
+      echo "public_ip_listener=present (${PUBLIC_IP}:${port})"
+    elif printf '%s\n' "$listener_text" | grep -Eq "(^|[[:space:]])(\*|0\.0\.0\.0|\[::\]|::):${port}([[:space:]]|$)"; then
+      echo "public_ip_listener=covered_by_wildcard"
+    else
+      warn "--public-ip ${PUBLIC_IP} does not appear in the port ${port} listener list. If queries target this IP, the Worker may be bound to the wrong address."
+      mark_failed
+    fi
+  fi
+}
+
 show_port_listeners() {
   local port="$1"
+  local listener_text=""
+  local output=""
 
   log "Port listeners: ${port}"
   if command -v ss >/dev/null 2>&1; then
-    ss -lntup 2>/dev/null | grep -E "(:${port}[[:space:]]|:${port}$)" || true
-    ss -lnuap 2>/dev/null | grep -E "(:${port}[[:space:]]|:${port}$)" || true
-  elif command -v lsof >/dev/null 2>&1; then
-    lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true
-    lsof -nP -iUDP:"${port}" 2>/dev/null || true
-  elif command -v netstat >/dev/null 2>&1; then
-    netstat -lntup 2>/dev/null | grep -E "[:.]${port}[[:space:]]" || true
-    netstat -lnuap 2>/dev/null | grep -E "[:.]${port}[[:space:]]" || true
+    output="$(run_readonly_command ss -H -lntup "( sport = :${port} )" || true)"
+    if [[ -z "$output" ]]; then
+      output="$(run_readonly_command ss -lntup 2>/dev/null | grep -E "(:${port}[[:space:]]|:${port}$)" || true)"
+    fi
+    if [[ -n "$output" ]]; then
+      echo "--- ss tcp ---"
+      printf '%s\n' "$output"
+      listener_text+=$'\n'"$output"
+    fi
+
+    output="$(run_readonly_command ss -H -lnuap "( sport = :${port} )" || true)"
+    if [[ -z "$output" ]]; then
+      output="$(run_readonly_command ss -lnuap 2>/dev/null | grep -E "(:${port}[[:space:]]|:${port}$)" || true)"
+    fi
+    if [[ -n "$output" ]]; then
+      echo "--- ss udp ---"
+      printf '%s\n' "$output"
+      listener_text+=$'\n'"$output"
+    fi
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    output="$(run_readonly_command lsof -nP -iTCP:"${port}" -sTCP:LISTEN || true)"
+    if [[ -n "$output" ]]; then
+      echo "--- lsof tcp ---"
+      printf '%s\n' "$output"
+      listener_text+=$'\n'"$output"
+    fi
+    output="$(run_readonly_command lsof -nP -iUDP:"${port}" || true)"
+    if [[ -n "$output" ]]; then
+      echo "--- lsof udp ---"
+      printf '%s\n' "$output"
+      listener_text+=$'\n'"$output"
+    fi
+  fi
+
+  if command -v fuser >/dev/null 2>&1; then
+    output="$(run_readonly_command fuser -v "${port}/tcp" "${port}/udp" || true)"
+    if [[ -n "$output" ]]; then
+      echo "--- fuser ---"
+      printf '%s\n' "$output"
+      listener_text+=$'\n'"$output"
+    fi
+  fi
+
+  if [[ -z "$listener_text" ]] && command -v netstat >/dev/null 2>&1; then
+    output="$(run_readonly_command netstat -lntup 2>/dev/null | grep -E "[:.]${port}[[:space:]]" || true)"
+    if [[ -n "$output" ]]; then
+      echo "--- netstat tcp ---"
+      printf '%s\n' "$output"
+      listener_text+=$'\n'"$output"
+    fi
+    output="$(run_readonly_command netstat -lnuap 2>/dev/null | grep -E "[:.]${port}[[:space:]]" || true)"
+    if [[ -n "$output" ]]; then
+      echo "--- netstat udp ---"
+      printf '%s\n' "$output"
+      listener_text+=$'\n'"$output"
+    fi
+  fi
+
+  if [[ -z "$listener_text" ]]; then
+    warn "neither ss, lsof, fuser, nor netstat found a listener for port ${port}."
+  fi
+  analyze_port_listeners "$port" "$listener_text"
+  echo
+}
+
+show_firewall_snapshot() {
+  local port="$1"
+  local output=""
+  local printed="false"
+
+  log "Firewall snapshot"
+  if command -v ufw >/dev/null 2>&1; then
+    echo "--- ufw status verbose ---"
+    if output="$(run_readonly_command ufw status verbose || true)"; [[ -n "$output" ]]; then
+      printf '%s\n' "$output"
+    else
+      warn "unable to read UFW status."
+    fi
+    printed="true"
+  fi
+
+  if command -v iptables >/dev/null 2>&1; then
+    echo "--- iptables INPUT relevant lines ---"
+    output="$(run_readonly_command iptables -L INPUT -n -v --line-numbers || true)"
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output" | grep -E "Chain INPUT|dpt:${port}|spt:${port}|DROP|REJECT" || echo "no obvious INPUT rule mentions port ${port}, DROP, or REJECT"
+    else
+      warn "unable to read iptables INPUT chain."
+    fi
+    printed="true"
+  fi
+
+  if command -v nft >/dev/null 2>&1; then
+    echo "--- nftables relevant lines ---"
+    output="$(run_readonly_command nft list ruleset || true)"
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output" | grep -nEi "(dport[[:space:]]+${port}|sport[[:space:]]+${port}|drop|reject)" | head -n 80 || echo "no obvious nftables rule mentions port ${port}, drop, or reject"
+    else
+      warn "unable to read nftables ruleset."
+    fi
+    printed="true"
+  fi
+
+  if [[ "$printed" != "true" ]]; then
+    warn "ufw, iptables, and nft were not found; skipping firewall snapshot."
   else
-    warn "neither ss, lsof, nor netstat was found; cannot list port ${port} listeners."
+    echo "firewall_note=read-only snapshot only; provider firewalls/security groups are not visible from inside the server"
   fi
   echo
 }
@@ -373,6 +567,9 @@ If only systemd-resolved is listening on 127.0.0.53/127.0.0.54:
 If SOA/NS fail with connection refused or timeout:
   - Check local firewall, cloud security group, NAT/port mapping, and upstream provider UDP/TCP ${port} policy.
   - Check that the registrar NS/Glue records point to this Worker public IP.
+  - If the Worker is listening locally, run on the Worker host while querying from another network:
+      sudo timeout 30 tcpdump -ni any 'port ${port}' -vv -c 30
+    No packets in tcpdump usually means provider/firewall/route/registrar target mismatch, not a DNS Worker bind conflict.
 
 If SOA/NS work but A/AAAA returns no target:
   - Switch the site to authoritative DNS mode, bind the correct Zone, and check GSLB simulation for no-target reasons.
@@ -407,9 +604,11 @@ server_url="$(env_value DUSHENGCDN_DNS_WORKER_SERVER_URL "")"
 DNS_PORT="$(detect_dns_port "$listen_addr")"
 
 show_target_summary "$listen_addr" "$snapshot_path" "$geoip_path" "$server_url" "$DNS_PORT"
+show_local_addresses
 show_systemd_status
 show_install_files "$snapshot_path" "$geoip_path"
 show_port_listeners "$DNS_PORT"
+show_firewall_snapshot "$DNS_PORT"
 check_processes
 run_dns_queries "$DNS_PORT"
 show_logs

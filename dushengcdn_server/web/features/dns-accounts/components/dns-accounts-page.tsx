@@ -168,7 +168,12 @@ function DnsAccountCreateModal({ isOpen, onClose, onCreated }: { isOpen: boolean
           hint="请填写 Cloudflare 里创建的 API 密钥，不要填写全局密钥。权限至少包含读取域名和修改解析记录。"
           tooltip="API 密钥就是面板代你去 Cloudflare 添加、修改解析记录时使用的授权。建议只授权需要管理的域名。"
         >
-          <ResourceInput {...register('authorization', { required: '请输入 API 密钥' })} />
+          <ResourceInput
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            {...register('authorization', { required: '请输入 API 密钥' })}
+          />
         </ResourceField>
         <PrimaryButton type="submit" disabled={createMutation.isPending}>
           {createMutation.isPending ? '提交中...' : '提交'}

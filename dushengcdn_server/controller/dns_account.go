@@ -4,9 +4,10 @@ import (
 	"dushengcdn/model"
 	"dushengcdn/service"
 	"encoding/json"
-	"github.com/gin-gonic/gin"
-	"net/http"
 	"strconv"
+	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 type DnsAccountInput struct {
@@ -25,17 +26,10 @@ type DnsAccountInput struct {
 func GetDnsAccounts(c *gin.Context) {
 	accounts, err := model.ListDnsAccounts()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    accounts,
-	})
+	respondSuccess(c, accounts)
 }
 
 // CreateDnsAccount godoc
@@ -50,10 +44,7 @@ func GetDnsAccounts(c *gin.Context) {
 func CreateDnsAccount(c *gin.Context) {
 	var input DnsAccountInput
 	if err := json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+		respondBadRequest(c, "无效的参数")
 		return
 	}
 
@@ -63,26 +54,16 @@ func CreateDnsAccount(c *gin.Context) {
 		Authorization: input.Authorization,
 	}
 	if err := service.NormalizeDNSAccountAuthorization(account); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "DNS 账号凭据格式无效：" + err.Error(),
-		})
+		respondFailure(c, "DNS 账号凭据格式无效："+err.Error())
 		return
 	}
 
 	if err := account.Insert(); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    account,
-	})
+	respondSuccess(c, account)
 }
 
 // UpdateDnsAccount godoc
@@ -98,55 +79,38 @@ func CreateDnsAccount(c *gin.Context) {
 func UpdateDnsAccount(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+		respondBadRequest(c, "无效的参数")
 		return
 	}
 
 	var input DnsAccountInput
 	if err := json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+		respondBadRequest(c, "无效的参数")
 		return
 	}
 
 	account, err := model.GetDnsAccountByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
 
 	account.Name = input.Name
 	account.Type = input.Type
-	account.Authorization = input.Authorization
+	if strings.TrimSpace(input.Authorization) != "" {
+		account.Authorization = input.Authorization
+	}
 	if err := service.NormalizeDNSAccountAuthorization(account); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "DNS 账号凭据格式无效：" + err.Error(),
-		})
+		respondFailure(c, "DNS 账号凭据格式无效："+err.Error())
 		return
 	}
 
 	if err := account.Update(); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    account,
-	})
+	respondSuccess(c, account)
 }
 
 // DeleteDnsAccount godoc
@@ -160,19 +124,13 @@ func UpdateDnsAccount(c *gin.Context) {
 func DeleteDnsAccount(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+		respondBadRequest(c, "无效的参数")
 		return
 	}
 
 	account, err := model.GetDnsAccountByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
 
@@ -180,23 +138,14 @@ func DeleteDnsAccount(c *gin.Context) {
 	var count int64
 	model.DB.Model(&model.TLSCertificate{}).Where("dns_account_id = ?", id).Count(&count)
 	if count > 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "该 DNS 账号已被证书使用，无法删除",
-		})
+		respondFailure(c, "该 DNS 账号已被证书使用，无法删除")
 		return
 	}
 
 	if err := account.Delete(); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
+	respondSuccessMessage(c, "")
 }

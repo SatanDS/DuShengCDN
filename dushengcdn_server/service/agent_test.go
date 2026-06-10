@@ -3,9 +3,50 @@ package service
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"dushengcdn/model"
 )
+
+func TestReportApplyLogRedactsSensitiveMessage(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:       "node-apply-redact",
+		Name:         "edge",
+		IP:           "127.0.0.1",
+		Status:       NodeStatusOnline,
+		AgentVersion: "v1.0.0",
+	}
+	if err := model.DB.Create(node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	log, err := ReportApplyLog(ApplyLogPayload{
+		NodeID:  node.NodeID,
+		Version: "20260610-001",
+		Result:  ApplyResultFailed,
+		Message: `openresty -t failed:
+local expected_hash = "abcdef123456"
+proxy_set_header Authorization "Bearer origin-token";
+callback /oauth?code=oauth-code&state=csrf-state`,
+	})
+	if err != nil {
+		t.Fatalf("ReportApplyLog failed: %v", err)
+	}
+	for _, leaked := range []string{"abcdef123456", "origin-token", "oauth-code", "csrf-state"} {
+		if strings.Contains(log.Message, leaked) {
+			t.Fatalf("expected %q to be redacted from apply log %q", leaked, log.Message)
+		}
+	}
+	reloaded, err := model.GetNodeByNodeID(node.NodeID)
+	if err != nil {
+		t.Fatalf("reload node: %v", err)
+	}
+	if reloaded.LastError != log.Message {
+		t.Fatalf("expected node last_error to use redacted apply message, got %q vs %q", reloaded.LastError, log.Message)
+	}
+}
 
 func TestGetActiveConfigForAgentIncludesPoWConfig(t *testing.T) {
 	setupServiceTestDB(t)
@@ -385,8 +426,118 @@ func TestBuildAgentDNSProbeTargetsLimitsOnlineWorkers(t *testing.T) {
 		t.Fatalf("expected probe target limit %d, got %+v", maxAgentDNSProbeTargets, targets)
 	}
 	for _, target := range targets {
-		if target.WorkerID == "" || target.PublicAddress == "" || target.QueryName != "example.com." || target.QueryType != "SOA" {
+		if target.WorkerID == "" || target.PublicAddress != "ns.example.net:53" || target.QueryName != "example.com." || target.QueryType != "SOA" {
 			t.Fatalf("unexpected target: %+v", target)
 		}
+	}
+}
+
+func TestBuildAgentDNSProbeTargetsSkipsUnsafeStoredAddress(t *testing.T) {
+	setupServiceTestDB(t)
+
+	if _, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{
+		Name:          "ns-safe",
+		PublicAddress: "8.8.8.8",
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if _, err := RecordDNSWorkerHeartbeat(workerModel, DNSWorkerHeartbeatInput{Status: dnsWorkerStatusOnline}); err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if err := model.DB.Model(workerModel).Update("public_address", "169.254.169.254:53").Error; err != nil {
+		t.Fatalf("seed unsafe public address: %v", err)
+	}
+
+	if targets := buildAgentDNSProbeTargets(); len(targets) != 0 {
+		t.Fatalf("expected unsafe stored address to be skipped, got %+v", targets)
+	}
+}
+
+func TestHeartbeatNodeIgnoresUnassignedDNSProbeReports(t *testing.T) {
+	setupServiceTestDB(t)
+
+	if _, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	assigned, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-assigned", PublicAddress: "ns1.example.net"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker assigned: %v", err)
+	}
+	worker, err := model.GetDNSWorkerByID(assigned.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+	if _, err := RecordDNSWorkerHeartbeat(worker, DNSWorkerHeartbeatInput{Status: dnsWorkerStatusOnline}); err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+
+	node := &model.Node{
+		NodeID:       "node-dnsprobe-authz",
+		Name:         "edge-dnsprobe-authz",
+		IP:           "203.0.113.10",
+		AgentToken:   "agent-token",
+		AgentVersion: "v1.0.0",
+		Status:       NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	now := time.Now().UTC()
+	results := []AgentDNSProbeResult{
+		{Network: "UDP", Reachable: true, DurationMs: 10, RCode: "NOERROR", AnswerCount: 1},
+		{Network: "TCP", Reachable: true, DurationMs: 15, RCode: "NOERROR", AnswerCount: 1},
+	}
+	_, err = HeartbeatNode(node, AgentNodePayload{
+		IP:              "203.0.113.10",
+		AgentVersion:    "v1.0.1",
+		OpenrestyStatus: OpenrestyStatusHealthy,
+		DNSProbeResults: []AgentDNSProbeReport{
+			{
+				WorkerID:      assigned.WorkerID,
+				PublicAddress: "ns1.example.net:53",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results:       results,
+			},
+			{
+				WorkerID:      assigned.WorkerID,
+				PublicAddress: "127.0.0.1:53",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results:       results,
+			},
+			{
+				WorkerID:      "forged-worker",
+				PublicAddress: "ns2.example.net",
+				QueryName:     "example.com.",
+				QueryType:     "SOA",
+				CheckedAtUnix: now.Unix(),
+				Results:       results,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HeartbeatNode: %v", err)
+	}
+
+	probes, err := model.ListDNSWorkerNodeProbes()
+	if err != nil {
+		t.Fatalf("ListDNSWorkerNodeProbes: %v", err)
+	}
+	if len(probes) != 1 {
+		t.Fatalf("expected only the assigned matching probe to persist, got %+v", probes)
+	}
+	if probes[0].WorkerID != assigned.WorkerID || probes[0].PublicAddress != "ns1.example.net:53" || probes[0].QueryName != "example.com." {
+		t.Fatalf("unexpected persisted probe: %+v", probes[0])
 	}
 }

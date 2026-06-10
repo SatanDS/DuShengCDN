@@ -9,6 +9,7 @@ param(
   [string]$DistDir = "",
   [string]$ReleaseSignaturePublicKey = $env:DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY,
   [string]$ReleaseSigningPrivateKey = $env:DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY,
+  [string]$ReleaseSigningPrivateKeyFile = $env:DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY_FILE,
   [string]$GitHubToken = $env:GH_TOKEN,
   [string]$SecretsFile = "",
   [switch]$Upload,
@@ -31,6 +32,34 @@ if ([string]::IsNullOrWhiteSpace($DistDir)) {
   $DistDir = Join-Path $SourceDir "dist\manual-installer-assets"
 }
 
+function Read-SecretFile($Path, $Name) {
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return ""
+  }
+  $resolved = (Resolve-Path -LiteralPath $Path).Path
+  if ($resolved.StartsWith($SourceDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "$Name file must be outside the source repository: $SourceDir"
+  }
+  return (Get-Content -Raw -Encoding UTF8 -LiteralPath $resolved).Trim()
+}
+
+function Protect-SecretFile($Path) {
+  if ($PSVersionTable.PSEdition -eq "Core" -and -not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    chmod 600 $Path 2>$null
+    return
+  }
+  try {
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "Allow")
+    $acl.SetAccessRule($rule)
+    Set-Acl -LiteralPath $Path -AclObject $acl
+  } catch {
+    Write-Warning "Could not restrict temporary release signing key ACL: $($_.Exception.Message)"
+  }
+}
+
 if (-not [string]::IsNullOrWhiteSpace($SecretsFile)) {
   $secretPath = (Resolve-Path -LiteralPath $SecretsFile).Path
   if ($secretPath.StartsWith($SourceDir, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -49,6 +78,13 @@ if (-not [string]::IsNullOrWhiteSpace($SecretsFile)) {
   if ($secretJson.license_issuer_private_key) {
     throw "license_issuer_private_key must not be provided to release signing secrets."
   }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ReleaseSigningPrivateKey) -and -not [string]::IsNullOrWhiteSpace($ReleaseSigningPrivateKeyFile)) {
+  throw "Use only one of DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY or DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY_FILE."
+}
+if ([string]::IsNullOrWhiteSpace($ReleaseSigningPrivateKey) -and -not [string]::IsNullOrWhiteSpace($ReleaseSigningPrivateKeyFile)) {
+  $ReleaseSigningPrivateKey = Read-SecretFile $ReleaseSigningPrivateKeyFile "DUSHENGCDN_RELEASE_SIGNING_PRIVATE_KEY"
 }
 
 function Fail($Message) {
@@ -198,14 +234,21 @@ foreach ($assetName in $Asset) {
   $checksum = Get-Sha256Hex $assetPath
   [System.IO.File]::WriteAllText($shaPath, "$checksum  $assetName`n", $utf8NoBom)
 
-  & go run $signScript `
-    -private-key $ReleaseSigningPrivateKey `
-    -tag $Tag `
-    -asset $assetName `
-    -checksum-file $shaPath `
-    -signature-file $sigPath
-  if ($LASTEXITCODE -ne 0) {
-    Fail "failed to sign $assetName"
+  $privateKeyTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("dushengcdn-release-signing-key-" + [guid]::NewGuid().ToString())
+  try {
+    [System.IO.File]::WriteAllText($privateKeyTemp, $ReleaseSigningPrivateKey, (New-Object System.Text.UTF8Encoding($false)))
+    Protect-SecretFile $privateKeyTemp
+    & go run $signScript `
+      -tag $Tag `
+      -asset $assetName `
+      -checksum-file $shaPath `
+      -signature-file $sigPath `
+      -private-key-file $privateKeyTemp
+    if ($LASTEXITCODE -ne 0) {
+      Fail "failed to sign $assetName"
+    }
+  } finally {
+    Remove-Item -LiteralPath $privateKeyTemp -Force -ErrorAction SilentlyContinue
   }
   Assert-ReleaseSignature $assetName $checksum $sigPath
 

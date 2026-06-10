@@ -71,7 +71,7 @@ func runKeygen(args []string) error {
 func runSign(args []string) error {
 	flags := flag.NewFlagSet("sign", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	privateKeyRaw := flags.String("private-key", "", "Ed25519 private key, base64url/base64/hex")
+	privateKeyRaw := flags.String("private-key", "", "Ed25519 private key, base64url/base64/hex; compatibility option, prefer -private-key-file")
 	privateKeyFile := flags.String("private-key-file", "", "file containing Ed25519 private key")
 	licenseID := flags.String("license-id", "", "license id")
 	customerID := flags.String("customer-id", "", "customer id")
@@ -392,7 +392,7 @@ func usageError(message string) error {
 func printUsage(writer *os.File) {
 	fmt.Fprintln(writer, "Usage:")
 	fmt.Fprintln(writer, "  go run ./cmd/license keygen [-encoding base64url|hex]")
-	fmt.Fprintln(writer, "  go run ./cmd/license sign -private-key <key> -license-id <id> -customer-name <name> [options]")
+	fmt.Fprintln(writer, "  go run ./cmd/license sign -private-key-file <file> -license-id <id> -customer-name <name> [options]")
 	fmt.Fprintln(writer, "  go run ./cmd/license inspect -token <token> [-public-key <key>]")
 	fmt.Fprintln(writer, "")
 	fmt.Fprintln(writer, "Features: all, acme-automation, authoritative-dns, cloudflare-dns, gslb, ddos-protection, waf, cc-protection, country-region-access-control, operator-access-control, source-cidr-access-control, asn-access-control")

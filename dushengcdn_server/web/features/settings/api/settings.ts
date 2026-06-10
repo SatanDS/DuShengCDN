@@ -22,6 +22,16 @@ import type {
   UpdateSelfPayload,
 } from '@/features/settings/types';
 
+export function sendEmailBindVerification(email: string, turnstileToken?: string) {
+  const query = turnstileToken
+    ? `?turnstile=${encodeURIComponent(turnstileToken)}`
+    : '';
+  return apiRequest<void>(`/oauth/email/verification${query}`, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
 export function getOptions() {
   return apiRequest<OptionItem[]>('/option/');
 }
@@ -204,18 +214,23 @@ export function updateSelf(payload: UpdateSelfPayload) {
 }
 
 export function generateAccessToken() {
-  return apiRequest<string>('/user/token');
+  return apiRequest<string>('/user/token', {
+    method: 'POST',
+  });
 }
 
 export function bindWeChat(code: string) {
-  return apiRequest<void>(
-    `/oauth/wechat/bind?code=${encodeURIComponent(code)}`,
-  );
+  return apiRequest<void>('/oauth/wechat/bind', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
 }
 
 export function bindEmail(email: string, code: string) {
-  const searchParams = new URLSearchParams({ email, code });
-  return apiRequest<void>(`/oauth/email/bind?${searchParams.toString()}`);
+  return apiRequest<void>('/oauth/email/bind', {
+    method: 'POST',
+    body: JSON.stringify({ email, code }),
+  });
 }
 
 export function getAboutContent() {

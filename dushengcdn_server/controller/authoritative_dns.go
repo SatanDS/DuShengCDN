@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"dushengcdn/internal/dnsworker"
 	"dushengcdn/job"
 	"dushengcdn/model"
 	"dushengcdn/service"
@@ -445,7 +446,12 @@ func GetDNSSnapshot(c *gin.Context) {
 	if !ok {
 		return
 	}
-	snapshot, err := service.GetAuthoritativeDNSSnapshot(worker)
+	token := dnsWorkerTokenFromRequest(c)
+	if strings.TrimSpace(c.GetHeader(dnsworker.SnapshotSignatureHeader)) != dnsworker.SnapshotSignatureVersion {
+		respondBadRequest(c, "signed DNS snapshot is required; upgrade DNS Worker to a version that sends "+dnsworker.SnapshotSignatureHeader)
+		return
+	}
+	snapshot, err := service.GetSignedAuthoritativeDNSSnapshot(worker, token)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -520,19 +526,25 @@ func DownloadDNSSourceDatabaseFile(c *gin.Context) {
 }
 
 func authenticateDNSWorker(c *gin.Context) (*model.DNSWorker, bool) {
-	token := strings.TrimSpace(c.GetHeader("X-DNS-Worker-Token"))
-	if token == "" {
-		auth := strings.TrimSpace(c.GetHeader("Authorization"))
-		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
-			token = strings.TrimSpace(auth[7:])
-		}
-	}
+	token := dnsWorkerTokenFromRequest(c)
 	worker, err := service.AuthenticateDNSWorkerToken(token)
 	if err != nil {
 		respondUnauthorized(c, err.Error())
 		return nil, false
 	}
 	return worker, true
+}
+
+func dnsWorkerTokenFromRequest(c *gin.Context) string {
+	token := strings.TrimSpace(c.GetHeader("X-DNS-Worker-Token"))
+	if token != "" {
+		return token
+	}
+	auth := strings.TrimSpace(c.GetHeader("Authorization"))
+	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		return strings.TrimSpace(auth[7:])
+	}
+	return ""
 }
 
 func parseUintParam(c *gin.Context, key string) (uint, bool) {

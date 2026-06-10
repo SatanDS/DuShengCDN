@@ -115,6 +115,29 @@ func TestBuildTrafficObservabilityReturnsAccessLogs(t *testing.T) {
 	}
 }
 
+func TestBuildTrafficObservabilityDropsAccessLogQuery(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "dushengcdn_access.log")
+	content := []byte(
+		"{\"ts\":\"2026-03-14T08:00:00Z\",\"host\":\"app.example.com\",\"path\":\"/oauth/callback?code=oauth-code&state=csrf-state&safe=1#fragment\",\"remote_addr\":\"10.0.0.1\",\"status\":302}\n" +
+			"{\"ts\":\"2026-03-14T08:00:01Z\",\"host\":\"app.example.com\",\"path\":\"https://app.example.com/reset?token=reset-token\",\"remote_addr\":\"10.0.0.2\",\"status\":200}\n",
+	)
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	_, accessLogs, _ := BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
+	if len(accessLogs) != 2 {
+		t.Fatalf("expected two access logs, got %+v", accessLogs)
+	}
+	for _, entry := range accessLogs {
+		if strings.Contains(entry.Path, "oauth-code") || strings.Contains(entry.Path, "csrf-state") || strings.Contains(entry.Path, "reset-token") || strings.ContainsAny(entry.Path, "?#") {
+			t.Fatalf("expected sensitive query to be removed, got %q", entry.Path)
+		}
+	}
+}
+
 func TestBuildTrafficObservabilityParsesUpstreamBytes(t *testing.T) {
 	tempDir := t.TempDir()
 	logPath := filepath.Join(tempDir, "dushengcdn_access.log")

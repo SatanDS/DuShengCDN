@@ -27,15 +27,23 @@ func TestRunnerSendsHeartbeatImmediatelyAfterInitialSnapshot(t *testing.T) {
 			if token := strings.TrimSpace(r.Header.Get("X-DNS-Worker-Token")); token != "dns-worker-token" {
 				t.Fatalf("unexpected snapshot token %q", token)
 			}
+			if r.Header.Get(SnapshotSignatureHeader) != SnapshotSignatureVersion {
+				t.Fatalf("expected signed snapshot request header, got %q", r.Header.Get(SnapshotSignatureHeader))
+			}
+			snapshot := &Snapshot{
+				SnapshotVersion: "snap-1",
+				GeneratedAt:     time.Now().UTC(),
+				Zones:           []SnapshotZone{},
+				Routes:          []SnapshotRoute{},
+				Nodes:           []SnapshotNode{},
+			}
+			envelope, err := SignSnapshot(snapshot, "dns-worker-token")
+			if err != nil {
+				t.Fatalf("sign snapshot: %v", err)
+			}
 			respondDNSWorkerTestJSON(t, w, map[string]any{
 				"success": true,
-				"data": map[string]any{
-					"snapshot_version": "snap-1",
-					"generated_at":     time.Now().UTC(),
-					"zones":            []any{},
-					"routes":           []any{},
-					"nodes":            []any{},
-				},
+				"data":    envelope,
 			})
 		case "/api/dns-worker-heartbeat":
 			if token := strings.TrimSpace(r.Header.Get("X-DNS-Worker-Token")); token != "dns-worker-token" {
@@ -203,6 +211,83 @@ func TestRunnerRunUpdateUsesBashScriptsOnUnix(t *testing.T) {
 	}
 	if got := string(raw); got != "stable:SatanDS/SatanDS-DuShengCDN-releases:v1.0.1" {
 		t.Fatalf("unexpected update script environment: %q", got)
+	}
+}
+
+func TestRunnerRunUpdateRejectsWritableScriptOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions are not relevant on Windows")
+	}
+	installDir := t.TempDir()
+	scriptPath := filepath.Join(installDir, "update-dns-worker.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\nexit 0\n"), 0777); err != nil {
+		t.Fatalf("write update script: %v", err)
+	}
+	runner := &Runner{Config: &Config{
+		InstallDir:        installDir,
+		UpdateScriptPath:  scriptPath,
+		UpdateEnabled:     true,
+		ServerURL:         "https://example.com",
+		Token:             "dns-worker-token",
+		ListenAddr:        "127.0.0.1:0",
+		HeartbeatInterval: time.Hour,
+		RequestTimeout:    time.Second,
+		Version:           "test-version",
+	}}
+
+	err := runner.runUpdate(WorkerSettings{UpdateChannel: "stable"})
+	if err == nil || !strings.Contains(err.Error(), "must not be writable") {
+		t.Fatalf("expected writable script rejection, got %v", err)
+	}
+}
+
+func TestRunnerRunUpdateRejectsScriptOutsideInstallDir(t *testing.T) {
+	installDir := t.TempDir()
+	otherDir := t.TempDir()
+	scriptPath := filepath.Join(otherDir, "update-dns-worker.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("write update script: %v", err)
+	}
+	runner := &Runner{Config: &Config{
+		InstallDir:        installDir,
+		UpdateScriptPath:  scriptPath,
+		UpdateEnabled:     true,
+		ServerURL:         "https://example.com",
+		Token:             "dns-worker-token",
+		ListenAddr:        "127.0.0.1:0",
+		HeartbeatInterval: time.Hour,
+		RequestTimeout:    time.Second,
+		Version:           "test-version",
+	}}
+
+	err := runner.runUpdate(WorkerSettings{UpdateChannel: "stable"})
+	if err == nil || !strings.Contains(err.Error(), "inside the install directory") {
+		t.Fatalf("expected outside install dir rejection, got %v", err)
+	}
+}
+
+func TestRunnerRunUninstallRejectsWritableScriptOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions are not relevant on Windows")
+	}
+	installDir := t.TempDir()
+	scriptPath := filepath.Join(installDir, "uninstall-dns-worker.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0777); err != nil {
+		t.Fatalf("write uninstall script: %v", err)
+	}
+	runner := &Runner{Config: &Config{
+		InstallDir:        installDir,
+		ServerURL:         "https://example.com",
+		Token:             "dns-worker-token",
+		ListenAddr:        "127.0.0.1:0",
+		HeartbeatInterval: time.Hour,
+		RequestTimeout:    time.Second,
+		Version:           "test-version",
+	}}
+
+	err := runner.runUninstall()
+	if err == nil || !strings.Contains(err.Error(), "must not be writable") {
+		t.Fatalf("expected writable uninstall script rejection, got %v", err)
 	}
 }
 

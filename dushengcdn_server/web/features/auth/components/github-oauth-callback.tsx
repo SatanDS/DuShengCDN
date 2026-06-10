@@ -54,7 +54,7 @@ function LegacyGitHubOAuthCallback() {
   useEffect(() => {
     if (oauthError || oauthErrorDescription) {
       setPrompt('授权处理失败');
-      setMessage({ tone: 'danger', text: oauthErrorDescription || oauthError });
+      setMessage({ tone: 'danger', text: 'GitHub 授权失败，请返回登录页重试。' });
       return;
     }
 

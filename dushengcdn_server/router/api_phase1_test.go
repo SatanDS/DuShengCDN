@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"dushengcdn/common"
+	"dushengcdn/controller"
+	"dushengcdn/middleware"
 	"dushengcdn/model"
 	"dushengcdn/router"
 	"dushengcdn/service"
@@ -46,14 +48,17 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 
 	createBody := map[string]any{
 		"domain":        "app.example.com",
-		"origin_url":    "https://10.0.0.11:8443",
-		"upstreams":     []string{"https://10.0.0.12:8443"},
+		"origin_url":    "https://8.8.8.11:8443",
+		"upstreams":     []string{"https://8.8.8.12:8443"},
 		"origin_host":   "origin-a.internal",
 		"enabled":       true,
 		"cache_enabled": true,
 		"cache_policy":  "path_prefix",
 		"cache_rules":   []string{"/assets", "/static"},
-		"remark":        "primary route",
+		"custom_headers": []map[string]any{
+			{"key": "Authorization", "value": "Bearer rollback-secret"},
+		},
+		"remark": "primary route",
 	}
 	resp := performJSONRequest(t, engine, token, http.MethodPost, "/api/proxy-routes/", createBody)
 	var createdRoute service.ProxyRouteView
@@ -67,7 +72,7 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 	if !createdRoute.CacheEnabled || createdRoute.CachePolicy != "path_prefix" {
 		t.Fatalf("expected route cache settings to persist, got %+v", createdRoute)
 	}
-	if !strings.Contains(createdRoute.Upstreams, "10.0.0.12:8443") {
+	if !strings.Contains(createdRoute.Upstreams, "8.8.8.12:8443") {
 		t.Fatalf("expected route upstream list to persist, got %s", createdRoute.Upstreams)
 	}
 	if !strings.Contains(createdRoute.CacheRules, "/assets") {
@@ -95,7 +100,9 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 	}
 
 	repeatPublishReq := httptest.NewRequest(http.MethodPost, "/api/config-versions/publish", nil)
-	repeatPublishReq.AddCookie(loginAsRoot(t, engine))
+	repeatSessionCookie := loginAsRoot(t, engine)
+	repeatPublishReq.AddCookie(repeatSessionCookie)
+	addSessionCSRFHeader(t, engine, repeatPublishReq, repeatSessionCookie)
 	repeatPublishRecorder := httptest.NewRecorder()
 	engine.ServeHTTP(repeatPublishRecorder, repeatPublishReq)
 	if repeatPublishRecorder.Code != http.StatusOK {
@@ -112,14 +119,18 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 		t.Fatalf("unexpected repeated publish message: %s", repeatPublishResp.Message)
 	}
 
-	initialSnapshot := version1.SnapshotJSON
-	initialMainConfig := version1.MainConfig
-	initialRendered := version1.RenderedConfig
+	var publishedVersion1 model.ConfigVersion
+	if err := model.DB.First(&publishedVersion1, version1.ID).Error; err != nil {
+		t.Fatalf("failed to query raw version1: %v", err)
+	}
+	initialSnapshot := publishedVersion1.SnapshotJSON
+	initialMainConfig := publishedVersion1.MainConfig
+	initialRendered := publishedVersion1.RenderedConfig
 
 	updateBody := map[string]any{
 		"domain":        "app.example.com",
-		"origin_url":    "https://10.0.0.21:8443",
-		"upstreams":     []string{"https://10.0.0.22:8443"},
+		"origin_url":    "https://8.8.8.21:8443",
+		"upstreams":     []string{"https://8.8.8.22:8443"},
 		"origin_host":   "origin-b.internal",
 		"enabled":       true,
 		"cache_enabled": true,
@@ -130,7 +141,7 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 	routePath := "/api/proxy-routes/" + toString(createdRoute.ID)
 	resp = performJSONRequest(t, engine, token, http.MethodPost, routePath+"/update", updateBody)
 	decodeResponseData(t, resp, &createdRoute)
-	if createdRoute.OriginURL != "https://10.0.0.21:8443" {
+	if createdRoute.OriginURL != "https://8.8.8.21:8443" {
 		t.Fatalf("unexpected updated route origin: %s", createdRoute.OriginURL)
 	}
 	if createdRoute.OriginHost != "origin-b.internal" {
@@ -139,7 +150,7 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 	if createdRoute.CachePolicy != "path_exact" || !strings.Contains(createdRoute.CacheRules, "/robots.txt") {
 		t.Fatalf("expected updated route cache rules to persist, got %+v", createdRoute)
 	}
-	if !strings.Contains(createdRoute.Upstreams, "10.0.0.22:8443") {
+	if !strings.Contains(createdRoute.Upstreams, "8.8.8.22:8443") {
 		t.Fatalf("expected updated route upstream list to persist, got %s", createdRoute.Upstreams)
 	}
 
@@ -191,6 +202,12 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 	decodeResponseData(t, resp, &activeVersion)
 	if activeVersion.ID != version1.ID || !activeVersion.IsActive {
 		t.Fatal("expected version1 to become active after rollback activation")
+	}
+	if strings.Contains(activeVersion.SnapshotJSON, "Bearer rollback-secret") || strings.Contains(activeVersion.RenderedConfig, "Bearer rollback-secret") {
+		t.Fatal("expected activate response to redact sensitive custom header values")
+	}
+	if strings.Contains(activeVersion.SnapshotJSON, "PRIVATE KEY") || strings.Contains(activeVersion.SupportFilesJSON, "PRIVATE KEY") {
+		t.Fatal("expected activate response to use admin-redacted config version detail")
 	}
 
 	var storedVersion1 model.ConfigVersion
@@ -248,11 +265,28 @@ func TestPhase1HTTPSAndCertificateImportLifecycle(t *testing.T) {
 		t.Fatal("expected certificate detail endpoint to omit key_pem")
 	}
 
-	contentResp := performJSONRequest(t, engine, token, http.MethodGet, "/api/tls-certificates/"+toString(manualCertificate.ID)+"/content", nil)
+	contentGetReq := httptest.NewRequest(http.MethodGet, "/api/tls-certificates/"+toString(manualCertificate.ID)+"/content", nil)
+	contentGetReq.AddCookie(loginAsRoot(t, engine))
+	contentGetRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(contentGetRecorder, contentGetReq)
+	if contentGetRecorder.Code != http.StatusNotFound {
+		t.Fatalf("expected certificate content GET to be unavailable, got %d: %s", contentGetRecorder.Code, contentGetRecorder.Body.String())
+	}
+
+	contentResp := performJSONRequest(t, engine, token, http.MethodPost, "/api/tls-certificates/"+toString(manualCertificate.ID)+"/content", nil)
 	var certificateContent map[string]any
 	decodeResponseData(t, contentResp, &certificateContent)
-	if certificateContent["cert_pem"] == "" || certificateContent["key_pem"] == "" {
-		t.Fatal("expected certificate content endpoint to return pem payloads")
+	if certificateContent["cert_pem"] == "" {
+		t.Fatal("expected certificate content endpoint to return certificate payload")
+	}
+	if certificateContent["key_pem"] != "" {
+		t.Fatal("expected certificate content endpoint to hide private key by default")
+	}
+	revealedContentResp := performJSONRequest(t, engine, token, http.MethodPost, "/api/tls-certificates/"+toString(manualCertificate.ID)+"/content?reveal_key=true", nil)
+	var revealedCertificateContent map[string]any
+	decodeResponseData(t, revealedContentResp, &revealedCertificateContent)
+	if revealedCertificateContent["cert_pem"] == "" || revealedCertificateContent["key_pem"] == "" {
+		t.Fatal("expected root reveal request to return certificate and private key payloads")
 	}
 
 	updatedCertPEM, updatedKeyPEM := generateCertificatePairForRouterTest(t, []string{"secure.example.com", "www.secure.example.com"})
@@ -417,6 +451,51 @@ func TestPhase1HTTPSAndCertificateImportLifecycle(t *testing.T) {
 	}
 }
 
+func TestTLSCertificateImportRejectsOversizedMultipartBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("name", "oversized-cert"); err != nil {
+		t.Fatalf("write multipart field: %v", err)
+	}
+	part, err := writer.CreateFormFile("cert_file", "cert.pem")
+	if err != nil {
+		t.Fatalf("create multipart cert file: %v", err)
+	}
+	if _, err = part.Write(bytes.Repeat([]byte("A"), 2*1024*1024)); err != nil {
+		t.Fatalf("write multipart cert file: %v", err)
+	}
+	part, err = writer.CreateFormFile("key_file", "key.pem")
+	if err != nil {
+		t.Fatalf("create multipart key file: %v", err)
+	}
+	if _, err = part.Write([]byte("key")); err != nil {
+		t.Fatalf("write multipart key file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/tls-certificates/import-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	sessionCookie := loginAsRoot(t, engine)
+	req.AddCookie(sessionCookie)
+	addSessionCSRFHeader(t, engine, req, sessionCookie)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected oversized multipart to return 413, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestTLSCertificateConvertAcmeAPI(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	common.RedisEnabled = false
@@ -511,6 +590,8 @@ func setupTestDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "phase1.db")
 	common.SQLitePath = dbPath
 	common.AgentToken = "phase1-agent-token"
+	middleware.ResetRateLimiterForTest()
+	controller.ResetLoginFailuresForTest()
 	previousAgentLegacyGlobalTokenEnabled := common.AgentLegacyGlobalTokenEnabled
 	common.AgentLegacyGlobalTokenEnabled = false
 	previousInitialRootPassword := common.InitialRootPassword
@@ -554,7 +635,9 @@ func performJSONRequest(t *testing.T, engine http.Handler, token string, method 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.AddCookie(loginAsRoot(t, engine))
+	sessionCookie := loginAsRoot(t, engine)
+	req.AddCookie(sessionCookie)
+	addSessionCSRFHeader(t, engine, req, sessionCookie)
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -584,7 +667,9 @@ func performJSONRequestNoFatal(t *testing.T, engine http.Handler, token string, 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.AddCookie(loginAsRoot(t, engine))
+	sessionCookie := loginAsRoot(t, engine)
+	req.AddCookie(sessionCookie)
+	addSessionCSRFHeader(t, engine, req, sessionCookie)
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK && recorder.Code != http.StatusBadRequest {
@@ -631,7 +716,9 @@ func performMultipartRequest(t *testing.T, engine http.Handler, token string, pa
 	}
 	req := httptest.NewRequest(http.MethodPost, path, &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.AddCookie(loginAsRoot(t, engine))
+	sessionCookie := loginAsRoot(t, engine)
+	req.AddCookie(sessionCookie)
+	addSessionCSRFHeader(t, engine, req, sessionCookie)
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {

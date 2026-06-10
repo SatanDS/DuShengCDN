@@ -4187,6 +4187,7 @@ const basicAuthSchema = z
     basic_auth_enabled: z.boolean(),
     basic_auth_username: z.string(),
     basic_auth_password: z.string(),
+    basic_auth_password_configured: z.boolean(),
   })
   .superRefine((value, context) => {
     if (value.basic_auth_enabled) {
@@ -4197,7 +4198,10 @@ const basicAuthSchema = z
           message: '请输入账号',
         });
       }
-      if (!value.basic_auth_password.trim()) {
+      if (
+        !value.basic_auth_password_configured &&
+        !value.basic_auth_password.trim()
+      ) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['basic_auth_password'],
@@ -4225,7 +4229,10 @@ export function BasicAuthSection({
     defaultValues: {
       basic_auth_enabled: route.basic_auth_enabled,
       basic_auth_username: route.basic_auth_username || '',
-      basic_auth_password: route.basic_auth_password || '',
+      basic_auth_password: '',
+      basic_auth_password_configured: Boolean(
+        route.basic_auth_password_configured,
+      ),
     },
   });
 
@@ -4233,7 +4240,10 @@ export function BasicAuthSection({
     form.reset({
       basic_auth_enabled: route.basic_auth_enabled,
       basic_auth_username: route.basic_auth_username || '',
-      basic_auth_password: route.basic_auth_password || '',
+      basic_auth_password: '',
+      basic_auth_password_configured: Boolean(
+        route.basic_auth_password_configured,
+      ),
     });
   }, [form, route]);
 
@@ -4287,7 +4297,8 @@ export function BasicAuthSection({
         >
           <ResourceInput
             disabled={!watchedEnabled}
-            type="text"
+            type="password"
+            autoComplete="new-password"
             placeholder="secret123"
             {...form.register('basic_auth_password')}
           />

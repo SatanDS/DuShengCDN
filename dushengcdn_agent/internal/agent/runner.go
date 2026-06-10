@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -416,9 +417,6 @@ func runDNSWorkerUpdate(ctx context.Context, request protocol.DNSWorkerUpdateReq
 	if !commandExists("bash") {
 		return fmt.Errorf("bash is required to run DNS Worker installer")
 	}
-	if !commandExists("curl") {
-		return fmt.Errorf("curl is required to download DNS Worker installer")
-	}
 	installDir := strings.TrimSpace(request.InstallDir)
 	if installDir == "" {
 		installDir = "/opt/dushengcdn-dns-worker"
@@ -427,9 +425,33 @@ func runDNSWorkerUpdate(ctx context.Context, request protocol.DNSWorkerUpdateReq
 	if err != nil {
 		return err
 	}
+	if installInfo, err := os.Stat(installDir); err != nil {
+		return fmt.Errorf("DNS Worker install directory is not available at %s: %w", installDir, err)
+	} else if err := validateDNSWorkerUpdateFileOwnership(installDir, installInfo, true); err != nil {
+		return err
+	}
 	envFile := filepath.Join(installDir, "dns-worker.env")
 	if _, err := os.Stat(envFile); err != nil {
 		return fmt.Errorf("DNS Worker env file is not available at %s: %w", envFile, err)
+	}
+	updateScript := filepath.Join(installDir, "update-dns-worker.sh")
+	info, err := os.Stat(updateScript)
+	if err != nil {
+		return fmt.Errorf("DNS Worker updater script is not available at %s: %w", updateScript, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("DNS Worker updater script path is a directory: %s", updateScript)
+	}
+	if err := validateDNSWorkerUpdateFileOwnership(updateScript, info, true); err != nil {
+		return err
+	}
+	if envInfo, err := os.Stat(envFile); err != nil {
+		return fmt.Errorf("DNS Worker env file is not available at %s: %w", envFile, err)
+	} else if err := validateDNSWorkerUpdateFileOwnership(envFile, envInfo, true); err != nil {
+		return err
+	}
+	if err := validateDNSWorkerUpdateIdentity(envFile, request.WorkerID); err != nil {
+		return err
 	}
 	repo := strings.TrimSpace(request.Repo)
 	if repo == "" {
@@ -447,10 +469,14 @@ func runDNSWorkerUpdate(ctx context.Context, request protocol.DNSWorkerUpdateReq
 		return fmt.Errorf("DNS Worker release tag is invalid: %s", tagName)
 	}
 
-	script := buildDNSWorkerUpdateScript(envFile, installDir, repo, channel, tagName)
 	cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, "bash", "-c", script)
+	cmd := exec.CommandContext(cmdCtx, "bash", updateScript)
+	cmd.Env = append(os.Environ(),
+		"DUSHENGCDN_RELEASE_REPO="+repo,
+		"DUSHENGCDN_DNS_WORKER_UPDATE_CHANNEL="+channel,
+		"DUSHENGCDN_DNS_WORKER_UPDATE_TAG="+tagName,
+	)
 	output, err := cmd.CombinedOutput()
 	if cmdCtx.Err() != nil {
 		return fmt.Errorf("DNS Worker installer timed out")
@@ -461,34 +487,77 @@ func runDNSWorkerUpdate(ctx context.Context, request protocol.DNSWorkerUpdateReq
 	return nil
 }
 
-func buildDNSWorkerUpdateScript(envFile string, installDir string, repo string, channel string, tagName string) string {
-	releaseSelector := "latest/download"
-	tagArg := ""
-	if tagName != "" {
-		releaseSelector = "download/" + tagName
-		tagArg = " --release-tag " + shellQuote(tagName)
+func validateDNSWorkerUpdateIdentity(envFile string, expectedWorkerID string) error {
+	expectedWorkerID = strings.TrimSpace(expectedWorkerID)
+	if expectedWorkerID == "" {
+		return fmt.Errorf("DNS Worker update request is missing worker_id")
 	}
-	return strings.Join([]string{
-		"set -euo pipefail",
-		"set -a",
-		". " + shellQuote(envFile),
-		"set +a",
-		"SERVER_URL=\"${DUSHENGCDN_DNS_WORKER_SERVER_URL:?missing DUSHENGCDN_DNS_WORKER_SERVER_URL}\"",
-		"TOKEN=\"${DUSHENGCDN_DNS_WORKER_TOKEN:?missing DUSHENGCDN_DNS_WORKER_TOKEN}\"",
-		"LISTEN_ADDR=\"${DUSHENGCDN_DNS_WORKER_LISTEN_ADDR:-:53}\"",
-		"SNAPSHOT_PATH=\"${DUSHENGCDN_DNS_WORKER_SNAPSHOT_PATH:-}\"",
-		"if [ -z \"$SNAPSHOT_PATH\" ]; then SNAPSHOT_PATH=" + shellQuote(filepath.ToSlash(filepath.Join(installDir, "data/dns-worker-snapshot.json"))) + "; fi",
-		"PROFILE=\"${DUSHENGCDN_DNS_WORKER_SOURCE_DATABASE_PROFILE:-full}\"",
-		"curl -fL --retry 10 --retry-all-errors --retry-delay 3 --connect-timeout 20 " + shellQuote("https://github.com/"+repo+"/releases/"+releaseSelector+"/install-dns-worker.sh") + " | bash -s --" +
-			" --server-url \"$SERVER_URL\"" +
-			" --token \"$TOKEN\"" +
-			" --install-dir " + shellQuote(installDir) +
-			" --listen \"$LISTEN_ADDR\"" +
-			" --snapshot-path \"$SNAPSHOT_PATH\"" +
-			" --source-database-profile \"$PROFILE\"" +
-			" --release-channel " + shellQuote(channel) +
-			tagArg,
-	}, "\n")
+	localWorkerID, err := readDNSWorkerEnvValue(envFile, "DUSHENGCDN_DNS_WORKER_ID")
+	if err != nil {
+		return fmt.Errorf("read DNS Worker identity from env file: %w", err)
+	}
+	if localWorkerID == "" {
+		return fmt.Errorf("DNS Worker env file does not declare DUSHENGCDN_DNS_WORKER_ID; rerun install-dns-worker.sh with --worker-id before Agent-mediated updates")
+	}
+	if localWorkerID != expectedWorkerID {
+		return fmt.Errorf("DNS Worker update request worker_id %q does not match local env worker_id %q", expectedWorkerID, localWorkerID)
+	}
+	return nil
+}
+
+func readDNSWorkerEnvValue(path string, key string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != key {
+			continue
+		}
+		return decodeDNSWorkerEnvValue(value), nil
+	}
+	return "", nil
+}
+
+func decodeDNSWorkerEnvValue(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
+		value, err := strconv.Unquote(raw)
+		if err == nil {
+			return value
+		}
+		return strings.Trim(raw, `"`)
+	}
+	if len(raw) >= 2 && raw[0] == '\'' && raw[len(raw)-1] == '\'' {
+		return raw[1 : len(raw)-1]
+	}
+	return raw
+}
+
+func validateDNSWorkerUpdateFileOwnership(path string, info os.FileInfo, requireRootOwner bool) error {
+	if info == nil {
+		return fmt.Errorf("DNS Worker update file is not available: %s", path)
+	}
+	if info.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("DNS Worker update file is writable by group/other and is unsafe to execute or source: %s", path)
+	}
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	uid, ok := dnsWorkerUpdateFileUID(info)
+	if !ok {
+		return fmt.Errorf("cannot inspect DNS Worker update file ownership: %s", path)
+	}
+	if requireRootOwner && uid != 0 {
+		return fmt.Errorf("DNS Worker updater script must be owned by root: %s", path)
+	}
+	return nil
 }
 
 func (r *Runner) recordDNSWorkerUpdateResult(request protocol.DNSWorkerUpdateRequest, success bool, message string) {

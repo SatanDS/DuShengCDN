@@ -1,6 +1,7 @@
 package service
 
 import (
+	"dushengcdn/utils/security"
 	"errors"
 	"fmt"
 	"net"
@@ -25,7 +26,13 @@ func validateOriginAddress(address string) error {
 		return errors.New("源站地址无需包含 IPv6 方括号")
 	}
 	if ip := net.ParseIP(address); ip != nil {
+		if err := security.ValidatePublicIP(ip); err != nil {
+			return errors.New("origin address must not use loopback, private, link-local, multicast, or metadata IP ranges")
+		}
 		return nil
+	}
+	if err := security.ValidatePublicHostname(address); err != nil {
+		return errors.New("origin address must not use localhost or unsafe IP ranges")
 	}
 	if strings.Count(address, ":") == 1 {
 		parts := strings.SplitN(address, ":", 2)
@@ -94,6 +101,9 @@ func normalizeOriginURI(raw string) (string, error) {
 	if strings.Contains(uri, "://") {
 		return "", errors.New("源站路径不能包含协议")
 	}
+	if strings.ContainsAny(uri, ";\r\n{}") {
+		return "", errors.New("源站路径包含不安全字符")
+	}
 	if !strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "?") {
 		return "", errors.New("源站路径需以 / 或 ? 开头")
 	}
@@ -153,6 +163,9 @@ func extractOriginAddress(rawURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("源站地址格式不合法: %w", err)
 	}
+	if parsed.User != nil {
+		return "", errors.New("origin URL must not include userinfo")
+	}
 	address := normalizeOriginAddress(parsed.Hostname())
 	if err := validateOriginAddress(address); err != nil {
 		return "", err
@@ -165,6 +178,9 @@ func rewriteOriginURLAddress(rawURL string, newAddress string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("源站地址格式不合法: %w", err)
 	}
+	if parsed.User != nil {
+		return "", errors.New("origin URL must not include userinfo")
+	}
 	address := normalizeOriginAddress(newAddress)
 	if err := validateOriginAddress(address); err != nil {
 		return "", err
@@ -172,6 +188,9 @@ func rewriteOriginURLAddress(rawURL string, newAddress string) (string, error) {
 	port := parsed.Port()
 	if port == "" {
 		return "", errors.New("源站地址缺少端口")
+	}
+	if _, err := normalizeOriginPort(port); err != nil {
+		return "", err
 	}
 	parsed.Host = formatOriginHost(address, port)
 	return parsed.String(), nil
@@ -181,6 +200,9 @@ func splitOriginURL(rawURL string) (scheme string, address string, port string, 
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
 	if err != nil {
 		return "", "", "", "", err
+	}
+	if parsed.User != nil {
+		return "", "", "", "", errors.New("origin URL must not include userinfo")
 	}
 	scheme = parsed.Scheme
 	address = normalizeOriginAddress(parsed.Hostname())

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"dushengcdn/utils/security"
 	"errors"
 	"regexp"
 	"strings"
@@ -96,6 +97,11 @@ func (source *AuthSource) Validate() error {
 	switch source.Type {
 	case AuthSourceTypeGitHub:
 	case AuthSourceTypeOIDC:
+		if source.OpenIDDiscoveryURL != "" {
+			if _, err := security.ValidatePublicHTTPURL(source.OpenIDDiscoveryURL, true); err != nil {
+				return errors.New("OIDC Discovery URL must be a public HTTPS URL")
+			}
+		}
 		if source.OpenIDDiscoveryURL == "" {
 			return errors.New("OIDC 认证源必须配置 Discovery URL")
 		}

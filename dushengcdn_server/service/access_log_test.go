@@ -677,6 +677,47 @@ func TestPersistNodeAccessLogsTruncatesLongPath(t *testing.T) {
 	}
 }
 
+func TestPersistNodeAccessLogsDropsSensitiveQuery(t *testing.T) {
+	setupServiceTestDB(t)
+
+	reportedAt := time.Now().UTC()
+	if err := persistNodeAccessLogs(model.DB, "node-query-redact", []AgentNodeAccessLog{
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "203.0.113.11",
+			Host:         "query.example.com",
+			Path:         "/oauth/callback?code=oauth-code&state=csrf-state&safe=1#fragment",
+			StatusCode:   302,
+		},
+		{
+			LoggedAtUnix: reportedAt.Add(time.Second).Unix(),
+			RemoteAddr:   "203.0.113.12",
+			Host:         "query.example.com",
+			Path:         "https://query.example.com/reset?token=reset-token",
+			StatusCode:   200,
+		},
+	}, reportedAt); err != nil {
+		t.Fatalf("persistNodeAccessLogs failed: %v", err)
+	}
+
+	logs, err := model.ListNodeAccessLogs(model.NodeAccessLogQuery{
+		NodeID:   "node-query-redact",
+		Page:     0,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListNodeAccessLogs failed: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("expected two stored logs, got %+v", logs)
+	}
+	for _, entry := range logs {
+		if strings.Contains(entry.Path, "oauth-code") || strings.Contains(entry.Path, "csrf-state") || strings.Contains(entry.Path, "reset-token") || strings.ContainsAny(entry.Path, "?#") {
+			t.Fatalf("expected sensitive query to be removed, got %q", entry.Path)
+		}
+	}
+}
+
 func TestPersistNodeAccessLogsStoresCacheStatus(t *testing.T) {
 	setupServiceTestDB(t)
 

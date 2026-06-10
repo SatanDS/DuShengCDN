@@ -2,12 +2,78 @@ package dnsworker
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestAPIClientFetchSnapshotVerifiesSignature(t *testing.T) {
+	token := "worker-token"
+	snapshot := &Snapshot{
+		SnapshotVersion: "snap-1",
+		GeneratedAt:     time.Now().UTC(),
+		Zones:           []SnapshotZone{},
+		Routes:          []SnapshotRoute{},
+		Nodes:           []SnapshotNode{},
+	}
+	envelope, err := SignSnapshot(snapshot, token)
+	if err != nil {
+		t.Fatalf("sign snapshot: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(SnapshotSignatureHeader) != SnapshotSignatureVersion {
+			t.Fatalf("expected signed snapshot request header, got %q", r.Header.Get(SnapshotSignatureHeader))
+		}
+		respondAPIClientTestJSON(t, w, map[string]any{
+			"success": true,
+			"data":    envelope,
+		})
+	}))
+	defer server.Close()
+
+	client := NewAPIClient(server.URL, token, time.Second)
+	got, err := client.FetchSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("fetch snapshot: %v", err)
+	}
+	if got.SnapshotVersion != "snap-1" {
+		t.Fatalf("unexpected snapshot version %q", got.SnapshotVersion)
+	}
+}
+
+func TestAPIClientFetchSnapshotRejectsBadSignature(t *testing.T) {
+	token := "worker-token"
+	envelope, err := SignSnapshot(&Snapshot{
+		SnapshotVersion: "snap-1",
+		GeneratedAt:     time.Now().UTC(),
+		Zones:           []SnapshotZone{},
+		Routes:          []SnapshotRoute{},
+		Nodes:           []SnapshotNode{},
+	}, token)
+	if err != nil {
+		t.Fatalf("sign snapshot: %v", err)
+	}
+	envelope.Snapshot.SnapshotVersion = "tampered"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respondAPIClientTestJSON(t, w, map[string]any{
+			"success": true,
+			"data":    envelope,
+		})
+	}))
+	defer server.Close()
+
+	client := NewAPIClient(server.URL, token, time.Second)
+	_, err = client.FetchSnapshot(context.Background())
+	if err == nil {
+		t.Fatal("expected signature verification error")
+	}
+	if !strings.Contains(err.Error(), "snapshot signature check failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 
 func TestAPIClientFetchSnapshotExplainsTokenAuthFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +95,7 @@ func TestAPIClientFetchSnapshotExplainsTokenAuthFailure(t *testing.T) {
 		"401 Unauthorized",
 		"invalid DNS Worker Token",
 		"DNS Worker Token authentication failed",
+		"DUSHENGCDN_DNS_WORKER_TOKEN_FILE/--token-file",
 		"DUSHENGCDN_DNS_WORKER_TOKEN/--token",
 		"not an Agent Token or login password",
 	} {
@@ -81,5 +148,13 @@ func TestAPIClientFetchSnapshotExplainsServerURLConnectivityFailure(t *testing.T
 	}
 	if strings.Contains(message, "worker-token") {
 		t.Fatalf("error leaked token value: %q", message)
+	}
+}
+
+func respondAPIClientTestJSON(t *testing.T, w http.ResponseWriter, value any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Fatalf("encode response: %v", err)
 	}
 }

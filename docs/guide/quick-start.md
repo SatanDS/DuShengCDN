@@ -65,7 +65,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       DSN: ${DSN:?set DSN in .env}
@@ -108,7 +108,7 @@ docker compose ps
 docker compose logs -f dushengcdn
 ```
 
-看到 `server listening` 且 `dushengcdn` 容器状态为 running 后，访问：
+默认示例只把管理端绑定到本机 `127.0.0.1`。看到 `server listening` 且 `dushengcdn` 容器状态为 running 后，可在服务器本机访问；生产公开访问请放在 HTTPS 反向代理后面：
 
 ```text
 http://localhost:3000
@@ -118,7 +118,7 @@ http://localhost:3000
 
 | 用户名 | 密码 |
 | --- | --- |
-| `root` | `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`，或 Server 首次空库启动日志中的一次性随机密码 |
+| `root` | `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`，或 Server 日志提示的 `initial-root-password.txt` 文件中的一次性随机密码 |
 
 首次登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码。
 
@@ -149,7 +149,7 @@ Agent 可以用两类凭证接入：
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --discovery-token YOUR_DISCOVERY_TOKEN
+  --discovery-token-file /run/secrets/dushengcdn-discovery-token
 ```
 
 使用节点专属 `agent_token`：
@@ -157,7 +157,7 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-agent.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --agent-token YOUR_AGENT_TOKEN
+  --agent-token-file /run/secrets/dushengcdn-agent-token
 ```
 
 脚本默认会：
@@ -198,7 +198,7 @@ journalctl -u dushengcdn-agent -f
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/install-dns-worker.sh | bash -s -- \
   --server-url http://your-server:3000 \
-  --token YOUR_DNS_WORKER_TOKEN
+  --token-file /run/secrets/dushengcdn-dns-worker-token
 ```
 
 脚本默认写入 `/opt/dushengcdn-dns-worker`，创建 `dushengcdn-dns-worker.service`，监听 UDP/TCP `53`，保存本地快照缓存，并按 `--source-database-profile full` 下载 Country MMDB、ASN MMDB 和 gaoyifan/china-operator-ip 运营商 CIDR 到响应端本地。DNS 查询路径只读响应端本地文件；GitHub 下载失败时会回退到面板服务器端的来源库镜像。也可以使用 Docker 方式：
@@ -208,8 +208,9 @@ DUSHENGCDN_VERSION=v1.0.0
 docker run -d --name dushengcdn-dns-worker --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp \
   -v dushengcdn-dns-worker-data:/data \
+  -v /run/secrets/dushengcdn-dns-worker-token:/run/secrets/dushengcdn_dns_worker_token:ro \
   -e DUSHENGCDN_DNS_WORKER_SERVER_URL=http://your-server:3000 \
-  -e DUSHENGCDN_DNS_WORKER_TOKEN=YOUR_DNS_WORKER_TOKEN \
+  -e DUSHENGCDN_DNS_WORKER_TOKEN_FILE=/run/secrets/dushengcdn_dns_worker_token \
   -e DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT=200 \
   -e DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE=1232 \
   ghcr.io/satands/dushengcdn-dns-worker:${DUSHENGCDN_VERSION:?set DUSHENGCDN_VERSION}
@@ -250,7 +251,7 @@ journalctl -u dushengcdn-agent -n 100 --no-pager
 
 | 现象 | 排查方向 |
 | --- | --- |
-| 浏览器打不开管理端 | 确认 `docker compose ps` 中 Server 正在运行，宿主机端口没有被占用；端口冲突时可把宿主侧改为 `3010:3000` 或其它空闲端口 |
+| 浏览器打不开管理端 | 确认 `docker compose ps` 中 Server 正在运行，宿主机端口没有被占用；端口冲突时可把宿主侧改为 `127.0.0.1:3010:3000` 或其它本机空闲端口 |
 | 登录后数据无法保存 | 检查 PostgreSQL 容器健康状态，以及 `DSN` 中的用户名、密码、库名是否一致 |
 | Agent 无法注册 | 确认 Agent 节点能访问 `--server-url`，并检查 Token 是否填错或已失效 |
 | Agent 在线但没有应用配置 | 确认网站配置已启用，并且已经发布并激活版本 |

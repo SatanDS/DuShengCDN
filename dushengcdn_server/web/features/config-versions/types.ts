@@ -17,6 +17,7 @@ export interface ConfigVersionDetail extends ConfigVersionSummary {
 export interface SupportFile {
   path: string;
   content: string;
+  redacted?: boolean;
 }
 
 export interface ConfigPreviewResult {

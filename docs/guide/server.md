@@ -74,7 +74,8 @@ go run . --port 3000 --log-dir ./logs
 | --- | --- | --- |
 | `--port` | 指定 Server 监听端口 | `3000` |
 | `--log-dir` | 指定日志目录 | 空，输出到标准输出 |
-| `--reset-root-password` | 重置 `root` 用户密码后退出，不启动 HTTP 服务 | 空 |
+| `--reset-root-password-file` / `--reset-root-password-stdin` | 从文件或标准输入读取新密码，重置 `root` 用户密码后退出，不启动 HTTP 服务 | 空 |
+| `--reset-root-password` | 兼容旧脚本的明文参数，不建议使用，会暴露在 shell history 或进程参数中 | 空 |
 | `--version` | 输出版本后退出 | `false` |
 | `--help` | 输出帮助后退出 | `false` |
 
@@ -83,7 +84,10 @@ go run . --port 3000 --log-dir ./logs
 ```bash
 cd dushengcdn_server
 export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disable'
-./dushengcdn-server --reset-root-password 'replace-with-new-password'
+install -m 0600 /dev/stdin /run/secrets/dushengcdn-root-password <<'EOF'
+replace-with-new-password
+EOF
+./dushengcdn-server --reset-root-password-file /run/secrets/dushengcdn-root-password
 ```
 
 如果使用 SQLite，把 `DSN` 换成实际 `SQLITE_PATH`。执行前建议先停止正在运行的 Server。
@@ -94,9 +98,9 @@ export DSN='postgres://dushengcdn:secret@127.0.0.1:5432/dushengcdn?sslmode=disab
 
 | 用户名 | 密码 |
 | --- | --- |
-| `root` | `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`，或 Server 首次空库启动日志中的一次性随机密码 |
+| `root` | `.env` 中的 `DUSHENGCDN_INITIAL_ROOT_PASSWORD`，或 Server 日志提示的 `initial-root-password.txt` 文件中的一次性随机密码 |
 
-首次登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码。如果忘记密码，可使用 `--reset-root-password` 离线重置。
+首次登录后请立即修改 root 密码，并移除或轮换 `.env` 中的启动密码。如果忘记密码，可使用 `--reset-root-password-file` 或 `--reset-root-password-stdin` 离线重置。
 
 ## Swagger
 

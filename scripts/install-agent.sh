@@ -5,16 +5,19 @@ set -euo pipefail
 # Usage:
 #   curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh | bash -s -- \
 #     --server-url http://your-server:3000 \
-#     --discovery-token your-token
+#     --discovery-token-file /run/secrets/dushengcdn-discovery-token
 
 INSTALL_DIR="/opt/dushengcdn-agent"
 REPO="${DUSHENGCDN_RELEASE_REPO:-SatanDS/SatanDS-DuShengCDN-releases}"
 RELEASE_SIGNATURE_PUBLIC_KEY="${DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY:-__DUSHENGCDN_RELEASE_SIGNATURE_PUBLIC_KEY__}"
 SERVER_URL=""
 DISCOVERY_TOKEN=""
+DISCOVERY_TOKEN_FILE=""
 AGENT_TOKEN=""
+AGENT_TOKEN_FILE=""
 CREATE_SERVICE="true"
 SERVICE_NAME="${DUSHENGCDN_AGENT_SERVICE_NAME:-dushengcdn-agent}"
+SERVICE_USER="${DUSHENGCDN_AGENT_SERVICE_USER:-dushengcdn-agent}"
 OPENRESTY_PATH=""
 AUTO_INSTALL_DEPS="true"
 REINSTALL="false"
@@ -23,6 +26,8 @@ SOURCE_REF="${SOURCE_REF:-main}"
 ALLOW_SOURCE_BUILD="${DUSHENGCDN_ALLOW_SOURCE_BUILD:-false}"
 GEOIP_LOOKUP_API_URL=""
 GEOIP_LOOKUP_API_TOKEN=""
+GEOIP_LOOKUP_API_TOKEN_FILE=""
+ALLOW_INSECURE_TOKEN_ARGV="false"
 DUSHENGCDN_BUILD_GO_DIR="${DUSHENGCDN_BUILD_GO_DIR:-/opt/dushengcdn-build/go}"
 OPENSSL_BIN=""
 
@@ -35,16 +40,22 @@ Usage:
 
 Options:
   --server-url URL          Server URL (required)
-  --discovery-token TOKEN   Discovery token for auto-registration
-  --agent-token TOKEN       Node-specific agent token
+  --discovery-token TOKEN   Discovery token for auto-registration (prefer --discovery-token-file)
+  --discovery-token-file FILE Read discovery token from FILE
+  --agent-token TOKEN       Node-specific agent token (prefer --agent-token-file)
+  --agent-token-file FILE   Read node-specific agent token from FILE
   --install-dir DIR         Installation directory (default: /opt/dushengcdn-agent)
   --openresty-path PATH     OpenResty binary path (default: auto-detect from PATH)
   --service-name NAME       systemd service name (default: ${SERVICE_NAME})
+  --service-user USER       systemd user to run the Agent (default: ${SERVICE_USER})
   --repo REPO               GitHub release repository (default: ${REPO})
   --source-ref REF          Git branch, tag, or commit used when building from source (default: main)
   --allow-source-build      Allow fallback source build when no release binary is available
   --geoip-api-url URL       Optional precise IP lookup API URL used when local GeoIP has no country
-  --geoip-api-token TOKEN   Optional bearer token for --geoip-api-url
+  --geoip-api-token TOKEN   Optional bearer token for --geoip-api-url (prefer --geoip-api-token-file)
+  --geoip-api-token-file FILE Read GeoIP API bearer token from FILE
+  --allow-insecure-token-argv
+                            Allow token values in argv for legacy automation; prefer *-token-file
   --install-deps            Install missing runtime dependencies automatically (default)
   --no-install-deps         Do not install missing dependencies automatically
   --reinstall               Reinstall the Agent binary; preserves existing data unless --wipe-data is also set
@@ -54,10 +65,10 @@ Options:
 
 Examples:
   # Install with discovery token (auto-register)
-  install-agent.sh --server-url http://10.0.0.1:3000 --discovery-token abc123
+  install-agent.sh --server-url http://10.0.0.1:3000 --discovery-token-file /run/secrets/dushengcdn-discovery-token
 
   # Install with node-specific token
-  install-agent.sh --server-url http://10.0.0.1:3000 --agent-token node-token-xyz
+  install-agent.sh --server-url http://10.0.0.1:3000 --agent-token-file /run/secrets/dushengcdn-agent-token
 
 Notes:
   Rerunning the installer upgrades the Agent binary in place and preserves
@@ -67,19 +78,40 @@ EOF
   exit 0
 }
 
+accept_insecure_token_arg() {
+  local option_name="$1"
+  if [[ "$ALLOW_INSECURE_TOKEN_ARGV" != "true" ]]; then
+    echo "Error: ${option_name} exposes the token in shell history and process arguments; use ${option_name}-file or pass --allow-insecure-token-argv only for legacy automation." >&2
+    exit 1
+  fi
+  echo "Warning: ${option_name} exposes the token in shell history and process arguments; prefer ${option_name}-file" >&2
+}
+
+for arg in "$@"; do
+  if [[ "$arg" == "--allow-insecure-token-argv" ]]; then
+    ALLOW_INSECURE_TOKEN_ARGV="true"
+    break
+  fi
+done
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --server-url)   SERVER_URL="$2"; shift 2 ;;
-    --discovery-token) DISCOVERY_TOKEN="$2"; shift 2 ;;
-    --agent-token)  AGENT_TOKEN="$2"; shift 2 ;;
+    --allow-insecure-token-argv) ALLOW_INSECURE_TOKEN_ARGV="true"; shift ;;
+    --discovery-token) accept_insecure_token_arg "--discovery-token"; DISCOVERY_TOKEN="$2"; shift 2 ;;
+    --discovery-token-file) DISCOVERY_TOKEN_FILE="$2"; shift 2 ;;
+    --agent-token)  accept_insecure_token_arg "--agent-token"; AGENT_TOKEN="$2"; shift 2 ;;
+    --agent-token-file) AGENT_TOKEN_FILE="$2"; shift 2 ;;
     --install-dir)  INSTALL_DIR="$2"; shift 2 ;;
     --openresty-path) OPENRESTY_PATH="$2"; shift 2 ;;
     --service-name) SERVICE_NAME="$2"; shift 2 ;;
+    --service-user) SERVICE_USER="$2"; shift 2 ;;
     --repo)         REPO="$2"; shift 2 ;;
     --source-ref)   SOURCE_REF="$2"; shift 2 ;;
     --allow-source-build) ALLOW_SOURCE_BUILD="true"; shift ;;
     --geoip-api-url) GEOIP_LOOKUP_API_URL="$2"; shift 2 ;;
-    --geoip-api-token) GEOIP_LOOKUP_API_TOKEN="$2"; shift 2 ;;
+    --geoip-api-token) accept_insecure_token_arg "--geoip-api-token"; GEOIP_LOOKUP_API_TOKEN="$2"; shift 2 ;;
+    --geoip-api-token-file) GEOIP_LOOKUP_API_TOKEN_FILE="$2"; shift 2 ;;
     --install-deps) AUTO_INSTALL_DEPS="true"; shift ;;
     --no-install-deps) AUTO_INSTALL_DEPS="false"; shift ;;
     --reinstall)    REINSTALL="true"; shift ;;
@@ -93,6 +125,34 @@ done
 if [[ -z "$SERVER_URL" ]]; then
   echo "Error: --server-url is required"
   exit 1
+fi
+
+if [[ -n "$DISCOVERY_TOKEN_FILE" ]]; then
+  if [[ ! -r "$DISCOVERY_TOKEN_FILE" ]]; then
+    echo "Error: --discovery-token-file is not readable" >&2
+    exit 1
+  fi
+  DISCOVERY_TOKEN="$(tr -d '\r\n' < "$DISCOVERY_TOKEN_FILE")"
+fi
+
+if [[ -n "$AGENT_TOKEN_FILE" ]]; then
+  if [[ ! -r "$AGENT_TOKEN_FILE" ]]; then
+    echo "Error: --agent-token-file is not readable" >&2
+    exit 1
+  fi
+  AGENT_TOKEN="$(tr -d '\r\n' < "$AGENT_TOKEN_FILE")"
+fi
+
+if [[ -n "$GEOIP_LOOKUP_API_TOKEN" && -n "$GEOIP_LOOKUP_API_TOKEN_FILE" ]]; then
+  echo "Error: use only one of --geoip-api-token or --geoip-api-token-file" >&2
+  exit 1
+fi
+
+if [[ -n "$GEOIP_LOOKUP_API_TOKEN_FILE" ]]; then
+  if [[ ! -r "$GEOIP_LOOKUP_API_TOKEN_FILE" ]]; then
+    echo "Error: --geoip-api-token-file is not readable" >&2
+    exit 1
+  fi
 fi
 
 if [[ -z "$DISCOVERY_TOKEN" && -z "$AGENT_TOKEN" ]]; then
@@ -110,7 +170,9 @@ geoip_api_config_json() {
     return
   fi
   printf ',\n  "geoip_lookup_api_url": "%s"' "$(json_escape "$GEOIP_LOOKUP_API_URL")"
-  if [[ -n "$GEOIP_LOOKUP_API_TOKEN" ]]; then
+  if [[ -n "$GEOIP_LOOKUP_API_TOKEN_FILE" ]]; then
+    printf ',\n  "geoip_lookup_api_token_file": "%s"' "$(json_escape "$GEOIP_LOOKUP_API_TOKEN_FILE")"
+  elif [[ -n "$GEOIP_LOOKUP_API_TOKEN" ]]; then
     printf ',\n  "geoip_lookup_api_token": "%s"' "$(json_escape "$GEOIP_LOOKUP_API_TOKEN")"
   fi
 }
@@ -142,13 +204,14 @@ run_as_root() {
 }
 
 write_file_as_root() {
-  local target="$1"
-  local tmp
+	local target="$1"
+	local mode="${2:-0644}"
+	local tmp
 
-  tmp="$(mktemp)"
-  cat > "$tmp"
-  run_as_root install -m 0644 "$tmp" "$target"
-  rm -f "$tmp"
+	tmp="$(mktemp)"
+	cat > "$tmp"
+	run_as_root install -m "$mode" "$tmp" "$target"
+	rm -f "$tmp"
 }
 
 SERVICE_AUTOSTART_POLICY_CREATED="false"
@@ -224,6 +287,52 @@ validate_service_name() {
       die "refusing to use unsafe systemd service name: ${SERVICE_NAME}"
       ;;
   esac
+}
+
+validate_service_user() {
+  if [[ "$CREATE_SERVICE" != "true" ]]; then
+    return
+  fi
+  if [[ -z "$SERVICE_USER" ]]; then
+    die "--service-user cannot be empty"
+  fi
+  case "$SERVICE_USER" in
+    root|[a-z_][a-z0-9_-]*)
+      ;;
+    *)
+      die "refusing to use unsafe systemd service user: ${SERVICE_USER}"
+      ;;
+  esac
+}
+
+ensure_service_user() {
+  if [[ "$SERVICE_USER" == "root" ]]; then
+    echo "Warning: Agent service will run as root because --service-user root was requested." >&2
+    return
+  fi
+  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    return
+  fi
+  command -v useradd >/dev/null 2>&1 || die "useradd is required to create service user ${SERVICE_USER}; pass --service-user root only if you accept the risk"
+  local nologin_shell="/usr/sbin/nologin"
+  if [[ ! -x "$nologin_shell" ]]; then
+    nologin_shell="/sbin/nologin"
+  fi
+  run_as_root useradd --system --home-dir "$INSTALL_DIR" --shell "$nologin_shell" --user-group "$SERVICE_USER"
+}
+
+harden_agent_install_permissions() {
+  if [[ "$SERVICE_USER" == "root" ]]; then
+    return
+  fi
+  run_as_root chown root:root "$INSTALL_DIR" "${INSTALL_DIR}/dushengcdn-agent"
+  run_as_root chmod 0755 "$INSTALL_DIR" "${INSTALL_DIR}/dushengcdn-agent"
+  run_as_root mkdir -p "${INSTALL_DIR}/data"
+  run_as_root chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/data"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    run_as_root chown "${SERVICE_USER}:${SERVICE_USER}" "$CONFIG_FILE"
+    run_as_root chmod 0600 "$CONFIG_FILE"
+  fi
 }
 
 validate_build_go_dir() {
@@ -1372,6 +1481,7 @@ fi
 
 validate_install_dir
 validate_service_name
+validate_service_user
 validate_build_go_dir
 
 if [[ "$OS" == "linux" && "$CREATE_SERVICE" == "true" && ! -d /etc/systemd/system ]]; then
@@ -1405,6 +1515,10 @@ echo "Detected platform: ${OS}/${ARCH}"
 SYSTEMCTL_AVAILABLE="false"
 if command -v systemctl >/dev/null 2>&1; then
   SYSTEMCTL_AVAILABLE="true"
+fi
+
+if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" ]]; then
+  ensure_service_user
 fi
 
 TMP_BINARY="$(mktemp "/tmp/dushengcdn-agent.tmp.XXXXXX")"
@@ -1466,7 +1580,7 @@ if [[ -f "$CONFIG_FILE" && ( "$REINSTALL" != "true" || "$WIPE_DATA" != "true" ) 
 elif [[ -n "$AGENT_TOKEN" ]]; then
   echo "Generating agent.json..."
   if [[ "$NEEDS_ROOT" == "true" ]]; then
-    write_file_as_root "$CONFIG_FILE" <<CFGEOF
+    write_file_as_root "$CONFIG_FILE" 0600 <<CFGEOF
 {
   "server_url": "$(json_escape "$SERVER_URL")",
   "agent_token": "$(json_escape "$AGENT_TOKEN")",
@@ -1491,11 +1605,12 @@ CFGEOF
   "request_timeout": 10000$(geoip_api_config_json)
 }
 CFGEOF
+    chmod 0600 "$CONFIG_FILE"
   fi
 else
   echo "Generating agent.json..."
   if [[ "$NEEDS_ROOT" == "true" ]]; then
-    write_file_as_root "$CONFIG_FILE" <<CFGEOF
+    write_file_as_root "$CONFIG_FILE" 0600 <<CFGEOF
 {
   "server_url": "$(json_escape "$SERVER_URL")",
   "discovery_token": "$(json_escape "$DISCOVERY_TOKEN")",
@@ -1520,7 +1635,12 @@ CFGEOF
   "request_timeout": 10000$(geoip_api_config_json)
 }
 CFGEOF
+    chmod 0600 "$CONFIG_FILE"
   fi
+fi
+
+if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" && "$SERVICE_USER" != "root" ]]; then
+  harden_agent_install_permissions
 fi
 
 # Create systemd service
@@ -1533,10 +1653,19 @@ After=network.target
 
 [Service]
 Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
 ExecStart=${INSTALL_DIR}/dushengcdn-agent -config ${CONFIG_FILE}
 WorkingDirectory=${INSTALL_DIR}
 Restart=always
 RestartSec=10
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=${INSTALL_DIR}/data ${CONFIG_FILE}
 
 [Install]
 WantedBy=multi-user.target

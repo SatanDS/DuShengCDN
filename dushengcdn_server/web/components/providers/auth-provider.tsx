@@ -11,6 +11,7 @@ import {
 } from 'react';
 
 import { logout as logoutRequest, getCurrentUser } from '@/features/auth/api/auth';
+import { setCSRFToken } from '@/lib/api/client';
 import type { AuthUser } from '@/types/auth';
 
 interface AuthContextValue {
@@ -35,9 +36,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const refreshUser = useCallback(async () => {
     try {
       const nextUser = await getCurrentUser();
+      setCSRFToken(nextUser.csrf_token);
       setUserState(nextUser);
       return nextUser;
     } catch {
+      setCSRFToken('');
       setUserState(null);
       return null;
     } finally {
@@ -50,6 +53,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [refreshUser]);
 
   const setUser = useCallback((nextUser: AuthUser | null) => {
+    setCSRFToken(nextUser?.csrf_token);
     setUserState(nextUser);
     setIsLoading(false);
   }, []);
@@ -58,6 +62,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       await logoutRequest();
     } finally {
+      setCSRFToken('');
       setUserState(null);
       setIsLoading(false);
     }

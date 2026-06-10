@@ -52,6 +52,7 @@ const originHostPattern =
   /^(?:(?:[a-z0-9-]+\.)*[a-z0-9-]+|\[[0-9a-f:.]+\]|[0-9.]+)(?::\d{1,5})?$/i;
 const headerKeyPattern = /^[A-Za-z0-9_-]+$/;
 const limitRatePattern = /^\d+(?:[kKmM])?$/;
+const unsafeOriginURIChars = /[;\r\n{}]/;
 
 export function buildDefaultGSLBPolicy(
   nodePool = 'default',
@@ -161,6 +162,20 @@ export function parseOriginUrls(value: string) {
       };
     }
 
+    if (parsed.username || parsed.password) {
+      return {
+        urls: [],
+        error: `源站地址不能包含用户名或密码：${originUrl}`,
+      };
+    }
+
+    if (unsafeOriginURIChars.test(parsed.pathname) || unsafeOriginURIChars.test(parsed.search)) {
+      return {
+        urls: [],
+        error: `源站地址路径或查询参数包含不安全字符：${originUrl}`,
+      };
+    }
+
     if (!parsed.hostname) {
       return { urls: [], error: `源站地址缺少主机名：${originUrl}` };
     }
@@ -189,6 +204,12 @@ export function parseOriginUrls(value: string) {
 
 export function parseOriginUrl(originUrl: string) {
   const parsed = new URL(originUrl);
+  if (parsed.username || parsed.password) {
+    throw new Error('源站地址不能包含用户名或密码');
+  }
+  if (unsafeOriginURIChars.test(parsed.pathname) || unsafeOriginURIChars.test(parsed.search)) {
+    throw new Error('源站地址路径或查询参数包含不安全字符');
+  }
   const port = parsed.port || (parsed.protocol === 'http:' ? '80' : '443');
   const path = parsed.pathname === '/' ? '' : parsed.pathname;
 
@@ -228,10 +249,17 @@ export function validateOriginHost(value: string) {
   }
   if (
     normalized.includes('://') ||
-    /[\/\\\s]/.test(normalized) ||
+    /[\/\\\s;$`{}]/.test(normalized) ||
     !originHostPattern.test(normalized)
   ) {
     return '回源 Host 格式不合法';
+  }
+  const port = normalized.match(/:(\d{1,5})$/)?.[1];
+  if (port) {
+    const portValue = Number(port);
+    if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) {
+      return '回源 Host 格式不合法';
+    }
   }
   return null;
 }
@@ -256,6 +284,13 @@ export function parseCustomHeadersText(value: string) {
       return {
         headers: [],
         error: `自定义请求头名称不合法：${key}`,
+      };
+    }
+
+    if (key.toLowerCase() === 'host') {
+      return {
+        headers: [],
+        error: 'Host 请求头请使用回源 Host 配置',
       };
     }
 
@@ -367,7 +402,7 @@ export function buildPayloadFromRoute(
     cc_config: JSON.stringify(route.cc_config),
     basic_auth_enabled: route.basic_auth_enabled,
     basic_auth_username: route.basic_auth_username,
-    basic_auth_password: route.basic_auth_password,
+    basic_auth_password: '',
     region_restriction_enabled: route.region_restriction_enabled,
     region_restriction_mode: route.region_restriction_mode,
     region_restriction_countries: route.region_restriction_countries,

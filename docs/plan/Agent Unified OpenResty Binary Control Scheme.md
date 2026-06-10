@@ -25,7 +25,7 @@
 - Docker Agent 镜像：
     - 新增 `dushengcdn_agent/Dockerfile`，运行镜像基于 `openresty/openresty:alpine`。
     - 默认 `DUSHENGCDN_OPENRESTY_PATH=openresty`、`DUSHENGCDN_DATA_DIR=/data`。
-    - 暴露 `80`、`443`、`18081`。
+    - 对公网暴露 `80`、`443`；`18081` 仅作为本机观测端口使用。
     - 支持挂载 `/etc/dushengcdn/agent.json`，也支持环境变量配置。
     - CI 发布独立多架构镜像：`ghcr.io/satands/dushengcdn-agent:<version>` 和 `latest`。
 
@@ -55,7 +55,7 @@
 
 - Docker 运行方式示例目标：
     - 挂载配置文件：`-v ./agent.json:/etc/dushengcdn/agent.json`
-    - 或环境变量：`-e DUSHENGCDN_SERVER_URL=... -e DUSHENGCDN_AGENT_TOKEN=...`
+    - 或环境变量加文件凭证：`-e DUSHENGCDN_SERVER_URL=... -e DUSHENGCDN_AGENT_TOKEN_FILE=/run/secrets/dushengcdn_agent_token`
 
 ## Test Plan
 

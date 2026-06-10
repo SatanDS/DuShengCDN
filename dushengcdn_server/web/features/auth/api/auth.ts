@@ -18,7 +18,9 @@ export function login(payload: LoginPayload) {
 }
 
 export function logout() {
-  return apiRequest<void>('/user/logout');
+  return apiRequest<void>('/user/logout', {
+    method: 'POST',
+  });
 }
 
 export function register(payload: RegisterPayload, turnstileToken?: string) {
@@ -33,25 +35,33 @@ export function register(payload: RegisterPayload, turnstileToken?: string) {
 }
 
 export function sendEmailVerification(email: string, turnstileToken?: string) {
-  const searchParams = new URLSearchParams({ email });
+  const searchParams = new URLSearchParams();
   if (turnstileToken) {
     searchParams.set('turnstile', turnstileToken);
   }
+  const query = searchParams.size > 0 ? `?${searchParams.toString()}` : '';
 
-  return apiRequest<void>(`/verification?${searchParams.toString()}`);
+  return apiRequest<void>(`/verification${query}`, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
 }
 
 export function sendPasswordResetEmail(email: string, turnstileToken?: string) {
-  const searchParams = new URLSearchParams({ email });
+  const searchParams = new URLSearchParams();
   if (turnstileToken) {
     searchParams.set('turnstile', turnstileToken);
   }
+  const query = searchParams.size > 0 ? `?${searchParams.toString()}` : '';
 
-  return apiRequest<void>(`/reset_password?${searchParams.toString()}`);
+  return apiRequest<void>(`/reset_password${query}`, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
 }
 
 export function resetPassword(payload: PasswordResetRequestPayload) {
-  return apiRequest<string>('/user/reset', {
+  return apiRequest<void>('/user/reset', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -73,6 +83,7 @@ export interface OAuthAuthorizeResult {
 export interface OAuthCallbackResult {
   status: 'logged_in' | 'registered' | 'linked' | 'link_required';
   user?: AuthUser;
+  csrf_token?: string;
 }
 
 export interface LinkExistingOAuthPayload {

@@ -74,11 +74,12 @@ func TestRunSignAndInspect(t *testing.T) {
 	}
 	privateKeyValue := base64.RawURLEncoding.EncodeToString(privateKey)
 	publicKeyValue := base64.RawURLEncoding.EncodeToString(publicKey)
+	privateKeyPath := writePrivateKeyFile(t, privateKeyValue)
 
 	stdout, restore := captureStdout(t)
 	if err := run([]string{
 		"sign",
-		"-private-key", privateKeyValue,
+		"-private-key-file", privateKeyPath,
 		"-license-id", "lic-cli",
 		"-customer-name", "CLI Customer",
 		"-plan", "enterprise",
@@ -123,6 +124,7 @@ func TestRunSignPreservesPayloadFileLimitsUnlessFlagsOverride(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 	privateKeyValue := base64.RawURLEncoding.EncodeToString(privateKey)
+	privateKeyPath := writePrivateKeyFile(t, privateKeyValue)
 	issuedAt, err := time.Parse(time.RFC3339, "2026-01-02T03:04:05Z")
 	if err != nil {
 		t.Fatalf("parse issued_at: %v", err)
@@ -139,7 +141,7 @@ func TestRunSignPreservesPayloadFileLimitsUnlessFlagsOverride(t *testing.T) {
 	stdout, restore := captureStdout(t)
 	if err := run([]string{
 		"sign",
-		"-private-key", privateKeyValue,
+		"-private-key-file", privateKeyPath,
 		"-payload-file", payloadPath,
 		"-max-sites", "0",
 	}); err != nil {
@@ -168,6 +170,15 @@ func writePayloadFile(t *testing.T, payload service.CommercialLicensePayload) st
 	path := t.TempDir() + "/payload.json"
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatalf("write payload file: %v", err)
+	}
+	return path
+}
+
+func writePrivateKeyFile(t *testing.T, value string) string {
+	t.Helper()
+	path := t.TempDir() + "/license-private-key"
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+		t.Fatalf("write private key file: %v", err)
 	}
 	return path
 }

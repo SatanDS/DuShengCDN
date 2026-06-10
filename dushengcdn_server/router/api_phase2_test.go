@@ -3,10 +3,14 @@ package router_test
 import (
 	"bytes"
 	"dushengcdn/common"
+	"dushengcdn/controller"
+	"dushengcdn/internal/dnsworker"
 	"dushengcdn/model"
 	"dushengcdn/router"
 	"dushengcdn/service"
+	"dushengcdn/utils/security"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -418,6 +422,446 @@ func TestLegacyGitHubOAuthRejectsMissingState(t *testing.T) {
 	if !strings.Contains(resp.Message, "授权状态无效") {
 		t.Fatalf("expected invalid state message, got %q", resp.Message)
 	}
+	if strings.Contains(resp.Message, "provider leaked detail") {
+		t.Fatalf("legacy github oauth must not reflect provider error descriptions, got %q", resp.Message)
+	}
+}
+
+func TestLegacyGitHubOAuthProviderErrorRequiresStateAndIsGeneric(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	oldEnabled := common.GitHubOAuthEnabled
+	oldClientID := common.GitHubClientId
+	oldClientSecret := common.GitHubClientSecret
+	t.Cleanup(func() {
+		common.GitHubOAuthEnabled = oldEnabled
+		common.GitHubClientId = oldClientID
+		common.GitHubClientSecret = oldClientSecret
+	})
+	common.GitHubOAuthEnabled = true
+	common.GitHubClientId = "legacy-client"
+	common.GitHubClientSecret = "legacy-secret"
+
+	sessionKey := []byte("test-secret")
+	store := cookie.NewStore(sessionKey)
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", store))
+	router.SetApiRouter(engine)
+
+	authorizeReq := httptest.NewRequest(http.MethodGet, "/api/oauth/github/authorize", nil)
+	authorizeRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(authorizeRecorder, authorizeReq)
+	if authorizeRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected authorize status %d: %s", authorizeRecorder.Code, authorizeRecorder.Body.String())
+	}
+	var authorizeResp apiResponse
+	if err := json.Unmarshal(authorizeRecorder.Body.Bytes(), &authorizeResp); err != nil {
+		t.Fatalf("failed to decode authorize response: %v", err)
+	}
+	var authorizePayload map[string]string
+	decodeResponseData(t, authorizeResp, &authorizePayload)
+	authorizeURL, err := url.Parse(authorizePayload["authorize_url"])
+	if err != nil {
+		t.Fatalf("failed to parse authorize url: %v", err)
+	}
+	state := authorizeURL.Query().Get("state")
+	if state == "" {
+		t.Fatal("expected state in authorize url")
+	}
+	sessionCookie := firstResponseCookie(t, authorizeRecorder, "session")
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "/api/oauth/github?error=access_denied&error_description=provider+leaked+detail&state="+url.QueryEscape(state), nil)
+	callbackReq.AddCookie(sessionCookie)
+	callbackRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(callbackRecorder, callbackReq)
+	if callbackRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected callback status %d: %s", callbackRecorder.Code, callbackRecorder.Body.String())
+	}
+	var callbackResp apiResponse
+	if err = json.Unmarshal(callbackRecorder.Body.Bytes(), &callbackResp); err != nil {
+		t.Fatalf("failed to decode callback response: %v", err)
+	}
+	if callbackResp.Success {
+		t.Fatal("expected provider error to fail")
+	}
+	if callbackResp.Message != "GitHub 授权失败，请返回登录页重试" {
+		t.Fatalf("expected generic provider error, got %q", callbackResp.Message)
+	}
+	if strings.Contains(callbackResp.Message, "provider leaked detail") {
+		t.Fatalf("legacy github oauth must not reflect provider error descriptions, got %q", callbackResp.Message)
+	}
+}
+
+func TestOAuthCallbackDoesNotBindWithPasswordChangedSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	oldRegisterEnabled := common.RegisterEnabled
+	t.Cleanup(func() {
+		common.RegisterEnabled = oldRegisterEnabled
+	})
+	common.RegisterEnabled = false
+
+	source := &model.AuthSource{
+		Name:         "github-main",
+		Type:         model.AuthSourceTypeGitHub,
+		DisplayName:  "GitHub",
+		IsActive:     true,
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+	}
+	if err := model.CreateAuthSource(source); err != nil {
+		t.Fatalf("failed to create auth source: %v", err)
+	}
+
+	defer service.SetOAuthHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case "https://github.com/login/oauth/access_token":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"access_token":"oauth-token"}`)),
+					Header:     make(http.Header),
+				}, nil
+			case "https://api.github.com/user":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"id":4242,"login":"attacker","name":"Attacker","email":"attacker@example.com"}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected OAuth request: %s", req.URL.String())
+				return nil, nil
+			}
+		}),
+	})()
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	loginCookie := loginAsRoot(t, engine)
+	authorizeReq := httptest.NewRequest(http.MethodGet, "/api/oauth/github-main/authorize", nil)
+	authorizeReq.AddCookie(loginCookie)
+	authorizeRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(authorizeRecorder, authorizeReq)
+	if authorizeRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected authorize status %d: %s", authorizeRecorder.Code, authorizeRecorder.Body.String())
+	}
+	var authorizeResp apiResponse
+	if err := json.Unmarshal(authorizeRecorder.Body.Bytes(), &authorizeResp); err != nil {
+		t.Fatalf("failed to decode authorize response: %v", err)
+	}
+	if !authorizeResp.Success {
+		t.Fatalf("authorize failed: %s", authorizeResp.Message)
+	}
+	var authorizePayload map[string]string
+	decodeResponseData(t, authorizeResp, &authorizePayload)
+	authorizeURL, err := url.Parse(authorizePayload["authorize_url"])
+	if err != nil {
+		t.Fatalf("failed to parse authorize url: %v", err)
+	}
+	state := authorizeURL.Query().Get("state")
+	if state == "" {
+		t.Fatal("expected OAuth state")
+	}
+	oauthCookie := firstResponseCookie(t, authorizeRecorder, "session")
+
+	if err := model.ResetUserPasswordByUsername("root", "new-password"); err != nil {
+		t.Fatalf("failed to reset root password: %v", err)
+	}
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "/api/oauth/github-main/callback?code=oauth-code&state="+url.QueryEscape(state), nil)
+	callbackReq.AddCookie(oauthCookie)
+	callbackRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(callbackRecorder, callbackReq)
+	if callbackRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected callback status %d: %s", callbackRecorder.Code, callbackRecorder.Body.String())
+	}
+	var callbackResp apiResponse
+	if err := json.Unmarshal(callbackRecorder.Body.Bytes(), &callbackResp); err != nil {
+		t.Fatalf("failed to decode callback response: %v", err)
+	}
+	if !callbackResp.Success {
+		t.Fatalf("callback failed: %s", callbackResp.Message)
+	}
+	var result service.OAuthCallbackResult
+	decodeResponseData(t, callbackResp, &result)
+	if result.Status != "link_required" {
+		t.Fatalf("expected stale session to be treated as anonymous link_required flow, got %q", result.Status)
+	}
+	if result.CSRFToken == "" {
+		t.Fatal("expected link_required response to include csrf_token")
+	}
+	if _, err := model.FindExternalAccount(source.ID, "4242"); err == nil {
+		t.Fatal("expected stale session not to bind external account")
+	}
+
+	linkPayload, err := json.Marshal(map[string]string{
+		"username": "root",
+		"password": "new-password",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal link payload: %v", err)
+	}
+	linkReq := httptest.NewRequest(http.MethodPost, "/api/oauth/link-existing", bytes.NewReader(linkPayload))
+	linkReq.Header.Set("Content-Type", "application/json")
+	linkReq.AddCookie(firstResponseCookie(t, callbackRecorder, "session"))
+	linkRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(linkRecorder, linkReq)
+	if linkRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected link status %d: %s", linkRecorder.Code, linkRecorder.Body.String())
+	}
+	var linkResp apiResponse
+	if err := json.Unmarshal(linkRecorder.Body.Bytes(), &linkResp); err != nil {
+		t.Fatalf("failed to decode link response: %v", err)
+	}
+	if linkResp.Success || !strings.Contains(linkResp.Message, "CSRF") {
+		t.Fatalf("expected link without CSRF to be rejected, got %+v", linkResp)
+	}
+
+	linkReq = httptest.NewRequest(http.MethodPost, "/api/oauth/link-existing", bytes.NewReader(linkPayload))
+	linkReq.Header.Set("Content-Type", "application/json")
+	linkReq.Header.Set("X-CSRF-Token", result.CSRFToken)
+	linkReq.AddCookie(firstResponseCookie(t, callbackRecorder, "session"))
+	linkRecorder = httptest.NewRecorder()
+	engine.ServeHTTP(linkRecorder, linkReq)
+	if linkRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected link status %d with csrf: %s", linkRecorder.Code, linkRecorder.Body.String())
+	}
+	if err := json.Unmarshal(linkRecorder.Body.Bytes(), &linkResp); err != nil {
+		t.Fatalf("failed to decode csrf link response: %v", err)
+	}
+	if !linkResp.Success {
+		t.Fatalf("expected link with CSRF to succeed, got %s", linkResp.Message)
+	}
+}
+
+func TestOAuthCallbackExchangeFailureIsGeneric(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	source := &model.AuthSource{
+		Name:         "github-main",
+		Type:         model.AuthSourceTypeGitHub,
+		DisplayName:  "GitHub",
+		IsActive:     true,
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+	}
+	if err := model.CreateAuthSource(source); err != nil {
+		t.Fatalf("failed to create auth source: %v", err)
+	}
+
+	defer service.SetOAuthHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() != "https://github.com/login/oauth/access_token" {
+				t.Fatalf("unexpected OAuth request: %s", req.URL.String())
+			}
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Status:     "500 internal endpoint detail",
+				Body:       io.NopCloser(strings.NewReader(`{"error":"internal endpoint detail"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	})()
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	authorizeReq := httptest.NewRequest(http.MethodGet, "/api/oauth/github-main/authorize", nil)
+	authorizeRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(authorizeRecorder, authorizeReq)
+	if authorizeRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected authorize status %d: %s", authorizeRecorder.Code, authorizeRecorder.Body.String())
+	}
+	var authorizeResp apiResponse
+	if err := json.Unmarshal(authorizeRecorder.Body.Bytes(), &authorizeResp); err != nil {
+		t.Fatalf("failed to decode authorize response: %v", err)
+	}
+	var authorizePayload map[string]string
+	decodeResponseData(t, authorizeResp, &authorizePayload)
+	authorizeURL, err := url.Parse(authorizePayload["authorize_url"])
+	if err != nil {
+		t.Fatalf("failed to parse authorize url: %v", err)
+	}
+	state := authorizeURL.Query().Get("state")
+	if state == "" {
+		t.Fatal("expected OAuth state")
+	}
+	oauthCookie := firstResponseCookie(t, authorizeRecorder, "session")
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "/api/oauth/github-main/callback?code=oauth-code&state="+url.QueryEscape(state), nil)
+	callbackReq.AddCookie(oauthCookie)
+	callbackRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(callbackRecorder, callbackReq)
+	if callbackRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected callback status %d: %s", callbackRecorder.Code, callbackRecorder.Body.String())
+	}
+	var callbackResp apiResponse
+	if err = json.Unmarshal(callbackRecorder.Body.Bytes(), &callbackResp); err != nil {
+		t.Fatalf("failed to decode callback response: %v", err)
+	}
+	if callbackResp.Success {
+		t.Fatal("expected exchange failure to fail")
+	}
+	if callbackResp.Message != "第三方授权失败，请返回登录页重试" {
+		t.Fatalf("expected generic exchange failure, got %q", callbackResp.Message)
+	}
+	if strings.Contains(callbackResp.Message, "internal endpoint detail") {
+		t.Fatalf("oauth callback must not reflect provider/internal error details, got %q", callbackResp.Message)
+	}
+}
+
+func TestOAuthLinkExistingUsesLoginFailureLockout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	oldRegisterEnabled := common.RegisterEnabled
+	oldCriticalRateLimitNum := common.CriticalRateLimitNum
+	t.Cleanup(func() {
+		common.RegisterEnabled = oldRegisterEnabled
+		common.CriticalRateLimitNum = oldCriticalRateLimitNum
+	})
+	common.RegisterEnabled = false
+	common.CriticalRateLimitNum = 1000
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	source, result, pendingCookie := createOAuthLinkRequiredSession(t, engine, "7777")
+	for i := 0; i < 5; i++ {
+		resp := performOAuthLinkExistingForTest(t, engine, pendingCookie, result.CSRFToken, "root", "wrong-password")
+		if resp.Success {
+			t.Fatal("expected wrong password OAuth link attempt to fail")
+		}
+		if strings.Contains(resp.Message, "次数过多") && i < 4 {
+			t.Fatalf("OAuth link-existing locked too early on attempt %d: %s", i+1, resp.Message)
+		}
+	}
+
+	resp := performOAuthLinkExistingForTest(t, engine, pendingCookie, result.CSRFToken, "root", "123456")
+	if resp.Success || !strings.Contains(resp.Message, "次数过多") {
+		t.Fatalf("expected OAuth link-existing to use login lockout, got %+v", resp)
+	}
+	if _, err := model.FindExternalAccount(source.ID, "7777"); err == nil {
+		t.Fatal("expected locked OAuth link-existing request not to link account")
+	}
+}
+
+func TestLoginLocksAccountSourceAfterRepeatedFailures(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	attackerRemote := "198.51.100.10:1234"
+	ownerRemote := "198.51.100.11:1234"
+
+	for i := 0; i < 5; i++ {
+		resp := performLoginNoFatalFrom(t, engine, "root", "wrong-password", attackerRemote)
+		if resp.Success {
+			t.Fatal("expected wrong password login to fail")
+		}
+		if strings.Contains(resp.Message, "次数过多") && i < 4 {
+			t.Fatalf("account locked too early on attempt %d: %s", i+1, resp.Message)
+		}
+	}
+
+	resp := performLoginNoFatalFrom(t, engine, "root", "123456", attackerRemote)
+	if resp.Success || !strings.Contains(resp.Message, "次数过多") {
+		t.Fatalf("expected locked source to reject even correct password, got %+v", resp)
+	}
+
+	resp = performLoginNoFatalFrom(t, engine, "root", "123456", ownerRemote)
+	if !resp.Success {
+		t.Fatalf("expected same account to remain usable from a different source, got %+v", resp)
+	}
+}
+
+func TestPublicEmailActionsRequirePostBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	if err := model.DB.Model(&model.User{}).Where("username = ?", "root").Update("email", "root@example.com").Error; err != nil {
+		t.Fatalf("set root email: %v", err)
+	}
+
+	getResp := performPublicJSONRequestNoFatal(t, engine, http.MethodGet, "/api/reset_password?email=missing@example.com")
+	if getResp.Success || !strings.Contains(getResp.Message, "404") {
+		t.Fatalf("expected legacy GET reset endpoint to be unavailable, got %+v", getResp)
+	}
+
+	postResp := performPublicJSONRequestNoFatal(t, engine, http.MethodPost, "/api/reset_password", map[string]any{
+		"email": "missing@example.com",
+	})
+	if !postResp.Success {
+		t.Fatalf("expected POST reset request for unknown email to be accepted, got %+v", postResp)
+	}
+
+	resetExistingResp := performPublicJSONRequestNoFatal(t, engine, http.MethodPost, "/api/reset_password", map[string]any{
+		"email": "root@example.com",
+	})
+	if !resetExistingResp.Success || strings.Contains(strings.ToLower(resetExistingResp.Message), "smtp") {
+		t.Fatalf("expected POST reset request for known email to avoid SMTP/account enumeration, got %+v", resetExistingResp)
+	}
+
+	verificationResp := performPublicJSONRequestNoFatal(t, engine, http.MethodPost, "/api/verification", map[string]any{
+		"email": "root@example.com",
+	})
+	if !verificationResp.Success || strings.Contains(verificationResp.Message, "already in use") {
+		t.Fatalf("expected POST verification to avoid account enumeration, got %+v", verificationResp)
+	}
+
+	newEmailVerificationResp := performPublicJSONRequestNoFatal(t, engine, http.MethodPost, "/api/verification", map[string]any{
+		"email": "new-public@example.com",
+	})
+	if !newEmailVerificationResp.Success || strings.Contains(strings.ToLower(newEmailVerificationResp.Message), "smtp") {
+		t.Fatalf("expected POST verification to avoid SMTP/config leakage, got %+v", newEmailVerificationResp)
+	}
+}
+
+func TestEmailBindVerificationAvoidsAccountEnumeration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	other := model.User{
+		Username: "other-user",
+		Password: "irrelevant-password",
+		Email:    "taken@example.com",
+	}
+	if err := other.Insert(); err != nil {
+		t.Fatalf("create secondary user: %v", err)
+	}
+
+	sessionCookie := loginAsRoot(t, engine)
+	resp := performSessionJSONRequestNoFatal(t, engine, sessionCookie, http.MethodPost, "/api/oauth/email/verification", map[string]any{
+		"email": "taken@example.com",
+	})
+	if !resp.Success || strings.Contains(resp.Message, "already in use") {
+		t.Fatalf("expected email bind verification to avoid account enumeration, got %+v", resp)
+	}
 }
 
 func TestWeChatAuthEncodesCodeAndRegistersRandomUsername(t *testing.T) {
@@ -442,7 +886,7 @@ func TestWeChatAuthEncodesCodeAndRegistersRandomUsername(t *testing.T) {
 	const oauthCode = "wx code+slash/?"
 	const wechatID = "wechat-openid-1"
 	wechatServerCalled := false
-	wechatServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	wechatServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wechatServerCalled = true
 		if r.URL.Path != "/api/wechat/user" {
 			t.Errorf("expected wechat user path, got %s", r.URL.Path)
@@ -457,13 +901,22 @@ func TestWeChatAuthEncodesCodeAndRegistersRandomUsername(t *testing.T) {
 		_, _ = w.Write([]byte(`{"success":true,"message":"","data":"` + wechatID + `"}`))
 	}))
 	t.Cleanup(wechatServer.Close)
-	common.WeChatServerAddress = wechatServer.URL
+	defer controller.SetWeChatHTTPClientForTest(wechatClientForTLSServer(t, wechatServer))()
+	common.WeChatServerAddress = "https://wechat.example.test"
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
 	router.SetApiRouter(engine)
 
-	resp := performPublicJSONRequestNoFatal(t, engine, http.MethodGet, "/api/oauth/wechat?code="+url.QueryEscape(oauthCode))
+	state, sessionCookie := authorizeWeChatOAuthForTest(t, engine)
+	req := httptest.NewRequest(http.MethodGet, "/api/oauth/wechat?code="+url.QueryEscape(oauthCode)+"&state="+url.QueryEscape(state), nil)
+	req.AddCookie(sessionCookie)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal wechat response: %v", err)
+	}
 	if !resp.Success {
 		t.Fatalf("expected wechat login to succeed, got %s", resp.Message)
 	}
@@ -482,6 +935,47 @@ func TestWeChatAuthEncodesCodeAndRegistersRandomUsername(t *testing.T) {
 	}
 	if storedUser.Username != loggedInUser.Username {
 		t.Fatalf("expected response user %q to match stored user %q", loggedInUser.Username, storedUser.Username)
+	}
+}
+
+func TestWeChatAuthRejectsMissingState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	oldEnabled := common.WeChatAuthEnabled
+	oldRegisterEnabled := common.RegisterEnabled
+	oldServerAddress := common.WeChatServerAddress
+	oldServerToken := common.WeChatServerToken
+	t.Cleanup(func() {
+		common.WeChatAuthEnabled = oldEnabled
+		common.RegisterEnabled = oldRegisterEnabled
+		common.WeChatServerAddress = oldServerAddress
+		common.WeChatServerToken = oldServerToken
+	})
+	common.WeChatAuthEnabled = true
+	common.RegisterEnabled = true
+	common.WeChatServerToken = "wechat-token"
+
+	wechatServerCalled := false
+	wechatServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wechatServerCalled = true
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":"wechat-openid"}`))
+	}))
+	t.Cleanup(wechatServer.Close)
+	defer controller.SetWeChatHTTPClientForTest(wechatClientForTLSServer(t, wechatServer))()
+	common.WeChatServerAddress = "https://wechat.example.test"
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	resp := performPublicJSONRequestNoFatal(t, engine, http.MethodGet, "/api/oauth/wechat?code=stolen-code")
+	if resp.Success {
+		t.Fatal("expected wechat login without state to fail")
+	}
+	if wechatServerCalled {
+		t.Fatal("wechat upstream must not be called before state validation")
 	}
 }
 
@@ -504,22 +998,34 @@ func TestWeChatAuthRejectsUpstreamHTTPError(t *testing.T) {
 	common.RegisterEnabled = true
 	common.WeChatServerToken = "wechat-token"
 
-	wechatServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	wechatServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream broken", http.StatusInternalServerError)
 	}))
 	t.Cleanup(wechatServer.Close)
-	common.WeChatServerAddress = wechatServer.URL
+	defer controller.SetWeChatHTTPClientForTest(wechatClientForTLSServer(t, wechatServer))()
+	common.WeChatServerAddress = "https://wechat.example.test"
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
 	router.SetApiRouter(engine)
 
-	resp := performPublicJSONRequestNoFatal(t, engine, http.MethodGet, "/api/oauth/wechat?code=abc")
+	state, sessionCookie := authorizeWeChatOAuthForTest(t, engine)
+	req := httptest.NewRequest(http.MethodGet, "/api/oauth/wechat?code=abc&state="+url.QueryEscape(state), nil)
+	req.AddCookie(sessionCookie)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal wechat response: %v", err)
+	}
 	if resp.Success {
 		t.Fatal("expected wechat login to fail when upstream returns 500")
 	}
 	if !strings.Contains(resp.Message, "微信登录服务返回异常状态") {
 		t.Fatalf("expected upstream status error message, got %q", resp.Message)
+	}
+	if strings.Contains(resp.Message, "upstream broken") {
+		t.Fatalf("expected upstream body to be hidden, got %q", resp.Message)
 	}
 }
 
@@ -569,6 +1075,26 @@ func TestSessionAuthUsesCurrentRoleAfterDowngrade(t *testing.T) {
 	}
 }
 
+func TestSessionAuthRejectsPasswordChangedSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	loginCookie := loginAsRoot(t, engine)
+	if err := model.ResetUserPasswordByUsername("root", "new-password"); err != nil {
+		t.Fatalf("failed to reset root password: %v", err)
+	}
+
+	resp := performSessionJSONRequestNoFatal(t, engine, loginCookie, http.MethodGet, "/api/user/self", nil)
+	if resp.Success {
+		t.Fatal("expected old session to be rejected after password change")
+	}
+}
+
 func TestBearerTokenRejectedForHighRiskAdminRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	common.RedisEnabled = false
@@ -606,28 +1132,190 @@ func firstResponseCookie(t *testing.T, recorder *httptest.ResponseRecorder, name
 	return nil
 }
 
-func loginAsRoot(t *testing.T, engine http.Handler) *http.Cookie {
+func createOAuthLinkRequiredSession(t *testing.T, engine http.Handler, externalID string) (*model.AuthSource, service.OAuthCallbackResult, *http.Cookie) {
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{
-		"username": "root",
-		"password": "123456",
+	oldRegisterEnabled := common.RegisterEnabled
+	common.RegisterEnabled = false
+	t.Cleanup(func() {
+		common.RegisterEnabled = oldRegisterEnabled
 	})
-	if err != nil {
-		t.Fatalf("failed to marshal login payload: %v", err)
+
+	source := &model.AuthSource{
+		Name:         "github-link-" + externalID,
+		Type:         model.AuthSourceTypeGitHub,
+		DisplayName:  "GitHub",
+		IsActive:     true,
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+	}
+	if err := model.CreateAuthSource(source); err != nil {
+		t.Fatalf("failed to create auth source: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/user/login", bytes.NewReader(payload))
+	defer service.SetOAuthHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case "https://github.com/login/oauth/access_token":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"access_token":"oauth-token"}`)),
+					Header:     make(http.Header),
+				}, nil
+			case "https://api.github.com/user":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"id":` + externalID + `,"login":"attacker","name":"Attacker","email":"attacker@example.com"}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected OAuth request: %s", req.URL.String())
+				return nil, nil
+			}
+		}),
+	})()
+
+	authorizeReq := httptest.NewRequest(http.MethodGet, "/api/oauth/"+source.Name+"/authorize", nil)
+	authorizeRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(authorizeRecorder, authorizeReq)
+	if authorizeRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected authorize status %d: %s", authorizeRecorder.Code, authorizeRecorder.Body.String())
+	}
+	var authorizeResp apiResponse
+	if err := json.Unmarshal(authorizeRecorder.Body.Bytes(), &authorizeResp); err != nil {
+		t.Fatalf("failed to decode authorize response: %v", err)
+	}
+	if !authorizeResp.Success {
+		t.Fatalf("authorize failed: %s", authorizeResp.Message)
+	}
+	var authorizePayload map[string]string
+	decodeResponseData(t, authorizeResp, &authorizePayload)
+	authorizeURL, err := url.Parse(authorizePayload["authorize_url"])
+	if err != nil {
+		t.Fatalf("failed to parse authorize url: %v", err)
+	}
+	state := authorizeURL.Query().Get("state")
+	if state == "" {
+		t.Fatal("expected OAuth state")
+	}
+	oauthCookie := firstResponseCookie(t, authorizeRecorder, "session")
+
+	callbackReq := httptest.NewRequest(http.MethodGet, "/api/oauth/"+source.Name+"/callback?code=oauth-code&state="+url.QueryEscape(state), nil)
+	callbackReq.AddCookie(oauthCookie)
+	callbackRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(callbackRecorder, callbackReq)
+	if callbackRecorder.Code != http.StatusOK {
+		t.Fatalf("unexpected callback status %d: %s", callbackRecorder.Code, callbackRecorder.Body.String())
+	}
+	var callbackResp apiResponse
+	if err := json.Unmarshal(callbackRecorder.Body.Bytes(), &callbackResp); err != nil {
+		t.Fatalf("failed to decode callback response: %v", err)
+	}
+	if !callbackResp.Success {
+		t.Fatalf("callback failed: %s", callbackResp.Message)
+	}
+	var result service.OAuthCallbackResult
+	decodeResponseData(t, callbackResp, &result)
+	if result.Status != "link_required" {
+		t.Fatalf("expected link_required flow, got %q", result.Status)
+	}
+	if result.CSRFToken == "" {
+		t.Fatal("expected link_required response to include csrf_token")
+	}
+	return source, result, firstResponseCookie(t, callbackRecorder, "session")
+}
+
+func performOAuthLinkExistingForTest(t *testing.T, engine http.Handler, sessionCookie *http.Cookie, csrfToken string, username string, password string) apiResponse {
+	t.Helper()
+	linkPayload, err := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal link payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/oauth/link-existing", bytes.NewReader(linkPayload))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrfToken)
+	req.AddCookie(sessionCookie)
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("unexpected login status %d: %s", recorder.Code, recorder.Body.String())
+		t.Fatalf("unexpected link-existing status %d: %s", recorder.Code, recorder.Body.String())
 	}
-
 	var resp apiResponse
 	if err = json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode login response: %v", err)
+		t.Fatalf("failed to decode link-existing response: %v", err)
 	}
+	return resp
+}
+
+func authorizeWeChatOAuthForTest(t *testing.T, engine http.Handler) (string, *http.Cookie) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/oauth/wechat/authorize", nil)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected wechat authorize status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal wechat authorize response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("wechat authorize failed: %s", resp.Message)
+	}
+	var payload map[string]string
+	decodeResponseData(t, resp, &payload)
+	state := payload["state"]
+	if state == "" {
+		t.Fatal("expected wechat oauth state")
+	}
+	return state, firstResponseCookie(t, recorder, "session")
+}
+
+func wechatClientForTLSServer(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+	upstream, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse TLS server URL: %v", err)
+	}
+	baseClient := server.Client()
+	baseTransport := baseClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	baseClient.Transport = wechatTestTransport{
+		base:     baseTransport,
+		upstream: upstream,
+	}
+	return baseClient
+}
+
+type wechatTestTransport struct {
+	base     http.RoundTripper
+	upstream *url.URL
+}
+
+func (transport wechatTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	rewritten := request.Clone(request.Context())
+	rewritten.URL = cloneURL(request.URL)
+	rewritten.URL.Scheme = transport.upstream.Scheme
+	rewritten.URL.Host = transport.upstream.Host
+	rewritten.Host = request.URL.Host
+	return transport.base.RoundTrip(rewritten)
+}
+
+func cloneURL(value *url.URL) *url.URL {
+	if value == nil {
+		return &url.URL{}
+	}
+	clone := *value
+	return &clone
+}
+
+func loginAsRoot(t *testing.T, engine http.Handler) *http.Cookie {
+	t.Helper()
+	recorder, resp := performLoginRequest(t, engine, "root", "123456")
 	if !resp.Success {
 		t.Fatalf("root login failed: %s", resp.Message)
 	}
@@ -639,6 +1327,85 @@ func loginAsRoot(t *testing.T, engine http.Handler) *http.Cookie {
 	}
 	t.Fatal("expected session cookie after root login")
 	return nil
+}
+
+func performLoginNoFatal(t *testing.T, engine http.Handler, username string, password string) apiResponse {
+	t.Helper()
+	_, resp := performLoginRequest(t, engine, username, password)
+	return resp
+}
+
+func performLoginNoFatalFrom(t *testing.T, engine http.Handler, username string, password string, remoteAddr string) apiResponse {
+	t.Helper()
+	_, resp := performLoginRequestFrom(t, engine, username, password, remoteAddr)
+	return resp
+}
+
+func performLoginRequest(t *testing.T, engine http.Handler, username string, password string) (*httptest.ResponseRecorder, apiResponse) {
+	t.Helper()
+	return performLoginRequestFrom(t, engine, username, password, "")
+}
+
+func performLoginRequestFrom(t *testing.T, engine http.Handler, username string, password string, remoteAddr string) (*httptest.ResponseRecorder, apiResponse) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"username": username,
+		"password": password,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal login payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/user/login", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	if remoteAddr != "" {
+		req.RemoteAddr = remoteAddr
+	}
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected login status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode login response: %v", err)
+	}
+	return recorder, resp
+}
+
+func csrfTokenForSession(t *testing.T, engine http.Handler, sessionCookie *http.Cookie) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/user/self", nil)
+	req.AddCookie(sessionCookie)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected csrf bootstrap status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode csrf bootstrap response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("csrf bootstrap failed: %s", resp.Message)
+	}
+	var data struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode csrf token: %v", err)
+	}
+	if data.CSRFToken == "" {
+		t.Fatal("expected csrf token in /api/user/self response")
+	}
+	return data.CSRFToken
+}
+
+func addSessionCSRFHeader(t *testing.T, engine http.Handler, req *http.Request, sessionCookie *http.Cookie) {
+	t.Helper()
+	if req.Method == http.MethodGet || req.Method == http.MethodHead {
+		return
+	}
+	req.Header.Set("X-CSRF-Token", csrfTokenForSession(t, engine, sessionCookie))
 }
 
 func performSessionJSONRequest(t *testing.T, engine http.Handler, sessionCookie *http.Cookie, method string, path string, body any) apiResponse {
@@ -657,6 +1424,7 @@ func performSessionJSONRequest(t *testing.T, engine http.Handler, sessionCookie 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.AddCookie(sessionCookie)
+	addSessionCSRFHeader(t, engine, req, sessionCookie)
 
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
@@ -689,6 +1457,7 @@ func performSessionJSONRequestNoFatal(t *testing.T, engine http.Handler, session
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.AddCookie(sessionCookie)
+	addSessionCSRFHeader(t, engine, req, sessionCookie)
 
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
@@ -703,19 +1472,86 @@ func performSessionJSONRequestNoFatal(t *testing.T, engine http.Handler, session
 	return resp
 }
 
-func performPublicJSONRequestNoFatal(t *testing.T, engine http.Handler, method string, path string) apiResponse {
+func performPublicJSONRequestNoFatal(t *testing.T, engine http.Handler, method string, path string, body ...any) apiResponse {
 	t.Helper()
-	req := httptest.NewRequest(method, path, nil)
+	var reader io.Reader
+	if len(body) > 0 && body[0] != nil {
+		payload, err := json.Marshal(body[0])
+		if err != nil {
+			t.Fatalf("failed to marshal public request body: %v", err)
+		}
+		reader = bytes.NewReader(payload)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	if reader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusOK {
+	if recorder.Code != http.StatusOK && recorder.Code != http.StatusNotFound {
 		t.Fatalf("unexpected status %d for %s %s: %s", recorder.Code, method, path, recorder.Body.String())
+	}
+	if recorder.Code == http.StatusNotFound {
+		return apiResponse{Success: false, Message: "404 not found"}
 	}
 	var resp apiResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 	return resp
+}
+
+func TestPublicStatusOmitsRuntimeMetadataByDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+	model.InitOptionMap()
+
+	oldExposeRuntimeMetadata := common.PublicStatusRuntimeMetadataEnabled
+	oldVersion := common.Version
+	oldStartTime := common.StartTime
+	oldServerAddress := common.ServerAddress
+	t.Cleanup(func() {
+		common.PublicStatusRuntimeMetadataEnabled = oldExposeRuntimeMetadata
+		common.Version = oldVersion
+		common.StartTime = oldStartTime
+		common.ServerAddress = oldServerAddress
+	})
+
+	common.PublicStatusRuntimeMetadataEnabled = false
+	common.Version = "v9.9.9-test"
+	common.StartTime = 1781080000
+	common.ServerAddress = "https://panel.example.test"
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	resp := performPublicJSONRequestNoFatal(t, engine, http.MethodGet, "/api/status")
+	if !resp.Success {
+		t.Fatalf("expected public status to succeed: %s", resp.Message)
+	}
+
+	var data map[string]any
+	decodeResponseData(t, resp, &data)
+	for _, key := range []string{"version", "start_time", "server_address"} {
+		if _, ok := data[key]; ok {
+			t.Fatalf("expected public status to omit %s by default, got %#v", key, data[key])
+		}
+	}
+	if _, ok := data["register_enabled"]; !ok {
+		t.Fatal("expected public status to keep login/register capability flags")
+	}
+
+	common.PublicStatusRuntimeMetadataEnabled = true
+	resp = performPublicJSONRequestNoFatal(t, engine, http.MethodGet, "/api/status")
+	decodeResponseData(t, resp, &data)
+	if data["version"] != common.Version {
+		t.Fatalf("expected version metadata when enabled, got %#v", data["version"])
+	}
+	if data["server_address"] != common.ServerAddress {
+		t.Fatalf("expected server address metadata when enabled, got %#v", data["server_address"])
+	}
 }
 
 func TestPhase2AgentLifecycle(t *testing.T) {
@@ -824,8 +1660,8 @@ func TestPhase2AgentLifecycle(t *testing.T) {
 	if nodes[0].Status != service.NodeStatusOnline {
 		t.Fatal("expected registered node to become online")
 	}
-	if nodes[0].AgentToken != createdNode.AgentToken {
-		t.Fatal("expected node auth token to remain stable after occupancy")
+	if nodes[0].AgentToken != "" || !nodes[0].AgentTokenAvailable || nodes[0].AgentTokenPrefix == "" {
+		t.Fatal("expected node list to hide full agent token and expose only token status")
 	}
 	if nodes[0].LatestApplyResult != service.ApplyResultFailed || nodes[0].LatestApplyMessage != "openresty reload failed" {
 		t.Fatal("expected node list to expose latest apply status")
@@ -1020,6 +1856,7 @@ func TestPhase2CustomHeadersPreviewAndDiffLifecycle(t *testing.T) {
 		"enabled":     true,
 		"custom_headers": []map[string]any{
 			{"key": "X-Trace-Id", "value": "$request_id"},
+			{"key": "Authorization", "value": "Bearer preview-secret"},
 		},
 	})
 	var createdRoute service.ProxyRouteView
@@ -1044,6 +1881,7 @@ func TestPhase2CustomHeadersPreviewAndDiffLifecycle(t *testing.T) {
 		"custom_headers": []map[string]any{
 			{"key": "X-Trace-Id", "value": "$request_id"},
 			{"key": "X-Release", "value": "candidate"},
+			{"key": "Authorization", "value": "[redacted sensitive header; preserved on save]"},
 		},
 	})
 	performJSONRequest(t, engine, token, http.MethodPost, "/api/proxy-routes/", map[string]any{
@@ -1061,6 +1899,13 @@ func TestPhase2CustomHeadersPreviewAndDiffLifecycle(t *testing.T) {
 	}
 	if !strings.Contains(renderedConfig, `proxy_set_header X-Release "candidate";`) {
 		t.Fatalf("expected preview endpoint to return custom header, got %s", renderedConfig)
+	}
+	if strings.Contains(renderedConfig, "Bearer preview-secret") {
+		t.Fatalf("expected preview endpoint to redact sensitive custom header, got %s", renderedConfig)
+	}
+	routeConfig, _ := preview["route_config"].(string)
+	if strings.Contains(routeConfig, "Bearer preview-secret") {
+		t.Fatalf("expected preview route_config to redact sensitive custom header, got %s", routeConfig)
 	}
 	if !strings.Contains(renderedConfig, `proxy_set_header Host "preview-upstream.internal";`) {
 		t.Fatalf("expected preview endpoint to return overridden host header, got %s", renderedConfig)
@@ -1152,6 +1997,80 @@ func TestPhase2ProxyRouteWebsiteDetailAndLimits(t *testing.T) {
 	}
 }
 
+func TestProxyRouteBasicAuthPasswordIsRedactedAndPreservedOnBlankUpdate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	token := prepareRootToken(t)
+	createResp := performJSONRequest(t, engine, token, http.MethodPost, "/api/proxy-routes/", map[string]any{
+		"domain":              "auth-redacted.example.com",
+		"origin_url":          "https://8.8.8.31:8443",
+		"enabled":             true,
+		"basic_auth_enabled":  true,
+		"basic_auth_username": "edge-admin",
+		"basic_auth_password": "edge-secret",
+	})
+	var createRaw map[string]json.RawMessage
+	if err := json.Unmarshal(createResp.Data, &createRaw); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if _, ok := createRaw["basic_auth_password"]; ok {
+		t.Fatal("expected create response to omit basic_auth_password")
+	}
+
+	var created service.ProxyRouteView
+	decodeResponseData(t, createResp, &created)
+	if !created.BasicAuthEnabled || !created.BasicAuthPasswordConfigured {
+		t.Fatalf("expected basic auth to be configured without revealing password, got %+v", created)
+	}
+
+	detailResp := performJSONRequest(t, engine, token, http.MethodGet, "/api/proxy-routes/"+toString(created.ID), nil)
+	var detailRaw map[string]json.RawMessage
+	if err := json.Unmarshal(detailResp.Data, &detailRaw); err != nil {
+		t.Fatalf("decode detail response: %v", err)
+	}
+	if _, ok := detailRaw["basic_auth_password"]; ok {
+		t.Fatal("expected detail response to omit basic_auth_password")
+	}
+
+	listResp := performJSONRequest(t, engine, token, http.MethodGet, "/api/proxy-routes/", nil)
+	var listRaw []map[string]json.RawMessage
+	decodeResponseData(t, listResp, &listRaw)
+	if len(listRaw) != 1 {
+		t.Fatalf("expected one route, got %d", len(listRaw))
+	}
+	if _, ok := listRaw[0]["basic_auth_password"]; ok {
+		t.Fatal("expected list response to omit basic_auth_password")
+	}
+
+	updateResp := performJSONRequest(t, engine, token, http.MethodPost, "/api/proxy-routes/"+toString(created.ID)+"/update", map[string]any{
+		"domain":              "auth-redacted.example.com",
+		"origin_url":          "https://8.8.8.32:8443",
+		"enabled":             true,
+		"basic_auth_enabled":  true,
+		"basic_auth_username": "edge-admin",
+		"basic_auth_password": "",
+	})
+	var updated service.ProxyRouteView
+	decodeResponseData(t, updateResp, &updated)
+	if !updated.BasicAuthPasswordConfigured {
+		t.Fatalf("expected blank update to preserve configured password, got %+v", updated)
+	}
+
+	var stored model.ProxyRoute
+	if err := model.DB.First(&stored, created.ID).Error; err != nil {
+		t.Fatalf("load stored proxy route: %v", err)
+	}
+	if stored.BasicAuthPassword != "edge-secret" {
+		t.Fatalf("expected blank update to preserve stored password, got %q", stored.BasicAuthPassword)
+	}
+}
+
 func TestPhase2GlobalDiscoveryRegistration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	common.RedisEnabled = false
@@ -1162,7 +2081,7 @@ func TestPhase2GlobalDiscoveryRegistration(t *testing.T) {
 	router.SetApiRouter(engine)
 
 	adminToken := prepareRootToken(t)
-	bootstrapResp := performJSONRequest(t, engine, adminToken, http.MethodGet, "/api/nodes/bootstrap-token", nil)
+	bootstrapResp := performJSONRequest(t, engine, adminToken, http.MethodPost, "/api/nodes/bootstrap-token/rotate", nil)
 	var bootstrap service.NodeBootstrapView
 	decodeResponseData(t, bootstrapResp, &bootstrap)
 	if bootstrap.DiscoveryToken == "" {
@@ -1190,11 +2109,57 @@ func TestPhase2GlobalDiscoveryRegistration(t *testing.T) {
 	if len(nodes) != 1 {
 		t.Fatalf("expected 1 discovered node, got %d", len(nodes))
 	}
-	if nodes[0].Name != "bulk-edge-1" || nodes[0].AgentToken != registration.AgentToken || nodes[0].Status != service.NodeStatusOnline {
-		t.Fatal("expected discovered node to be created online with issued agent token")
+	if nodes[0].Name != "bulk-edge-1" || nodes[0].Status != service.NodeStatusOnline {
+		t.Fatal("expected discovered node to be created online")
+	}
+	if nodes[0].AgentToken != "" || !nodes[0].AgentTokenAvailable || nodes[0].AgentTokenPrefix == "" {
+		t.Fatal("expected discovered node list entry to hide full agent token")
 	}
 	if nodes[0].IP != "203.0.113.18" {
 		t.Fatalf("expected discovered node to keep public source ip, got %s", nodes[0].IP)
+	}
+}
+
+func TestDNSSnapshotRequiresSignedRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	worker, err := service.CreateAuthoritativeDNSWorker(service.DNSWorkerInput{Name: "ns-signed"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+
+	engine := gin.New()
+	router.SetApiRouter(engine)
+
+	unsignedReq := httptest.NewRequest(http.MethodGet, "/api/dns-snapshot", nil)
+	unsignedReq.Header.Set("X-DNS-Worker-Token", worker.Token)
+	unsignedRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(unsignedRecorder, unsignedReq)
+	if unsignedRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected unsigned snapshot request to fail with 400, got %d: %s", unsignedRecorder.Code, unsignedRecorder.Body.String())
+	}
+
+	signedReq := httptest.NewRequest(http.MethodGet, "/api/dns-snapshot", nil)
+	signedReq.Header.Set("X-DNS-Worker-Token", worker.Token)
+	signedReq.Header.Set(dnsworker.SnapshotSignatureHeader, dnsworker.SnapshotSignatureVersion)
+	signedRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(signedRecorder, signedReq)
+	if signedRecorder.Code != http.StatusOK {
+		t.Fatalf("expected signed snapshot request to succeed, got %d: %s", signedRecorder.Code, signedRecorder.Body.String())
+	}
+	var resp apiResponse
+	if err = json.Unmarshal(signedRecorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode signed snapshot response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected signed snapshot success, got %s", resp.Message)
+	}
+	var envelope dnsworker.SignedSnapshot
+	decodeResponseData(t, resp, &envelope)
+	if envelope.SignatureVersion != dnsworker.SnapshotSignatureVersion || envelope.Signature == "" {
+		t.Fatalf("expected signed snapshot envelope, got %+v", envelope)
 	}
 }
 
@@ -1275,16 +2240,17 @@ func TestPhase2LegacyGlobalAgentTokenKeepsExistingNodeOnline(t *testing.T) {
 		t.Fatal("expected legacy heartbeat response to include active config summary")
 	}
 
-	activeConfigResp := performAgentJSONRequestWithToken(t, engine, common.AgentToken, http.MethodGet, "/api/agent/config-versions/active", nil)
-	var activeConfig service.AgentConfigResponse
-	decodeResponseData(t, activeConfigResp, &activeConfig)
-	if activeConfig.Version == "" || activeConfig.Checksum == "" {
-		t.Fatal("expected legacy global token to fetch active config")
+	activeConfigReq := httptest.NewRequest(http.MethodGet, "/api/agent/config-versions/active", nil)
+	activeConfigReq.Header.Set("X-Agent-Token", common.AgentToken)
+	activeConfigRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(activeConfigRecorder, activeConfigReq)
+	if activeConfigRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected legacy global token to be rejected for unbound active config fetch, got %d: %s", activeConfigRecorder.Code, activeConfigRecorder.Body.String())
 	}
 
 	applyResp := performAgentJSONRequestWithToken(t, engine, common.AgentToken, http.MethodPost, "/api/agent/apply-logs", map[string]any{
 		"node_id": legacyNode.NodeID,
-		"version": activeConfig.Version,
+		"version": heartbeatResp.ActiveConfig.Version,
 		"result":  service.ApplyResultOK,
 		"message": "legacy apply ok",
 	})
@@ -1295,15 +2261,16 @@ func TestPhase2LegacyGlobalAgentTokenKeepsExistingNodeOnline(t *testing.T) {
 	}
 
 	protectedNode := &model.Node{
-		NodeID:          "dedicated-node-1",
-		Name:            "dedicated-edge-1",
-		IP:              "10.0.0.20",
-		AgentToken:      "dedicated-token",
-		AgentVersion:    "0.2.0",
-		NginxVersion:    "1.25.5",
-		OpenrestyStatus: service.OpenrestyStatusUnknown,
-		Status:          service.NodeStatusOnline,
-		LastSeenAt:      time.Now(),
+		NodeID:           "dedicated-node-1",
+		Name:             "dedicated-edge-1",
+		IP:               "10.0.0.20",
+		AgentTokenHash:   security.HashSecretToken("dedicated-token"),
+		AgentTokenPrefix: security.SecretTokenPrefix("dedicated-token"),
+		AgentVersion:     "0.2.0",
+		NginxVersion:     "1.25.5",
+		OpenrestyStatus:  service.OpenrestyStatusUnknown,
+		Status:           service.NodeStatusOnline,
+		LastSeenAt:       time.Now(),
 	}
 	if err = protectedNode.Insert(); err != nil {
 		t.Fatalf("failed to seed dedicated node: %v", err)

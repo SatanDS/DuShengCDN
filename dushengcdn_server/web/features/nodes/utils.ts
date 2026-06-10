@@ -1,4 +1,5 @@
 import type { NodeItem } from '@/features/nodes/types';
+import { shellQuote } from '@/lib/utils/shell';
 
 export const WS_CONNECTED_LAST_SEEN = '__DUSHENGCDN_WS_CONNECTED__';
 
@@ -213,10 +214,24 @@ const installerScriptUrl =
   'https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/latest/download/install-agent.sh';
 
 export function buildNodeInstallCommand(serverUrl: string, agentToken: string) {
+  void agentToken;
+  const quotedServerUrl = shellQuote(serverUrl);
   return [
+    `token_file="$(mktemp)"`,
+    `chmod 600 "$token_file"`,
+    `trap 'stty echo 2>/dev/null || true; rm -f "$token_file"' EXIT`,
+    `printf 'Agent token: ' >&2`,
+    `stty -echo 2>/dev/null || true`,
+    `IFS= read -r agent_token`,
+    `stty echo 2>/dev/null || true`,
+    `printf '\\n' >&2`,
+    `printf '%s\\n' "$agent_token" > "$token_file"`,
+    `unset agent_token`,
     `curl -fsSL ${installerScriptUrl} | bash -s -- \\`,
-    `  --server-url ${serverUrl} \\`,
-    `  --agent-token ${agentToken}`,
+    `  --server-url ${quotedServerUrl} \\`,
+    `  --agent-token-file "$token_file"`,
+    `rm -f "$token_file"`,
+    `trap - EXIT`,
   ].join('\n');
 }
 
@@ -224,11 +239,26 @@ export function buildNodeDockerInstallCommand(
   serverUrl: string,
   agentToken: string,
 ) {
+  void agentToken;
+  const quotedServerUrl = shellQuote(serverUrl);
   return [
+    `secret_dir="\${XDG_CONFIG_HOME:-$HOME/.config}/dushengcdn-agent"`,
+    `mkdir -p "$secret_dir"`,
+    `chmod 700 "$secret_dir"`,
+    `token_file="$secret_dir/agent-token"`,
+    `printf 'Agent token: ' >&2`,
+    `stty -echo 2>/dev/null || true`,
+    `IFS= read -r agent_token`,
+    `stty echo 2>/dev/null || true`,
+    `printf '\\n' >&2`,
+    `printf '%s\\n' "$agent_token" > "$token_file"`,
+    `chmod 600 "$token_file"`,
+    `unset agent_token`,
     `docker run -d --name dushengcdn-agent --restart unless-stopped \\`,
     `  -p 80:80 -p 443:443 \\`,
-    `  -e DUSHENGCDN_SERVER_URL=${serverUrl} \\`,
-    `  -e DUSHENGCDN_AGENT_TOKEN=${agentToken} \\`,
+    `  -v "$token_file":/run/secrets/dushengcdn_agent_token:ro \\`,
+    `  -e DUSHENGCDN_SERVER_URL=${quotedServerUrl} \\`,
+    `  -e DUSHENGCDN_AGENT_TOKEN_FILE=/run/secrets/dushengcdn_agent_token \\`,
     `  ghcr.io/satands/dushengcdn-agent:latest`,
   ].join('\n');
 }

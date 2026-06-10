@@ -32,6 +32,7 @@ func TestClientHeartbeatExplainsAgentTokenAuthFailure(t *testing.T) {
 		"Agent Token 无效",
 		"Agent authentication failed",
 		"agent_token/discovery_token",
+		"DUSHENGCDN_AGENT_TOKEN_FILE/DUSHENGCDN_DISCOVERY_TOKEN_FILE",
 		"DUSHENGCDN_AGENT_TOKEN/DUSHENGCDN_DISCOVERY_TOKEN",
 		"registration uses Discovery Token",
 		"heartbeat/config pull uses the node Agent Token",

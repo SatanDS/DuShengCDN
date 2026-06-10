@@ -1,14 +1,19 @@
 package geoip
 
 import (
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const maxIPInfoResponseBytes int64 = 1024 * 1024
 
 // IPInfoService 使用 ipinfo.io 服务实现 GeoIPService 接口。
 type IPInfoService struct {
@@ -34,9 +39,7 @@ type ipInfoResponse struct {
 // NewIPInfoService 创建并返回一个 IPInfoService 的新实例。
 func NewIPInfoService() (*IPInfoService, error) {
 	return &IPInfoService{
-		Client: &http.Client{
-			Timeout: 5 * time.Second,
-		},
+		Client: security.NewPublicHTTPClient(5*time.Second, true),
 	}, nil
 }
 
@@ -50,9 +53,18 @@ func (s *IPInfoService) Name() string {
 func (s *IPInfoService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	// IPinfo 免费额度不需要 API token 就可以查询基本的 IP 信息。
 	// API URL: https://ipinfo.io/json (查询自身IP) 或 https://ipinfo.io/YOUR_IP/json
-	apiURL := fmt.Sprintf("https://ipinfo.io/%s/json", ip.String())
+	apiURL := fmt.Sprintf("https://ipinfo.io/%s/json", url.PathEscape(ip.String()))
 
-	resp, err := s.Client.Get(apiURL)
+	client := s.Client
+	if client == nil {
+		client = security.NewPublicHTTPClient(5*time.Second, true)
+	}
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ipinfo.io request: %w", err)
+	}
+	req.Header.Set("User-Agent", "DuShengCDN-Server")
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get geo info from ipinfo.io: %w", err)
 	}
@@ -63,7 +75,7 @@ func (s *IPInfoService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	}
 
 	var apiResp ipInfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxIPInfoResponseBytes)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode ipinfo.io response: %w", err)
 	}
 

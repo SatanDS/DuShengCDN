@@ -27,6 +27,7 @@ import {
   getNodeAgentRelease,
   getNodeObservability,
   getNodes,
+  rotateNodeAgentToken,
   requestNodeForceSync,
   requestNodeOpenrestyRestart,
   requestNodeAgentUpdate,
@@ -300,6 +301,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const [agentUpdateFeedback, setAgentUpdateFeedback] =
     useState<FeedbackState | null>(null);
   const [serverUrl, setServerUrl] = useState('');
+  const [revealedAgentToken, setRevealedAgentToken] = useState('');
   const [deploymentProtocol, setDeploymentProtocol] =
     useState<DeploymentProtocol>('https');
   const [isServerUrlOverridden, setIsServerUrlOverridden] = useState(false);
@@ -449,6 +451,21 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
       setFeedback({
         tone: 'success',
         message: `已向节点 ${updatedNode.name} 下发强制同步指令，无视当前错误拦截。`,
+      });
+      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+    },
+    onError: (error) => {
+      setFeedback({ tone: 'danger', message: getErrorMessage(error) });
+    },
+  });
+
+  const rotateAgentTokenMutation = useMutation({
+    mutationFn: () => rotateNodeAgentToken(Number(nodeId)),
+    onSuccess: async (token) => {
+      setRevealedAgentToken(token.agent_token ?? '');
+      setFeedback({
+        tone: 'success',
+        message: 'Agent token rotated. Copy the install command before leaving this page.',
       });
       await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
     },
@@ -642,12 +659,12 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     serverUrl,
   );
   const nodeInstallCommand =
-    normalizedServerUrl && node.agent_token
-      ? buildNodeInstallCommand(normalizedServerUrl, node.agent_token)
+    normalizedServerUrl && revealedAgentToken
+      ? buildNodeInstallCommand(normalizedServerUrl, revealedAgentToken)
       : '';
   const nodeDockerInstallCommand =
-    normalizedServerUrl && node.agent_token
-      ? buildNodeDockerInstallCommand(normalizedServerUrl, node.agent_token)
+    normalizedServerUrl && revealedAgentToken
+      ? buildNodeDockerInstallCommand(normalizedServerUrl, revealedAgentToken)
       : '';
   const updateMode = getUpdateMode(node);
   const selectedAgentRelease =
@@ -1757,6 +1774,15 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                 title="节点标识与部署"
                 action={
                   <div className="flex gap-2">
+                    <SecondaryButton
+                      type="button"
+                      disabled={rotateAgentTokenMutation.isPending}
+                      onClick={() => rotateAgentTokenMutation.mutate()}
+                    >
+                      {rotateAgentTokenMutation.isPending
+                        ? 'Rotating...'
+                        : 'Rotate token'}
+                    </SecondaryButton>
                     {nodeInstallCommand ? (
                       <PrimaryButton
                         type="button"
@@ -1801,7 +1827,11 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                         节点密钥
                       </p>
                       <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
-                        {node.agent_token || '暂无'}
+                        {node.agent_token_prefix
+                          ? `${node.agent_token_prefix}...`
+                          : node.agent_token_available
+                            ? 'configured'
+                            : 'unconfigured'}
                       </p>
                     </div>
                   </div>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,11 +91,18 @@ func (m *fakeManager) CurrentChecksum() (string, error) {
 	return m.currentChecksum, m.currentChecksumErr
 }
 
+func setBundleChecksum(config *protocol.ActiveConfigResponse) {
+	routeConfig := config.RouteConfig
+	if routeConfig == "" {
+		routeConfig = config.RenderedConfig
+	}
+	config.Checksum = nginx.BundleChecksum(config.MainConfig, routeConfig, config.SupportFiles)
+}
+
 func TestSyncOnceSuccess(t *testing.T) {
 	client := &fakeClient{
 		config: protocol.ActiveConfigResponse{
 			Version:        "20260309-001",
-			Checksum:       "checksum-1",
 			MainConfig:     "worker_processes auto;",
 			RouteConfig:    "server { listen 80; }",
 			RenderedConfig: "server { listen 80; }",
@@ -102,6 +110,7 @@ func TestSyncOnceSuccess(t *testing.T) {
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		},
 	}
+	setBundleChecksum(&client.config)
 
 	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
 	nodeID, err := stateStore.EnsureNodeID()
@@ -146,13 +155,13 @@ func TestSyncOnceSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load state: %v", err)
 	}
-	if snapshot.CurrentVersion != "20260309-001" || snapshot.CurrentChecksum != "checksum-1" {
+	if snapshot.CurrentVersion != "20260309-001" || snapshot.CurrentChecksum != client.config.Checksum {
 		t.Fatal("expected state store to persist current version and checksum")
 	}
 	if len(client.reports) != 1 || client.reports[0].Result != ApplyResultSuccess {
 		t.Fatal("expected successful apply report to be sent")
 	}
-	if client.reports[0].Checksum != "checksum-1" {
+	if client.reports[0].Checksum != client.config.Checksum {
 		t.Fatalf("expected config checksum to be reported, got %q", client.reports[0].Checksum)
 	}
 	if client.reports[0].MainConfigChecksum == "" || client.reports[0].RouteConfigChecksum == "" {
@@ -167,7 +176,6 @@ func TestSyncOnceRollbackOnNginxFailure(t *testing.T) {
 	client := &fakeClient{
 		config: protocol.ActiveConfigResponse{
 			Version:        "20260309-002",
-			Checksum:       "checksum-2",
 			MainConfig:     "worker_processes 2;",
 			RouteConfig:    "server { listen 81; }",
 			RenderedConfig: "server { listen 81; }",
@@ -175,6 +183,7 @@ func TestSyncOnceRollbackOnNginxFailure(t *testing.T) {
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		},
 	}
+	setBundleChecksum(&client.config)
 
 	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
 	nodeID, err := stateStore.EnsureNodeID()
@@ -184,7 +193,7 @@ func TestSyncOnceRollbackOnNginxFailure(t *testing.T) {
 	if err = stateStore.Save(&state.Snapshot{
 		NodeID:          nodeID,
 		CurrentVersion:  "20260309-001",
-		CurrentChecksum: "checksum-1",
+		CurrentChecksum: "previous-checksum",
 	}); err != nil {
 		t.Fatalf("failed to seed state: %v", err)
 	}
@@ -210,7 +219,7 @@ func TestSyncOnceRollbackOnNginxFailure(t *testing.T) {
 	if snapshot.CurrentVersion != "20260309-001" {
 		t.Fatal("expected failed sync not to overwrite current version")
 	}
-	if snapshot.BlockedVersion != "20260309-002" || snapshot.BlockedChecksum != "checksum-2" {
+	if snapshot.BlockedVersion != "20260309-002" || snapshot.BlockedChecksum != client.config.Checksum {
 		t.Fatalf("expected failed target version to be blocked, got %+v", snapshot)
 	}
 	if snapshot.OpenrestyStatus != protocol.OpenrestyStatusUnhealthy {
@@ -219,7 +228,7 @@ func TestSyncOnceRollbackOnNginxFailure(t *testing.T) {
 	if len(client.reports) != 1 || client.reports[0].Result != ApplyResultFailed {
 		t.Fatal("expected failed apply report to be sent")
 	}
-	if client.reports[0].Checksum != "checksum-2" {
+	if client.reports[0].Checksum != client.config.Checksum {
 		t.Fatalf("expected failed report to retain target checksum, got %q", client.reports[0].Checksum)
 	}
 	if client.reports[0].MainConfigChecksum == "" || client.reports[0].RouteConfigChecksum == "" {
@@ -234,7 +243,6 @@ func TestSyncOnceReportsWarningWhenRollbackKeepsOpenrestyHealthy(t *testing.T) {
 	client := &fakeClient{
 		config: protocol.ActiveConfigResponse{
 			Version:        "20260309-002",
-			Checksum:       "checksum-2",
 			MainConfig:     "worker_processes 2;",
 			RouteConfig:    "server { listen 81; }",
 			RenderedConfig: "server { listen 81; }",
@@ -242,6 +250,7 @@ func TestSyncOnceReportsWarningWhenRollbackKeepsOpenrestyHealthy(t *testing.T) {
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		},
 	}
+	setBundleChecksum(&client.config)
 
 	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
 	nodeID, err := stateStore.EnsureNodeID()
@@ -251,7 +260,7 @@ func TestSyncOnceReportsWarningWhenRollbackKeepsOpenrestyHealthy(t *testing.T) {
 	if err = stateStore.Save(&state.Snapshot{
 		NodeID:          nodeID,
 		CurrentVersion:  "20260309-001",
-		CurrentChecksum: "checksum-1",
+		CurrentChecksum: "previous-checksum",
 	}); err != nil {
 		t.Fatalf("failed to seed state: %v", err)
 	}
@@ -274,10 +283,10 @@ func TestSyncOnceReportsWarningWhenRollbackKeepsOpenrestyHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load state: %v", err)
 	}
-	if snapshot.CurrentVersion != "20260309-001" || snapshot.CurrentChecksum != "checksum-1" {
+	if snapshot.CurrentVersion != "20260309-001" || snapshot.CurrentChecksum != "previous-checksum" {
 		t.Fatal("expected warning apply to keep previous version state")
 	}
-	if snapshot.BlockedVersion != "20260309-002" || snapshot.BlockedChecksum != "checksum-2" {
+	if snapshot.BlockedVersion != "20260309-002" || snapshot.BlockedChecksum != client.config.Checksum {
 		t.Fatalf("expected rolled-back target version to be blocked, got %+v", snapshot)
 	}
 	if snapshot.OpenrestyStatus != protocol.OpenrestyStatusHealthy {
@@ -288,6 +297,53 @@ func TestSyncOnceReportsWarningWhenRollbackKeepsOpenrestyHealthy(t *testing.T) {
 	}
 	if len(client.reports) != 1 || client.reports[0].Result != ApplyResultWarning {
 		t.Fatal("expected warning apply report to be sent")
+	}
+}
+
+func TestSyncOnceRedactsSensitiveApplyMessage(t *testing.T) {
+	client := &fakeClient{
+		config: protocol.ActiveConfigResponse{
+			Version:     "20260309-002",
+			MainConfig:  "worker_processes auto;",
+			RouteConfig: "server { listen 82; }",
+			CreatedAt:   time.Now().Format(time.RFC3339),
+		},
+	}
+	setBundleChecksum(&client.config)
+
+	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	nodeID, err := stateStore.EnsureNodeID()
+	if err != nil {
+		t.Fatalf("EnsureNodeID failed: %v", err)
+	}
+	if err = stateStore.Save(&state.Snapshot{NodeID: nodeID}); err != nil {
+		t.Fatalf("failed to seed state: %v", err)
+	}
+
+	service := New(client, &fakeManager{
+		applyOutcome: nginx.ApplyOutcome{
+			Status: nginx.ApplyStatusWarning,
+			Message: `openresty -t failed:
+local expected_hash = "abcdef123456"
+proxy_set_header Authorization "Bearer origin-token";
+callback /oauth?code=oauth-code&state=csrf-state`,
+		},
+	}, stateStore)
+
+	if err = service.SyncOnce(context.Background(), &protocol.ActiveConfigMeta{
+		Version:  client.config.Version,
+		Checksum: client.config.Checksum,
+	}); err != nil {
+		t.Fatalf("expected warning outcome to keep sync successful, got %v", err)
+	}
+	if len(client.reports) != 1 {
+		t.Fatalf("expected one apply report, got %+v", client.reports)
+	}
+	reported := client.reports[0].Message
+	for _, leaked := range []string{"abcdef123456", "origin-token", "oauth-code", "csrf-state"} {
+		if strings.Contains(reported, leaked) {
+			t.Fatalf("expected %q to be redacted from %q", leaked, reported)
+		}
 	}
 }
 
@@ -605,13 +661,13 @@ func TestSyncOnceClearsBlockedTargetWhenNewVersionArrives(t *testing.T) {
 	client := &fakeClient{
 		config: protocol.ActiveConfigResponse{
 			Version:        "20260309-008",
-			Checksum:       "checksum-8",
 			MainConfig:     "worker_processes 8;",
 			RouteConfig:    "server { listen 88; }",
 			RenderedConfig: "server { listen 88; }",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		},
 	}
+	setBundleChecksum(&client.config)
 	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
 	nodeID, err := stateStore.EnsureNodeID()
 	if err != nil {
@@ -620,9 +676,9 @@ func TestSyncOnceClearsBlockedTargetWhenNewVersionArrives(t *testing.T) {
 	if err = stateStore.Save(&state.Snapshot{
 		NodeID:          nodeID,
 		CurrentVersion:  "20260309-005",
-		CurrentChecksum: "checksum-5",
+		CurrentChecksum: "previous-checksum",
 		BlockedVersion:  "20260309-007",
-		BlockedChecksum: "checksum-7",
+		BlockedChecksum: "blocked-checksum",
 		BlockedReason:   "apply failed, rolled back to previous config",
 	}); err != nil {
 		t.Fatalf("failed to seed state: %v", err)
@@ -632,7 +688,7 @@ func TestSyncOnceClearsBlockedTargetWhenNewVersionArrives(t *testing.T) {
 	service := New(client, manager, stateStore)
 	if err = service.SyncOnce(context.Background(), &protocol.ActiveConfigMeta{
 		Version:  "20260309-008",
-		Checksum: "checksum-8",
+		Checksum: client.config.Checksum,
 	}); err != nil {
 		t.Fatalf("expected new target version to be applied, got %v", err)
 	}
@@ -649,8 +705,66 @@ func TestSyncOnceClearsBlockedTargetWhenNewVersionArrives(t *testing.T) {
 	if snapshot.BlockedVersion != "" || snapshot.BlockedChecksum != "" {
 		t.Fatalf("expected blocked target to be cleared after new version succeeds, got %+v", snapshot)
 	}
-	if snapshot.CurrentVersion != "20260309-008" || snapshot.CurrentChecksum != "checksum-8" {
+	if snapshot.CurrentVersion != "20260309-008" || snapshot.CurrentChecksum != client.config.Checksum {
 		t.Fatalf("expected current version to move to new target, got %+v", snapshot)
+	}
+}
+
+func TestSyncOnceRejectsFetchedConfigWithMismatchedBundleChecksum(t *testing.T) {
+	client := &fakeClient{
+		config: protocol.ActiveConfigResponse{
+			Version:        "20260309-011",
+			Checksum:       "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			MainConfig:     "worker_processes 11;",
+			RouteConfig:    "server { listen 91; }",
+			RenderedConfig: "server { listen 91; }",
+			SupportFiles:   []protocol.SupportFile{{Path: "1.crt", Content: "cert"}},
+			CreatedAt:      time.Now().Format(time.RFC3339),
+		},
+	}
+	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	nodeID, err := stateStore.EnsureNodeID()
+	if err != nil {
+		t.Fatalf("EnsureNodeID failed: %v", err)
+	}
+	if err = stateStore.Save(&state.Snapshot{
+		NodeID:          nodeID,
+		CurrentVersion:  "20260309-010",
+		CurrentChecksum: "previous-checksum",
+	}); err != nil {
+		t.Fatalf("failed to seed state: %v", err)
+	}
+
+	manager := &fakeManager{currentChecksum: "previous-checksum"}
+	service := New(client, manager, stateStore)
+	err = service.SyncOnce(context.Background(), &protocol.ActiveConfigMeta{
+		Version:  client.config.Version,
+		Checksum: client.config.Checksum,
+	})
+	if err == nil {
+		t.Fatal("expected mismatched active config checksum to fail")
+	}
+	if len(manager.applyMainContents) != 0 {
+		t.Fatal("expected mismatched active config not to be applied")
+	}
+	snapshot, err := stateStore.Load()
+	if err != nil {
+		t.Fatalf("failed to load state: %v", err)
+	}
+	if snapshot.CurrentVersion != "20260309-010" || snapshot.CurrentChecksum != "previous-checksum" {
+		t.Fatalf("expected current config state to remain unchanged, got %+v", snapshot)
+	}
+	if snapshot.BlockedVersion != client.config.Version || snapshot.BlockedChecksum != client.config.Checksum {
+		t.Fatalf("expected mismatched target to be blocked, got %+v", snapshot)
+	}
+	if snapshot.LastError == "" {
+		t.Fatal("expected integrity failure to be recorded")
+	}
+	if len(client.reports) != 1 || client.reports[0].Result != ApplyResultFailed {
+		t.Fatalf("expected one failed apply log for integrity failure, got %+v", client.reports)
+	}
+	if client.reports[0].Checksum != client.config.Checksum {
+		t.Fatalf("expected failed report to keep declared checksum, got %q", client.reports[0].Checksum)
 	}
 }
 

@@ -82,6 +82,9 @@ func UpgradeServer(c *gin.Context) {
 // @Tags Update
 // @Router /api/update/logs/ws [get]
 func StreamServerUpgradeLogs(c *gin.Context) {
+	if rejectInvalidWebSocketOrigin(c) {
+		return
+	}
 	websocket.Handler(func(conn *websocket.Conn) {
 		defer func() {
 			_ = conn.Close()

@@ -2,9 +2,11 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -312,10 +314,10 @@ func TestLoadUsesEnvConfigWhenFileIsMissing(t *testing.T) {
 func TestLoadEnvOverridesConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "agent.json")
-	if err := os.WriteFile(configPath, []byte(`{"server_url":"http://old:3000","agent_token":"old","node_name":"edge-01","node_ip":"10.0.0.8","openresty_path":"/old/openresty"}`), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"server_url":"https://old.example.com","agent_token":"old","node_name":"edge-01","node_ip":"10.0.0.8","openresty_path":"/old/openresty"}`), 0o644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
 	}
-	t.Setenv("DUSHENGCDN_SERVER_URL", "http://new:3000")
+	t.Setenv("DUSHENGCDN_SERVER_URL", "https://new.example.com")
 	t.Setenv("DUSHENGCDN_AGENT_TOKEN", "new-token")
 	t.Setenv("DUSHENGCDN_OPENRESTY_PATH", "/new/openresty")
 
@@ -323,7 +325,7 @@ func TestLoadEnvOverridesConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if cfg.ServerURL != "http://new:3000" {
+	if cfg.ServerURL != "https://new.example.com" {
 		t.Fatalf("expected server url from env, got %s", cfg.ServerURL)
 	}
 	if cfg.AgentToken != "new-token" {
@@ -331,6 +333,206 @@ func TestLoadEnvOverridesConfigFile(t *testing.T) {
 	}
 	if cfg.OpenrestyPath != "/new/openresty" {
 		t.Fatalf("expected openresty path from env, got %s", cfg.OpenrestyPath)
+	}
+}
+
+func TestLoadReadsAgentTokenFromFileEnv(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	tokenPath := filepath.Join(dir, "agent-token")
+	if err := os.WriteFile(tokenPath, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+	t.Setenv("DUSHENGCDN_SERVER_URL", "https://new.example.com")
+	t.Setenv("DUSHENGCDN_AGENT_TOKEN_FILE", tokenPath)
+	t.Setenv("DUSHENGCDN_NODE_NAME", "edge-env")
+	t.Setenv("DUSHENGCDN_NODE_IP", "10.0.0.8")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.AgentToken != "file-token" {
+		t.Fatalf("expected token from file, got %q", cfg.AgentToken)
+	}
+}
+
+func TestLoadReadsDiscoveryTokenFromFileEnv(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	tokenPath := filepath.Join(dir, "discovery-token")
+	if err := os.WriteFile(tokenPath, []byte("discovery-file-token\n"), 0o600); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+	t.Setenv("DUSHENGCDN_SERVER_URL", "https://new.example.com")
+	t.Setenv("DUSHENGCDN_DISCOVERY_TOKEN_FILE", tokenPath)
+	t.Setenv("DUSHENGCDN_NODE_NAME", "edge-env")
+	t.Setenv("DUSHENGCDN_NODE_IP", "10.0.0.8")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.DiscoveryToken != "discovery-file-token" {
+		t.Fatalf("expected discovery token from file, got %q", cfg.DiscoveryToken)
+	}
+}
+
+func TestLoadRejectsAgentTokenAndTokenFileTogether(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	tokenPath := filepath.Join(dir, "agent-token")
+	if err := os.WriteFile(tokenPath, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+	t.Setenv("DUSHENGCDN_SERVER_URL", "https://new.example.com")
+	t.Setenv("DUSHENGCDN_AGENT_TOKEN", "env-token")
+	t.Setenv("DUSHENGCDN_AGENT_TOKEN_FILE", tokenPath)
+	t.Setenv("DUSHENGCDN_NODE_NAME", "edge-env")
+	t.Setenv("DUSHENGCDN_NODE_IP", "10.0.0.8")
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected token env and token file env together to be rejected")
+	}
+}
+
+func TestLoadReadsGeoIPLookupTokenFromFileEnv(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	tokenPath := filepath.Join(dir, "geoip-token")
+	if err := os.WriteFile(tokenPath, []byte("geoip-file-token\n"), 0o600); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+	t.Setenv("DUSHENGCDN_SERVER_URL", "https://new.example.com")
+	t.Setenv("DUSHENGCDN_AGENT_TOKEN", "agent-token")
+	t.Setenv("DUSHENGCDN_NODE_NAME", "edge-env")
+	t.Setenv("DUSHENGCDN_NODE_IP", "10.0.0.8")
+	t.Setenv("DUSHENGCDN_GEOIP_LOOKUP_API_URL", "https://geoip.example.com/lookup")
+	t.Setenv("DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN_FILE", tokenPath)
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.GeoIPLookupAPIToken != "geoip-file-token" {
+		t.Fatalf("expected GeoIP lookup token from file, got %q", cfg.GeoIPLookupAPIToken)
+	}
+}
+
+func TestLoadReadsGeoIPLookupTokenFromConfigFilePath(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	tokenPath := filepath.Join(dir, "geoip-token")
+	if err := os.WriteFile(tokenPath, []byte("geoip-file-token\n"), 0o600); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+	payload := fmt.Sprintf(`{"server_url":"https://new.example.com","agent_token":"agent-token","node_name":"edge-env","node_ip":"10.0.0.8","geoip_lookup_api_url":"https://geoip.example.com/lookup","geoip_lookup_api_token_file":%q}`, tokenPath)
+	if err := os.WriteFile(configPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.GeoIPLookupAPIToken != "geoip-file-token" {
+		t.Fatalf("expected GeoIP lookup token from file, got %q", cfg.GeoIPLookupAPIToken)
+	}
+	if cfg.GeoIPLookupAPITokenFile == "" {
+		t.Fatal("expected GeoIP lookup token file path to be retained")
+	}
+}
+
+func TestLoadRejectsGeoIPLookupTokenAndTokenFileTogether(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	tokenPath := filepath.Join(dir, "geoip-token")
+	if err := os.WriteFile(tokenPath, []byte("geoip-file-token\n"), 0o600); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+	t.Setenv("DUSHENGCDN_SERVER_URL", "https://new.example.com")
+	t.Setenv("DUSHENGCDN_AGENT_TOKEN", "agent-token")
+	t.Setenv("DUSHENGCDN_NODE_NAME", "edge-env")
+	t.Setenv("DUSHENGCDN_NODE_IP", "10.0.0.8")
+	t.Setenv("DUSHENGCDN_GEOIP_LOOKUP_API_URL", "https://geoip.example.com/lookup")
+	t.Setenv("DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN", "env-token")
+	t.Setenv("DUSHENGCDN_GEOIP_LOOKUP_API_TOKEN_FILE", tokenPath)
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected GeoIP lookup token env and token file env together to be rejected")
+	}
+}
+
+func TestLoadRejectsGeoIPLookupTokenAndTokenFileTogetherInConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	tokenPath := filepath.Join(dir, "geoip-token")
+	if err := os.WriteFile(tokenPath, []byte("geoip-file-token\n"), 0o600); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+	payload := fmt.Sprintf(`{"server_url":"https://new.example.com","agent_token":"agent-token","node_name":"edge-env","node_ip":"10.0.0.8","geoip_lookup_api_url":"https://geoip.example.com/lookup","geoip_lookup_api_token":"inline","geoip_lookup_api_token_file":%q}`, tokenPath)
+	if err := os.WriteFile(configPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected GeoIP lookup token and token file in config together to be rejected")
+	}
+}
+
+func TestLoadRejectsRemoteHTTPServerURL(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(configPath, []byte(`{"server_url":"http://edge.example.com:3000","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8"}`), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected remote http server_url to be rejected")
+	}
+}
+
+func TestLoadAllowsLoopbackHTTPServerURL(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(configPath, []byte(`{"server_url":"http://localhost:3000","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8"}`), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err != nil {
+		t.Fatalf("expected loopback http server_url to be allowed: %v", err)
+	}
+}
+
+func TestLoadRejectsUnsafeGeoIPURLs(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "database http",
+			payload: `{"server_url":"http://127.0.0.1:3000","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8","geoip_database_url":"http://ipdb.example.com/GeoLite2-Country.mmdb"}`,
+		},
+		{
+			name:    "database localhost",
+			payload: `{"server_url":"http://127.0.0.1:3000","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8","geoip_database_url":"https://127.0.0.1/GeoLite2-Country.mmdb"}`,
+		},
+		{
+			name:    "lookup localhost",
+			payload: `{"server_url":"http://127.0.0.1:3000","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8","geoip_lookup_api_url":"https://localhost/lookup"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "agent.json")
+			if err := os.WriteFile(configPath, []byte(tt.payload), 0o644); err != nil {
+				t.Fatalf("failed to write config: %v", err)
+			}
+			if _, err := Load(configPath); err == nil {
+				t.Fatal("expected unsafe geoip url to be rejected")
+			}
+		})
 	}
 }
 
@@ -427,6 +629,46 @@ func TestSavePersistsMillisecondsAndOmitsRuntimeVersions(t *testing.T) {
 	}
 	if _, ok := decoded["docker_binary"]; ok {
 		t.Fatal("deprecated docker_binary should not be persisted by default")
+	}
+}
+
+func TestSaveOmitsGeoIPLookupTokenWhenTokenFileIsConfigured(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	tokenPath := filepath.Join(dir, "geoip-token")
+	if err := os.WriteFile(tokenPath, []byte("geoip-file-token\n"), 0o600); err != nil {
+		t.Fatalf("failed to write token file: %v", err)
+	}
+	payload := fmt.Sprintf(`{"server_url":"https://new.example.com","agent_token":"agent-token","node_name":"edge-env","node_ip":"10.0.0.8","geoip_lookup_api_url":"https://geoip.example.com/lookup","geoip_lookup_api_token_file":%q}`, tokenPath)
+	if err := os.WriteFile(configPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.GeoIPLookupAPIToken == "" {
+		t.Fatal("expected token to be loaded into memory")
+	}
+	if err = cfg.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read saved config: %v", err)
+	}
+	if strings.Contains(string(data), "geoip-file-token") {
+		t.Fatalf("saved config must not contain GeoIP lookup token: %s", string(data))
+	}
+	var decoded map[string]any
+	if err = json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("failed to decode saved config: %v", err)
+	}
+	if _, ok := decoded["geoip_lookup_api_token"]; ok {
+		t.Fatal("geoip_lookup_api_token should not be persisted when token file is configured")
+	}
+	if decoded["geoip_lookup_api_token_file"] == "" {
+		t.Fatal("geoip_lookup_api_token_file should be persisted")
 	}
 }
 

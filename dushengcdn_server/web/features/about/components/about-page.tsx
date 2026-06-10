@@ -53,12 +53,17 @@ export function AboutPage() {
     return <EmptyState title='暂无系统信息' description='未能获取 DuShengCDN 的公开状态信息。' />;
   }
 
+  const versionLabel = status.version || '未公开';
+  const startedAtLabel = status.start_time
+    ? formatDateTime(new Date(status.start_time * 1000))
+    : '未公开';
+
   return (
     <div className='space-y-6'>
       <AppCard
         title='关于 DuShengCDN'
         description='公开展示当前系统简介、版本信息与项目入口。'
-        action={<StatusBadge label={status.version || 'dev'} variant='info' />}
+        action={<StatusBadge label={versionLabel} variant='info' />}
       >
         <div className='grid gap-4 md:grid-cols-3'>
           <div className='rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)] px-4 py-4'>
@@ -68,7 +73,7 @@ export function AboutPage() {
           <div className='rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)] px-4 py-4'>
             <p className='text-xs uppercase tracking-[0.2em] text-[var(--foreground-muted)]'>Server 启动时间</p>
             <p className='mt-2 text-sm font-medium text-[var(--foreground-primary)]'>
-              {formatDateTime(new Date(status.start_time * 1000))}
+              {startedAtLabel}
             </p>
           </div>
           <div className='rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)] px-4 py-4'>
