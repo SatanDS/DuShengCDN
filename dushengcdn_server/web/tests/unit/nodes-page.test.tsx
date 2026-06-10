@@ -199,5 +199,9 @@ describe('NodesPage', () => {
     expect(screen.getByRole('button', { name: '添加节点' })).toBeInTheDocument();
     expect(await screen.findByText('HK Edge 1')).toBeInTheDocument();
     expect(screen.queryByText('EU Edge 1')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '详情' })).toHaveAttribute(
+      'href',
+      '/node/detail?id=1&pool=hongkong',
+    );
   });
 });

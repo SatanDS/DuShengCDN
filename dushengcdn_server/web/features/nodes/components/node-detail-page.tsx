@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -135,6 +135,18 @@ function optionsToMap(options: OptionItem[] | undefined) {
 function normalizePoolName(value: string | null | undefined) {
   const normalized = value?.trim().toLowerCase();
   return normalized || 'default';
+}
+
+function buildNodePoolHref(poolName: string, riskFilter: string | null) {
+  const params = new URLSearchParams({ pool: normalizePoolName(poolName) });
+  const normalizedRiskFilter = riskFilter?.trim().toLowerCase();
+  if (
+    normalizedRiskFilter &&
+    ['offline', 'unhealthy', 'lagging'].includes(normalizedRiskFilter)
+  ) {
+    params.set('risk', normalizedRiskFilter);
+  }
+  return `/node?${params.toString()}`;
 }
 
 function getNodeTargetConfigValue(
@@ -276,6 +288,7 @@ function SummaryStat({
 
 export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { setFeedback } = useToastFeedback<FeedbackState>();
   const confirmDialog = useConfirmDialog();
@@ -325,6 +338,13 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
       (nodesQuery.data ?? []).find((item) => String(item.id) === nodeId) ?? null
     );
   }, [nodeId, nodesQuery.data]);
+  const returnPoolName = normalizePoolName(
+    node?.pool_name || searchParams.get('pool'),
+  );
+  const nodePoolHref = buildNodePoolHref(
+    returnPoolName,
+    searchParams.get('risk'),
+  );
 
   const applyLogsQuery = useQuery({
     queryKey: ['apply-logs', node?.node_id ?? '', 1, 10],
@@ -445,7 +465,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
         message: result.uninstall_agent_message || '节点已删除。',
       });
       await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
-      router.push('/node');
+      router.push(nodePoolHref);
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -745,7 +765,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
           action={
             <>
               <Link
-                href="/node"
+                href={nodePoolHref}
                 className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-4 py-3 text-sm font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
               >
                 返回

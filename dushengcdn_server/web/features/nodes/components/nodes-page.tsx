@@ -95,6 +95,17 @@ function buildPoolHref(poolName: string, riskFilter: NodeRiskFilter) {
   return `/node?${params.toString()}`;
 }
 
+function buildNodeDetailHref(node: NodeItem, riskFilter: NodeRiskFilter) {
+  const params = new URLSearchParams({
+    id: String(node.id),
+    pool: normalizePoolName(node.pool_name),
+  });
+  if (riskFilter !== 'all') {
+    params.set('risk', riskFilter);
+  }
+  return `/node/detail?${params.toString()}`;
+}
+
 function createEmptyNodeForPool(poolName: string): Partial<NodeItem> {
   return {
     pool_name: poolName,
@@ -924,7 +935,7 @@ export function NodesPage() {
                           <td className="px-3 py-4">
                             <div className="flex flex-wrap gap-2">
                               <Link
-                                href={`/node/detail?id=${node.id}`}
+                                href={buildNodeDetailHref(node, riskFilter)}
                                 className="inline-flex items-center justify-center rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-3 py-2 text-xs font-medium text-[var(--foreground-primary)] transition hover:bg-[var(--control-background-hover)]"
                               >
                                 详情
