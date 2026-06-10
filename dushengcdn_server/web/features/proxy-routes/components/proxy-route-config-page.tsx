@@ -277,6 +277,7 @@ type DNSAutomationValues = {
   gslb_max_cpu_percent: number;
   gslb_max_memory_percent: number;
   gslb_cooldown_seconds: number;
+  gslb_pool_match_mode: 'priority' | 'mixed_weighted';
   gslb_source_pool_fallback_mode: 'strict' | 'fallback_to_global';
   proxy_buffering_mode: 'default' | 'off';
   cloudflare_proxied: boolean;
@@ -301,6 +302,10 @@ type GSLBPoolRow = {
   operators: string[];
   asns: string;
   sourceCidrs: string;
+  excludeCountries: string;
+  excludeOperators: string[];
+  excludeAsns: string;
+  excludeSourceCidrs: string;
 };
 
 const dnsTTLHint =
@@ -324,6 +329,8 @@ const ddosProtectionModeHint =
   '关闭时不做自动防护；自动时最近 5 分钟请求量或错误率超过阈值后暂停多节点智能解析，并临时切到所选防护目标，指标恢复后回到正常调度。';
 const gslbSourcePoolFallbackHint =
   '严格匹配时，来源命中特定池但池内无可用 IP 会返回空结果；回退到全局时，会继续尝试未配置来源条件的全局节点池。';
+const gslbPoolMatchModeHint =
+  '专属池优先会保持现有行为，来源命中特定池后只在命中池内选；混合权重会先排除不适用池，再把所有适用池按权重共同分流。';
 const gslbPoolActionButtonClassName = 'h-11 w-11 shrink-0 rounded-2xl px-0';
 const gslbPoolRemoveButtonClassName =
   'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--foreground-secondary)] hover:border-[var(--status-danger-border)] hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger-foreground)] disabled:border-[var(--border-default)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--foreground-muted)]';
@@ -393,6 +400,10 @@ function createGSLBPoolRow(
     operators: [],
     asns: '',
     sourceCidrs: '',
+    excludeCountries: '',
+    excludeOperators: [],
+    excludeAsns: '',
+    excludeSourceCidrs: '',
     ...values,
   };
 }
@@ -426,6 +437,10 @@ function syncGSLBPoolRowsWithOptions(
         operators: existingRow?.operators ?? [],
         asns: existingRow?.asns || '',
         sourceCidrs: existingRow?.sourceCidrs || '',
+        excludeCountries: existingRow?.excludeCountries || '',
+        excludeOperators: existingRow?.excludeOperators ?? [],
+        excludeAsns: existingRow?.excludeAsns || '',
+        excludeSourceCidrs: existingRow?.excludeSourceCidrs || '',
       });
     });
 
@@ -500,6 +515,10 @@ function buildGSLBPoolRows(route: ProxyRouteItem) {
           operators: normalizeGSLBOperatorList(pool.operators),
           asns: pool.asns?.join(',') || '',
           sourceCidrs: pool.source_cidrs?.join('\n') || '',
+          excludeCountries: pool.exclude_countries?.join(',') || '',
+          excludeOperators: normalizeGSLBOperatorList(pool.exclude_operators),
+          excludeAsns: pool.exclude_asns?.join(',') || '',
+          excludeSourceCidrs: pool.exclude_source_cidrs?.join('\n') || '',
         }),
       ),
   );
@@ -518,6 +537,16 @@ function parseGSLBPoolRows(rows: GSLBPoolRow[]) {
       operators: normalizeGSLBOperatorList(row.operators),
       asns: parseGSLBASNList(row.asns),
       source_cidrs: row.sourceCidrs
+        .split(/[\s,，;；]+/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+      exclude_countries: row.excludeCountries
+        .split(/[\s,，;；]+/)
+        .map((item) => item.trim().toUpperCase())
+        .filter((item) => /^[A-Z0-9]{2}$/.test(item)),
+      exclude_operators: normalizeGSLBOperatorList(row.excludeOperators),
+      exclude_asns: parseGSLBASNList(row.excludeAsns),
+      exclude_source_cidrs: row.excludeSourceCidrs
         .split(/[\s,，;；]+/)
         .map((item) => item.trim())
         .filter(Boolean),
@@ -999,6 +1028,10 @@ export function DNSAutomationSection({
         route.gslb_policy?.load_thresholds?.max_memory_percent || 0,
       gslb_cooldown_seconds:
         route.gslb_policy?.debounce?.cooldown_seconds || 60,
+      gslb_pool_match_mode:
+        route.gslb_policy?.pool_match_mode === 'mixed_weighted'
+          ? 'mixed_weighted'
+          : 'priority',
       gslb_source_pool_fallback_mode:
         route.gslb_policy?.source_pool_fallback_mode === 'fallback_to_global'
           ? 'fallback_to_global'
@@ -1040,6 +1073,10 @@ export function DNSAutomationSection({
         route.gslb_policy?.load_thresholds?.max_memory_percent || 0,
       gslb_cooldown_seconds:
         route.gslb_policy?.debounce?.cooldown_seconds || 60,
+      gslb_pool_match_mode:
+        route.gslb_policy?.pool_match_mode === 'mixed_weighted'
+          ? 'mixed_weighted'
+          : 'priority',
       gslb_source_pool_fallback_mode:
         route.gslb_policy?.source_pool_fallback_mode === 'fallback_to_global'
           ? 'fallback_to_global'
@@ -1179,6 +1216,7 @@ export function DNSAutomationSection({
                 ...baseGSLBPolicy,
                 mode: 'cloudflare_dns',
                 strategy: values.dns_schedule_mode,
+                pool_match_mode: values.gslb_pool_match_mode,
                 target_count: values.dns_target_count,
                 ttl: values.dns_ttl,
                 source_pool_fallback_mode:
@@ -1873,6 +1911,101 @@ export function DNSAutomationSection({
                                   }}
                                   className="h-11"
                                 />
+
+                                <div className="grid gap-3 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 md:col-start-2 md:col-span-6 md:grid-cols-[minmax(0,0.75fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,1fr)]">
+                                  <ResourceInput
+                                    value={row.excludeCountries}
+                                    aria-label={`节点池排除国家或地区 ${index + 1}`}
+                                    placeholder="排除国家，例如 CN"
+                                    disabled={!autoSyncEnabled}
+                                    onChange={(event) => {
+                                      const nextRows = rows.slice();
+                                      nextRows[index] = {
+                                        ...row,
+                                        excludeCountries: event.target.value,
+                                      };
+                                      updateRows(nextRows);
+                                    }}
+                                    className="h-11"
+                                  />
+
+                                  <div
+                                    aria-label={`节点池排除访问运营商 ${index + 1}`}
+                                    role="group"
+                                    className="grid min-h-11 gap-2 rounded-2xl border border-[var(--border-default)] bg-[var(--control-background)] px-3 py-2"
+                                  >
+                                    {gslbOperatorOptions.map((option) => (
+                                      <label
+                                        key={option.value}
+                                        className="flex min-w-0 items-center gap-2 text-xs text-[var(--foreground-primary)]"
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={row.excludeOperators.includes(
+                                            option.value,
+                                          )}
+                                          disabled={!autoSyncEnabled}
+                                          onChange={(event) => {
+                                            const nextOperators = event.target
+                                              .checked
+                                              ? [
+                                                  ...row.excludeOperators,
+                                                  option.value,
+                                                ]
+                                              : row.excludeOperators.filter(
+                                                  (item) =>
+                                                    item !== option.value,
+                                                );
+                                            const nextRows = rows.slice();
+                                            nextRows[index] = {
+                                              ...row,
+                                              excludeOperators: Array.from(
+                                                new Set(nextOperators),
+                                              ),
+                                            };
+                                            updateRows(nextRows);
+                                          }}
+                                          className="h-4 w-4 shrink-0 accent-[var(--brand-primary)]"
+                                        />
+                                        <span className="truncate">
+                                          排除{option.label}
+                                        </span>
+                                      </label>
+                                    ))}
+                                  </div>
+
+                                  <ResourceInput
+                                    value={row.excludeAsns}
+                                    aria-label={`节点池排除 ASN ${index + 1}`}
+                                    placeholder="排除 ASN，例如 AS4134"
+                                    disabled={!autoSyncEnabled}
+                                    onChange={(event) => {
+                                      const nextRows = rows.slice();
+                                      nextRows[index] = {
+                                        ...row,
+                                        excludeAsns: event.target.value,
+                                      };
+                                      updateRows(nextRows);
+                                    }}
+                                    className="h-11"
+                                  />
+
+                                  <ResourceInput
+                                    value={row.excludeSourceCidrs}
+                                    aria-label={`节点池排除来源网段 ${index + 1}`}
+                                    placeholder="排除网段，例如 203.0.113.0/24"
+                                    disabled={!autoSyncEnabled}
+                                    onChange={(event) => {
+                                      const nextRows = rows.slice();
+                                      nextRows[index] = {
+                                        ...row,
+                                        excludeSourceCidrs: event.target.value,
+                                      };
+                                      updateRows(nextRows);
+                                    }}
+                                    className="h-11"
+                                  />
+                                </div>
                               </div>
                             );
                           })}
@@ -1897,18 +2030,37 @@ export function DNSAutomationSection({
                   />
                 </ResourceField>
 
-                <ResourceField
-                  label="来源池无可用目标时"
-                  hint={gslbSourcePoolFallbackHint}
-                >
-                  <ResourceSelect
-                    disabled={!autoSyncEnabled}
-                    {...form.register('gslb_source_pool_fallback_mode')}
+                <div className="grid gap-5 md:grid-cols-2">
+                  <ResourceField
+                    label="节点池匹配模式"
+                    hint={gslbPoolMatchModeHint}
                   >
-                    <option value="strict">严格匹配，返回空结果</option>
-                    <option value="fallback_to_global">回退到全局节点池</option>
-                  </ResourceSelect>
-                </ResourceField>
+                    <ResourceSelect
+                      aria-label="节点池匹配模式"
+                      disabled={!autoSyncEnabled}
+                      {...form.register('gslb_pool_match_mode')}
+                    >
+                      <option value="priority">专属池优先</option>
+                      <option value="mixed_weighted">混合权重</option>
+                    </ResourceSelect>
+                  </ResourceField>
+
+                  <ResourceField
+                    label="来源池无可用目标时"
+                    hint={gslbSourcePoolFallbackHint}
+                  >
+                    <ResourceSelect
+                      aria-label="来源池无可用目标时"
+                      disabled={!autoSyncEnabled}
+                      {...form.register('gslb_source_pool_fallback_mode')}
+                    >
+                      <option value="strict">严格匹配，返回空结果</option>
+                      <option value="fallback_to_global">
+                        回退到全局节点池
+                      </option>
+                    </ResourceSelect>
+                  </ResourceField>
+                </div>
 
                 <ResourceField
                   label="代理缓冲模式"

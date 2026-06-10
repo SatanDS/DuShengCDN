@@ -298,14 +298,18 @@ type DNSGSLBSimulationView struct {
 }
 
 type DNSGSLBSimulationPoolView struct {
-	Name        string   `json:"name"`
-	Weight      int      `json:"weight"`
-	Countries   []string `json:"countries"`
-	SourceCIDRs []string `json:"source_cidrs"`
-	Operators   []string `json:"operators"`
-	ASNs        []uint32 `json:"asns"`
-	Matched     bool     `json:"matched"`
-	Reason      string   `json:"reason"`
+	Name               string   `json:"name"`
+	Weight             int      `json:"weight"`
+	Countries          []string `json:"countries"`
+	SourceCIDRs        []string `json:"source_cidrs"`
+	Operators          []string `json:"operators"`
+	ASNs               []uint32 `json:"asns"`
+	ExcludeCountries   []string `json:"exclude_countries"`
+	ExcludeSourceCIDRs []string `json:"exclude_source_cidrs"`
+	ExcludeOperators   []string `json:"exclude_operators"`
+	ExcludeASNs        []uint32 `json:"exclude_asns"`
+	Matched            bool     `json:"matched"`
+	Reason             string   `json:"reason"`
 }
 
 type DNSGSLBSimulationNodeView struct {
@@ -2333,7 +2337,7 @@ func buildDNSGSLBSimulationDiagnosticsWithOptions(recordType string, policy dnsw
 	if err != nil {
 		return dnsGSLBSimulationDiagnostics{}
 	}
-	matchedPools := matchGSLBPoolsForSource(servicePolicy.Pools, source)
+	matchedPools := matchGSLBPoolsForSourceWithMode(servicePolicy.Pools, source, servicePolicy.PoolMatchMode)
 	diagnostics := dnsGSLBSimulationDiagnostics{
 		pools: buildDNSGSLBSimulationPoolViews(servicePolicy.Pools, matchedPools, source),
 		nodes: []DNSGSLBSimulationNodeView{},
@@ -2414,7 +2418,9 @@ func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPo
 		}
 		_, matched := matchedPools[name]
 		reason := "参与全局调度"
-		if matchedCIDR, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+		if excluded, excludeReason := gslbPoolExclusionReason(pool, source); excluded {
+			reason = excludeReason
+		} else if matchedCIDR, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
 			reason = "匹配来源网段 " + matchedCIDR
 		} else if cidrMatched {
 			reason = "未匹配来源网段"
@@ -2443,17 +2449,51 @@ func buildDNSGSLBSimulationPoolViews(pools []ProxyRouteGSLBPoolPolicy, matchedPo
 			}
 		}
 		result = append(result, DNSGSLBSimulationPoolView{
-			Name:        name,
-			Weight:      pool.Weight,
-			Countries:   append([]string(nil), pool.Countries...),
-			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
-			Operators:   append([]string(nil), pool.Operators...),
-			ASNs:        append([]uint32(nil), pool.ASNs...),
-			Matched:     matched,
-			Reason:      reason,
+			Name:               name,
+			Weight:             pool.Weight,
+			Countries:          append([]string(nil), pool.Countries...),
+			SourceCIDRs:        append([]string(nil), pool.SourceCIDRs...),
+			Operators:          append([]string(nil), pool.Operators...),
+			ASNs:               append([]uint32(nil), pool.ASNs...),
+			ExcludeCountries:   append([]string(nil), pool.ExcludeCountries...),
+			ExcludeSourceCIDRs: append([]string(nil), pool.ExcludeSourceCIDRs...),
+			ExcludeOperators:   append([]string(nil), pool.ExcludeOperators...),
+			ExcludeASNs:        append([]uint32(nil), pool.ExcludeASNs...),
+			Matched:            matched,
+			Reason:             reason,
 		})
 	}
 	return result
+}
+
+func gslbPoolExclusionReason(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) (bool, string) {
+	if cidr, ok := sourceIPMatchesCIDRList(source.IP, pool.ExcludeSourceCIDRs); ok {
+		return true, "被排除来源网段 " + cidr + " 命中"
+	}
+	if source.ASN > 0 {
+		for _, asn := range pool.ExcludeASNs {
+			if source.ASN == asn {
+				return true, fmt.Sprintf("被排除 ASN %d 命中", source.ASN)
+			}
+		}
+	}
+	operator := normalizeGSLBOperator(source.Operator)
+	if operator != "" {
+		for _, item := range pool.ExcludeOperators {
+			if operator == normalizeGSLBOperator(item) {
+				return true, "被排除运营商 " + operator + " 命中"
+			}
+		}
+	}
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	if country != "" {
+		for _, item := range pool.ExcludeCountries {
+			if country == strings.ToUpper(strings.TrimSpace(item)) {
+				return true, "被排除国家 " + country + " 命中"
+			}
+		}
+	}
+	return false, ""
 }
 
 func gslbPoolMatchesASN(pool ProxyRouteGSLBPoolPolicy, asn uint32) bool {
@@ -2652,6 +2692,7 @@ func convertWorkerGSLBPolicyToAuthoritative(policy dnsworker.GSLBPolicy) ProxyRo
 	result := ProxyRouteGSLBPolicy{
 		Mode:                   policy.Mode,
 		Strategy:               policy.Strategy,
+		PoolMatchMode:          policy.PoolMatchMode,
 		TargetCount:            policy.TargetCount,
 		TTL:                    policy.TTL,
 		SourcePoolFallbackMode: policy.SourcePoolFallbackMode,
@@ -2674,14 +2715,18 @@ func convertWorkerGSLBPolicyToAuthoritative(policy dnsworker.GSLBPolicy) ProxyRo
 	}
 	for _, pool := range policy.Pools {
 		result.Pools = append(result.Pools, ProxyRouteGSLBPoolPolicy{
-			Name:        pool.Name,
-			Weight:      pool.Weight,
-			Countries:   append([]string(nil), pool.Countries...),
-			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
-			Operators:   append([]string(nil), pool.Operators...),
-			ASNs:        append([]uint32(nil), pool.ASNs...),
-			NodeIDs:     append([]string(nil), pool.NodeIDs...),
-			Enabled:     pool.Enabled,
+			Name:               pool.Name,
+			Weight:             pool.Weight,
+			Countries:          append([]string(nil), pool.Countries...),
+			SourceCIDRs:        append([]string(nil), pool.SourceCIDRs...),
+			Operators:          append([]string(nil), pool.Operators...),
+			ASNs:               append([]uint32(nil), pool.ASNs...),
+			ExcludeCountries:   append([]string(nil), pool.ExcludeCountries...),
+			ExcludeSourceCIDRs: append([]string(nil), pool.ExcludeSourceCIDRs...),
+			ExcludeOperators:   append([]string(nil), pool.ExcludeOperators...),
+			ExcludeASNs:        append([]uint32(nil), pool.ExcludeASNs...),
+			NodeIDs:            append([]string(nil), pool.NodeIDs...),
+			Enabled:            pool.Enabled,
 		})
 	}
 	return result
@@ -4159,6 +4204,7 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 	result := dnsworker.GSLBPolicy{
 		Mode:                   policy.Mode,
 		Strategy:               policy.Strategy,
+		PoolMatchMode:          policy.PoolMatchMode,
 		TargetCount:            policy.TargetCount,
 		TTL:                    policy.TTL,
 		SourcePoolFallbackMode: policy.SourcePoolFallbackMode,
@@ -4181,14 +4227,18 @@ func convertAuthoritativeGSLBPolicyToWorker(policy ProxyRouteGSLBPolicy) dnswork
 	}
 	for _, pool := range policy.Pools {
 		result.Pools = append(result.Pools, dnsworker.GSLBPoolPolicy{
-			Name:        pool.Name,
-			Weight:      pool.Weight,
-			Countries:   append([]string(nil), pool.Countries...),
-			SourceCIDRs: append([]string(nil), pool.SourceCIDRs...),
-			Operators:   append([]string(nil), pool.Operators...),
-			ASNs:        append([]uint32(nil), pool.ASNs...),
-			NodeIDs:     append([]string(nil), pool.NodeIDs...),
-			Enabled:     pool.Enabled,
+			Name:               pool.Name,
+			Weight:             pool.Weight,
+			Countries:          append([]string(nil), pool.Countries...),
+			SourceCIDRs:        append([]string(nil), pool.SourceCIDRs...),
+			Operators:          append([]string(nil), pool.Operators...),
+			ASNs:               append([]uint32(nil), pool.ASNs...),
+			ExcludeCountries:   append([]string(nil), pool.ExcludeCountries...),
+			ExcludeSourceCIDRs: append([]string(nil), pool.ExcludeSourceCIDRs...),
+			ExcludeOperators:   append([]string(nil), pool.ExcludeOperators...),
+			ExcludeASNs:        append([]uint32(nil), pool.ExcludeASNs...),
+			NodeIDs:            append([]string(nil), pool.NodeIDs...),
+			Enabled:            pool.Enabled,
 		})
 	}
 	return result

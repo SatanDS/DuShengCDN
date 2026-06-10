@@ -1808,6 +1808,17 @@ describe('Proxy route website pages', () => {
       screen.getByLabelText('节点池 ASN 1'),
       'AS4134 as4837 asn:4134 4294967296 0 bad',
     );
+    await user.type(screen.getByLabelText('节点池排除国家或地区 1'), 'CN');
+    await user.click(
+      within(
+        screen.getByRole('group', { name: '节点池排除访问运营商 1' }),
+      ).getByRole('checkbox', { name: '排除电信' }),
+    );
+    await user.type(screen.getByLabelText('节点池排除 ASN 1'), 'AS9808');
+    await user.type(
+      screen.getByLabelText('节点池排除来源网段 1'),
+      '198.51.100.0/24',
+    );
 
     await user.click(screen.getByLabelText('新增节点池'));
     await user.selectOptions(screen.getByLabelText('节点池选择 2'), 'eu');
@@ -1818,6 +1829,7 @@ describe('Proxy route website pages', () => {
     await user.type(screen.getByLabelText('节点池权重 2'), '20');
     await user.type(screen.getByLabelText('节点池国家或地区 2'), 'DE FR');
 
+    await user.selectOptions(screen.getByLabelText('节点池匹配模式'), 'mixed_weighted');
     await user.selectOptions(screen.getByLabelText('代理缓冲模式'), 'off');
 
     const saveButton = document.querySelector(
@@ -1838,6 +1850,7 @@ describe('Proxy route website pages', () => {
       gslb_enabled: true,
       proxy_buffering_mode: 'off',
       gslb_policy: {
+        pool_match_mode: 'mixed_weighted',
         source_pool_fallback_mode: 'strict',
         pools: [
           {
@@ -1846,6 +1859,10 @@ describe('Proxy route website pages', () => {
             countries: ['HK', 'TW'],
             operators: ['cn-telecom'],
             asns: [4134, 4837],
+            exclude_countries: ['CN'],
+            exclude_operators: ['cn-telecom'],
+            exclude_asns: [9808],
+            exclude_source_cidrs: ['198.51.100.0/24'],
             node_ids: ['node-hk'],
             enabled: true,
           },

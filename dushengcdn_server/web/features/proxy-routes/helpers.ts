@@ -59,12 +59,19 @@ export function buildDefaultGSLBPolicy(
   return {
     mode: 'cloudflare_dns',
     strategy: 'load_aware',
+    pool_match_mode: 'priority',
     pools: [
       {
         name: nodePool.trim() || 'default',
         weight: 100,
         countries: [],
         source_cidrs: [],
+        operators: [],
+        asns: [],
+        exclude_countries: [],
+        exclude_source_cidrs: [],
+        exclude_operators: [],
+        exclude_asns: [],
         enabled: true,
       },
     ],

@@ -135,14 +135,18 @@ type SnapshotSchedulingState struct {
 }
 
 type GSLBPoolPolicy struct {
-	Name        string   `json:"name"`
-	Weight      int      `json:"weight"`
-	Countries   []string `json:"countries"`
-	SourceCIDRs []string `json:"source_cidrs"`
-	Operators   []string `json:"operators,omitempty"`
-	ASNs        []uint32 `json:"asns,omitempty"`
-	NodeIDs     []string `json:"node_ids,omitempty"`
-	Enabled     bool     `json:"enabled"`
+	Name               string   `json:"name"`
+	Weight             int      `json:"weight"`
+	Countries          []string `json:"countries"`
+	SourceCIDRs        []string `json:"source_cidrs"`
+	Operators          []string `json:"operators,omitempty"`
+	ASNs               []uint32 `json:"asns,omitempty"`
+	ExcludeCountries   []string `json:"exclude_countries,omitempty"`
+	ExcludeSourceCIDRs []string `json:"exclude_source_cidrs,omitempty"`
+	ExcludeOperators   []string `json:"exclude_operators,omitempty"`
+	ExcludeASNs        []uint32 `json:"exclude_asns,omitempty"`
+	NodeIDs            []string `json:"node_ids,omitempty"`
+	Enabled            bool     `json:"enabled"`
 }
 
 type GSLBSourceIPProvider struct {
@@ -166,6 +170,7 @@ type GSLBDebounce struct {
 type GSLBPolicy struct {
 	Mode                   string               `json:"mode"`
 	Strategy               string               `json:"strategy"`
+	PoolMatchMode          string               `json:"pool_match_mode"`
 	Pools                  []GSLBPoolPolicy     `json:"pools"`
 	TargetCount            int                  `json:"target_count"`
 	TTL                    int                  `json:"ttl"`

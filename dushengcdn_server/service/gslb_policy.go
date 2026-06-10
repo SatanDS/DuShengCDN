@@ -15,20 +15,26 @@ const (
 	gslbModeCloudflareDNS        = "cloudflare_dns"
 	gslbSourceProviderNone       = "none"
 	gslbSourceProviderHTTP       = "http"
+	gslbPoolMatchModePriority    = "priority"
+	gslbPoolMatchModeMixed       = "mixed_weighted"
 	gslbSourcePoolFallbackStrict = "strict"
 	gslbSourcePoolFallbackGlobal = "fallback_to_global"
 	defaultGSLBCooldownSeconds   = 60
 )
 
 type ProxyRouteGSLBPoolPolicy struct {
-	Name        string   `json:"name"`
-	Weight      int      `json:"weight"`
-	Countries   []string `json:"countries"`
-	SourceCIDRs []string `json:"source_cidrs"`
-	Operators   []string `json:"operators,omitempty"`
-	ASNs        []uint32 `json:"asns,omitempty"`
-	NodeIDs     []string `json:"node_ids,omitempty"`
-	Enabled     bool     `json:"enabled"`
+	Name               string   `json:"name"`
+	Weight             int      `json:"weight"`
+	Countries          []string `json:"countries"`
+	SourceCIDRs        []string `json:"source_cidrs"`
+	Operators          []string `json:"operators,omitempty"`
+	ASNs               []uint32 `json:"asns,omitempty"`
+	ExcludeCountries   []string `json:"exclude_countries,omitempty"`
+	ExcludeSourceCIDRs []string `json:"exclude_source_cidrs,omitempty"`
+	ExcludeOperators   []string `json:"exclude_operators,omitempty"`
+	ExcludeASNs        []uint32 `json:"exclude_asns,omitempty"`
+	NodeIDs            []string `json:"node_ids,omitempty"`
+	Enabled            bool     `json:"enabled"`
 }
 
 type ProxyRouteGSLBSourceIPProvider struct {
@@ -52,6 +58,7 @@ type ProxyRouteGSLBDebounce struct {
 type ProxyRouteGSLBPolicy struct {
 	Mode                   string                         `json:"mode"`
 	Strategy               string                         `json:"strategy"`
+	PoolMatchMode          string                         `json:"pool_match_mode"`
 	Pools                  []ProxyRouteGSLBPoolPolicy     `json:"pools"`
 	TargetCount            int                            `json:"target_count"`
 	TTL                    int                            `json:"ttl"`
@@ -63,19 +70,24 @@ type ProxyRouteGSLBPolicy struct {
 
 func defaultGSLBPolicy(nodePool string, targetCount int, scheduleMode string, ttl int) ProxyRouteGSLBPolicy {
 	return ProxyRouteGSLBPolicy{
-		Mode:        gslbModeCloudflareDNS,
-		Strategy:    normalizeDNSScheduleMode(scheduleMode),
-		TargetCount: normalizeDNSTargetCount(targetCount),
-		TTL:         normalizeDNSTTL(ttl),
+		Mode:          gslbModeCloudflareDNS,
+		Strategy:      normalizeDNSScheduleMode(scheduleMode),
+		PoolMatchMode: gslbPoolMatchModePriority,
+		TargetCount:   normalizeDNSTargetCount(targetCount),
+		TTL:           normalizeDNSTTL(ttl),
 		Pools: []ProxyRouteGSLBPoolPolicy{
 			{
-				Name:        normalizeNodePoolName(nodePool),
-				Weight:      100,
-				Countries:   []string{},
-				SourceCIDRs: []string{},
-				Operators:   []string{},
-				ASNs:        []uint32{},
-				Enabled:     true,
+				Name:               normalizeNodePoolName(nodePool),
+				Weight:             100,
+				Countries:          []string{},
+				SourceCIDRs:        []string{},
+				Operators:          []string{},
+				ASNs:               []uint32{},
+				ExcludeCountries:   []string{},
+				ExcludeSourceCIDRs: []string{},
+				ExcludeOperators:   []string{},
+				ExcludeASNs:        []uint32{},
+				Enabled:            true,
 			},
 		},
 		SourceIP: ProxyRouteGSLBSourceIPProvider{
@@ -100,6 +112,7 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 		strings.TrimSpace(input.SourceIP.Provider) == "" &&
 		strings.TrimSpace(input.SourceIP.APIURL) == "" &&
 		strings.TrimSpace(input.SourceIP.APIToken) == "" &&
+		strings.TrimSpace(input.PoolMatchMode) == "" &&
 		strings.TrimSpace(input.SourcePoolFallbackMode) == "" {
 		return defaultPolicy, nil
 	}
@@ -123,6 +136,7 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 	if input.TTL > 0 {
 		policy.TTL = normalizeDNSTTL(input.TTL)
 	}
+	policy.PoolMatchMode = normalizeGSLBPoolMatchMode(input.PoolMatchMode)
 
 	sourceProvider := strings.ToLower(strings.TrimSpace(input.SourceIP.Provider))
 	sourceAPIURL := strings.TrimSpace(input.SourceIP.APIURL)
@@ -155,6 +169,15 @@ func normalizeGSLBPolicy(input ProxyRouteGSLBPolicy, nodePool string, targetCoun
 		policy.Pools = pools
 	}
 	return policy, nil
+}
+
+func normalizeGSLBPoolMatchMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case gslbPoolMatchModeMixed:
+		return gslbPoolMatchModeMixed
+	default:
+		return gslbPoolMatchModePriority
+	}
 }
 
 func normalizeGSLBSourcePoolFallbackMode(value string) string {
@@ -198,6 +221,13 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 		}
 		operators := normalizeGSLBOperatorList(pool.Operators)
 		asns := normalizeGSLBASNList(pool.ASNs)
+		excludeCountries := normalizeGSLBCountryList(pool.ExcludeCountries)
+		excludeSourceCIDRs, err := normalizeGSLBCIDRListField(pool.ExcludeSourceCIDRs, "gslb_policy.pools.exclude_source_cidrs")
+		if err != nil {
+			return nil, err
+		}
+		excludeOperators := normalizeGSLBOperatorList(pool.ExcludeOperators)
+		excludeASNs := normalizeGSLBASNList(pool.ExcludeASNs)
 		nodeIDs := normalizeGSLBNodeIDList(pool.NodeIDs)
 		if existingIndex, ok := seen[name]; ok {
 			result[existingIndex].Weight = weight
@@ -205,6 +235,10 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 			result[existingIndex].SourceCIDRs = mergeGSLBStringLists(result[existingIndex].SourceCIDRs, sourceCIDRs)
 			result[existingIndex].Operators = mergeGSLBStringLists(result[existingIndex].Operators, operators)
 			result[existingIndex].ASNs = mergeGSLBASNLists(result[existingIndex].ASNs, asns)
+			result[existingIndex].ExcludeCountries = mergeGSLBStringLists(result[existingIndex].ExcludeCountries, excludeCountries)
+			result[existingIndex].ExcludeSourceCIDRs = mergeGSLBStringLists(result[existingIndex].ExcludeSourceCIDRs, excludeSourceCIDRs)
+			result[existingIndex].ExcludeOperators = mergeGSLBStringLists(result[existingIndex].ExcludeOperators, excludeOperators)
+			result[existingIndex].ExcludeASNs = mergeGSLBASNLists(result[existingIndex].ExcludeASNs, excludeASNs)
 			if len(result[existingIndex].NodeIDs) == 0 || len(nodeIDs) == 0 {
 				result[existingIndex].NodeIDs = nil
 			} else {
@@ -214,14 +248,18 @@ func normalizeGSLBPools(input []ProxyRouteGSLBPoolPolicy) ([]ProxyRouteGSLBPoolP
 		}
 		seen[name] = len(result)
 		result = append(result, ProxyRouteGSLBPoolPolicy{
-			Name:        name,
-			Weight:      weight,
-			Countries:   countries,
-			SourceCIDRs: sourceCIDRs,
-			Operators:   operators,
-			ASNs:        asns,
-			NodeIDs:     nodeIDs,
-			Enabled:     true,
+			Name:               name,
+			Weight:             weight,
+			Countries:          countries,
+			SourceCIDRs:        sourceCIDRs,
+			Operators:          operators,
+			ASNs:               asns,
+			ExcludeCountries:   excludeCountries,
+			ExcludeSourceCIDRs: excludeSourceCIDRs,
+			ExcludeOperators:   excludeOperators,
+			ExcludeASNs:        excludeASNs,
+			NodeIDs:            nodeIDs,
+			Enabled:            true,
 		})
 	}
 	if len(result) == 0 {
@@ -408,6 +446,10 @@ func normalizeGSLBASNList(values []uint32) []uint32 {
 }
 
 func normalizeGSLBCIDRList(values []string) ([]string, error) {
+	return normalizeGSLBCIDRListField(values, "gslb_policy.pools.source_cidrs")
+}
+
+func normalizeGSLBCIDRListField(values []string, field string) ([]string, error) {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
@@ -416,7 +458,7 @@ func normalizeGSLBCIDRList(values []string) ([]string, error) {
 			if strings.TrimSpace(value) == "" {
 				continue
 			}
-			return nil, errors.New("gslb_policy.pools.source_cidrs contains invalid CIDR")
+			return nil, fmt.Errorf("%s contains invalid CIDR", field)
 		}
 		if _, exists := seen[cidr]; exists {
 			continue

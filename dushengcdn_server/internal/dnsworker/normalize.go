@@ -136,6 +136,7 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 	policy := input
 	policy.Pools = append([]GSLBPoolPolicy(nil), input.Pools...)
 	policy.Strategy = normalizeStrategy(firstNonEmpty(policy.Strategy, route.ScheduleMode))
+	policy.PoolMatchMode = normalizePoolMatchMode(policy.PoolMatchMode)
 	policy.TargetCount = normalizeTargetCount(firstPositive(policy.TargetCount, route.TargetCount))
 	policy.TTL = normalizeAuthoritativeTTL(firstPositive(policy.TTL, route.TTL))
 	policy.SourcePoolFallbackMode = normalizeSourcePoolFallbackMode(policy.SourcePoolFallbackMode)
@@ -175,11 +176,32 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 		if len(policy.Pools[i].NodeIDs) > 0 {
 			policy.Pools[i].NodeIDs = normalizeNodeIDList(policy.Pools[i].NodeIDs)
 		}
+		if len(policy.Pools[i].ExcludeCountries) > 0 {
+			policy.Pools[i].ExcludeCountries = normalizeCountryList(policy.Pools[i].ExcludeCountries)
+		}
+		if len(policy.Pools[i].ExcludeSourceCIDRs) > 0 {
+			policy.Pools[i].ExcludeSourceCIDRs = normalizeCIDRList(policy.Pools[i].ExcludeSourceCIDRs)
+		}
+		if len(policy.Pools[i].ExcludeOperators) > 0 {
+			policy.Pools[i].ExcludeOperators = normalizeOperatorList(policy.Pools[i].ExcludeOperators)
+		}
+		if len(policy.Pools[i].ExcludeASNs) > 0 {
+			policy.Pools[i].ExcludeASNs = normalizeASNList(policy.Pools[i].ExcludeASNs)
+		}
 		if !hasExplicitEnabledPool {
 			policy.Pools[i].Enabled = true
 		}
 	}
 	return policy
+}
+
+func normalizePoolMatchMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "mixed_weighted":
+		return "mixed_weighted"
+	default:
+		return "priority"
+	}
 }
 
 func normalizeSourcePoolFallbackMode(value string) string {

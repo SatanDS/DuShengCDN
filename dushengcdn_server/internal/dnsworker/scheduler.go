@@ -315,11 +315,11 @@ func buildCandidates(snapshot *Snapshot, recordType string, policy GSLBPolicy, s
 	if snapshot == nil {
 		return nil
 	}
-	pools := matchPoolsForSource(policy.Pools, source)
+	pools := matchPoolsForSourceWithMode(policy.Pools, source, policy.PoolMatchMode)
 	candidates := candidatesForPools(snapshot, recordType, policy, pools)
 	if len(candidates) == 0 && normalizeSourcePoolFallbackMode(policy.SourcePoolFallbackMode) == "fallback_to_global" {
 		if matchedHasSourceCondition(pools) {
-			if fallbackCandidates := candidatesForPools(snapshot, recordType, policy, globalPoolsForFallback(policy.Pools)); len(fallbackCandidates) > 0 {
+			if fallbackCandidates := candidatesForPools(snapshot, recordType, policy, globalPoolsForFallback(policy.Pools, source)); len(fallbackCandidates) > 0 {
 				return fallbackCandidates
 			}
 		}
@@ -395,23 +395,23 @@ func candidatesForPools(snapshot *Snapshot, recordType string, policy GSLBPolicy
 
 func matchedHasSourceCondition(pools map[string]GSLBPoolPolicy) bool {
 	for _, pool := range pools {
-		if len(pool.SourceCIDRs) > 0 || len(pool.ASNs) > 0 || len(pool.Operators) > 0 || len(pool.Countries) > 0 {
+		if poolHasSourceConditions(pool) {
 			return true
 		}
 	}
 	return false
 }
 
-func globalPoolsForFallback(pools []GSLBPoolPolicy) map[string]GSLBPoolPolicy {
+func globalPoolsForFallback(pools []GSLBPoolPolicy, source SourceContext) map[string]GSLBPoolPolicy {
 	global := map[string]GSLBPoolPolicy{}
 	all := map[string]GSLBPoolPolicy{}
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
-		if name == "" || !pool.Enabled {
+		if name == "" || !pool.Enabled || poolExcludesSource(pool, source) {
 			continue
 		}
 		all[name] = pool
-		if len(pool.SourceCIDRs) == 0 && len(pool.ASNs) == 0 && len(pool.Operators) == 0 && len(pool.Countries) == 0 {
+		if !poolHasSourceConditions(pool) {
 			global[name] = pool
 		}
 	}
@@ -447,6 +447,31 @@ func hasCandidatesWithoutDNSProbe(snapshot *Snapshot, recordType string, policy 
 }
 
 func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[string]GSLBPoolPolicy {
+	return matchPoolsForSourceWithMode(pools, source, "priority")
+}
+
+func matchPoolsForSourceWithMode(pools []GSLBPoolPolicy, source SourceContext, mode string) map[string]GSLBPoolPolicy {
+	if normalizePoolMatchMode(mode) == "mixed_weighted" {
+		return matchMixedPoolsForSource(pools, source)
+	}
+	return matchPriorityPoolsForSource(pools, source)
+}
+
+func matchMixedPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[string]GSLBPoolPolicy {
+	result := map[string]GSLBPoolPolicy{}
+	for _, pool := range pools {
+		name := normalizeNodePoolName(pool.Name)
+		if name == "" || !pool.Enabled || poolExcludesSource(pool, source) {
+			continue
+		}
+		if !poolHasSourceConditions(pool) || poolMatchesSource(pool, source) {
+			result[name] = pool
+		}
+	}
+	return result
+}
+
+func matchPriorityPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[string]GSLBPoolPolicy {
 	all := map[string]GSLBPoolPolicy{}
 	cidrMatched := map[string]GSLBPoolPolicy{}
 	asnMatched := map[string]GSLBPoolPolicy{}
@@ -456,7 +481,7 @@ func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[strin
 	operator := normalizeOperator(source.Operator)
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
-		if name == "" || !pool.Enabled {
+		if name == "" || !pool.Enabled || poolExcludesSource(pool, source) {
 			continue
 		}
 		all[name] = pool
@@ -511,9 +536,73 @@ func matchPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) map[strin
 	return all
 }
 
+func poolHasSourceConditions(pool GSLBPoolPolicy) bool {
+	return len(pool.SourceCIDRs) > 0 || len(pool.ASNs) > 0 || len(pool.Operators) > 0 || len(pool.Countries) > 0
+}
+
+func poolMatchesSource(pool GSLBPoolPolicy, source SourceContext) bool {
+	if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+		return true
+	}
+	if source.ASN > 0 {
+		for _, asn := range pool.ASNs {
+			if source.ASN == asn {
+				return true
+			}
+		}
+	}
+	operator := normalizeOperator(source.Operator)
+	if operator != "" {
+		for _, item := range pool.Operators {
+			if operator == normalizeOperator(item) {
+				return true
+			}
+		}
+	}
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	if country != "" {
+		for _, item := range pool.Countries {
+			if country == strings.ToUpper(strings.TrimSpace(item)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func poolExcludesSource(pool GSLBPoolPolicy, source SourceContext) bool {
+	if _, ok := sourceIPMatchesCIDRList(source.IP, pool.ExcludeSourceCIDRs); ok {
+		return true
+	}
+	if source.ASN > 0 {
+		for _, asn := range pool.ExcludeASNs {
+			if source.ASN == asn {
+				return true
+			}
+		}
+	}
+	operator := normalizeOperator(source.Operator)
+	if operator != "" {
+		for _, item := range pool.ExcludeOperators {
+			if operator == normalizeOperator(item) {
+				return true
+			}
+		}
+	}
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	if country != "" {
+		for _, item := range pool.ExcludeCountries {
+			if country == strings.ToUpper(strings.TrimSpace(item)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func sourceScopeKeyForPolicy(policy GSLBPolicy, source SourceContext) string {
 	for _, pool := range policy.Pools {
-		if !pool.Enabled {
+		if !pool.Enabled || poolExcludesSource(pool, source) {
 			continue
 		}
 		if cidr, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
@@ -522,7 +611,7 @@ func sourceScopeKeyForPolicy(policy GSLBPolicy, source SourceContext) string {
 	}
 	if source.ASN > 0 {
 		for _, pool := range policy.Pools {
-			if !pool.Enabled {
+			if !pool.Enabled || poolExcludesSource(pool, source) {
 				continue
 			}
 			for _, asn := range pool.ASNs {
@@ -535,7 +624,7 @@ func sourceScopeKeyForPolicy(policy GSLBPolicy, source SourceContext) string {
 	operator := normalizeOperator(source.Operator)
 	if operator != "" {
 		for _, pool := range policy.Pools {
-			if !pool.Enabled {
+			if !pool.Enabled || poolExcludesSource(pool, source) {
 				continue
 			}
 			for _, poolOperator := range pool.Operators {
@@ -744,7 +833,7 @@ func selectRankedTargets(candidates []targetCandidate, policy GSLBPolicy) []stri
 	for _, candidate := range candidates {
 		byPool[candidate.PoolName] = append(byPool[candidate.PoolName], candidate)
 	}
-	quotas := allocatePoolQuotas(policy.Pools, targetCount)
+	quotas := allocatePoolQuotas(policy.Pools, targetCount, byPool)
 	selected := make([]targetCandidate, 0, targetCount)
 	used := map[string]struct{}{}
 	for _, pool := range policy.Pools {
@@ -950,7 +1039,7 @@ func stableHashUnit(value string) float64 {
 	return (float64(hash) + 1) / (float64(^uint64(0)) + 2)
 }
 
-func allocatePoolQuotas(pools []GSLBPoolPolicy, targetCount int) map[string]int {
+func allocatePoolQuotas(pools []GSLBPoolPolicy, targetCount int, byPool map[string][]targetCandidate) map[string]int {
 	type weightedPool struct {
 		Name      string
 		Weight    int
@@ -966,6 +1055,9 @@ func allocatePoolQuotas(pools []GSLBPoolPolicy, targetCount int) map[string]int 
 		}
 		name := normalizeNodePoolName(pool.Name)
 		if name == "" {
+			continue
+		}
+		if len(byPool[name]) == 0 {
 			continue
 		}
 		weight := normalizeWeight(pool.Weight)

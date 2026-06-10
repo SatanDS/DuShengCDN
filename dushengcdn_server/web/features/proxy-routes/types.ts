@@ -66,6 +66,10 @@ export interface ProxyRouteGSLBPoolPolicy {
   source_cidrs: string[];
   operators?: string[];
   asns?: number[];
+  exclude_countries?: string[];
+  exclude_source_cidrs?: string[];
+  exclude_operators?: string[];
+  exclude_asns?: number[];
   node_ids?: string[];
   enabled: boolean;
 }
@@ -73,6 +77,7 @@ export interface ProxyRouteGSLBPoolPolicy {
 export interface ProxyRouteGSLBPolicy {
   mode: 'cloudflare_dns';
   strategy: 'healthy' | 'weighted' | 'load_aware';
+  pool_match_mode?: 'priority' | 'mixed_weighted';
   pools: ProxyRouteGSLBPoolPolicy[];
   target_count: number;
   ttl: number;

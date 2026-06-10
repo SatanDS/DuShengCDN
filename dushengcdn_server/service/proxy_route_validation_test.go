@@ -172,3 +172,30 @@ func TestMatchGSLBPoolsForSourcePrefersCIDRASNOperatorCountry(t *testing.T) {
 		t.Fatalf("expected country fallback scope, got %s", scope)
 	}
 }
+
+func TestMatchGSLBPoolsMixedWeightedIncludesApplicablePoolsAndExcludesSource(t *testing.T) {
+	pools := []ProxyRouteGSLBPoolPolicy{
+		{Name: "aws-tokyo", Weight: 10, ExcludeOperators: []string{"cn-telecom"}, Enabled: true},
+		{Name: "jp", Weight: 40, Enabled: true},
+		{Name: "sg", Weight: 30, Countries: []string{"CN"}, Enabled: true},
+		{Name: "tw-only", Weight: 20, Countries: []string{"TW"}, Enabled: true},
+	}
+
+	telecom := GSLBSourceContext{Country: "CN", Operator: "China Telecom"}
+	matched := matchGSLBPoolsForSourceWithMode(pools, telecom, gslbPoolMatchModeMixed)
+	if _, ok := matched["aws-tokyo"]; ok {
+		t.Fatalf("expected excluded aws-tokyo pool to be removed, got %+v", matched)
+	}
+	if _, ok := matched["tw-only"]; ok {
+		t.Fatalf("expected unmatched conditional pool to be removed, got %+v", matched)
+	}
+	if len(matched) != 2 || matched["jp"].Name != "jp" || matched["sg"].Name != "sg" {
+		t.Fatalf("expected global and matching country pools, got %+v", matched)
+	}
+
+	unicom := GSLBSourceContext{Country: "CN", Operator: "cn-unicom"}
+	matched = matchGSLBPoolsForSourceWithMode(pools, unicom, gslbPoolMatchModeMixed)
+	if len(matched) != 3 || matched["aws-tokyo"].Name != "aws-tokyo" || matched["jp"].Name != "jp" || matched["sg"].Name != "sg" {
+		t.Fatalf("expected aws-tokyo to participate for non-telecom source, got %+v", matched)
+	}
+}

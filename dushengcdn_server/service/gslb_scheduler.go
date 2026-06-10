@@ -266,7 +266,7 @@ func gslbScopeKeyFromSource(source GSLBSourceContext) string {
 
 func gslbScopeKeyForPolicy(policy ProxyRouteGSLBPolicy, source GSLBSourceContext) string {
 	for _, pool := range policy.Pools {
-		if !pool.Enabled {
+		if !pool.Enabled || gslbPoolExcludesSource(pool, source) {
 			continue
 		}
 		if cidr, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
@@ -275,7 +275,7 @@ func gslbScopeKeyForPolicy(policy ProxyRouteGSLBPolicy, source GSLBSourceContext
 	}
 	if source.ASN > 0 {
 		for _, pool := range policy.Pools {
-			if !pool.Enabled {
+			if !pool.Enabled || gslbPoolExcludesSource(pool, source) {
 				continue
 			}
 			for _, asn := range pool.ASNs {
@@ -288,7 +288,7 @@ func gslbScopeKeyForPolicy(policy ProxyRouteGSLBPolicy, source GSLBSourceContext
 	operator := normalizeGSLBOperator(source.Operator)
 	if operator != "" {
 		for _, pool := range policy.Pools {
-			if !pool.Enabled {
+			if !pool.Enabled || gslbPoolExcludesSource(pool, source) {
 				continue
 			}
 			for _, poolOperator := range pool.Operators {
@@ -325,10 +325,10 @@ func buildGSLBDNSTargetCandidatesWithOptions(recordType string, policy ProxyRout
 	if options.RequireHealthyDNSProbe {
 		probeStatsByNode = gslbDNSSchedulingProbeStatsByNode(options)
 	}
-	poolPolicies := matchGSLBPoolsForSource(policy.Pools, source)
+	poolPolicies := matchGSLBPoolsForSourceWithMode(policy.Pools, source, policy.PoolMatchMode)
 	candidates := buildGSLBDNSTargetCandidatesForPools(nodes, metrics, probeStatsByNode, recordType, policy, options, poolPolicies)
 	if len(candidates) == 0 && normalizeGSLBSourcePoolFallbackMode(policy.SourcePoolFallbackMode) == gslbSourcePoolFallbackGlobal && gslbMatchedPoolsHaveSourceConditions(poolPolicies) {
-		if fallbackCandidates := buildGSLBDNSTargetCandidatesForPools(nodes, metrics, probeStatsByNode, recordType, policy, options, gslbGlobalPoolsForFallback(policy.Pools)); len(fallbackCandidates) > 0 {
+		if fallbackCandidates := buildGSLBDNSTargetCandidatesForPools(nodes, metrics, probeStatsByNode, recordType, policy, options, gslbGlobalPoolsForFallback(policy.Pools, source)); len(fallbackCandidates) > 0 {
 			return fallbackCandidates, nil
 		}
 	}
@@ -405,23 +405,23 @@ func buildGSLBDNSTargetCandidatesForPools(nodes []*model.Node, metrics map[strin
 
 func gslbMatchedPoolsHaveSourceConditions(pools map[string]ProxyRouteGSLBPoolPolicy) bool {
 	for _, pool := range pools {
-		if len(pool.SourceCIDRs) > 0 || len(pool.ASNs) > 0 || len(pool.Operators) > 0 || len(pool.Countries) > 0 {
+		if gslbPoolHasSourceConditions(pool) {
 			return true
 		}
 	}
 	return false
 }
 
-func gslbGlobalPoolsForFallback(pools []ProxyRouteGSLBPoolPolicy) map[string]ProxyRouteGSLBPoolPolicy {
+func gslbGlobalPoolsForFallback(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) map[string]ProxyRouteGSLBPoolPolicy {
 	global := map[string]ProxyRouteGSLBPoolPolicy{}
 	all := map[string]ProxyRouteGSLBPoolPolicy{}
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
-		if name == "" || !pool.Enabled {
+		if name == "" || !pool.Enabled || gslbPoolExcludesSource(pool, source) {
 			continue
 		}
 		all[name] = pool
-		if len(pool.SourceCIDRs) == 0 && len(pool.ASNs) == 0 && len(pool.Operators) == 0 && len(pool.Countries) == 0 {
+		if !gslbPoolHasSourceConditions(pool) {
 			global[name] = pool
 		}
 	}
@@ -458,6 +458,31 @@ func latestNodeMetricSnapshots() map[string]*model.NodeMetricSnapshot {
 }
 
 func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) map[string]ProxyRouteGSLBPoolPolicy {
+	return matchGSLBPoolsForSourceWithMode(pools, source, gslbPoolMatchModePriority)
+}
+
+func matchGSLBPoolsForSourceWithMode(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext, mode string) map[string]ProxyRouteGSLBPoolPolicy {
+	if normalizeGSLBPoolMatchMode(mode) == gslbPoolMatchModeMixed {
+		return matchMixedGSLBPoolsForSource(pools, source)
+	}
+	return matchPriorityGSLBPoolsForSource(pools, source)
+}
+
+func matchMixedGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) map[string]ProxyRouteGSLBPoolPolicy {
+	result := make(map[string]ProxyRouteGSLBPoolPolicy, len(pools))
+	for _, pool := range pools {
+		name := normalizeNodePoolName(pool.Name)
+		if name == "" || !pool.Enabled || gslbPoolExcludesSource(pool, source) {
+			continue
+		}
+		if !gslbPoolHasSourceConditions(pool) || gslbPoolMatchesSource(pool, source) {
+			result[name] = pool
+		}
+	}
+	return result
+}
+
+func matchPriorityGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) map[string]ProxyRouteGSLBPoolPolicy {
 	result := make(map[string]ProxyRouteGSLBPoolPolicy, len(pools))
 	country := strings.ToUpper(strings.TrimSpace(source.Country))
 	operator := normalizeGSLBOperator(source.Operator)
@@ -467,7 +492,7 @@ func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSource
 	matchedByCountry := make(map[string]ProxyRouteGSLBPoolPolicy)
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
-		if name == "" || !pool.Enabled {
+		if name == "" || !pool.Enabled || gslbPoolExcludesSource(pool, source) {
 			continue
 		}
 		result[name] = pool
@@ -520,6 +545,70 @@ func matchGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSource
 		return matchedByCountry
 	}
 	return result
+}
+
+func gslbPoolHasSourceConditions(pool ProxyRouteGSLBPoolPolicy) bool {
+	return len(pool.SourceCIDRs) > 0 || len(pool.ASNs) > 0 || len(pool.Operators) > 0 || len(pool.Countries) > 0
+}
+
+func gslbPoolMatchesSource(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) bool {
+	if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+		return true
+	}
+	if source.ASN > 0 {
+		for _, asn := range pool.ASNs {
+			if source.ASN == asn {
+				return true
+			}
+		}
+	}
+	operator := normalizeGSLBOperator(source.Operator)
+	if operator != "" {
+		for _, item := range pool.Operators {
+			if operator == normalizeGSLBOperator(item) {
+				return true
+			}
+		}
+	}
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	if country != "" {
+		for _, item := range pool.Countries {
+			if country == strings.ToUpper(strings.TrimSpace(item)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func gslbPoolExcludesSource(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) bool {
+	if _, ok := sourceIPMatchesCIDRList(source.IP, pool.ExcludeSourceCIDRs); ok {
+		return true
+	}
+	if source.ASN > 0 {
+		for _, asn := range pool.ExcludeASNs {
+			if source.ASN == asn {
+				return true
+			}
+		}
+	}
+	operator := normalizeGSLBOperator(source.Operator)
+	if operator != "" {
+		for _, item := range pool.ExcludeOperators {
+			if operator == normalizeGSLBOperator(item) {
+				return true
+			}
+		}
+	}
+	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	if country != "" {
+		for _, item := range pool.ExcludeCountries {
+			if country == strings.ToUpper(strings.TrimSpace(item)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func metricWithinGSLBThresholds(metric *model.NodeMetricSnapshot, thresholds ProxyRouteGSLBLoadThresholds) bool {
@@ -643,7 +732,7 @@ func selectWeightedGSLBTargets(candidates []gslbDNSTargetCandidate, policy Proxy
 	for _, candidate := range candidates {
 		candidatesByPool[candidate.PoolName] = append(candidatesByPool[candidate.PoolName], candidate)
 	}
-	quotas := allocateGSLBPoolQuotas(policy.Pools, targetCount)
+	quotas := allocateGSLBPoolQuotas(policy.Pools, targetCount, candidatesByPool)
 	selected := make([]gslbDNSTargetCandidate, 0, targetCount)
 	used := make(map[string]struct{}, targetCount)
 	for _, pool := range policy.Pools {
@@ -680,7 +769,7 @@ func selectWeightedGSLBTargets(candidates []gslbDNSTargetCandidate, policy Proxy
 	return targets
 }
 
-func allocateGSLBPoolQuotas(pools []ProxyRouteGSLBPoolPolicy, targetCount int) map[string]int {
+func allocateGSLBPoolQuotas(pools []ProxyRouteGSLBPoolPolicy, targetCount int, candidatesByPool map[string][]gslbDNSTargetCandidate) map[string]int {
 	type weightedPool struct {
 		Name      string
 		Weight    int
@@ -700,6 +789,9 @@ func allocateGSLBPoolQuotas(pools []ProxyRouteGSLBPoolPolicy, targetCount int) m
 		}
 		name := normalizeNodePoolName(pool.Name)
 		if name == "" {
+			continue
+		}
+		if len(candidatesByPool[name]) == 0 {
 			continue
 		}
 		totalWeight += weight

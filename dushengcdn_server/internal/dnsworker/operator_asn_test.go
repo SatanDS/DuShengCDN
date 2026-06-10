@@ -114,6 +114,81 @@ func TestSourceScopeKeyForPolicyIgnoresUnconfiguredASNOrOperatorScopes(t *testin
 	}
 }
 
+func TestMatchPoolsForSourceMixedWeightedIncludesApplicablePoolsAndExcludesSource(t *testing.T) {
+	pools := []GSLBPoolPolicy{
+		{Name: "aws-tokyo", Weight: 10, ExcludeOperators: []string{"cn-telecom"}, Enabled: true},
+		{Name: "jp", Weight: 40, Enabled: true},
+		{Name: "sg", Weight: 30, Countries: []string{"CN"}, Enabled: true},
+		{Name: "tw-only", Weight: 20, Countries: []string{"TW"}, Enabled: true},
+	}
+
+	telecom := SourceContext{Country: "CN", Operator: "China Telecom"}
+	matched := matchPoolsForSourceWithMode(pools, telecom, "mixed_weighted")
+	if _, ok := matched["aws-tokyo"]; ok {
+		t.Fatalf("expected excluded aws-tokyo pool to be removed, got %+v", matched)
+	}
+	assertPoolNames(t, matched, []string{"jp", "sg"})
+
+	unicom := SourceContext{Country: "CN", Operator: "cn-unicom"}
+	matched = matchPoolsForSourceWithMode(pools, unicom, "mixed_weighted")
+	assertPoolNames(t, matched, []string{"aws-tokyo", "jp", "sg"})
+}
+
+func TestSchedulerMixedWeightedExcludesTelecomPoolButKeepsItForOthers(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Nodes = []SnapshotNode{
+		testNode("aws", "aws-tokyo", "8.8.8.8", 100, 1),
+		testNode("jp", "jp", "8.8.4.4", 100, 1),
+		testNode("sg", "sg", "1.1.1.1", 100, 1),
+	}
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           31,
+			Domains:      []string{"media.example.com"},
+			ZoneID:       1,
+			NodePool:     "jp",
+			RecordType:   "A",
+			ScheduleMode: "weighted",
+			TargetCount:  3,
+			TTL:          30,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:      "weighted",
+				PoolMatchMode: "mixed_weighted",
+				TargetCount:   3,
+				TTL:           30,
+				Pools: []GSLBPoolPolicy{
+					{Name: "aws-tokyo", Weight: 10, ExcludeOperators: []string{"cn-telecom"}, Enabled: true},
+					{Name: "jp", Weight: 40, Enabled: true},
+					{Name: "sg", Weight: 30, Countries: []string{"CN"}, Enabled: true},
+				},
+			},
+		},
+	}
+	scheduler := NewScheduler()
+	route := &snapshot.Routes[0]
+
+	telecomTargets, _, _, err := scheduler.Select(snapshot, route, "A", SourceContext{Country: "CN", Operator: "China Telecom"}, true)
+	if err != nil {
+		t.Fatalf("select telecom targets: %v", err)
+	}
+	if containsString(telecomTargets, "8.8.8.8") {
+		t.Fatalf("expected telecom source to exclude aws-tokyo target, got %v", telecomTargets)
+	}
+	if !containsString(telecomTargets, "8.8.4.4") || !containsString(telecomTargets, "1.1.1.1") {
+		t.Fatalf("expected telecom source to use global and matching country pools, got %v", telecomTargets)
+	}
+
+	unicomScheduler := NewScheduler()
+	unicomTargets, _, _, err := unicomScheduler.Select(snapshot, route, "A", SourceContext{Country: "CN", Operator: "cn-unicom"}, true)
+	if err != nil {
+		t.Fatalf("select unicom targets: %v", err)
+	}
+	if !containsString(unicomTargets, "8.8.8.8") {
+		t.Fatalf("expected non-telecom source to keep aws-tokyo in mixed weighting, got %v", unicomTargets)
+	}
+}
+
 func TestClassifySourceOperatorValueHandlesAliasesAndFallbacks(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -158,6 +233,15 @@ func TestNormalizeSourceScopeBaseSupportsOperatorAndASN(t *testing.T) {
 			}
 		})
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func assertPoolNames(t *testing.T, pools map[string]GSLBPoolPolicy, want []string) {

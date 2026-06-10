@@ -216,6 +216,10 @@ export interface DNSGSLBSimulationPool {
   source_cidrs: string[];
   operators: string[];
   asns: number[];
+  exclude_countries: string[];
+  exclude_source_cidrs: string[];
+  exclude_operators: string[];
+  exclude_asns: number[];
   matched: boolean;
   reason: string;
 }
