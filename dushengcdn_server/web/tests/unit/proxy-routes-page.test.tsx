@@ -1818,6 +1818,8 @@ describe('Proxy route website pages', () => {
     await user.type(screen.getByLabelText('节点池权重 2'), '20');
     await user.type(screen.getByLabelText('节点池国家或地区 2'), 'DE FR');
 
+    await user.selectOptions(screen.getByLabelText('边缘代理缓冲模式'), 'off');
+
     const saveButton = document.querySelector(
       'button[form="proxy-route-dns-form"]',
     ) as HTMLButtonElement | null;
@@ -1834,6 +1836,7 @@ describe('Proxy route website pages', () => {
     expect(updateRequests[0]).toMatchObject({
       dns_ttl: 60,
       gslb_enabled: true,
+      proxy_buffering_mode: 'off',
       gslb_policy: {
         source_pool_fallback_mode: 'strict',
         pools: [

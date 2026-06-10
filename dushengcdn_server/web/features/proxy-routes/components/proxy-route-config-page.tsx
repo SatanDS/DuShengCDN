@@ -278,6 +278,7 @@ type DNSAutomationValues = {
   gslb_max_memory_percent: number;
   gslb_cooldown_seconds: number;
   gslb_source_pool_fallback_mode: 'strict' | 'fallback_to_global';
+  proxy_buffering_mode: 'default' | 'off';
   cloudflare_proxied: boolean;
   ddos_protection_mode: 'off' | 'auto';
   ddos_protection_provider: 'cloudflare' | 'custom';
@@ -997,6 +998,8 @@ export function DNSAutomationSection({
         route.gslb_policy?.source_pool_fallback_mode === 'fallback_to_global'
           ? 'fallback_to_global'
           : 'strict',
+      proxy_buffering_mode:
+        route.proxy_buffering_mode === 'off' ? 'off' : 'default',
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
       ddos_protection_provider:
@@ -1037,6 +1040,8 @@ export function DNSAutomationSection({
         route.gslb_policy?.source_pool_fallback_mode === 'fallback_to_global'
           ? 'fallback_to_global'
           : 'strict',
+      proxy_buffering_mode:
+        route.proxy_buffering_mode === 'off' ? 'off' : 'default',
       cloudflare_proxied: route.cloudflare_proxied,
       ddos_protection_mode: route.ddos_protection_mode || 'off',
       ddos_protection_provider:
@@ -1191,6 +1196,7 @@ export function DNSAutomationSection({
                   cooldown_seconds: values.gslb_cooldown_seconds,
                 },
               },
+              proxy_buffering_mode: values.proxy_buffering_mode,
               cloudflare_proxied: authoritativeMode
                 ? false
                 : values.cloudflare_proxied,
@@ -1898,6 +1904,20 @@ export function DNSAutomationSection({
                   >
                     <option value="strict">严格匹配，返回空结果</option>
                     <option value="fallback_to_global">回退到全局节点池</option>
+                  </ResourceSelect>
+                </ResourceField>
+
+                <ResourceField
+                  label="边缘代理缓冲模式"
+                  hint="Emby、Jellyfin、大文件下载和 Range 视频流建议关闭，避免命中的边缘节点提前从源站读取大量内容。"
+                >
+                  <ResourceSelect
+                    aria-label="边缘代理缓冲模式"
+                    disabled={!autoSyncEnabled}
+                    {...form.register('proxy_buffering_mode')}
+                  >
+                    <option value="default">跟随全局配置</option>
+                    <option value="off">流媒体模式：关闭代理缓冲</option>
                   </ResourceSelect>
                 </ResourceField>
 
