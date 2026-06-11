@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"dushengcdn/service/configversion"
+	"dushengcdn/service/openresty"
 	"dushengcdn/utils/security"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -29,11 +28,7 @@ type ReleaseResult struct {
 	Routes  []*ProxyRouteView    `json:"routes"`
 }
 
-type SupportFile struct {
-	Path     string `json:"path"`
-	Content  string `json:"content"`
-	Redacted bool   `json:"redacted,omitempty"`
-}
+type SupportFile = openresty.SupportFile
 
 type ConfigPreviewResult struct {
 	SnapshotJSON   string        `json:"snapshot_json"`
@@ -78,11 +73,7 @@ type ConfigDiffResult struct {
 	ActiveWebsiteCount   int                    `json:"active_website_count"`
 }
 
-type ConfigOptionDiffItem struct {
-	Key           string `json:"key"`
-	PreviousValue string `json:"previous_value"`
-	CurrentValue  string `json:"current_value"`
-}
+type ConfigOptionDiffItem = configversion.OptionDiffItem
 
 type snapshotRoute struct {
 	SiteName                   string                        `json:"site_name,omitempty"`
@@ -219,16 +210,7 @@ type configBundle struct {
 	ChangedOptionKeys []string
 }
 
-type configVersionArtifactBundle struct {
-	PoolName            string
-	RouteConfig         string
-	SupportFiles        []SupportFile
-	Checksum            string
-	MainConfigChecksum  string
-	RouteConfigChecksum string
-	SupportFilesJSON    string
-	RouteCount          int
-}
+type configVersionArtifactBundle = configversion.ArtifactBundle
 
 const (
 	nginxCertDirPlaceholder             = "__DUSHENGCDN_CERT_DIR__"
@@ -701,61 +683,11 @@ func versionRoutesFromSnapshot(snapshotJSON string) []snapshotRoute {
 }
 
 func createConfigVersionArtifacts(tx *gorm.DB, versionID uint, bundles []configVersionArtifactBundle) error {
-	if len(bundles) == 0 {
-		return nil
-	}
-	records := make([]*model.ConfigVersionArtifact, 0, len(bundles))
-	for _, bundle := range bundles {
-		records = append(records, &model.ConfigVersionArtifact{
-			ConfigVersionID:     versionID,
-			PoolName:            normalizeNodePoolName(bundle.PoolName),
-			Checksum:            bundle.Checksum,
-			MainConfigChecksum:  bundle.MainConfigChecksum,
-			RouteConfigChecksum: bundle.RouteConfigChecksum,
-			RenderedConfig:      bundle.RouteConfig,
-			SupportFilesJSON:    bundle.SupportFilesJSON,
-			RouteCount:          bundle.RouteCount,
-		})
-	}
-	return tx.Create(&records).Error
+	return configversion.CreateArtifacts(tx, versionID, bundles)
 }
 
 func CleanupConfigVersions(keepCount int) (int64, error) {
-	if keepCount < 3 {
-		keepCount = 3
-	}
-	var keepIDs []uint
-	if err := model.DB.Model(&model.ConfigVersion{}).
-		Select("id").
-		Order("id desc").
-		Limit(keepCount).
-		Pluck("id", &keepIDs).Error; err != nil {
-		return 0, err
-	}
-	if len(keepIDs) < keepCount {
-		return 0, nil
-	}
-	var deleteIDs []uint
-	if err := model.DB.Model(&model.ConfigVersion{}).
-		Select("id").
-		Where("is_active = ?", false).
-		Where("id NOT IN ?", keepIDs).
-		Pluck("id", &deleteIDs).Error; err != nil {
-		return 0, err
-	}
-	if len(deleteIDs) == 0 {
-		return 0, nil
-	}
-	var deleted int64
-	err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("config_version_id IN ?", deleteIDs).Delete(&model.ConfigVersionArtifact{}).Error; err != nil {
-			return err
-		}
-		result := tx.Where("id IN ?", deleteIDs).Delete(&model.ConfigVersion{})
-		deleted = result.RowsAffected
-		return result.Error
-	})
-	return deleted, err
+	return configversion.CleanupVersions(keepCount)
 }
 
 func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
@@ -787,31 +719,12 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	powConfigJSON, powSupportFiles, err := renderPowConfigBundle(routes)
+	accessSupportFiles, err := renderPoolAccessSupportFiles(routes)
 	if err != nil {
 		return nil, err
 	}
-	supportFiles = append(supportFiles, powSupportFiles...)
-	regionConfigJSON, regionSupportFiles, err := renderRegionConfigBundle(routes)
-	if err != nil {
-		return nil, err
-	}
-	supportFiles = append(supportFiles, regionSupportFiles...)
-	wafConfigJSON, wafSupportFiles, err := renderWAFConfigBundle(routes)
-	if err != nil {
-		return nil, err
-	}
-	supportFiles = append(supportFiles, wafSupportFiles...)
-	ccConfigJSON, ccSupportFiles, err := renderCCConfigBundle(routes)
-	if err != nil {
-		return nil, err
-	}
-	supportFiles = append(supportFiles, ccSupportFiles...)
+	supportFiles = append(supportFiles, accessSupportFiles...)
 	mainConfig := renderMainConfig(openRestyConfig)
-	supportFiles = append(supportFiles, SupportFile{Path: "pow_config.json", Content: powConfigJSON})
-	supportFiles = append(supportFiles, SupportFile{Path: "region_config.json", Content: regionConfigJSON})
-	supportFiles = append(supportFiles, SupportFile{Path: "waf_config.json", Content: wafConfigJSON})
-	supportFiles = append(supportFiles, SupportFile{Path: "cc_config.json", Content: ccConfigJSON})
 	artifacts, err := buildConfigVersionArtifacts(routes, openRestyConfig, mainConfig, routeConfigContext)
 	if err != nil {
 		return nil, err
@@ -871,32 +784,53 @@ func buildConfigVersionArtifacts(routes []*model.ProxyRoute, cfg openRestyConfig
 }
 
 func renderPoolAccessSupportFiles(routes []*model.ProxyRoute) ([]SupportFile, error) {
-	powConfigJSON, powSupportFiles, err := renderPowConfigBundle(routes)
+	accessRoutes, err := buildOpenRestyAccessRoutes(routes)
 	if err != nil {
 		return nil, err
 	}
-	regionConfigJSON, regionSupportFiles, err := renderRegionConfigBundle(routes)
-	if err != nil {
-		return nil, err
+	return openresty.RenderAccessSupportFiles(accessRoutes)
+}
+
+func buildOpenRestyAccessRoutes(routes []*model.ProxyRoute) ([]openresty.AccessRoute, error) {
+	result := make([]openresty.AccessRoute, 0, len(routes))
+	for _, route := range routes {
+		if route == nil {
+			continue
+		}
+		domains, err := decodeStoredDomains(route.Domains, route.Domain)
+		if err != nil {
+			return nil, err
+		}
+		wafConfig, err := decodeStoredWAFConfig(route.WAFEnabled, route.WAFConfig)
+		if err != nil {
+			return nil, fmt.Errorf("route %s waf_config is invalid", route.Domain)
+		}
+		ccConfig, err := decodeStoredCCConfig(route.CCEnabled, route.CCConfig)
+		if err != nil {
+			return nil, fmt.Errorf("route %s cc_config is invalid", route.Domain)
+		}
+		countries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, openresty.AccessRoute{
+			Domain:                     route.Domain,
+			Domains:                    domains,
+			PoWEnabled:                 route.PoWEnabled,
+			PoWConfigJSON:              route.PoWConfig,
+			DefaultPoWConfig:           defaultPoWConfig(),
+			WAFEnabled:                 route.WAFEnabled,
+			WAFMode:                    normalizeWAFMode(route.WAFMode),
+			WAFConfig:                  wafConfig,
+			CCEnabled:                  route.CCEnabled,
+			CCMode:                     normalizeCCMode(route.CCMode),
+			CCConfig:                   ccConfig,
+			RegionRestrictionEnabled:   route.RegionRestrictionEnabled && len(countries) > 0,
+			RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
+			RegionRestrictionCountries: countries,
+		})
 	}
-	wafConfigJSON, wafSupportFiles, err := renderWAFConfigBundle(routes)
-	if err != nil {
-		return nil, err
-	}
-	ccConfigJSON, ccSupportFiles, err := renderCCConfigBundle(routes)
-	if err != nil {
-		return nil, err
-	}
-	files := make([]SupportFile, 0, len(powSupportFiles)+len(regionSupportFiles)+len(wafSupportFiles)+len(ccSupportFiles)+4)
-	files = append(files, powSupportFiles...)
-	files = append(files, regionSupportFiles...)
-	files = append(files, wafSupportFiles...)
-	files = append(files, ccSupportFiles...)
-	files = append(files, SupportFile{Path: "pow_config.json", Content: powConfigJSON})
-	files = append(files, SupportFile{Path: "region_config.json", Content: regionConfigJSON})
-	files = append(files, SupportFile{Path: "waf_config.json", Content: wafConfigJSON})
-	files = append(files, SupportFile{Path: "cc_config.json", Content: ccConfigJSON})
-	return files, nil
+	return result, nil
 }
 
 func buildConfigVersionArtifactRouteMap(routes []*model.ProxyRoute) (map[string][]*model.ProxyRoute, error) {
@@ -1052,7 +986,7 @@ func buildSnapshotRoutesWithContext(
 			CCConfig:                   ccConfig,
 			BasicAuthEnabled:           route.BasicAuthEnabled,
 			BasicAuthUsername:          route.BasicAuthUsername,
-			BasicAuthPasswordHash:      basicAuthCredentialHash(route.BasicAuthUsername, route.BasicAuthPassword),
+			BasicAuthPasswordHash:      proxyRouteBasicAuthPasswordHashForView(route),
 			RegionRestrictionEnabled:   regionEnabled,
 			RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
 			RegionRestrictionCountries: regionCountries,
@@ -1448,111 +1382,23 @@ func buildOpenRestyConfigSnapshot() openRestyConfigSnapshot {
 }
 
 func diffOpenRestyOptionKeys(left openRestyConfigSnapshot, right openRestyConfigSnapshot) []string {
-	details := diffOpenRestyOptionDetails(left, right)
-	return extractOptionDiffKeys(details)
+	return configversion.ExtractOptionDiffKeys(diffOpenRestyOptionDetails(left, right))
 }
 
 func buildInitialOpenRestyOptionDiffs(current openRestyConfigSnapshot) []ConfigOptionDiffItem {
-	details := diffOpenRestyOptionDetails(openRestyConfigSnapshot{}, current)
-	for index := range details {
-		details[index].PreviousValue = ""
-	}
-	return details
+	return configversion.BuildInitialOpenRestyOptionDiffs(openresty.ConfigSnapshot(current))
 }
 
 func diffOpenRestyOptionDetails(left openRestyConfigSnapshot, right openRestyConfigSnapshot) []ConfigOptionDiffItem {
-	changes := make([]ConfigOptionDiffItem, 0)
-	appendIfChanged := func(key string, previous string, current string) {
-		if previous == current {
-			return
-		}
-		changes = append(changes, ConfigOptionDiffItem{
-			Key:           key,
-			PreviousValue: previous,
-			CurrentValue:  current,
-		})
-	}
-	appendIfChanged("OpenRestyWorkerProcesses", left.WorkerProcesses, right.WorkerProcesses)
-	appendIfChanged("OpenRestyWorkerConnections", fmt.Sprintf("%d", left.WorkerConnections), fmt.Sprintf("%d", right.WorkerConnections))
-	appendIfChanged("OpenRestyWorkerRlimitNofile", fmt.Sprintf("%d", left.WorkerRlimitNofile), fmt.Sprintf("%d", right.WorkerRlimitNofile))
-	appendIfChanged("OpenRestyEventsUse", left.EventsUse, right.EventsUse)
-	appendIfChanged("OpenRestyEventsMultiAcceptEnabled", fmt.Sprintf("%t", left.EventsMultiAcceptEnabled), fmt.Sprintf("%t", right.EventsMultiAcceptEnabled))
-	appendIfChanged("OpenRestyKeepaliveTimeout", fmt.Sprintf("%d", left.KeepaliveTimeout), fmt.Sprintf("%d", right.KeepaliveTimeout))
-	appendIfChanged("OpenRestyKeepaliveRequests", fmt.Sprintf("%d", left.KeepaliveRequests), fmt.Sprintf("%d", right.KeepaliveRequests))
-	appendIfChanged("OpenRestyClientHeaderTimeout", fmt.Sprintf("%d", left.ClientHeaderTimeout), fmt.Sprintf("%d", right.ClientHeaderTimeout))
-	appendIfChanged("OpenRestyClientBodyTimeout", fmt.Sprintf("%d", left.ClientBodyTimeout), fmt.Sprintf("%d", right.ClientBodyTimeout))
-	appendIfChanged("OpenRestyClientMaxBodySize", left.ClientMaxBodySize, right.ClientMaxBodySize)
-	appendIfChanged("OpenRestyLargeClientHeaderBuffers", left.LargeClientHeaderBuffers, right.LargeClientHeaderBuffers)
-	appendIfChanged("OpenRestySendTimeout", fmt.Sprintf("%d", left.SendTimeout), fmt.Sprintf("%d", right.SendTimeout))
-	appendIfChanged("OpenRestyProxyConnectTimeout", fmt.Sprintf("%d", left.ProxyConnectTimeout), fmt.Sprintf("%d", right.ProxyConnectTimeout))
-	appendIfChanged("OpenRestyProxySendTimeout", fmt.Sprintf("%d", left.ProxySendTimeout), fmt.Sprintf("%d", right.ProxySendTimeout))
-	appendIfChanged("OpenRestyProxyReadTimeout", fmt.Sprintf("%d", left.ProxyReadTimeout), fmt.Sprintf("%d", right.ProxyReadTimeout))
-	appendIfChanged("OpenRestyWebsocketEnabled", fmt.Sprintf("%t", left.WebsocketEnabled), fmt.Sprintf("%t", right.WebsocketEnabled))
-	appendIfChanged("OpenRestyProxyRequestBufferingEnabled", fmt.Sprintf("%t", left.ProxyRequestBuffering), fmt.Sprintf("%t", right.ProxyRequestBuffering))
-	appendIfChanged("OpenRestyProxyBufferingEnabled", fmt.Sprintf("%t", left.ProxyBufferingEnabled), fmt.Sprintf("%t", right.ProxyBufferingEnabled))
-	appendIfChanged("OpenRestyProxyBuffers", left.ProxyBuffers, right.ProxyBuffers)
-	appendIfChanged("OpenRestyProxyBufferSize", left.ProxyBufferSize, right.ProxyBufferSize)
-	appendIfChanged("OpenRestyProxyBusyBuffersSize", left.ProxyBusyBuffersSize, right.ProxyBusyBuffersSize)
-	appendIfChanged("OpenRestyGzipEnabled", fmt.Sprintf("%t", left.GzipEnabled), fmt.Sprintf("%t", right.GzipEnabled))
-	appendIfChanged("OpenRestyGzipMinLength", fmt.Sprintf("%d", left.GzipMinLength), fmt.Sprintf("%d", right.GzipMinLength))
-	appendIfChanged("OpenRestyGzipCompLevel", fmt.Sprintf("%d", left.GzipCompLevel), fmt.Sprintf("%d", right.GzipCompLevel))
-	appendIfChanged("OpenRestyResolvers", left.Resolvers, right.Resolvers)
-	appendIfChanged("OpenRestyCacheEnabled", fmt.Sprintf("%t", left.CacheEnabled), fmt.Sprintf("%t", right.CacheEnabled))
-	appendIfChanged("OpenRestyCachePath", left.CachePath, right.CachePath)
-	appendIfChanged("OpenRestyCacheLevels", left.CacheLevels, right.CacheLevels)
-	appendIfChanged("OpenRestyCacheInactive", left.CacheInactive, right.CacheInactive)
-	appendIfChanged("OpenRestyCacheMaxSize", left.CacheMaxSize, right.CacheMaxSize)
-	appendIfChanged("OpenRestyCacheKeyTemplate", left.CacheKeyTemplate, right.CacheKeyTemplate)
-	appendIfChanged("OpenRestyCacheLockEnabled", fmt.Sprintf("%t", left.CacheLockEnabled), fmt.Sprintf("%t", right.CacheLockEnabled))
-	appendIfChanged("OpenRestyCacheLockTimeout", left.CacheLockTimeout, right.CacheLockTimeout)
-	appendIfChanged("OpenRestyCacheUseStale", left.CacheUseStale, right.CacheUseStale)
-	return changes
+	return configversion.DiffOpenRestyOptionDetails(openresty.ConfigSnapshot(left), openresty.ConfigSnapshot(right))
 }
 
 func extractOptionDiffKeys(details []ConfigOptionDiffItem) []string {
-	keys := make([]string, 0, len(details))
-	for _, item := range details {
-		keys = append(keys, item.Key)
-	}
-	return keys
+	return configversion.ExtractOptionDiffKeys(details)
 }
 
 func openRestyOptionKeys() []string {
-	return []string{
-		"OpenRestyWorkerProcesses",
-		"OpenRestyWorkerConnections",
-		"OpenRestyWorkerRlimitNofile",
-		"OpenRestyEventsUse",
-		"OpenRestyEventsMultiAcceptEnabled",
-		"OpenRestyKeepaliveTimeout",
-		"OpenRestyKeepaliveRequests",
-		"OpenRestyClientHeaderTimeout",
-		"OpenRestyClientBodyTimeout",
-		"OpenRestyClientMaxBodySize",
-		"OpenRestyLargeClientHeaderBuffers",
-		"OpenRestySendTimeout",
-		"OpenRestyProxyConnectTimeout",
-		"OpenRestyProxySendTimeout",
-		"OpenRestyProxyReadTimeout",
-		"OpenRestyWebsocketEnabled",
-		"OpenRestyProxyRequestBufferingEnabled",
-		"OpenRestyProxyBufferingEnabled",
-		"OpenRestyProxyBuffers",
-		"OpenRestyProxyBufferSize",
-		"OpenRestyProxyBusyBuffersSize",
-		"OpenRestyGzipEnabled",
-		"OpenRestyGzipMinLength",
-		"OpenRestyGzipCompLevel",
-		"OpenRestyCacheEnabled",
-		"OpenRestyCachePath",
-		"OpenRestyCacheLevels",
-		"OpenRestyCacheInactive",
-		"OpenRestyCacheMaxSize",
-		"OpenRestyCacheKeyTemplate",
-		"OpenRestyCacheLockEnabled",
-		"OpenRestyCacheLockTimeout",
-		"OpenRestyCacheUseStale",
-	}
+	return configversion.OpenRestyOptionKeys()
 }
 
 func renderRouteConfig(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot) (string, []SupportFile, error) {
@@ -1567,7 +1413,11 @@ func renderRouteConfigWithContext(
 	if context == nil {
 		return renderRouteConfig(routes, cfg)
 	}
-	return renderRouteConfigWithContextAndQueries(routes, cfg, context)
+	renderRoutes, err := buildOpenRestyRenderRoutes(routes, context)
+	if err != nil {
+		return "", nil, err
+	}
+	return openresty.RenderRouteConfig(renderRoutes, openresty.ConfigSnapshot(cfg), openRestyRenderOptions())
 }
 
 type routeConfigQueries struct {
@@ -1580,6 +1430,112 @@ var defaultRouteConfigQueries = routeConfigQueries{
 
 type routeConfigRenderContext struct {
 	certificatesByID map[uint]*model.TLSCertificate
+}
+
+func openRestyRenderOptions() openresty.RenderOptions {
+	return openresty.RenderOptions{LookupIPAddr: routeUpstreamLookupIPAddr}
+}
+
+func buildOpenRestyRenderRoutes(routes []*model.ProxyRoute, context proxyRouteTLSCertificateLoader) ([]openresty.Route, error) {
+	result := make([]openresty.Route, 0, len(routes))
+	for _, route := range routes {
+		if route == nil {
+			continue
+		}
+		domains, err := decodeStoredDomains(route.Domains, route.Domain)
+		if err != nil {
+			return nil, fmt.Errorf("route %s domains are invalid", route.Domain)
+		}
+		customHeaders, err := decodeStoredCustomHeaders(route.CustomHeaders)
+		if err != nil {
+			return nil, fmt.Errorf("璺敱 %s 鑷畾涔夎姹傚ご鏃犳晥", route.Domain)
+		}
+		upstreams, err := decodeStoredUpstreams(route.Upstreams, route.OriginURL)
+		if err != nil {
+			return nil, fmt.Errorf("璺敱 %s 婧愮珯閰嶇疆鏃犳晥", route.Domain)
+		}
+		cacheRules, err := decodeStoredCacheRules(route.CacheRules)
+		if err != nil {
+			return nil, fmt.Errorf("璺敱 %s 缂撳瓨瑙勫垯鏃犳晥", route.Domain)
+		}
+		regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
+		if err != nil {
+			return nil, fmt.Errorf("璺敱 %s 鍦板尯闄愬埗閰嶇疆鏃犳晥", route.Domain)
+		}
+		renderRoute := openresty.Route{
+			ID:                         route.ID,
+			SiteName:                   route.SiteName,
+			Domain:                     route.Domain,
+			Domains:                    domains,
+			OriginURL:                  route.OriginURL,
+			OriginHost:                 route.OriginHost,
+			Upstreams:                  upstreams,
+			EnableHTTPS:                route.EnableHTTPS,
+			CertID:                     route.CertID,
+			RedirectHTTP:               route.RedirectHTTP,
+			LimitConnPerServer:         route.LimitConnPerServer,
+			LimitConnPerIP:             route.LimitConnPerIP,
+			LimitRate:                  route.LimitRate,
+			ProxyBufferingMode:         normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
+			CacheEnabled:               route.CacheEnabled,
+			CachePolicy:                route.CachePolicy,
+			CacheRules:                 cacheRules,
+			CustomHeaders:              toOpenRestyCustomHeaders(customHeaders),
+			PoWEnabled:                 route.PoWEnabled,
+			WAFEnabled:                 route.WAFEnabled,
+			WAFMode:                    normalizeWAFMode(route.WAFMode),
+			CCEnabled:                  route.CCEnabled,
+			CCMode:                     normalizeCCMode(route.CCMode),
+			BasicAuthEnabled:           route.BasicAuthEnabled,
+			BasicAuthUsername:          route.BasicAuthUsername,
+			BasicAuthPasswordHash:      proxyRouteBasicAuthPasswordHashForView(route),
+			RegionRestrictionEnabled:   route.RegionRestrictionEnabled && len(regionCountries) > 0,
+			RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
+			RegionRestrictionCountries: regionCountries,
+		}
+		if route.EnableHTTPS {
+			certIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
+			if err != nil {
+				return nil, fmt.Errorf("route %s cert_ids are invalid: %w", route.Domain, err)
+			}
+			domainCertIDs, err := resolveProxyRouteDomainCertIDsWithContext(route, domains, certIDs, context)
+			if err != nil {
+				return nil, fmt.Errorf("route %s domain_cert_ids are invalid: %w", route.Domain, err)
+			}
+			certificates, err := loadTLSCertificatesWithContext(context, certIDs)
+			if err != nil {
+				return nil, fmt.Errorf("route %s certificate lookup failed: %w", route.Domain, err)
+			}
+			renderRoute.CertIDs = certIDs
+			renderRoute.DomainCertIDs = domainCertIDs
+			renderRoute.Certificates = toOpenRestyTLSCertificates(certificates)
+		}
+		result = append(result, renderRoute)
+	}
+	return result, nil
+}
+
+func toOpenRestyCustomHeaders(headers []ProxyRouteCustomHeaderInput) []openresty.CustomHeader {
+	result := make([]openresty.CustomHeader, 0, len(headers))
+	for _, header := range headers {
+		result = append(result, openresty.CustomHeader{Key: header.Key, Value: header.Value})
+	}
+	return result
+}
+
+func toOpenRestyTLSCertificates(certificates []*model.TLSCertificate) []openresty.TLSCertificate {
+	result := make([]openresty.TLSCertificate, 0, len(certificates))
+	for _, certificate := range certificates {
+		if certificate == nil {
+			continue
+		}
+		result = append(result, openresty.TLSCertificate{
+			ID:      certificate.ID,
+			CertPEM: certificate.CertPEM,
+			KeyPEM:  certificate.KeyPEM,
+		})
+	}
+	return result
 }
 
 func newRouteConfigRenderContext(routes []*model.ProxyRoute, queries routeConfigQueries) (*routeConfigRenderContext, error) {
@@ -1648,7 +1604,11 @@ func renderRouteConfigWithQueries(routes []*model.ProxyRoute, cfg openRestyConfi
 	if err != nil {
 		return "", nil, err
 	}
-	return renderRouteConfigWithContextAndQueries(routes, cfg, context)
+	renderRoutes, err := buildOpenRestyRenderRoutes(routes, context)
+	if err != nil {
+		return "", nil, err
+	}
+	return openresty.RenderRouteConfig(renderRoutes, openresty.ConfigSnapshot(cfg), openRestyRenderOptions())
 }
 
 func renderRouteConfigWithContextAndQueries(
@@ -1719,8 +1679,9 @@ func renderRouteConfigWithContextAndQueries(
 		if upstreamConfig.UsesNamedUpstream {
 			builder.WriteString(renderNamedUpstreamBlock(upstreamConfig))
 		}
+		basicAuthPasswordHash := proxyRouteBasicAuthPasswordHashForView(route)
 		if !route.EnableHTTPS {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, basicAuthPasswordHash, cfg))
 			continue
 		}
 		certIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
@@ -1781,7 +1742,7 @@ func renderRouteConfigWithContextAndQueries(
 
 		if route.RedirectHTTP {
 			if len(httpOnlyDomains) > 0 {
-				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, basicAuthPasswordHash, cfg))
 			}
 			for _, certID := range certIDs {
 				assignedDomains := domainsByCertID[certID]
@@ -1791,25 +1752,21 @@ func renderRouteConfigWithContextAndQueries(
 				builder.WriteString(renderHTTPRedirectServer(renderServerNames(assignedDomains), regionConfig, wafConfig, ccConfig))
 			}
 		} else {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, basicAuthPasswordHash, cfg))
 		}
 		for _, certID := range certIDs {
 			assignedDomains := domainsByCertID[certID]
 			if len(assignedDomains) == 0 {
 				continue
 			}
-			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), route.OriginURL, route.OriginHost, certID, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPassword, cfg))
+			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), route.OriginURL, route.OriginHost, certID, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, basicAuthPasswordHash, cfg))
 		}
 	}
 	return builder.String(), dedupeSupportFiles(supportFiles), nil
 }
 
 func renderMainConfig(cfg openRestyConfigSnapshot) string {
-	templateText := common.OpenRestyMainConfigTemplate
-	if strings.TrimSpace(templateText) == "" {
-		templateText = defaultOpenRestyMainConfigTemplate()
-	}
-	return renderMainConfigTemplate(templateText, cfg)
+	return openresty.RenderMainConfig(openresty.ConfigSnapshot(cfg))
 }
 
 func ValidateOpenRestyMainConfigTemplate(templateText string) error {
@@ -1826,7 +1783,7 @@ func ValidateOpenRestyMainConfigTemplate(templateText string) error {
 }
 
 func defaultOpenRestyMainConfigTemplate() string {
-	return common.OpenRestyMainConfigTemplate
+	return openresty.DefaultMainConfigTemplate()
 }
 
 func renderMainConfigTemplate(templateText string, cfg openRestyConfigSnapshot) string {
@@ -1933,11 +1890,11 @@ func renderUnifiedAccessBlock(enabled bool) string {
 	return fmt.Sprintf("    access_by_lua_file %s/access.lua;\n", nginxLuaDirPlaceholder)
 }
 
-func renderBasicAuthBlock(enabled bool, username, password string) string {
-	if !enabled || username == "" || password == "" {
+func renderBasicAuthBlock(enabled bool, username, passwordHash string) string {
+	expectedHash := strings.TrimSpace(passwordHash)
+	if !enabled || username == "" || expectedHash == "" {
 		return ""
 	}
-	expectedHash := basicAuthCredentialHash(username, password)
 	return fmt.Sprintf(`        rewrite_by_lua_block {
             local expected_hash = "%s"
             local auth = ngx.var.http_authorization or ""
@@ -1963,12 +1920,7 @@ func renderBasicAuthBlock(enabled bool, username, password string) string {
 }
 
 func basicAuthCredentialHash(username, password string) string {
-	credentials := strings.TrimSpace(username) + ":" + strings.TrimSpace(password)
-	if credentials == ":" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(basicAuthCredentialHashMaterial + credentials))
-	return hex.EncodeToString(sum[:])
+	return openresty.BasicAuthCredentialHash(username, password)
 }
 
 func renderRegionRestrictionBlock(config routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
@@ -2070,27 +2022,11 @@ func uintSliceEqual(left []uint, right []uint) bool {
 }
 
 func checksum(content string) string {
-	sum := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(sum[:])
+	return configversion.Checksum(content)
 }
 
 func checksumBundle(mainConfig string, routeConfig string, supportFiles []SupportFile) string {
-	var builder strings.Builder
-	builder.WriteString(mainConfig)
-	builder.WriteString("\n--route-config--\n")
-	builder.WriteString(routeConfig)
-	builder.WriteString("\n--support-files--\n")
-	files := dedupeSupportFiles(supportFiles)
-	sort.Slice(files, func(i int, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	for _, file := range files {
-		builder.WriteString(file.Path)
-		builder.WriteString("\n")
-		builder.WriteString(file.Content)
-		builder.WriteString("\n")
-	}
-	return checksum(builder.String())
+	return configversion.ChecksumBundle(mainConfig, routeConfig, supportFiles)
 }
 
 func configBundleRuntimeChanged(activeVersion *model.ConfigVersion, bundle *configBundle) (bool, error) {
@@ -2133,72 +2069,31 @@ func activeConfigVersionArtifactManifestChecksum(version *model.ConfigVersion) (
 }
 
 func configVersionArtifactBundleManifestChecksum(bundles []configVersionArtifactBundle) string {
-	items := make([]configVersionArtifactManifestItem, 0, len(bundles))
-	for _, bundle := range bundles {
-		items = append(items, configVersionArtifactManifestItem{
-			PoolName:            normalizeNodePoolName(bundle.PoolName),
-			Checksum:            strings.TrimSpace(bundle.Checksum),
-			MainConfigChecksum:  strings.TrimSpace(bundle.MainConfigChecksum),
-			RouteConfigChecksum: strings.TrimSpace(bundle.RouteConfigChecksum),
-			RouteCount:          bundle.RouteCount,
-		})
-	}
-	return checksumConfigVersionArtifactManifest(items)
+	return configversion.ArtifactBundleManifestChecksum(bundles, normalizeNodePoolName)
 }
 
-type configVersionArtifactManifestItem struct {
-	PoolName            string `json:"pool_name"`
-	Checksum            string `json:"checksum"`
-	MainConfigChecksum  string `json:"main_config_checksum"`
-	RouteConfigChecksum string `json:"route_config_checksum"`
-	RouteCount          int    `json:"route_count"`
-}
+type configVersionArtifactManifestItem = configversion.ArtifactManifestItem
 
 func checksumConfigVersionArtifactManifest(items []configVersionArtifactManifestItem) string {
-	sort.Slice(items, func(i int, j int) bool {
-		return items[i].PoolName < items[j].PoolName
-	})
-	raw, err := json.Marshal(items)
-	if err != nil {
-		return checksum("")
-	}
-	return checksum(string(raw))
+	return configversion.ChecksumArtifactManifest(items)
 }
 
 func nextVersionNumber(now time.Time) (string, error) {
-	prefix := now.Format("20060102")
-	var latest model.ConfigVersion
-	err := model.DB.
-		Select("version").
-		Where("version LIKE ?", prefix+"-%").
-		Order("version desc").
-		First(&latest).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return fmt.Sprintf("%s-%03d", prefix, 1), nil
-	}
-	if err != nil {
-		return "", err
-	}
-	suffix := strings.TrimPrefix(latest.Version, prefix+"-")
-	sequence, err := strconv.Atoi(suffix)
-	if err != nil {
-		return "", fmt.Errorf("invalid config version sequence %q: %w", latest.Version, err)
-	}
-	return fmt.Sprintf("%s-%03d", prefix, sequence+1), nil
+	return configversion.NextVersionNumber(now)
 }
 
-func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg openRestyConfigSnapshot) string {
+	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
 	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s\n    return 301 https://$host$request_uri;\n}\n\n", serverNames, renderRegionRestrictionBlock(regionConfig, wafConfig, ccConfig))
 }
 
-func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPassword string, cfg openRestyConfigSnapshot) string {
+func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg openRestyConfigSnapshot) string {
 	certPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateCertFileName(certificateID))
 	keyPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateKeyFileName(certificateID))
-	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPassword), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderServerNames(domains []string) string {
@@ -2649,13 +2544,11 @@ func resolveUpstreamServerName(originURL string, originHost string) string {
 }
 
 func quoteNginxHeaderValue(value string) string {
-	return quoteNginxStringLiteral(value)
+	return openresty.QuoteNginxHeaderValue(value)
 }
 
 func quoteNginxStringLiteral(value string) string {
-	escaped := strings.ReplaceAll(value, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	return fmt.Sprintf(`"%s"`, escaped)
+	return openresty.QuoteNginxStringLiteral(value)
 }
 
 func luaStringLiteral(value string) string {
@@ -2667,30 +2560,19 @@ func luaStringLiteral(value string) string {
 }
 
 func certificateCertFileName(id uint) string {
-	return fmt.Sprintf("%d.crt", id)
+	return openresty.CertFileName(id)
 }
 
 func certificateKeyFileName(id uint) string {
-	return fmt.Sprintf("%d.key", id)
+	return openresty.KeyFileName(id)
 }
 
 func normalizePEM(content string) string {
-	return strings.TrimSpace(content) + "\n"
+	return openresty.NormalizePEM(content)
 }
 
 func dedupeSupportFiles(files []SupportFile) []SupportFile {
-	if len(files) == 0 {
-		return nil
-	}
-	unique := make(map[string]SupportFile, len(files))
-	for _, file := range files {
-		unique[file.Path] = file
-	}
-	result := make([]SupportFile, 0, len(unique))
-	for _, file := range unique {
-		result = append(result, file)
-	}
-	return result
+	return openresty.DedupeSupportFiles(files)
 }
 
 func renderPowConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, error) {

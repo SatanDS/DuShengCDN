@@ -2028,6 +2028,9 @@ func TestProxyRouteBasicAuthPasswordIsRedactedAndPreservedOnBlankUpdate(t *testi
 	if !created.BasicAuthEnabled || !created.BasicAuthPasswordConfigured {
 		t.Fatalf("expected basic auth to be configured without revealing password, got %+v", created)
 	}
+	if created.BasicAuthPasswordUpdatedAt == nil {
+		t.Fatalf("expected create response to expose password update time, got %+v", created)
+	}
 
 	detailResp := performJSONRequest(t, engine, token, http.MethodGet, "/api/proxy-routes/"+toString(created.ID), nil)
 	var detailRaw map[string]json.RawMessage
@@ -2066,8 +2069,20 @@ func TestProxyRouteBasicAuthPasswordIsRedactedAndPreservedOnBlankUpdate(t *testi
 	if err := model.DB.First(&stored, created.ID).Error; err != nil {
 		t.Fatalf("load stored proxy route: %v", err)
 	}
-	if stored.BasicAuthPassword != "edge-secret" {
-		t.Fatalf("expected blank update to preserve stored password, got %q", stored.BasicAuthPassword)
+	if stored.BasicAuthPassword != "" {
+		t.Fatalf("expected stored plaintext password to be empty, got %q", stored.BasicAuthPassword)
+	}
+	if stored.BasicAuthPasswordHash == "" || stored.BasicAuthPasswordUpdatedAt == nil {
+		t.Fatalf("expected blank update to preserve password hash, got hash=%q updated_at=%v", stored.BasicAuthPasswordHash, stored.BasicAuthPasswordUpdatedAt)
+	}
+	if model.DB.Migrator().HasColumn("proxy_routes", "basic_auth_password") {
+		var legacyPlaintext string
+		if err := model.DB.Table("proxy_routes").Select("basic_auth_password").Where("id = ?", created.ID).Scan(&legacyPlaintext).Error; err != nil {
+			t.Fatalf("query legacy basic auth password column: %v", err)
+		}
+		if legacyPlaintext != "" {
+			t.Fatalf("expected legacy basic_auth_password column to be empty, got %q", legacyPlaintext)
+		}
 	}
 }
 

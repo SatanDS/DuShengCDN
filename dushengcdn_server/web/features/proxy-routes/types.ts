@@ -140,6 +140,7 @@ export interface ProxyRouteItem {
   basic_auth_username: string;
   basic_auth_password?: string;
   basic_auth_password_configured?: boolean;
+  basic_auth_password_updated_at?: string | null;
   region_restriction_enabled: boolean;
   region_restriction_mode: 'allow' | 'block';
   region_restriction_countries: string[];

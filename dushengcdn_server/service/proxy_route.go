@@ -148,6 +148,7 @@ type ProxyRouteView struct {
 	BasicAuthUsername           string                        `json:"basic_auth_username"`
 	BasicAuthPassword           string                        `json:"-"`
 	BasicAuthPasswordConfigured bool                          `json:"basic_auth_password_configured"`
+	BasicAuthPasswordUpdatedAt  *time.Time                    `json:"basic_auth_password_updated_at"`
 	RegionRestrictionEnabled    bool                          `json:"region_restriction_enabled"`
 	RegionRestrictionMode       string                        `json:"region_restriction_mode"`
 	RegionRestrictionCountries  []string                      `json:"region_restriction_countries"`
@@ -407,18 +408,9 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		return nil, errors.New("redirect_http requires enable_https")
 	}
 
-	if input.BasicAuthEnabled {
-		input.BasicAuthUsername = strings.TrimSpace(input.BasicAuthUsername)
-		input.BasicAuthPassword = strings.TrimSpace(input.BasicAuthPassword)
-		if input.BasicAuthPassword == "" && route != nil {
-			input.BasicAuthPassword = route.BasicAuthPassword
-		}
-		if input.BasicAuthUsername == "" || input.BasicAuthPassword == "" {
-			return nil, errors.New("basic_auth_username and basic_auth_password cannot be empty when basic auth is enabled")
-		}
-	} else {
-		input.BasicAuthUsername = ""
-		input.BasicAuthPassword = ""
+	basicAuthUsername, basicAuthPasswordHash, basicAuthPasswordUpdatedAt, err := normalizeProxyRouteBasicAuth(route, input)
+	if err != nil {
+		return nil, err
 	}
 
 	dnsProviderMode := normalizeDNSProviderMode(input.DNSProviderMode)
@@ -514,8 +506,10 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.CCMode = ccMode
 	route.CCConfig = string(ccConfigJSON)
 	route.BasicAuthEnabled = input.BasicAuthEnabled
-	route.BasicAuthUsername = input.BasicAuthUsername
-	route.BasicAuthPassword = input.BasicAuthPassword
+	route.BasicAuthUsername = basicAuthUsername
+	route.BasicAuthPasswordHash = basicAuthPasswordHash
+	route.BasicAuthPasswordUpdatedAt = basicAuthPasswordUpdatedAt
+	route.BasicAuthPassword = ""
 	route.RegionRestrictionEnabled = input.RegionRestrictionEnabled
 	route.RegionRestrictionMode = regionMode
 	route.RegionRestrictionCountries = string(regionCountriesJSON)
@@ -542,6 +536,47 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 		return nil, err
 	}
 	return route, nil
+}
+
+func normalizeProxyRouteBasicAuth(route *model.ProxyRoute, input ProxyRouteInput) (string, string, *time.Time, error) {
+	if !input.BasicAuthEnabled {
+		return "", "", nil, nil
+	}
+	username := strings.TrimSpace(input.BasicAuthUsername)
+	password := strings.TrimSpace(input.BasicAuthPassword)
+	if username == "" {
+		return "", "", nil, errors.New("basic_auth_username and basic_auth_password cannot be empty when basic auth is enabled")
+	}
+	if password != "" {
+		now := time.Now()
+		return username, model.BasicAuthCredentialHash(username, password), &now, nil
+	}
+	if route != nil && route.BasicAuthEnabled && strings.TrimSpace(route.BasicAuthUsername) == username {
+		passwordHash := strings.TrimSpace(route.BasicAuthPasswordHash)
+		if passwordHash == "" && strings.TrimSpace(route.BasicAuthPassword) != "" {
+			passwordHash = model.BasicAuthCredentialHash(username, route.BasicAuthPassword)
+		}
+		if passwordHash != "" {
+			updatedAt := route.BasicAuthPasswordUpdatedAt
+			if updatedAt == nil {
+				now := time.Now()
+				updatedAt = &now
+			}
+			return username, passwordHash, updatedAt, nil
+		}
+	}
+	return "", "", nil, errors.New("basic_auth_username and basic_auth_password cannot be empty when basic auth is enabled")
+}
+
+func proxyRouteBasicAuthPasswordHashForView(route *model.ProxyRoute) string {
+	if route == nil || !route.BasicAuthEnabled {
+		return ""
+	}
+	passwordHash := strings.TrimSpace(route.BasicAuthPasswordHash)
+	if passwordHash != "" {
+		return passwordHash
+	}
+	return model.BasicAuthCredentialHash(route.BasicAuthUsername, route.BasicAuthPassword)
 }
 
 func ensureCommercialProxyRouteInputFeaturesEnabled(input ProxyRouteInput) error {
@@ -863,7 +898,8 @@ func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRoute
 		CCConfig:                    ccConfig,
 		BasicAuthEnabled:            route.BasicAuthEnabled,
 		BasicAuthUsername:           route.BasicAuthUsername,
-		BasicAuthPasswordConfigured: route.BasicAuthEnabled && strings.TrimSpace(route.BasicAuthPassword) != "",
+		BasicAuthPasswordConfigured: route.BasicAuthEnabled && strings.TrimSpace(proxyRouteBasicAuthPasswordHashForView(route)) != "",
+		BasicAuthPasswordUpdatedAt:  route.BasicAuthPasswordUpdatedAt,
 		RegionRestrictionEnabled:    route.RegionRestrictionEnabled,
 		RegionRestrictionMode:       normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
 		RegionRestrictionCountries:  regionCountries,
@@ -1071,14 +1107,24 @@ func validateProxyRouteSiteName(siteName string) error {
 }
 
 func validateProxyRouteIdentityUniqueness(route *model.ProxyRoute, siteName string, domains []string) error {
-	routes, err := model.ListProxyRouteIdentityCandidates(siteName, domains)
-	if err != nil {
-		return err
-	}
-
 	currentID := uint(0)
 	if route != nil {
 		currentID = route.ID
+	}
+
+	for _, domain := range domains {
+		binding, err := model.GetProxySiteDomainByDomain(domain)
+		if err == nil && binding != nil && binding.ProxyRouteID != currentID {
+			return fmt.Errorf("domain %s already exists", domain)
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
+
+	routes, err := model.ListProxyRouteIdentityCandidates(siteName, domains)
+	if err != nil {
+		return err
 	}
 
 	for _, item := range routes {

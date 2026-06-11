@@ -774,9 +774,18 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 		"node_system_profiles",
 		"nodes",
 		"options",
+		"cache_policies",
+		"dns_bindings",
+		"origin_groups",
+		"origin_servers",
 		"origins",
+		"proxy_route_rules",
 		"proxy_routes",
+		"proxy_site_domains",
+		"proxy_sites",
+		"security_policies",
 		"tls_certificates",
+		"tls_bindings",
 		"users",
 	}
 	sort.Strings(want)
@@ -3069,6 +3078,180 @@ func TestEnsureDatabaseSchemaUpToDateAddsCommercialLicenseTable(t *testing.T) {
 	}
 	if !exists || version != currentDatabaseSchemaVersion {
 		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
+func TestEnsureDatabaseSchemaUpToDateBackfillsProxyRouteNormalizedTables(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "proxy-route-normalized-schema.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+	domainsJSON, _ := json.Marshal([]string{"www.example.com", "api.example.com"})
+	upstreamsJSON, _ := json.Marshal([]string{"https://origin-a.internal:8443", "https://origin-b.internal:8443"})
+	certID := uint(7)
+	certIDsJSON, _ := json.Marshal([]uint{7})
+	domainCertIDsJSON, _ := json.Marshal([]uint{7, 7})
+	basicAuthPasswordUpdatedAt := time.Now()
+	route := &ProxyRoute{
+		SiteName:                   "example-site",
+		Domain:                     "www.example.com",
+		Domains:                    string(domainsJSON),
+		OriginURL:                  "https://origin-a.internal:8443",
+		Upstreams:                  string(upstreamsJSON),
+		NodePool:                   "edge",
+		Enabled:                    true,
+		EnableHTTPS:                true,
+		CertID:                     &certID,
+		CertIDs:                    string(certIDsJSON),
+		DomainCertIDs:              string(domainCertIDsJSON),
+		RedirectHTTP:               true,
+		CacheEnabled:               true,
+		CachePolicy:                "suffix",
+		CacheRules:                 `["jpg"]`,
+		CustomHeaders:              `[{"key":"X-Test","value":"yes"}]`,
+		BasicAuthEnabled:           true,
+		BasicAuthUsername:          "admin",
+		BasicAuthPasswordHash:      BasicAuthCredentialHash("admin", "secret"),
+		BasicAuthPasswordUpdatedAt: &basicAuthPasswordUpdatedAt,
+		RegionRestrictionEnabled:   true,
+		RegionRestrictionMode:      "allow",
+		RegionRestrictionCountries: `["US"]`,
+		DNSProviderMode:            "cloudflare",
+		DNSRecordType:              "A",
+		DNSRecordIDs:               `{"www.example.com|203.0.113.10":"record-id"}`,
+		DDOSProtectionMode:         "off",
+		DDOSProtectionProvider:     "cloudflare",
+	}
+	if err := db.Create(route).Error; err != nil {
+		t.Fatalf("create legacy route: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 44); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	var site ProxySite
+	if err := db.Where("proxy_route_id = ?", route.ID).First(&site).Error; err != nil {
+		t.Fatalf("query proxy site: %v", err)
+	}
+	if site.Name != "example-site" || site.NodePool != "edge" {
+		t.Fatalf("unexpected proxy site: %+v", site)
+	}
+	var domains []ProxySiteDomain
+	if err := db.Where("proxy_route_id = ?", route.ID).Order("sort_order asc").Find(&domains).Error; err != nil {
+		t.Fatalf("query site domains: %v", err)
+	}
+	if len(domains) != 2 || domains[0].Domain != "www.example.com" || !domains[0].IsPrimary || domains[1].Domain != "api.example.com" {
+		t.Fatalf("unexpected site domains: %+v", domains)
+	}
+	var servers []OriginServer
+	if err := db.Where("proxy_route_id = ?", route.ID).Order("sort_order asc").Find(&servers).Error; err != nil {
+		t.Fatalf("query origin servers: %v", err)
+	}
+	if len(servers) != 2 || servers[0].Scheme != "https" || servers[0].Host != "origin-a.internal" || servers[0].Port != "8443" {
+		t.Fatalf("unexpected origin servers: %+v", servers)
+	}
+	var tlsBindings []TLSBinding
+	if err := db.Where("proxy_route_id = ?", route.ID).Order("sort_order asc").Find(&tlsBindings).Error; err != nil {
+		t.Fatalf("query tls bindings: %v", err)
+	}
+	if len(tlsBindings) != 2 || tlsBindings[0].CertID == nil || *tlsBindings[0].CertID != 7 || !tlsBindings[0].RedirectHTTP {
+		t.Fatalf("unexpected tls bindings: %+v", tlsBindings)
+	}
+	var cachePolicy CachePolicy
+	if err := db.Where("proxy_route_id = ?", route.ID).First(&cachePolicy).Error; err != nil {
+		t.Fatalf("query cache policy: %v", err)
+	}
+	if !cachePolicy.Enabled || cachePolicy.Policy != "suffix" || cachePolicy.RulesJSON != `["jpg"]` {
+		t.Fatalf("unexpected cache policy: %+v", cachePolicy)
+	}
+	var dnsBinding DNSBinding
+	if err := db.Where("proxy_route_id = ?", route.ID).First(&dnsBinding).Error; err != nil {
+		t.Fatalf("query dns binding: %v", err)
+	}
+	if dnsBinding.DNSRecordIDsJSON == "" || dnsBinding.DNSProviderMode != "cloudflare" {
+		t.Fatalf("unexpected dns binding: %+v", dnsBinding)
+	}
+	var securityPolicy SecurityPolicy
+	if err := db.Where("proxy_route_id = ?", route.ID).First(&securityPolicy).Error; err != nil {
+		t.Fatalf("query security policy: %v", err)
+	}
+	if !securityPolicy.BasicAuthEnabled || securityPolicy.BasicAuthPasswordHash == "" || securityPolicy.RegionRestrictionCountriesJSON != `["US"]` {
+		t.Fatalf("unexpected security policy: %+v", securityPolicy)
+	}
+}
+
+func TestEnsureDatabaseSchemaUpToDateMigratesProxyRouteBasicAuthPlaintext(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "proxy-route-basic-auth-hash.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+	if !db.Migrator().HasColumn("proxy_routes", "basic_auth_password") {
+		if err := db.Exec(`ALTER TABLE "proxy_routes" ADD COLUMN "basic_auth_password" varchar(255) NOT NULL DEFAULT ''`).Error; err != nil {
+			t.Fatalf("add legacy basic_auth_password column: %v", err)
+		}
+	}
+	domainsJSON, _ := json.Marshal([]string{"auth.example.com"})
+	upstreamsJSON, _ := json.Marshal([]string{"https://origin-auth.internal"})
+	updatedAt := time.Now().Add(-time.Hour).UTC()
+	if err := db.Table("proxy_routes").Create(map[string]any{
+		"site_name":                "auth-site",
+		"domain":                   "auth.example.com",
+		"domains":                  string(domainsJSON),
+		"origin_url":               "https://origin-auth.internal",
+		"upstreams":                string(upstreamsJSON),
+		"node_pool":                "edge",
+		"enabled":                  true,
+		"basic_auth_enabled":       true,
+		"basic_auth_username":      "admin",
+		"basic_auth_password":      "legacy-secret",
+		"dns_record_type":          "A",
+		"dns_provider_mode":        "cloudflare",
+		"ddos_protection_mode":     "off",
+		"ddos_protection_provider": "cloudflare",
+		"created_at":               updatedAt,
+		"updated_at":               updatedAt,
+	}).Error; err != nil {
+		t.Fatalf("create legacy route: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 45); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	var stored ProxyRoute
+	if err := db.Where("domain = ?", "auth.example.com").First(&stored).Error; err != nil {
+		t.Fatalf("load migrated route: %v", err)
+	}
+	expectedHash := BasicAuthCredentialHash("admin", "legacy-secret")
+	if stored.BasicAuthPasswordHash != expectedHash || stored.BasicAuthPasswordUpdatedAt == nil {
+		t.Fatalf("expected migrated password hash and timestamp, got hash=%q updated_at=%v", stored.BasicAuthPasswordHash, stored.BasicAuthPasswordUpdatedAt)
+	}
+	var legacyPlaintext string
+	if err := db.Table("proxy_routes").Select("basic_auth_password").Where("id = ?", stored.ID).Scan(&legacyPlaintext).Error; err != nil {
+		t.Fatalf("query legacy plaintext column: %v", err)
+	}
+	if legacyPlaintext != "" {
+		t.Fatalf("expected legacy plaintext column to be empty, got %q", legacyPlaintext)
+	}
+	var securityPolicy SecurityPolicy
+	if err := db.Where("proxy_route_id = ?", stored.ID).First(&securityPolicy).Error; err != nil {
+		t.Fatalf("query security policy: %v", err)
+	}
+	if securityPolicy.BasicAuthPasswordHash != expectedHash || securityPolicy.BasicAuthPasswordUpdatedAt == nil {
+		t.Fatalf("expected security policy to mirror migrated hash, got %+v", securityPolicy)
 	}
 }
 

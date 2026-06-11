@@ -212,6 +212,11 @@ func updateRoutesForOriginAddress(tx *gorm.DB, originID uint, address string) er
 			}).Error; err != nil {
 			return fmt.Errorf("update route %d origin address failed: %w", route.ID, err)
 		}
+		route.OriginURL = rewrittenOriginURL
+		route.Upstreams = string(upstreamsJSON)
+		if err := model.SyncProxyRouteNormalizedTablesWithDB(tx, route); err != nil {
+			return fmt.Errorf("sync route %d normalized origins failed: %w", route.ID, err)
+		}
 	}
 	return nil
 }

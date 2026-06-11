@@ -41,7 +41,9 @@ type ProxyRoute struct {
 	CCConfig                   string     `json:"cc_config" gorm:"column:cc_config;type:text;not null;default:'{}'"`
 	BasicAuthEnabled           bool       `json:"basic_auth_enabled" gorm:"not null;default:false"`
 	BasicAuthUsername          string     `json:"basic_auth_username" gorm:"size:255;not null;default:''"`
-	BasicAuthPassword          string     `json:"-" gorm:"size:255;not null;default:''"`
+	BasicAuthPasswordHash      string     `json:"-" gorm:"size:64;not null;default:''"`
+	BasicAuthPasswordUpdatedAt *time.Time `json:"basic_auth_password_updated_at"`
+	BasicAuthPassword          string     `json:"-" gorm:"-"`
 	RegionRestrictionEnabled   bool       `json:"region_restriction_enabled" gorm:"not null;default:false"`
 	RegionRestrictionMode      string     `json:"region_restriction_mode" gorm:"size:16;not null;default:'block'"`
 	RegionRestrictionCountries string     `json:"region_restriction_countries" gorm:"type:text;not null;default:'[]'"`
@@ -145,13 +147,16 @@ func ListProxyRouteIdentityCandidates(siteName string, domains []string) (routes
 }
 
 func (route *ProxyRoute) Insert() error {
-	return route.InsertWithDB(DB)
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return route.InsertWithDB(tx)
+	})
 }
 
 func (route *ProxyRoute) InsertWithDB(db *gorm.DB) error {
 	if db == nil {
 		db = DB
 	}
+	route.prepareBasicAuthStorage()
 	enabled := route.Enabled
 	if err := db.Create(route).Error; err != nil {
 		return err
@@ -162,73 +167,132 @@ func (route *ProxyRoute) InsertWithDB(db *gorm.DB) error {
 		}
 		route.Enabled = false
 	}
-	return nil
+	return SyncProxyRouteNormalizedTablesWithDB(db, route)
 }
 
 func (route *ProxyRoute) Update() error {
-	return DB.Model(&ProxyRoute{}).Where("id = ?", route.ID).Updates(map[string]any{
-		"site_name":                    route.SiteName,
-		"domain":                       route.Domain,
-		"domains":                      route.Domains,
-		"origin_id":                    route.OriginID,
-		"origin_url":                   route.OriginURL,
-		"origin_host":                  route.OriginHost,
-		"upstreams":                    route.Upstreams,
-		"node_pool":                    route.NodePool,
-		"enabled":                      route.Enabled,
-		"enable_https":                 route.EnableHTTPS,
-		"cert_id":                      route.CertID,
-		"cert_ids":                     route.CertIDs,
-		"domain_cert_ids":              route.DomainCertIDs,
-		"redirect_http":                route.RedirectHTTP,
-		"limit_conn_per_server":        route.LimitConnPerServer,
-		"limit_conn_per_ip":            route.LimitConnPerIP,
-		"limit_rate":                   route.LimitRate,
-		"proxy_buffering_mode":         route.ProxyBufferingMode,
-		"cache_enabled":                route.CacheEnabled,
-		"cache_policy":                 route.CachePolicy,
-		"cache_rules":                  route.CacheRules,
-		"custom_headers":               route.CustomHeaders,
-		"pow_enabled":                  route.PoWEnabled,
-		"pow_config":                   route.PoWConfig,
-		"waf_enabled":                  route.WAFEnabled,
-		"waf_mode":                     route.WAFMode,
-		"waf_config":                   route.WAFConfig,
-		"cc_enabled":                   route.CCEnabled,
-		"cc_mode":                      route.CCMode,
-		"cc_config":                    route.CCConfig,
-		"basic_auth_enabled":           route.BasicAuthEnabled,
-		"basic_auth_username":          route.BasicAuthUsername,
-		"basic_auth_password":          route.BasicAuthPassword,
-		"region_restriction_enabled":   route.RegionRestrictionEnabled,
-		"region_restriction_mode":      route.RegionRestrictionMode,
-		"region_restriction_countries": route.RegionRestrictionCountries,
-		"dns_auto_sync":                route.DNSAutoSync,
-		"dns_account_id":               route.DNSAccountID,
-		"dns_zone_id":                  route.DNSZoneID,
-		"dns_record_type":              route.DNSRecordType,
-		"dns_record_name":              route.DNSRecordName,
-		"dns_record_content":           route.DNSRecordContent,
-		"dns_auto_target":              route.DNSAutoTarget,
-		"dns_target_count":             route.DNSTargetCount,
-		"dns_schedule_mode":            route.DNSScheduleMode,
-		"dns_ttl":                      route.DNSTTL,
-		"dns_provider_mode":            route.DNSProviderMode,
-		"dns_zone_id_ref":              route.DNSZoneIDRef,
-		"gslb_enabled":                 route.GSLBEnabled,
-		"gslb_policy":                  route.GSLBPolicy,
-		"dns_record_ids":               route.DNSRecordIDs,
-		"cloudflare_proxied":           route.CloudflareProxied,
-		"ddos_protection_mode":         route.DDOSProtectionMode,
-		"ddos_protection_provider":     route.DDOSProtectionProvider,
-		"ddos_protection_target":       route.DDOSProtectionTarget,
-		"dns_last_sync_status":         route.DNSLastSyncStatus,
-		"dns_last_sync_message":        route.DNSLastSyncMessage,
-		"dns_last_synced_at":           route.DNSLastSyncedAt,
-		"remark":                       route.Remark,
-	}).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return route.UpdateWithDB(tx)
+	})
+}
+
+func (route *ProxyRoute) UpdateWithDB(db *gorm.DB) error {
+	if db == nil {
+		db = DB
+	}
+	route.prepareBasicAuthStorage()
+	var basicAuthPasswordUpdatedAt any = gorm.Expr("NULL")
+	if route.BasicAuthPasswordUpdatedAt != nil {
+		basicAuthPasswordUpdatedAt = route.BasicAuthPasswordUpdatedAt
+	}
+	if err := db.Model(&ProxyRoute{}).Where("id = ?", route.ID).Updates(map[string]any{
+		"site_name":                      route.SiteName,
+		"domain":                         route.Domain,
+		"domains":                        route.Domains,
+		"origin_id":                      route.OriginID,
+		"origin_url":                     route.OriginURL,
+		"origin_host":                    route.OriginHost,
+		"upstreams":                      route.Upstreams,
+		"node_pool":                      route.NodePool,
+		"enabled":                        route.Enabled,
+		"enable_https":                   route.EnableHTTPS,
+		"cert_id":                        route.CertID,
+		"cert_ids":                       route.CertIDs,
+		"domain_cert_ids":                route.DomainCertIDs,
+		"redirect_http":                  route.RedirectHTTP,
+		"limit_conn_per_server":          route.LimitConnPerServer,
+		"limit_conn_per_ip":              route.LimitConnPerIP,
+		"limit_rate":                     route.LimitRate,
+		"proxy_buffering_mode":           route.ProxyBufferingMode,
+		"cache_enabled":                  route.CacheEnabled,
+		"cache_policy":                   route.CachePolicy,
+		"cache_rules":                    route.CacheRules,
+		"custom_headers":                 route.CustomHeaders,
+		"pow_enabled":                    route.PoWEnabled,
+		"pow_config":                     route.PoWConfig,
+		"waf_enabled":                    route.WAFEnabled,
+		"waf_mode":                       route.WAFMode,
+		"waf_config":                     route.WAFConfig,
+		"cc_enabled":                     route.CCEnabled,
+		"cc_mode":                        route.CCMode,
+		"cc_config":                      route.CCConfig,
+		"basic_auth_enabled":             route.BasicAuthEnabled,
+		"basic_auth_username":            route.BasicAuthUsername,
+		"basic_auth_password_hash":       route.BasicAuthPasswordHash,
+		"basic_auth_password_updated_at": basicAuthPasswordUpdatedAt,
+		"region_restriction_enabled":     route.RegionRestrictionEnabled,
+		"region_restriction_mode":        route.RegionRestrictionMode,
+		"region_restriction_countries":   route.RegionRestrictionCountries,
+		"dns_auto_sync":                  route.DNSAutoSync,
+		"dns_account_id":                 route.DNSAccountID,
+		"dns_zone_id":                    route.DNSZoneID,
+		"dns_record_type":                route.DNSRecordType,
+		"dns_record_name":                route.DNSRecordName,
+		"dns_record_content":             route.DNSRecordContent,
+		"dns_auto_target":                route.DNSAutoTarget,
+		"dns_target_count":               route.DNSTargetCount,
+		"dns_schedule_mode":              route.DNSScheduleMode,
+		"dns_ttl":                        route.DNSTTL,
+		"dns_provider_mode":              route.DNSProviderMode,
+		"dns_zone_id_ref":                route.DNSZoneIDRef,
+		"gslb_enabled":                   route.GSLBEnabled,
+		"gslb_policy":                    route.GSLBPolicy,
+		"dns_record_ids":                 route.DNSRecordIDs,
+		"cloudflare_proxied":             route.CloudflareProxied,
+		"ddos_protection_mode":           route.DDOSProtectionMode,
+		"ddos_protection_provider":       route.DDOSProtectionProvider,
+		"ddos_protection_target":         route.DDOSProtectionTarget,
+		"dns_last_sync_status":           route.DNSLastSyncStatus,
+		"dns_last_sync_message":          route.DNSLastSyncMessage,
+		"dns_last_synced_at":             route.DNSLastSyncedAt,
+		"remark":                         route.Remark,
+	}).Error; err != nil {
+		return err
+	}
+	return SyncProxyRouteNormalizedTablesWithDB(db, route)
+}
+
+func (route *ProxyRoute) prepareBasicAuthStorage() {
+	if route == nil {
+		return
+	}
+	if !route.BasicAuthEnabled {
+		route.BasicAuthUsername = ""
+		route.BasicAuthPasswordHash = ""
+		route.BasicAuthPasswordUpdatedAt = nil
+		route.BasicAuthPassword = ""
+		return
+	}
+	route.BasicAuthUsername = strings.TrimSpace(route.BasicAuthUsername)
+	route.BasicAuthPasswordHash = strings.TrimSpace(route.BasicAuthPasswordHash)
+	if route.BasicAuthPasswordHash == "" && strings.TrimSpace(route.BasicAuthPassword) != "" {
+		route.BasicAuthPasswordHash = BasicAuthCredentialHash(route.BasicAuthUsername, route.BasicAuthPassword)
+		if route.BasicAuthPasswordUpdatedAt == nil {
+			now := time.Now()
+			route.BasicAuthPasswordUpdatedAt = &now
+		}
+	}
+	if route.BasicAuthPasswordHash != "" && route.BasicAuthPasswordUpdatedAt == nil {
+		now := time.Now()
+		route.BasicAuthPasswordUpdatedAt = &now
+	}
+	route.BasicAuthPassword = ""
 }
 
 func (route *ProxyRoute) Delete() error {
-	return DB.Delete(route).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return route.DeleteWithDB(tx)
+	})
+}
+
+func (route *ProxyRoute) DeleteWithDB(db *gorm.DB) error {
+	if db == nil {
+		db = DB
+	}
+	if route != nil && route.ID != 0 {
+		if err := DeleteProxyRouteNormalizedTablesWithDB(db, route.ID); err != nil {
+			return err
+		}
+	}
+	return db.Delete(route).Error
 }

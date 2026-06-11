@@ -231,6 +231,9 @@ func syncProxyRouteDNSWithContext(route *model.ProxyRoute, syncContext *proxyRou
 	if err := model.DB.Model(route).Select(updateColumns).Updates(route).Error; err != nil {
 		return err
 	}
+	if err := model.SyncProxyRouteNormalizedTables(route); err != nil {
+		return err
+	}
 	slog.Info("cloudflare dns synced", "route_id", route.ID, "site_name", route.SiteName, "records", len(nextRecordIDs), "content", content, "proxied", effectiveCloudflareProxied(route, ddosActive), "ddos_active", ddosActive, "ddos_provider", ddosProvider)
 	return nil
 }

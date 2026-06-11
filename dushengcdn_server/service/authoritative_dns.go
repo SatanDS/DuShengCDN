@@ -1278,6 +1278,9 @@ func SwitchProxyRouteToAuthoritativeDNS(id uint, input AuthoritativeDNSMigration
 	).Updates(route).Error; err != nil {
 		return nil, err
 	}
+	if err := model.SyncProxyRouteNormalizedTables(route); err != nil {
+		return nil, err
+	}
 	return buildProxyRouteView(route)
 }
 

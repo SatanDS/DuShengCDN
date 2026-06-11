@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -137,7 +138,10 @@ func applyCurrentSchema(db *gorm.DB, backend string) error {
 	if err := ensureDNSRollupObservabilityIndex(db); err != nil {
 		return err
 	}
-	return ensureObservabilityShardQueryIndexes(db, backend)
+	if err := ensureObservabilityShardQueryIndexes(db, backend); err != nil {
+		return err
+	}
+	return EnsureProxyRouteNormalizedTablesBackfilled(db)
 }
 
 func loadDatabaseSchemaVersion(db *gorm.DB) (int, bool, error) {
@@ -2478,6 +2482,197 @@ func validateDatabaseSchemaV44(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func migrateV45(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return BackfillProxyRouteNormalizedTables(db)
+}
+
+func validateDatabaseSchemaV45(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV44(db, backend); err != nil {
+		return err
+	}
+	normalizedTables := []struct {
+		model   any
+		table   string
+		columns []string
+	}{
+		{model: &ProxySite{}, table: "proxy_sites", columns: []string{"id", "proxy_route_id", "name", "node_pool", "enabled", "remark"}},
+		{model: &ProxySiteDomain{}, table: "proxy_site_domains", columns: []string{"id", "proxy_site_id", "proxy_route_id", "domain", "is_primary", "sort_order"}},
+		{model: &OriginGroup{}, table: "origin_groups", columns: []string{"id", "proxy_route_id", "origin_id", "name"}},
+		{model: &OriginServer{}, table: "origin_servers", columns: []string{"id", "origin_group_id", "proxy_route_id", "origin_id", "url", "scheme", "host", "port", "uri", "sort_order"}},
+		{model: &ProxyRouteRule{}, table: "proxy_route_rules", columns: []string{"id", "proxy_route_id", "proxy_site_id", "origin_group_id", "limit_conn_per_server", "limit_conn_per_ip", "limit_rate", "proxy_buffering_mode", "custom_headers_json"}},
+		{model: &CachePolicy{}, table: "cache_policies", columns: []string{"id", "proxy_route_id", "enabled", "policy", "rules_json"}},
+		{model: &TLSBinding{}, table: "tls_bindings", columns: []string{"id", "proxy_route_id", "proxy_site_id", "domain", "cert_id", "enable_https", "redirect_http", "is_primary", "sort_order"}},
+		{model: &DNSBinding{}, table: "dns_bindings", columns: []string{"id", "proxy_route_id", "dns_auto_sync", "dns_account_id", "dns_zone_id", "dns_record_type", "dns_record_name", "dns_record_content", "dns_auto_target", "dns_target_count", "dns_schedule_mode", "dns_ttl", "dns_provider_mode", "dns_zone_id_ref", "gslb_enabled", "gslb_policy_json", "dns_record_ids_json", "cloudflare_proxied", "last_sync_status", "last_sync_message", "last_synced_at"}},
+		{model: &SecurityPolicy{}, table: "security_policies", columns: []string{"id", "proxy_route_id", "pow_enabled", "pow_config", "waf_enabled", "waf_mode", "waf_config", "cc_enabled", "cc_mode", "cc_config", "basic_auth_enabled", "basic_auth_username", "basic_auth_password_hash", "region_restriction_enabled", "region_restriction_mode", "region_restriction_countries_json", "ddos_protection_mode", "ddos_protection_provider", "ddos_protection_target"}},
+	}
+	for _, item := range normalizedTables {
+		if !db.Migrator().HasTable(item.model) {
+			return fmt.Errorf("table %s is missing", item.table)
+		}
+		for _, column := range item.columns {
+			if !db.Migrator().HasColumn(item.model, column) {
+				return fmt.Errorf("column %s.%s is missing", item.table, column)
+			}
+		}
+	}
+
+	var routeCount int64
+	if err := db.Model(&ProxyRoute{}).Count(&routeCount).Error; err != nil {
+		return err
+	}
+	if routeCount > 0 {
+		var siteCount int64
+		if err := db.Model(&ProxySite{}).Count(&siteCount).Error; err != nil {
+			return err
+		}
+		if siteCount != routeCount {
+			return fmt.Errorf("proxy route normalized table backfill incomplete: proxy_sites=%d proxy_routes=%d", siteCount, routeCount)
+		}
+	}
+	_ = backend
+	return nil
+}
+
+func migrateV46(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	if err := migrateProxyRouteBasicAuthPasswordHashes(db); err != nil {
+		return err
+	}
+	return BackfillProxyRouteNormalizedTables(db)
+}
+
+func validateDatabaseSchemaV46(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV45(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{"basic_auth_password_hash", "basic_auth_password_updated_at"} {
+		if !db.Migrator().HasColumn(&ProxyRoute{}, column) {
+			return fmt.Errorf("column proxy_routes.%s is missing", column)
+		}
+	}
+	if !db.Migrator().HasColumn(&SecurityPolicy{}, "basic_auth_password_updated_at") {
+		return errors.New("column security_policies.basic_auth_password_updated_at is missing")
+	}
+	hasLegacyPasswordColumn, err := databaseTableHasColumn(db, "proxy_routes", "basic_auth_password")
+	if err != nil {
+		return err
+	}
+	if hasLegacyPasswordColumn {
+		var plaintextCount int64
+		if err := db.Table("proxy_routes").Where("basic_auth_password <> ''").Count(&plaintextCount).Error; err != nil {
+			return fmt.Errorf("validate proxy route basic auth password cleanup failed: %w", err)
+		}
+		if plaintextCount > 0 {
+			return fmt.Errorf("proxy_routes.basic_auth_password still contains %d plaintext values", plaintextCount)
+		}
+	}
+	_ = backend
+	return nil
+}
+
+type legacyProxyRouteBasicAuthPassword struct {
+	ID                         uint
+	BasicAuthEnabled           bool
+	BasicAuthUsername          string
+	BasicAuthPassword          string
+	BasicAuthPasswordHash      string
+	BasicAuthPasswordUpdatedAt *time.Time
+	UpdatedAt                  time.Time
+}
+
+func migrateProxyRouteBasicAuthPasswordHashes(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&ProxyRoute{}) {
+		return nil
+	}
+	db = sessionIgnoringSharding(db)
+	hasLegacyPasswordColumn, err := databaseTableHasColumn(db, "proxy_routes", "basic_auth_password")
+	if err != nil {
+		return err
+	}
+	if !hasLegacyPasswordColumn {
+		return nil
+	}
+	var rows []legacyProxyRouteBasicAuthPassword
+	if err := db.Table("proxy_routes").
+		Select("id, basic_auth_enabled, basic_auth_username, basic_auth_password, basic_auth_password_hash, basic_auth_password_updated_at, updated_at").
+		Where("basic_auth_password <> '' OR (basic_auth_enabled = ? AND basic_auth_password_hash <> '')", true).
+		Find(&rows).Error; err != nil {
+		return fmt.Errorf("query proxy route basic auth passwords failed: %w", err)
+	}
+	for _, row := range rows {
+		passwordHash := strings.TrimSpace(row.BasicAuthPasswordHash)
+		passwordUpdatedAt := row.BasicAuthPasswordUpdatedAt
+		if strings.TrimSpace(row.BasicAuthPassword) != "" {
+			passwordHash = BasicAuthCredentialHash(row.BasicAuthUsername, row.BasicAuthPassword)
+			if passwordUpdatedAt == nil {
+				value := row.UpdatedAt
+				if value.IsZero() {
+					value = time.Now()
+				}
+				passwordUpdatedAt = &value
+			}
+		}
+		updates := map[string]any{
+			"basic_auth_password":            "",
+			"basic_auth_password_hash":       passwordHash,
+			"basic_auth_password_updated_at": passwordUpdatedAt,
+		}
+		if !row.BasicAuthEnabled {
+			updates["basic_auth_password_hash"] = ""
+			updates["basic_auth_password_updated_at"] = gorm.Expr("NULL")
+		}
+		if err := db.Session(&gorm.Session{NewDB: true}).Table("proxy_routes").Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("migrate proxy route %d basic auth password failed: %w", row.ID, err)
+		}
+	}
+	return nil
+}
+
+func databaseTableHasColumn(db *gorm.DB, table string, column string) (bool, error) {
+	db = sessionIgnoringSharding(db)
+	if db == nil || strings.TrimSpace(table) == "" || strings.TrimSpace(column) == "" {
+		return false, nil
+	}
+	if !db.Migrator().HasTable(table) {
+		return false, nil
+	}
+	switch databaseDialectorName(db) {
+	case "sqlite":
+		type pragmaColumn struct {
+			Name string
+		}
+		var columns []pragmaColumn
+		if err := db.Raw(fmt.Sprintf("PRAGMA table_info(%s)", quoteIdentifier(table))).Scan(&columns).Error; err != nil {
+			return false, fmt.Errorf("query sqlite table %s columns failed: %w", table, err)
+		}
+		for _, item := range columns {
+			if strings.EqualFold(item.Name, column) {
+				return true, nil
+			}
+		}
+		return false, nil
+	case "postgres":
+		var count int64
+		if err := db.Raw(
+			"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?",
+			table,
+			column,
+		).Scan(&count).Error; err != nil {
+			return false, fmt.Errorf("query postgres table %s column %s failed: %w", table, column, err)
+		}
+		return count > 0, nil
+	default:
+		return db.Migrator().HasColumn(table, column), nil
+	}
+}
+
 func backfillDNSWorkerTokenHashes(db *gorm.DB) error {
 	if db == nil || !db.Migrator().HasTable(&DNSWorker{}) {
 		return nil
@@ -2653,6 +2848,8 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 41, toVersion: 42, migrate: migrateV42, validate: validateDatabaseSchemaV42},
 		{fromVersion: 42, toVersion: 43, migrate: migrateV43, validate: validateDatabaseSchemaV43},
 		{fromVersion: 43, toVersion: 44, migrate: migrateV44, validate: validateDatabaseSchemaV44},
+		{fromVersion: 44, toVersion: 45, migrate: migrateV45, validate: validateDatabaseSchemaV45},
+		{fromVersion: 45, toVersion: 46, migrate: migrateV46, validate: validateDatabaseSchemaV46},
 	}
 }
 
@@ -2700,7 +2897,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV44(db, backend)
+		return validateDatabaseSchemaV46(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2716,7 +2913,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV44(db, backend)
+	return validateDatabaseSchemaV46(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2741,13 +2938,19 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := backfillProxyRouteDomainCertificateFields(db); err != nil {
 		return err
 	}
+	if err := migrateProxyRouteBasicAuthPasswordHashes(db); err != nil {
+		return err
+	}
+	if err := BackfillProxyRouteNormalizedTables(db); err != nil {
+		return err
+	}
 	if err := ensureDefaultGitHubAuthSource(db); err != nil {
 		return err
 	}
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV44(db, backend); err != nil {
+	if err := validateDatabaseSchemaV46(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)
