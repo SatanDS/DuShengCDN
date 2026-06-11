@@ -900,6 +900,9 @@ func CreateAuthoritativeDNSZone(input DNSZoneInput) (*DNSZoneView, error) {
 		}
 		return nil, err
 	}
+	if err := assignDNSZoneToAllWorkers(zone.ID); err != nil {
+		return nil, err
+	}
 	return buildDNSZoneView(zone, true)
 }
 
@@ -995,6 +998,13 @@ func UpdateAuthoritativeDNSZoneWorkerAssignments(zoneID uint, input DNSZoneWorke
 		return nil, err
 	}
 	workerIDs := normalizeUintIDs(input.WorkerIDs)
+	if len(workerIDs) == 0 {
+		var err error
+		workerIDs, err = listAuthoritativeDNSWorkerIDs()
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, workerID := range workerIDs {
 		if _, err := model.GetDNSWorkerByID(workerID); err != nil {
 			return nil, fmt.Errorf("DNS worker %d does not exist", workerID)
@@ -1004,6 +1014,32 @@ func UpdateAuthoritativeDNSZoneWorkerAssignments(zoneID uint, input DNSZoneWorke
 		return nil, err
 	}
 	return GetAuthoritativeDNSZoneWorkerAssignments(zoneID)
+}
+
+func assignDNSZoneToAllWorkers(zoneID uint) error {
+	workerIDs, err := listAuthoritativeDNSWorkerIDs()
+	if err != nil {
+		return err
+	}
+	if len(workerIDs) == 0 {
+		return nil
+	}
+	return model.ReplaceDNSZoneWorkerAssignments(zoneID, workerIDs)
+}
+
+func listAuthoritativeDNSWorkerIDs() ([]uint, error) {
+	workers, err := model.ListDNSWorkers()
+	if err != nil {
+		return nil, err
+	}
+	workerIDs := make([]uint, 0, len(workers))
+	for _, worker := range workers {
+		if worker == nil || worker.ID == 0 {
+			continue
+		}
+		workerIDs = append(workerIDs, worker.ID)
+	}
+	return workerIDs, nil
 }
 
 func ListAuthoritativeDNSRecords(zoneID uint) ([]DNSRecordView, error) {

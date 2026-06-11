@@ -561,6 +561,55 @@ func TestAuthoritativeDNSSnapshotAllowsLegacyUnassignedZonesWhenNoAssignmentsExi
 	}
 }
 
+func TestAuthoritativeDNSZoneCreationAssignsExistingWorkers(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+
+	assignments, err := GetAuthoritativeDNSZoneWorkerAssignments(zone.ID)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSZoneWorkerAssignments: %v", err)
+	}
+	if !sameUintSet(assignments.WorkerIDs, []uint{worker.ID}) {
+		t.Fatalf("expected new zone to be assigned to existing workers, got %+v", assignments.WorkerIDs)
+	}
+}
+
+func TestAuthoritativeDNSZoneWorkerAssignmentsExpandEmptyInputToAllWorkers(t *testing.T) {
+	setupServiceTestDB(t)
+
+	workerA, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-a"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker A: %v", err)
+	}
+	workerB, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-b"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker B: %v", err)
+	}
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{workerA.ID}}); err != nil {
+		t.Fatalf("assign worker A: %v", err)
+	}
+
+	assignments, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{}})
+	if err != nil {
+		t.Fatalf("UpdateAuthoritativeDNSZoneWorkerAssignments: %v", err)
+	}
+	if !sameUintSet(assignments.WorkerIDs, []uint{workerA.ID, workerB.ID}) {
+		t.Fatalf("expected empty input to assign all workers, got %+v", assignments.WorkerIDs)
+	}
+}
+
 func TestAuthoritativeDNSRejectsWritesAndSnapshotWhenLicenseExpires(t *testing.T) {
 	setupServiceTestDB(t)
 	withCommercialLicenseTestConfig(t, true, "", true)
