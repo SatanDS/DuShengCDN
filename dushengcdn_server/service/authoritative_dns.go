@@ -2138,6 +2138,7 @@ func filterAuthoritativeDNSSnapshotForWorker(snapshot *AuthoritativeDNSSnapshot,
 		}
 		assignedByZone[assignment.ZoneID][assignment.WorkerID] = struct{}{}
 	}
+	allowUnassignedZones := common.AuthoritativeDNSWorkerAllowUnassignedZones || len(assignments) == 0
 	allowedZones := map[uint]struct{}{}
 	filteredZones := make([]AuthoritativeDNSSnapshotZone, 0, len(snapshot.Zones))
 	for _, zone := range snapshot.Zones {
@@ -2146,7 +2147,7 @@ func filterAuthoritativeDNSSnapshotForWorker(snapshot *AuthoritativeDNSSnapshot,
 			if _, ok := assignmentsForZone[worker.ID]; !ok {
 				continue
 			}
-		} else if !common.AuthoritativeDNSWorkerAllowUnassignedZones {
+		} else if !allowUnassignedZones {
 			continue
 		}
 		allowedZones[zone.ID] = struct{}{}
@@ -4856,13 +4857,14 @@ func buildDNSWorkerHeartbeatACL(db *gorm.DB, worker *model.DNSWorker) (*dnsWorke
 		}
 		assignedByZone[assignment.ZoneID][assignment.WorkerID] = struct{}{}
 	}
+	allowUnassignedZones := common.AuthoritativeDNSWorkerAllowUnassignedZones || len(assignments) == 0
 	for _, zoneID := range zoneIDs {
 		assignmentsForZone := assignedByZone[zoneID]
 		if acl.enforce && len(assignmentsForZone) > 0 {
 			if _, ok := assignmentsForZone[worker.ID]; !ok {
 				continue
 			}
-		} else if acl.enforce && len(assignmentsForZone) == 0 && !common.AuthoritativeDNSWorkerAllowUnassignedZones {
+		} else if acl.enforce && len(assignmentsForZone) == 0 && !allowUnassignedZones {
 			continue
 		}
 		acl.allowedZones[zoneID] = struct{}{}

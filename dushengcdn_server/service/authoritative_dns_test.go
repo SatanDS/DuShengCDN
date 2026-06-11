@@ -505,6 +505,62 @@ func TestAuthoritativeDNSSnapshotFiltersZonesRoutesAndStatesForAssignedWorker(t 
 	}
 }
 
+func TestAuthoritativeDNSSnapshotAllowsLegacyUnassignedZonesWhenNoAssignmentsExist(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "legacy.example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	route := seedAuthoritativeSnapshotFilterRoute(t, zone.ID, "www.legacy.example.com")
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns-legacy"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+
+	snapshot, err := GetAuthoritativeDNSSnapshot(workerModel)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+	if !sameStringSet(snapshotZoneNames(snapshot.Zones), []string{"legacy.example.com"}) {
+		t.Fatalf("expected legacy unassigned zone to remain visible, got %v", snapshotZoneNames(snapshot.Zones))
+	}
+	if !sameStringSet(snapshotRouteDomains(snapshot.Routes), []string{"www.legacy.example.com"}) {
+		t.Fatalf("expected legacy unassigned route to remain visible, got %v", snapshotRouteDomains(snapshot.Routes))
+	}
+
+	windowStart := time.Now().UTC().Truncate(time.Minute)
+	_, err = RecordDNSWorkerHeartbeat(workerModel, DNSWorkerHeartbeatInput{
+		Status: "online",
+		Rollups: []DNSQueryRollupInput{
+			{
+				WindowStart:   windowStart,
+				WindowMinutes: 1,
+				ZoneID:        zone.ID,
+				ProxyRouteID:  route.ID,
+				QName:         "www.legacy.example.com",
+				QType:         "A",
+				RCode:         "NOERROR",
+				QueryCount:    3,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	var count int64
+	if err := model.DB.Model(&model.DNSQueryRollup{}).Where("worker_id = ?", worker.WorkerID).Count(&count).Error; err != nil {
+		t.Fatalf("count rollups: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected legacy unassigned rollup to persist, got %d", count)
+	}
+}
+
 func TestAuthoritativeDNSRejectsWritesAndSnapshotWhenLicenseExpires(t *testing.T) {
 	setupServiceTestDB(t)
 	withCommercialLicenseTestConfig(t, true, "", true)
