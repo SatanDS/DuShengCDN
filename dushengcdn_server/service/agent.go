@@ -233,6 +233,7 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
+	evaluateConfigReleaseTargetFromHeartbeat(node)
 	return &HeartbeatResponse{
 		Node:             node,
 		AgentSettings:    buildAgentSettingsWithDNSProbeTargets(node, updateNow, updateChannel.String(), updateTag, restartOpenrestyNow, dnsProbeTargets),
@@ -445,6 +446,21 @@ func GetActiveConfigForAgentNode(node *model.Node) (*AgentConfigResponse, error)
 }
 
 func getActiveConfigVersionArtifactForNode(node *model.Node) (*model.ConfigVersion, *model.ConfigVersionArtifact, error) {
+	if node != nil {
+		if _, target, err := model.GetActiveConfigReleaseTargetForNodeID(node.NodeID); err == nil && target != nil {
+			version, versionErr := model.GetConfigVersionByID(target.ConfigVersionID)
+			if versionErr != nil {
+				return nil, nil, versionErr
+			}
+			artifact, artifactErr := model.GetConfigVersionArtifact(version.ID, normalizeNodePoolName(target.PoolName))
+			if artifactErr != nil {
+				return nil, nil, artifactErr
+			}
+			return version, artifact, nil
+		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, err
+		}
+	}
 	version, err := model.GetActiveConfigVersion()
 	if err != nil {
 		return nil, nil, err
@@ -552,6 +568,7 @@ func ReportApplyLog(payload ApplyLogPayload) (*model.ApplyLog, error) {
 	} else {
 		slog.Error("agent apply reported failure", "node_id", payload.NodeID, "version", payload.Version, "message", payload.Message)
 	}
+	updateConfigReleaseTargetFromApplyLog(payload)
 	return log, nil
 }
 

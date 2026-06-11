@@ -39,6 +39,11 @@ const (
 	proxyRouteOriginResolvePublish       = "publish_resolve"
 	proxyRouteOriginResolveStaticIP      = "static_ip"
 	proxyRouteOriginResolveOriginGroup   = "origin_group"
+	proxyRouteRuleMatchDefault           = "default"
+	proxyRouteRuleMatchPrefix            = "prefix"
+	proxyRouteRuleMatchExact             = "exact"
+	proxyRouteRuleMatchRegex             = "regex"
+	proxyRouteDefaultRulePriority        = 1000000
 	redactedProxyRouteCustomHeaderValue  = "[redacted sensitive header; preserved on save]"
 	DNSProviderModeCloudflare            = "cloudflare"
 	DNSProviderModeAuthoritative         = "authoritative"
@@ -47,6 +52,65 @@ const (
 type ProxyRouteCustomHeaderInput struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+}
+
+type ProxyRouteRuleInput struct {
+	ID                 uint                          `json:"id"`
+	Name               string                        `json:"name"`
+	MatchType          string                        `json:"match_type"`
+	Path               string                        `json:"path"`
+	Priority           int                           `json:"priority"`
+	Enabled            *bool                         `json:"enabled"`
+	OriginURL          string                        `json:"origin_url"`
+	Upstreams          []string                      `json:"upstreams"`
+	OriginHostHeader   string                        `json:"origin_host_header"`
+	OriginSNI          string                        `json:"origin_sni"`
+	OriginTLSVerify    *bool                         `json:"origin_tls_verify"`
+	OriginCABundle     string                        `json:"origin_ca_bundle"`
+	OriginResolveMode  string                        `json:"origin_resolve_mode"`
+	LimitConnPerServer int                           `json:"limit_conn_per_server"`
+	LimitConnPerIP     int                           `json:"limit_conn_per_ip"`
+	LimitRate          string                        `json:"limit_rate"`
+	ProxyBufferingMode string                        `json:"proxy_buffering_mode"`
+	CacheEnabled       *bool                         `json:"cache_enabled"`
+	CachePolicy        string                        `json:"cache_policy"`
+	CacheRules         []string                      `json:"cache_rules"`
+	CustomHeaders      []ProxyRouteCustomHeaderInput `json:"custom_headers"`
+	BasicAuthEnabled   *bool                         `json:"basic_auth_enabled"`
+	BasicAuthUsername  string                        `json:"basic_auth_username"`
+	BasicAuthPassword  string                        `json:"basic_auth_password"`
+}
+
+type ProxyRouteRuleView struct {
+	ID                          uint                          `json:"id"`
+	Name                        string                        `json:"name"`
+	MatchType                   string                        `json:"match_type"`
+	Path                        string                        `json:"path"`
+	Priority                    int                           `json:"priority"`
+	Enabled                     bool                          `json:"enabled"`
+	OriginGroupID               uint                          `json:"origin_group_id"`
+	OriginURL                   string                        `json:"origin_url"`
+	Upstreams                   []string                      `json:"upstreams"`
+	OriginHostHeader            string                        `json:"origin_host_header"`
+	OriginSNI                   string                        `json:"origin_sni"`
+	OriginTLSVerify             bool                          `json:"origin_tls_verify"`
+	OriginCABundle              string                        `json:"origin_ca_bundle"`
+	OriginResolveMode           string                        `json:"origin_resolve_mode"`
+	LimitConnPerServer          int                           `json:"limit_conn_per_server"`
+	LimitConnPerIP              int                           `json:"limit_conn_per_ip"`
+	LimitRate                   string                        `json:"limit_rate"`
+	ProxyBufferingMode          string                        `json:"proxy_buffering_mode"`
+	CustomHeaders               []ProxyRouteCustomHeaderInput `json:"custom_headers"`
+	CachePolicyID               *uint                         `json:"cache_policy_id,omitempty"`
+	CacheEnabled                bool                          `json:"cache_enabled"`
+	CachePolicy                 string                        `json:"cache_policy"`
+	CacheRules                  []string                      `json:"cache_rules"`
+	SecurityPolicyID            *uint                         `json:"security_policy_id,omitempty"`
+	BasicAuthEnabled            bool                          `json:"basic_auth_enabled"`
+	BasicAuthUsername           string                        `json:"basic_auth_username"`
+	BasicAuthPasswordConfigured bool                          `json:"basic_auth_password_configured"`
+	CreatedAt                   time.Time                     `json:"created_at"`
+	UpdatedAt                   time.Time                     `json:"updated_at"`
 }
 
 type ProxyRouteInput struct {
@@ -81,6 +145,7 @@ type ProxyRouteInput struct {
 	CachePolicy                string                        `json:"cache_policy"`
 	CacheRules                 []string                      `json:"cache_rules"`
 	CustomHeaders              []ProxyRouteCustomHeaderInput `json:"custom_headers"`
+	RouteRules                 []ProxyRouteRuleInput         `json:"route_rules"`
 	PoWEnabled                 bool                          `json:"pow_enabled"`
 	PoWConfig                  string                        `json:"pow_config"`
 	WAFEnabled                 bool                          `json:"waf_enabled"`
@@ -150,6 +215,7 @@ type ProxyRouteView struct {
 	CacheRuleList               []string                      `json:"cache_rule_list"`
 	CustomHeaders               string                        `json:"custom_headers"`
 	CustomHeaderList            []ProxyRouteCustomHeaderInput `json:"custom_header_list"`
+	RouteRules                  []ProxyRouteRuleView          `json:"route_rules"`
 	PoWEnabled                  bool                          `json:"pow_enabled"`
 	PoWConfig                   *ProxyRoutePoWConfig          `json:"pow_config"`
 	WAFEnabled                  bool                          `json:"waf_enabled"`
@@ -218,7 +284,13 @@ func CreateProxyRoute(input ProxyRouteInput) (*ProxyRouteView, error) {
 		return nil, err
 	}
 	if err = withCommercialResourceCreation("site", func(tx *gorm.DB) error {
-		return route.InsertWithDB(tx)
+		if err := route.InsertWithDB(tx); err != nil {
+			return err
+		}
+		if input.RouteRules != nil {
+			return replaceProxyRouteRuleInputsWithDB(tx, route, input.RouteRules)
+		}
+		return nil
 	}); err != nil {
 		if isUniqueConstraintError(err) {
 			return nil, errors.New("proxy route identity already exists")
@@ -246,7 +318,15 @@ func UpdateProxyRoute(id uint, input ProxyRouteInput) (*ProxyRouteView, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = route.Update(); err != nil {
+	if err = model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := route.UpdateWithDB(tx); err != nil {
+			return err
+		}
+		if input.RouteRules != nil {
+			return replaceProxyRouteRuleInputsWithDB(tx, route, input.RouteRules)
+		}
+		return nil
+	}); err != nil {
 		if isUniqueConstraintError(err) {
 			return nil, errors.New("proxy route identity already exists")
 		}
@@ -601,6 +681,277 @@ func normalizeProxyRouteBasicAuth(route *model.ProxyRoute, input ProxyRouteInput
 	return "", "", nil, errors.New("basic_auth_username and basic_auth_password cannot be empty when basic auth is enabled")
 }
 
+func replaceProxyRouteRuleInputsWithDB(db *gorm.DB, route *model.ProxyRoute, inputs []ProxyRouteRuleInput) error {
+	if db == nil {
+		db = model.DB
+	}
+	if db == nil || route == nil || route.ID == 0 {
+		return nil
+	}
+	if err := model.SyncProxyRouteNormalizedTablesWithDB(db, route); err != nil {
+		return err
+	}
+	if err := db.Where("proxy_route_id = ? AND match_type <> ?", route.ID, proxyRouteRuleMatchDefault).Delete(&model.ProxyRouteRule{}).Error; err != nil {
+		return err
+	}
+	var staleGroups []model.OriginGroup
+	if err := db.Where("proxy_route_id = ? AND is_default = ?", route.ID, false).Find(&staleGroups).Error; err != nil {
+		return err
+	}
+	if len(staleGroups) > 0 {
+		groupIDs := make([]uint, 0, len(staleGroups))
+		for _, group := range staleGroups {
+			groupIDs = append(groupIDs, group.ID)
+		}
+		if err := db.Where("origin_group_id IN ?", groupIDs).Delete(&model.OriginServer{}).Error; err != nil {
+			return err
+		}
+		if err := db.Where("id IN ?", groupIDs).Delete(&model.OriginGroup{}).Error; err != nil {
+			return err
+		}
+	}
+	if err := db.Where("proxy_route_id = ? AND is_default = ?", route.ID, false).Delete(&model.CachePolicy{}).Error; err != nil {
+		return err
+	}
+	if err := db.Where("proxy_route_id = ? AND is_default = ?", route.ID, false).Delete(&model.SecurityPolicy{}).Error; err != nil {
+		return err
+	}
+	var defaultOriginGroup model.OriginGroup
+	if err := db.Where("proxy_route_id = ? AND is_default = ?", route.ID, true).First(&defaultOriginGroup).Error; err != nil {
+		return err
+	}
+	site, err := model.GetProxySiteByRouteIDWithDB(db, route.ID)
+	if err != nil {
+		return err
+	}
+	for index, input := range inputs {
+		rule, err := normalizeProxyRouteRuleInput(route, site.ID, defaultOriginGroup.ID, input, index)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(input.OriginURL) != "" || len(input.Upstreams) > 0 {
+			group := &model.OriginGroup{
+				ProxyRouteID: route.ID,
+				OriginID:     route.OriginID,
+				Name:         rule.Name,
+				IsDefault:    false,
+			}
+			if strings.TrimSpace(group.Name) == "" {
+				group.Name = fmt.Sprintf("rule-%d", index+1)
+			}
+			if err := db.Create(group).Error; err != nil {
+				return err
+			}
+			originURL := strings.TrimSpace(input.OriginURL)
+			if originURL == "" {
+				originURL = route.OriginURL
+			}
+			upstreams, err := normalizeUpstreams(originURL, input.Upstreams)
+			if err != nil {
+				return err
+			}
+			tempRoute := *route
+			upstreamsJSON, err := json.Marshal(upstreams)
+			if err != nil {
+				return err
+			}
+			tempRoute.OriginURL = upstreams[0]
+			tempRoute.Upstreams = string(upstreamsJSON)
+			if err := model.ReplaceOriginServersForProxyRouteRule(db, group.ID, &tempRoute, route.OriginID); err != nil {
+				return err
+			}
+			rule.OriginGroupID = group.ID
+		}
+		if input.CacheEnabled != nil {
+			cacheRules, err := normalizeCacheRules(*input.CacheEnabled, input.CachePolicy, input.CacheRules)
+			if err != nil {
+				return err
+			}
+			cacheRulesJSON, err := json.Marshal(cacheRules)
+			if err != nil {
+				return err
+			}
+			cachePolicy := &model.CachePolicy{
+				ProxyRouteID: route.ID,
+				Name:         rule.Name,
+				IsDefault:    false,
+				Enabled:      *input.CacheEnabled,
+				Policy:       normalizeCachePolicy(*input.CacheEnabled, input.CachePolicy),
+				RulesJSON:    string(cacheRulesJSON),
+			}
+			if strings.TrimSpace(cachePolicy.Name) == "" {
+				cachePolicy.Name = fmt.Sprintf("rule-%d-cache", index+1)
+			}
+			if err := db.Create(cachePolicy).Error; err != nil {
+				return err
+			}
+			rule.CachePolicyID = &cachePolicy.ID
+		}
+		if input.BasicAuthEnabled != nil {
+			securityPolicy, err := buildProxyRouteRuleSecurityPolicy(route.ID, rule.Name, input)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(securityPolicy.Name) == "" {
+				securityPolicy.Name = fmt.Sprintf("rule-%d-security", index+1)
+			}
+			if err := db.Create(securityPolicy).Error; err != nil {
+				return err
+			}
+			rule.SecurityPolicyID = &securityPolicy.ID
+		}
+		if err := db.Create(rule).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeProxyRouteRuleInput(route *model.ProxyRoute, siteID uint, defaultOriginGroupID uint, input ProxyRouteRuleInput, index int) (*model.ProxyRouteRule, error) {
+	matchType, path, err := normalizeProxyRouteRuleMatch(input.MatchType, input.Path)
+	if err != nil {
+		return nil, err
+	}
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	priority := input.Priority
+	if priority == 0 {
+		priority = index + 1
+	}
+	originHostHeader := strings.TrimSpace(input.OriginHostHeader)
+	if originHostHeader == "" {
+		originHostHeader = normalizeStoredOriginHostHeader(route)
+	}
+	if err := validateOriginHostHeader(originHostHeader); err != nil {
+		return nil, err
+	}
+	originSNI := strings.TrimSpace(input.OriginSNI)
+	if err := validateOriginSNI(originSNI); err != nil {
+		return nil, err
+	}
+	originTLSVerify := normalizeOriginTLSVerify(input.OriginTLSVerify)
+	if input.OriginTLSVerify == nil {
+		originTLSVerify = normalizeStoredOriginTLSVerify(route)
+	}
+	originResolveMode := strings.TrimSpace(input.OriginResolveMode)
+	if originResolveMode == "" {
+		originResolveMode = normalizeStoredOriginResolveMode(route.OriginResolveMode)
+	}
+	originResolveMode, err = normalizeOriginResolveMode(originResolveMode)
+	if err != nil {
+		return nil, err
+	}
+	customHeaders, err := normalizeCustomHeaders(input.CustomHeaders)
+	if err != nil {
+		return nil, err
+	}
+	customHeadersJSON, err := json.Marshal(customHeaders)
+	if err != nil {
+		return nil, err
+	}
+	limitConnPerServer, err := normalizeProxyRouteLimitConnValue(input.LimitConnPerServer, "route_rules.limit_conn_per_server")
+	if err != nil {
+		return nil, err
+	}
+	limitConnPerIP, err := normalizeProxyRouteLimitConnValue(input.LimitConnPerIP, "route_rules.limit_conn_per_ip")
+	if err != nil {
+		return nil, err
+	}
+	limitRate, err := normalizeProxyRouteLimitRate(input.LimitRate)
+	if err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = fmt.Sprintf("%s %s", matchType, path)
+	}
+	return &model.ProxyRouteRule{
+		ProxyRouteID:       route.ID,
+		ProxySiteID:        siteID,
+		OriginGroupID:      defaultOriginGroupID,
+		Name:               name,
+		MatchType:          matchType,
+		Path:               path,
+		Priority:           priority,
+		Enabled:            enabled,
+		OriginHostHeader:   originHostHeader,
+		OriginSNI:          originSNI,
+		OriginTLSVerify:    originTLSVerify,
+		OriginCABundle:     strings.TrimSpace(input.OriginCABundle),
+		OriginResolveMode:  originResolveMode,
+		LimitConnPerServer: limitConnPerServer,
+		LimitConnPerIP:     limitConnPerIP,
+		LimitRate:          limitRate,
+		ProxyBufferingMode: normalizeProxyRouteProxyBufferingMode(input.ProxyBufferingMode),
+		CustomHeadersJSON:  string(customHeadersJSON),
+	}, nil
+}
+
+func normalizeProxyRouteRuleMatch(rawMatchType string, rawPath string) (string, string, error) {
+	matchType := strings.ToLower(strings.TrimSpace(rawMatchType))
+	if matchType == "" {
+		matchType = proxyRouteRuleMatchPrefix
+	}
+	path := strings.TrimSpace(rawPath)
+	switch matchType {
+	case proxyRouteRuleMatchDefault:
+		return proxyRouteRuleMatchDefault, "/", nil
+	case proxyRouteRuleMatchPrefix, proxyRouteRuleMatchExact:
+		if path == "" {
+			return "", "", errors.New("route_rules.path cannot be empty")
+		}
+		if !strings.HasPrefix(path, "/") || strings.Contains(path, "://") || strings.ContainsAny(path, " \t\r\n;{}") {
+			return "", "", errors.New("route_rules.path format is invalid")
+		}
+		if matchType == proxyRouteRuleMatchPrefix && path != "/" && !strings.HasSuffix(path, "/") {
+			path += "/"
+		}
+		return matchType, path, nil
+	case proxyRouteRuleMatchRegex:
+		if path == "" || strings.ContainsAny(path, "\r\n;") {
+			return "", "", errors.New("route_rules regex path format is invalid")
+		}
+		if _, err := regexp.Compile(path); err != nil {
+			return "", "", errors.New("route_rules regex path is invalid")
+		}
+		return matchType, path, nil
+	default:
+		return "", "", errors.New("route_rules.match_type must be one of prefix, exact, regex, default")
+	}
+}
+
+func buildProxyRouteRuleSecurityPolicy(routeID uint, name string, input ProxyRouteRuleInput) (*model.SecurityPolicy, error) {
+	enabled := input.BasicAuthEnabled != nil && *input.BasicAuthEnabled
+	username := strings.TrimSpace(input.BasicAuthUsername)
+	password := strings.TrimSpace(input.BasicAuthPassword)
+	passwordHash := ""
+	var updatedAt *time.Time
+	if enabled {
+		if username == "" || password == "" {
+			return nil, errors.New("route_rules basic_auth_username and basic_auth_password cannot be empty when basic auth is enabled")
+		}
+		now := time.Now()
+		passwordHash = model.BasicAuthCredentialHash(username, password)
+		updatedAt = &now
+	}
+	return &model.SecurityPolicy{
+		ProxyRouteID:               routeID,
+		Name:                       strings.TrimSpace(name),
+		IsDefault:                  false,
+		BasicAuthEnabled:           enabled,
+		BasicAuthUsername:          username,
+		BasicAuthPasswordHash:      passwordHash,
+		BasicAuthPasswordUpdatedAt: updatedAt,
+		RegionRestrictionMode:      proxyRouteRegionModeBlock,
+		WAFMode:                    proxyRouteWAFModeBlock,
+		CCMode:                     proxyRouteCCModeBlock,
+		DDOSProtectionMode:         "off",
+		DDOSProtectionProvider:     DNSProviderModeCloudflare,
+	}, nil
+}
+
 func proxyRouteBasicAuthPasswordHashForView(route *model.ProxyRoute) string {
 	if route == nil || !route.BasicAuthEnabled {
 		return ""
@@ -894,6 +1245,10 @@ func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRoute
 	primaryDomain := domains[0]
 	originHostHeader := normalizeStoredOriginHostHeader(route)
 	originResolveMode := normalizeStoredOriginResolveMode(route.OriginResolveMode)
+	routeRules, err := buildProxyRouteRuleViews(route)
+	if err != nil {
+		return nil, err
+	}
 	return &ProxyRouteView{
 		ID:                          route.ID,
 		SiteName:                    normalizeProxyRouteSiteNameInput(route, route.SiteName, primaryDomain),
@@ -928,6 +1283,7 @@ func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRoute
 		CacheRuleList:               cacheRules,
 		CustomHeaders:               marshalCustomHeadersForView(customHeaders),
 		CustomHeaderList:            redactSensitiveCustomHeaders(customHeaders),
+		RouteRules:                  routeRules,
 		PoWEnabled:                  route.PoWEnabled,
 		PoWConfig:                   powConfig,
 		WAFEnabled:                  route.WAFEnabled,
@@ -969,6 +1325,121 @@ func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRoute
 		CreatedAt:                   route.CreatedAt,
 		UpdatedAt:                   route.UpdatedAt,
 	}, nil
+}
+
+func buildProxyRouteRuleViews(route *model.ProxyRoute) ([]ProxyRouteRuleView, error) {
+	if route == nil || route.ID == 0 {
+		return []ProxyRouteRuleView{}, nil
+	}
+	rules, err := model.ListProxyRouteRulesByRouteID(route.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rules) == 0 {
+		return []ProxyRouteRuleView{}, nil
+	}
+	groupIDs := make([]uint, 0, len(rules))
+	cachePolicyIDs := make([]uint, 0, len(rules))
+	securityPolicyIDs := make([]uint, 0, len(rules))
+	for _, rule := range rules {
+		if rule.OriginGroupID != 0 {
+			groupIDs = append(groupIDs, rule.OriginGroupID)
+		}
+		if rule.CachePolicyID != nil && *rule.CachePolicyID != 0 {
+			cachePolicyIDs = append(cachePolicyIDs, *rule.CachePolicyID)
+		}
+		if rule.SecurityPolicyID != nil && *rule.SecurityPolicyID != 0 {
+			securityPolicyIDs = append(securityPolicyIDs, *rule.SecurityPolicyID)
+		}
+	}
+	servers, err := model.ListOriginServersByGroupIDs(groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	upstreamsByGroupID := make(map[uint][]string)
+	for _, server := range servers {
+		if strings.TrimSpace(server.URL) == "" {
+			continue
+		}
+		upstreamsByGroupID[server.OriginGroupID] = append(upstreamsByGroupID[server.OriginGroupID], server.URL)
+	}
+	cachePolicies := make(map[uint]model.CachePolicy)
+	if len(cachePolicyIDs) > 0 {
+		var rows []model.CachePolicy
+		if err := model.DB.Where("id IN ?", cachePolicyIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			cachePolicies[row.ID] = row
+		}
+	}
+	securityPolicies := make(map[uint]model.SecurityPolicy)
+	if len(securityPolicyIDs) > 0 {
+		var rows []model.SecurityPolicy
+		if err := model.DB.Where("id IN ?", securityPolicyIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			securityPolicies[row.ID] = row
+		}
+	}
+	views := make([]ProxyRouteRuleView, 0, len(rules))
+	for _, rule := range rules {
+		customHeaders, err := decodeStoredCustomHeaders(rule.CustomHeadersJSON)
+		if err != nil {
+			return nil, err
+		}
+		upstreams := upstreamsByGroupID[rule.OriginGroupID]
+		originURL := ""
+		if len(upstreams) > 0 {
+			originURL = upstreams[0]
+		}
+		view := ProxyRouteRuleView{
+			ID:                 rule.ID,
+			Name:               rule.Name,
+			MatchType:          rule.MatchType,
+			Path:               rule.Path,
+			Priority:           rule.Priority,
+			Enabled:            rule.Enabled,
+			OriginGroupID:      rule.OriginGroupID,
+			OriginURL:          originURL,
+			Upstreams:          upstreams,
+			OriginHostHeader:   strings.TrimSpace(rule.OriginHostHeader),
+			OriginSNI:          strings.TrimSpace(rule.OriginSNI),
+			OriginTLSVerify:    rule.OriginTLSVerify,
+			OriginCABundle:     strings.TrimSpace(rule.OriginCABundle),
+			OriginResolveMode:  normalizeStoredOriginResolveMode(rule.OriginResolveMode),
+			LimitConnPerServer: rule.LimitConnPerServer,
+			LimitConnPerIP:     rule.LimitConnPerIP,
+			LimitRate:          rule.LimitRate,
+			ProxyBufferingMode: normalizeProxyRouteProxyBufferingMode(rule.ProxyBufferingMode),
+			CustomHeaders:      redactSensitiveCustomHeaders(customHeaders),
+			CachePolicyID:      rule.CachePolicyID,
+			SecurityPolicyID:   rule.SecurityPolicyID,
+			CreatedAt:          rule.CreatedAt,
+			UpdatedAt:          rule.UpdatedAt,
+		}
+		if rule.CachePolicyID != nil {
+			if policy, ok := cachePolicies[*rule.CachePolicyID]; ok {
+				cacheRules, err := decodeStoredCacheRules(policy.RulesJSON)
+				if err != nil {
+					return nil, err
+				}
+				view.CacheEnabled = policy.Enabled
+				view.CachePolicy = policy.Policy
+				view.CacheRules = cacheRules
+			}
+		}
+		if rule.SecurityPolicyID != nil {
+			if policy, ok := securityPolicies[*rule.SecurityPolicyID]; ok {
+				view.BasicAuthEnabled = policy.BasicAuthEnabled
+				view.BasicAuthUsername = policy.BasicAuthUsername
+				view.BasicAuthPasswordConfigured = policy.BasicAuthEnabled && strings.TrimSpace(policy.BasicAuthPasswordHash) != ""
+			}
+		}
+		views = append(views, view)
+	}
+	return views, nil
 }
 
 type proxyRouteTLSCertificateLoader interface {

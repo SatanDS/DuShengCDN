@@ -102,6 +102,7 @@ type snapshotRoute struct {
 	CachePolicy                string                        `json:"cache_policy,omitempty"`
 	CacheRules                 []string                      `json:"cache_rules,omitempty"`
 	CustomHeaders              []ProxyRouteCustomHeaderInput `json:"custom_headers,omitempty"`
+	RouteRules                 []snapshotRouteRule           `json:"route_rules,omitempty"`
 	PoWEnabled                 bool                          `json:"pow_enabled,omitempty"`
 	PoWConfig                  *ProxyRoutePoWConfig          `json:"pow_config,omitempty"`
 	WAFEnabled                 bool                          `json:"waf_enabled,omitempty"`
@@ -118,6 +119,33 @@ type snapshotRoute struct {
 	RegionRestrictionMode      string                        `json:"region_restriction_mode,omitempty"`
 	RegionRestrictionCountries []string                      `json:"region_restriction_countries,omitempty"`
 	Remark                     string                        `json:"remark,omitempty"`
+}
+
+type snapshotRouteRule struct {
+	ID                          uint                          `json:"id,omitempty"`
+	Name                        string                        `json:"name,omitempty"`
+	MatchType                   string                        `json:"match_type"`
+	Path                        string                        `json:"path"`
+	Priority                    int                           `json:"priority"`
+	Enabled                     bool                          `json:"enabled"`
+	OriginURL                   string                        `json:"origin_url,omitempty"`
+	Upstreams                   []string                      `json:"upstreams,omitempty"`
+	OriginHostHeader            string                        `json:"origin_host_header,omitempty"`
+	OriginSNI                   string                        `json:"origin_sni,omitempty"`
+	OriginTLSVerify             bool                          `json:"origin_tls_verify"`
+	OriginCABundle              string                        `json:"origin_ca_bundle,omitempty"`
+	OriginResolveMode           string                        `json:"origin_resolve_mode,omitempty"`
+	LimitConnPerServer          int                           `json:"limit_conn_per_server,omitempty"`
+	LimitConnPerIP              int                           `json:"limit_conn_per_ip,omitempty"`
+	LimitRate                   string                        `json:"limit_rate,omitempty"`
+	ProxyBufferingMode          string                        `json:"proxy_buffering_mode,omitempty"`
+	CacheEnabled                bool                          `json:"cache_enabled,omitempty"`
+	CachePolicy                 string                        `json:"cache_policy,omitempty"`
+	CacheRules                  []string                      `json:"cache_rules,omitempty"`
+	CustomHeaders               []ProxyRouteCustomHeaderInput `json:"custom_headers,omitempty"`
+	BasicAuthEnabled            bool                          `json:"basic_auth_enabled,omitempty"`
+	BasicAuthUsername           string                        `json:"basic_auth_username,omitempty"`
+	BasicAuthPasswordConfigured bool                          `json:"basic_auth_password_configured,omitempty"`
 }
 
 type routeCacheConfig struct {
@@ -307,6 +335,9 @@ func redactConfigSnapshotForAdmin(snapshotJSON string) string {
 		doc.Routes[index].BasicAuthPasswordHash = ""
 		doc.Routes[index].BasicAuthPassword = ""
 		doc.Routes[index].CustomHeaders = redactSensitiveCustomHeaders(doc.Routes[index].CustomHeaders)
+		for ruleIndex := range doc.Routes[index].RouteRules {
+			doc.Routes[index].RouteRules[ruleIndex].CustomHeaders = redactSensitiveCustomHeaders(doc.Routes[index].RouteRules[ruleIndex].CustomHeaders)
+		}
 	}
 	raw, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -500,6 +531,14 @@ func HasConfigChanges() (bool, error) {
 }
 
 func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) {
+	return createConfigVersionRecord(createdBy, force, true)
+}
+
+func CreateInactiveConfigVersion(createdBy string, force bool) (*ReleaseResult, error) {
+	return createConfigVersionRecord(createdBy, force, false)
+}
+
+func createConfigVersionRecord(createdBy string, force bool, activate bool) (*ReleaseResult, error) {
 	bundle, err := buildCurrentConfigBundle(true)
 	if err != nil {
 		return nil, err
@@ -535,12 +574,14 @@ func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) 
 		RenderedConfig:   bundle.RouteConfig,
 		SupportFilesJSON: string(supportFilesJSON),
 		Checksum:         bundle.Checksum,
-		IsActive:         true,
+		IsActive:         activate,
 		CreatedBy:        createdBy,
 	}
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.ConfigVersion{}).Where("is_active = ?", true).Update("is_active", false).Error; err != nil {
-			return err
+		if activate {
+			if err := tx.Model(&model.ConfigVersion{}).Where("is_active = ?", true).Update("is_active", false).Error; err != nil {
+				return err
+			}
 		}
 		if err := tx.Create(record).Error; err != nil {
 			return err
@@ -556,7 +597,9 @@ func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) 
 		}
 		return nil, err
 	}
-	BroadcastAgentWSActiveConfigForVersion(record)
+	if activate {
+		BroadcastAgentWSActiveConfigForVersion(record)
+	}
 	routeViews, err := buildProxyRouteViews(bundle.Routes)
 	if err != nil {
 		return nil, err
@@ -958,6 +1001,10 @@ func buildSnapshotRoutesWithContext(
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 地区限制配置无效", route.Domain)
 		}
+		routeRules, err := buildSnapshotRouteRules(route)
+		if err != nil {
+			return nil, fmt.Errorf("route %s route_rules are invalid: %w", route.Domain, err)
+		}
 		regionEnabled := route.RegionRestrictionEnabled && len(regionCountries) > 0
 		items = append(items, snapshotRoute{
 			SiteName:                   normalizeProxyRouteSiteNameInput(route, route.SiteName, domains[0]),
@@ -986,6 +1033,7 @@ func buildSnapshotRoutesWithContext(
 			CachePolicy:                route.CachePolicy,
 			CacheRules:                 cacheRules,
 			CustomHeaders:              customHeaders,
+			RouteRules:                 routeRules,
 			PoWEnabled:                 route.PoWEnabled,
 			PoWConfig:                  powConfig,
 			WAFEnabled:                 route.WAFEnabled,
@@ -1034,6 +1082,167 @@ func mustDecodeSnapshotDomainCertIDs(
 		return []uint{}
 	}
 	return domainCertIDs
+}
+
+func buildSnapshotRouteRules(route *model.ProxyRoute) ([]snapshotRouteRule, error) {
+	if route == nil || route.ID == 0 {
+		return nil, nil
+	}
+	configs, err := loadProxyRouteRuleConfigs(route)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]snapshotRouteRule, 0, len(configs))
+	for _, config := range configs {
+		result = append(result, snapshotRouteRule{
+			ID:                          config.Rule.ID,
+			Name:                        config.Rule.Name,
+			MatchType:                   config.Rule.MatchType,
+			Path:                        config.Rule.Path,
+			Priority:                    config.Rule.Priority,
+			Enabled:                     config.Rule.Enabled,
+			OriginURL:                   firstString(config.Upstreams),
+			Upstreams:                   config.Upstreams,
+			OriginHostHeader:            config.Rule.OriginHostHeader,
+			OriginSNI:                   config.Rule.OriginSNI,
+			OriginTLSVerify:             config.Rule.OriginTLSVerify,
+			OriginCABundle:              config.Rule.OriginCABundle,
+			OriginResolveMode:           config.Rule.OriginResolveMode,
+			LimitConnPerServer:          config.Rule.LimitConnPerServer,
+			LimitConnPerIP:              config.Rule.LimitConnPerIP,
+			LimitRate:                   config.Rule.LimitRate,
+			ProxyBufferingMode:          config.Rule.ProxyBufferingMode,
+			CacheEnabled:                config.CachePolicy != nil && config.CachePolicy.Enabled,
+			CachePolicy:                 routeRuleCachePolicyName(config.CachePolicy),
+			CacheRules:                  config.CacheRules,
+			CustomHeaders:               config.CustomHeaders,
+			BasicAuthEnabled:            config.SecurityPolicy != nil && config.SecurityPolicy.BasicAuthEnabled,
+			BasicAuthUsername:           routeRuleBasicAuthUsername(config.SecurityPolicy),
+			BasicAuthPasswordConfigured: config.SecurityPolicy != nil && strings.TrimSpace(config.SecurityPolicy.BasicAuthPasswordHash) != "",
+		})
+	}
+	return result, nil
+}
+
+type proxyRouteRuleConfig struct {
+	Rule           model.ProxyRouteRule
+	Upstreams      []string
+	CustomHeaders  []ProxyRouteCustomHeaderInput
+	CachePolicy    *model.CachePolicy
+	CacheRules     []string
+	SecurityPolicy *model.SecurityPolicy
+}
+
+func loadProxyRouteRuleConfigs(route *model.ProxyRoute) ([]proxyRouteRuleConfig, error) {
+	if route == nil || route.ID == 0 {
+		return nil, nil
+	}
+	rules, err := model.ListProxyRouteRulesByRouteID(route.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rules) == 0 {
+		return nil, nil
+	}
+	groupIDs := make([]uint, 0, len(rules))
+	cachePolicyIDs := make([]uint, 0, len(rules))
+	securityPolicyIDs := make([]uint, 0, len(rules))
+	for _, rule := range rules {
+		if rule.OriginGroupID != 0 {
+			groupIDs = append(groupIDs, rule.OriginGroupID)
+		}
+		if rule.CachePolicyID != nil && *rule.CachePolicyID != 0 {
+			cachePolicyIDs = append(cachePolicyIDs, *rule.CachePolicyID)
+		}
+		if rule.SecurityPolicyID != nil && *rule.SecurityPolicyID != 0 {
+			securityPolicyIDs = append(securityPolicyIDs, *rule.SecurityPolicyID)
+		}
+	}
+	originServers, err := model.ListOriginServersByGroupIDs(groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	upstreamsByGroupID := make(map[uint][]string)
+	for _, server := range originServers {
+		if strings.TrimSpace(server.URL) == "" {
+			continue
+		}
+		upstreamsByGroupID[server.OriginGroupID] = append(upstreamsByGroupID[server.OriginGroupID], server.URL)
+	}
+	cachePolicies := make(map[uint]model.CachePolicy)
+	if len(cachePolicyIDs) > 0 {
+		var rows []model.CachePolicy
+		if err := model.DB.Where("id IN ?", cachePolicyIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			cachePolicies[row.ID] = row
+		}
+	}
+	securityPolicies := make(map[uint]model.SecurityPolicy)
+	if len(securityPolicyIDs) > 0 {
+		var rows []model.SecurityPolicy
+		if err := model.DB.Where("id IN ?", securityPolicyIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			securityPolicies[row.ID] = row
+		}
+	}
+	result := make([]proxyRouteRuleConfig, 0, len(rules))
+	for _, rule := range rules {
+		customHeaders, err := decodeStoredCustomHeaders(rule.CustomHeadersJSON)
+		if err != nil {
+			return nil, err
+		}
+		item := proxyRouteRuleConfig{
+			Rule:          rule,
+			Upstreams:     upstreamsByGroupID[rule.OriginGroupID],
+			CustomHeaders: customHeaders,
+		}
+		if rule.CachePolicyID != nil {
+			if policy, ok := cachePolicies[*rule.CachePolicyID]; ok {
+				policyCopy := policy
+				cacheRules, err := decodeStoredCacheRules(policy.RulesJSON)
+				if err != nil {
+					return nil, err
+				}
+				item.CachePolicy = &policyCopy
+				item.CacheRules = cacheRules
+			}
+		}
+		if rule.SecurityPolicyID != nil {
+			if policy, ok := securityPolicies[*rule.SecurityPolicyID]; ok {
+				policyCopy := policy
+				item.SecurityPolicy = &policyCopy
+			}
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func firstString(values []string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func routeRuleCachePolicyName(policy *model.CachePolicy) string {
+	if policy == nil {
+		return ""
+	}
+	return strings.TrimSpace(policy.Policy)
+}
+
+func routeRuleBasicAuthUsername(policy *model.SecurityPolicy) string {
+	if policy == nil {
+		return ""
+	}
+	return strings.TrimSpace(policy.BasicAuthUsername)
 }
 
 func parseSnapshotDocument(snapshotJSON string) (*snapshotDocument, error) {
@@ -1530,6 +1739,11 @@ func buildOpenRestyRenderRoutes(routes []*model.ProxyRoute, context proxyRouteTL
 			RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
 			RegionRestrictionCountries: regionCountries,
 		}
+		routeRules, err := buildOpenRestyRouteRules(route)
+		if err != nil {
+			return nil, fmt.Errorf("route %s route_rules are invalid: %w", route.Domain, err)
+		}
+		renderRoute.Rules = routeRules
 		if route.EnableHTTPS {
 			certIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
 			if err != nil {
@@ -1558,6 +1772,59 @@ func toOpenRestyCustomHeaders(headers []ProxyRouteCustomHeaderInput) []openresty
 		result = append(result, openresty.CustomHeader{Key: header.Key, Value: header.Value})
 	}
 	return result
+}
+
+func buildOpenRestyRouteRules(route *model.ProxyRoute) ([]openresty.RouteRule, error) {
+	configs, err := loadProxyRouteRuleConfigs(route)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]openresty.RouteRule, 0, len(configs))
+	for _, config := range configs {
+		rule := config.Rule
+		if rule.MatchType == proxyRouteRuleMatchDefault {
+			continue
+		}
+		renderRule := openresty.RouteRule{
+			ID:                rule.ID,
+			MatchType:         rule.MatchType,
+			Path:              rule.Path,
+			Priority:          rule.Priority,
+			Enabled:           rule.Enabled,
+			OriginURL:         firstString(config.Upstreams),
+			OriginHostHeader:  strings.TrimSpace(rule.OriginHostHeader),
+			OriginSNI:         strings.TrimSpace(rule.OriginSNI),
+			OriginTLSVerify:   &rule.OriginTLSVerify,
+			OriginCABundle:    strings.TrimSpace(rule.OriginCABundle),
+			OriginResolveMode: strings.TrimSpace(rule.OriginResolveMode),
+			LimitRate:         strings.TrimSpace(rule.LimitRate),
+			ProxyBufferingMode: normalizeProxyRouteProxyBufferingMode(
+				rule.ProxyBufferingMode,
+			),
+			CustomHeaders: toOpenRestyCustomHeaders(config.CustomHeaders),
+		}
+		if len(config.Upstreams) > 0 {
+			renderRule.Upstreams = config.Upstreams
+		}
+		limitConnPerServer := rule.LimitConnPerServer
+		renderRule.LimitConnPerServer = &limitConnPerServer
+		limitConnPerIP := rule.LimitConnPerIP
+		renderRule.LimitConnPerIP = &limitConnPerIP
+		if config.CachePolicy != nil {
+			cacheEnabled := config.CachePolicy.Enabled
+			renderRule.CacheEnabled = &cacheEnabled
+			renderRule.CachePolicy = config.CachePolicy.Policy
+			renderRule.CacheRules = config.CacheRules
+		}
+		if config.SecurityPolicy != nil {
+			basicAuthEnabled := config.SecurityPolicy.BasicAuthEnabled
+			renderRule.BasicAuthEnabled = &basicAuthEnabled
+			renderRule.BasicAuthUsername = config.SecurityPolicy.BasicAuthUsername
+			renderRule.BasicAuthPasswordHash = config.SecurityPolicy.BasicAuthPasswordHash
+		}
+		result = append(result, renderRule)
+	}
+	return result, nil
 }
 
 func toOpenRestyTLSCertificates(certificates []*model.TLSCertificate) []openresty.TLSCertificate {

@@ -3,8 +3,41 @@ package openresty
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 )
+
+type routeLocationConfig struct {
+	origin                routeOriginConfig
+	customHeaders         []CustomHeader
+	cacheConfig           routeCacheConfig
+	limitConfig           routeLimitConfig
+	proxyBufferingConfig  routeProxyBufferingConfig
+	regionConfig          routeRegionRestrictionConfig
+	wafConfig             routeWAFConfig
+	ccConfig              routeCCConfig
+	upstreamConfig        routeUpstreamConfig
+	powEnabled            bool
+	basicAuthEnabled      bool
+	basicAuthUsername     string
+	basicAuthPasswordHash string
+}
+
+type renderedRouteLocation struct {
+	selector string
+	config   routeLocationConfig
+}
+
+type renderedRouteLocationSet struct {
+	locations      []renderedRouteLocation
+	namedUpstreams []routeUpstreamConfig
+	supportFiles   []SupportFile
+}
+
+type indexedRouteRule struct {
+	rule  RouteRule
+	index int
+}
 
 func RenderRouteConfig(routes []Route, cfg ConfigSnapshot, options RenderOptions) (string, []SupportFile, error) {
 	var builder strings.Builder
@@ -23,33 +56,6 @@ func RenderRouteConfig(routes []Route, cfg ConfigSnapshot, options RenderOptions
 		if strings.TrimSpace(displayName) == "" {
 			displayName = domains[0]
 		}
-		cacheConfig := routeCacheConfig{
-			Enabled: route.CacheEnabled,
-			Policy:  route.CachePolicy,
-			Rules:   route.CacheRules,
-		}
-		limitConfig := routeLimitConfig{
-			LimitConnPerServer: route.LimitConnPerServer,
-			LimitConnPerIP:     route.LimitConnPerIP,
-			LimitRate:          route.LimitRate,
-		}
-		proxyBufferingConfig := routeProxyBufferingConfig{
-			Mode: normalizeProxyBufferingMode(route.ProxyBufferingMode),
-		}
-		regionConfig := routeRegionRestrictionConfig{
-			Enabled:   route.RegionRestrictionEnabled && len(route.RegionRestrictionCountries) > 0,
-			Mode:      normalizeRegionMode(route.RegionRestrictionMode),
-			Countries: route.RegionRestrictionCountries,
-		}
-		wafConfig := routeWAFConfig{
-			Enabled: route.WAFEnabled,
-			Mode:    normalizeWAFMode(route.WAFMode),
-		}
-		ccConfig := routeCCConfig{
-			Enabled: route.CCEnabled,
-			Mode:    normalizeCCMode(route.CCMode),
-		}
-		powRequired := route.PoWEnabled || (ccConfig.Enabled && ccConfig.Mode == CCModePoW)
 		upstreamConfig, err := buildRouteUpstreamConfig(route, route.Upstreams, options)
 		if err != nil {
 			return "", nil, fmt.Errorf("route %s origin upstream is invalid: %w", route.Domain, err)
@@ -59,11 +65,21 @@ func RenderRouteConfig(routes []Route, cfg ConfigSnapshot, options RenderOptions
 			supportFiles = append(supportFiles, *caFile)
 			originConfig.CABundlePath = fmt.Sprintf("%s/%s", CertDirPlaceholder, caFile.Path)
 		}
+		siteLocationConfig := buildRouteLocationConfig(route, originConfig, upstreamConfig)
+		locationSet, err := buildRenderedRouteLocationSet(route, siteLocationConfig, options)
+		if err != nil {
+			return "", nil, err
+		}
+		supportFiles = append(supportFiles, locationSet.supportFiles...)
+		seenUpstreamNames := make(map[string]struct{})
 		if upstreamConfig.UsesNamedUpstream {
-			builder.WriteString(renderNamedUpstreamBlock(upstreamConfig))
+			appendNamedUpstreamBlock(&builder, seenUpstreamNames, upstreamConfig)
+		}
+		for _, ruleUpstreamConfig := range locationSet.namedUpstreams {
+			appendNamedUpstreamBlock(&builder, seenUpstreamNames, ruleUpstreamConfig)
 		}
 		if !route.EnableHTTPS {
-			builder.WriteString(renderHTTPProxyServer(serverNames, originConfig, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, locationSet, cfg))
 			continue
 		}
 		if route.CertID == nil || *route.CertID == 0 {
@@ -112,41 +128,464 @@ func RenderRouteConfig(routes []Route, cfg ConfigSnapshot, options RenderOptions
 
 		if route.RedirectHTTP {
 			if len(httpOnlyDomains) > 0 {
-				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), originConfig, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
+				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), locationSet, cfg))
 			}
 			for _, certID := range route.CertIDs {
 				assignedDomains := domainsByCertID[certID]
 				if len(assignedDomains) == 0 {
 					continue
 				}
-				builder.WriteString(renderHTTPRedirectServer(renderServerNames(assignedDomains), regionConfig, wafConfig, ccConfig))
+				builder.WriteString(renderHTTPRedirectServer(renderServerNames(assignedDomains), siteLocationConfig.regionConfig, siteLocationConfig.wafConfig, siteLocationConfig.ccConfig))
 			}
 		} else {
-			builder.WriteString(renderHTTPProxyServer(serverNames, originConfig, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, locationSet, cfg))
 		}
 		for _, certID := range route.CertIDs {
 			assignedDomains := domainsByCertID[certID]
 			if len(assignedDomains) == 0 {
 				continue
 			}
-			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), originConfig, certID, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
+			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), certID, locationSet, cfg))
 		}
 	}
 	return builder.String(), DedupeSupportFiles(supportFiles), nil
 }
 
-func renderHTTPProxyServer(serverNames string, origin routeOriginConfig, customHeaders []CustomHeader, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg ConfigSnapshot) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(origin, customHeaders, upstreamConfig, cfg), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(origin.URL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+func renderHTTPProxyServer(serverNames string, locationSet renderedRouteLocationSet, cfg ConfigSnapshot) string {
+	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s%s%s}\n\n", serverNames, renderRouteLocationServerAccessBlock(locationSet.locations), renderPowLocationBlocks(routeLocationSetPowEnabled(locationSet.locations)), renderRouteLocationBlocks(locationSet.locations, cfg), renderPowStaticLocationBlock(routeLocationSetPowEnabled(locationSet.locations)))
 }
 
 func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
 	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s\n    return 301 https://$host$request_uri;\n}\n\n", serverNames, renderRegionRestrictionBlock(regionConfig, wafConfig, ccConfig))
 }
 
-func renderHTTPSServer(serverNames string, origin routeOriginConfig, certificateID uint, customHeaders []CustomHeader, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg ConfigSnapshot) string {
+func renderHTTPSServer(serverNames string, certificateID uint, locationSet renderedRouteLocationSet, cfg ConfigSnapshot) string {
 	certPath := fmt.Sprintf("%s/%s", CertDirPlaceholder, CertFileName(certificateID))
 	keyPath := fmt.Sprintf("%s/%s", CertDirPlaceholder, KeyFileName(certificateID))
-	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(origin, customHeaders, upstreamConfig, cfg), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(origin.URL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s%s%s}\n\n", serverNames, certPath, keyPath, renderRouteLocationServerAccessBlock(locationSet.locations), renderPowLocationBlocks(routeLocationSetPowEnabled(locationSet.locations)), renderRouteLocationBlocks(locationSet.locations, cfg), renderPowStaticLocationBlock(routeLocationSetPowEnabled(locationSet.locations)))
+}
+
+func buildRouteLocationConfig(route Route, origin routeOriginConfig, upstreamConfig routeUpstreamConfig) routeLocationConfig {
+	cacheConfig := routeCacheConfig{
+		Enabled: route.CacheEnabled,
+		Policy:  route.CachePolicy,
+		Rules:   route.CacheRules,
+	}
+	limitConfig := routeLimitConfig{
+		LimitConnPerServer: route.LimitConnPerServer,
+		LimitConnPerIP:     route.LimitConnPerIP,
+		LimitRate:          route.LimitRate,
+	}
+	proxyBufferingConfig := routeProxyBufferingConfig{
+		Mode: normalizeProxyBufferingMode(route.ProxyBufferingMode),
+	}
+	regionConfig := routeRegionRestrictionConfig{
+		Enabled:   route.RegionRestrictionEnabled && len(route.RegionRestrictionCountries) > 0,
+		Mode:      normalizeRegionMode(route.RegionRestrictionMode),
+		Countries: route.RegionRestrictionCountries,
+	}
+	wafConfig := routeWAFConfig{
+		Enabled: route.WAFEnabled,
+		Mode:    normalizeWAFMode(route.WAFMode),
+	}
+	ccConfig := routeCCConfig{
+		Enabled: route.CCEnabled,
+		Mode:    normalizeCCMode(route.CCMode),
+	}
+	return routeLocationConfig{
+		origin:                origin,
+		customHeaders:         route.CustomHeaders,
+		cacheConfig:           cacheConfig,
+		limitConfig:           limitConfig,
+		proxyBufferingConfig:  proxyBufferingConfig,
+		regionConfig:          regionConfig,
+		wafConfig:             wafConfig,
+		ccConfig:              ccConfig,
+		upstreamConfig:        upstreamConfig,
+		powEnabled:            route.PoWEnabled || (ccConfig.Enabled && ccConfig.Mode == CCModePoW),
+		basicAuthEnabled:      route.BasicAuthEnabled,
+		basicAuthUsername:     route.BasicAuthUsername,
+		basicAuthPasswordHash: route.BasicAuthPasswordHash,
+	}
+}
+
+func buildRenderedRouteLocationSet(route Route, siteLocationConfig routeLocationConfig, options RenderOptions) (renderedRouteLocationSet, error) {
+	enabledRules := enabledRouteRules(route.Rules)
+	if len(enabledRules) == 0 {
+		return renderedRouteLocationSet{
+			locations: []renderedRouteLocation{{
+				selector: "/",
+				config:   siteLocationConfig,
+			}},
+		}, nil
+	}
+
+	locationSet := renderedRouteLocationSet{
+		locations: make([]renderedRouteLocation, 0, len(enabledRules)+1),
+	}
+	for _, indexedRule := range enabledRules {
+		matchType, err := normalizeRouteRuleMatchType(indexedRule.rule.MatchType)
+		if err != nil {
+			return renderedRouteLocationSet{}, fmt.Errorf("route %s rule %d match type is invalid: %w", route.Domain, indexedRule.rule.ID, err)
+		}
+		if matchType == RouteRuleMatchTypeDefault {
+			continue
+		}
+		selector, err := renderRouteRuleLocationSelector(indexedRule.rule, matchType)
+		if err != nil {
+			return renderedRouteLocationSet{}, fmt.Errorf("route %s rule %d path is invalid: %w", route.Domain, indexedRule.rule.ID, err)
+		}
+		ruleLocationConfig, namedUpstreams, supportFiles, err := buildRouteRuleLocationConfig(route, siteLocationConfig, indexedRule, options)
+		if err != nil {
+			return renderedRouteLocationSet{}, err
+		}
+		locationSet.locations = append(locationSet.locations, renderedRouteLocation{
+			selector: selector,
+			config:   ruleLocationConfig,
+		})
+		locationSet.namedUpstreams = append(locationSet.namedUpstreams, namedUpstreams...)
+		locationSet.supportFiles = append(locationSet.supportFiles, supportFiles...)
+	}
+	locationSet.locations = append(locationSet.locations, renderedRouteLocation{
+		selector: "/",
+		config:   siteLocationConfig,
+	})
+	return locationSet, nil
+}
+
+func buildRouteRuleLocationConfig(route Route, siteLocationConfig routeLocationConfig, indexedRule indexedRouteRule, options RenderOptions) (routeLocationConfig, []routeUpstreamConfig, []SupportFile, error) {
+	rule := indexedRule.rule
+	effectiveRoute := route
+	originURLOverridden := strings.TrimSpace(rule.OriginURL) != ""
+	resolveModeOverridden := strings.TrimSpace(rule.OriginResolveMode) != ""
+	if strings.TrimSpace(rule.OriginURL) != "" {
+		effectiveRoute.OriginURL = strings.TrimSpace(rule.OriginURL)
+	}
+	if strings.TrimSpace(rule.OriginHost) != "" {
+		effectiveRoute.OriginHost = strings.TrimSpace(rule.OriginHost)
+	}
+	if strings.TrimSpace(rule.OriginHostHeader) != "" {
+		effectiveRoute.OriginHostHeader = strings.TrimSpace(rule.OriginHostHeader)
+	}
+	if strings.TrimSpace(rule.OriginSNI) != "" {
+		effectiveRoute.OriginSNI = strings.TrimSpace(rule.OriginSNI)
+	}
+	if rule.OriginTLSVerify != nil {
+		effectiveRoute.OriginTLSVerify = rule.OriginTLSVerify
+	}
+	if strings.TrimSpace(rule.OriginCABundle) != "" {
+		effectiveRoute.OriginCABundle = strings.TrimSpace(rule.OriginCABundle)
+	}
+	if strings.TrimSpace(rule.OriginResolveMode) != "" {
+		effectiveRoute.OriginResolveMode = strings.TrimSpace(rule.OriginResolveMode)
+	}
+	if rule.Upstreams != nil {
+		effectiveRoute.Upstreams = rule.Upstreams
+	}
+	if rule.Limit.LimitConnPerServer > 0 {
+		effectiveRoute.LimitConnPerServer = rule.Limit.LimitConnPerServer
+	}
+	if rule.Limit.LimitConnPerIP > 0 {
+		effectiveRoute.LimitConnPerIP = rule.Limit.LimitConnPerIP
+	}
+	if strings.TrimSpace(rule.Limit.LimitRate) != "" {
+		effectiveRoute.LimitRate = strings.TrimSpace(rule.Limit.LimitRate)
+	}
+	if rule.LimitConnPerServer != nil {
+		effectiveRoute.LimitConnPerServer = *rule.LimitConnPerServer
+	}
+	if rule.LimitConnPerIP != nil {
+		effectiveRoute.LimitConnPerIP = *rule.LimitConnPerIP
+	}
+	if strings.TrimSpace(rule.LimitRate) != "" {
+		effectiveRoute.LimitRate = strings.TrimSpace(rule.LimitRate)
+	}
+	if strings.TrimSpace(rule.ProxyBuffering.Mode) != "" {
+		effectiveRoute.ProxyBufferingMode = strings.TrimSpace(rule.ProxyBuffering.Mode)
+	}
+	if strings.TrimSpace(rule.ProxyBufferingMode) != "" {
+		effectiveRoute.ProxyBufferingMode = strings.TrimSpace(rule.ProxyBufferingMode)
+	}
+	if rule.Cache.Enabled != nil {
+		effectiveRoute.CacheEnabled = *rule.Cache.Enabled
+	}
+	if strings.TrimSpace(rule.Cache.Policy) != "" {
+		effectiveRoute.CachePolicy = strings.TrimSpace(rule.Cache.Policy)
+	}
+	if rule.Cache.Rules != nil {
+		effectiveRoute.CacheRules = rule.Cache.Rules
+	}
+	if rule.CacheEnabled != nil {
+		effectiveRoute.CacheEnabled = *rule.CacheEnabled
+	}
+	if strings.TrimSpace(rule.CachePolicy) != "" {
+		effectiveRoute.CachePolicy = strings.TrimSpace(rule.CachePolicy)
+	}
+	if rule.CacheRules != nil {
+		effectiveRoute.CacheRules = rule.CacheRules
+	}
+	if rule.CustomHeaders != nil {
+		effectiveRoute.CustomHeaders = rule.CustomHeaders
+	}
+	if rule.PoW.Enabled != nil {
+		effectiveRoute.PoWEnabled = *rule.PoW.Enabled
+	}
+	if rule.PoWEnabled != nil {
+		effectiveRoute.PoWEnabled = *rule.PoWEnabled
+	}
+	if rule.WAF.Enabled != nil {
+		effectiveRoute.WAFEnabled = *rule.WAF.Enabled
+	}
+	if strings.TrimSpace(rule.WAF.Mode) != "" {
+		effectiveRoute.WAFMode = strings.TrimSpace(rule.WAF.Mode)
+	}
+	if rule.WAFEnabled != nil {
+		effectiveRoute.WAFEnabled = *rule.WAFEnabled
+	}
+	if strings.TrimSpace(rule.WAFMode) != "" {
+		effectiveRoute.WAFMode = strings.TrimSpace(rule.WAFMode)
+	}
+	if rule.CC.Enabled != nil {
+		effectiveRoute.CCEnabled = *rule.CC.Enabled
+	}
+	if strings.TrimSpace(rule.CC.Mode) != "" {
+		effectiveRoute.CCMode = strings.TrimSpace(rule.CC.Mode)
+	}
+	if rule.CCEnabled != nil {
+		effectiveRoute.CCEnabled = *rule.CCEnabled
+	}
+	if strings.TrimSpace(rule.CCMode) != "" {
+		effectiveRoute.CCMode = strings.TrimSpace(rule.CCMode)
+	}
+	if rule.BasicAuth.Enabled != nil {
+		effectiveRoute.BasicAuthEnabled = *rule.BasicAuth.Enabled
+	}
+	if strings.TrimSpace(rule.BasicAuth.Username) != "" {
+		effectiveRoute.BasicAuthUsername = strings.TrimSpace(rule.BasicAuth.Username)
+	}
+	if strings.TrimSpace(rule.BasicAuth.PasswordHash) != "" {
+		effectiveRoute.BasicAuthPasswordHash = strings.TrimSpace(rule.BasicAuth.PasswordHash)
+	}
+	if rule.BasicAuthEnabled != nil {
+		effectiveRoute.BasicAuthEnabled = *rule.BasicAuthEnabled
+	}
+	if strings.TrimSpace(rule.BasicAuthUsername) != "" {
+		effectiveRoute.BasicAuthUsername = strings.TrimSpace(rule.BasicAuthUsername)
+	}
+	if strings.TrimSpace(rule.BasicAuthPasswordHash) != "" {
+		effectiveRoute.BasicAuthPasswordHash = strings.TrimSpace(rule.BasicAuthPasswordHash)
+	}
+	if rule.Region.Enabled != nil {
+		effectiveRoute.RegionRestrictionEnabled = *rule.Region.Enabled
+	}
+	if strings.TrimSpace(rule.Region.Mode) != "" {
+		effectiveRoute.RegionRestrictionMode = strings.TrimSpace(rule.Region.Mode)
+	}
+	if rule.Region.Countries != nil {
+		effectiveRoute.RegionRestrictionCountries = rule.Region.Countries
+	}
+	if rule.RegionRestrictionEnabled != nil {
+		effectiveRoute.RegionRestrictionEnabled = *rule.RegionRestrictionEnabled
+	}
+	if strings.TrimSpace(rule.RegionRestrictionMode) != "" {
+		effectiveRoute.RegionRestrictionMode = strings.TrimSpace(rule.RegionRestrictionMode)
+	}
+	if rule.RegionRestrictionCountries != nil {
+		effectiveRoute.RegionRestrictionCountries = rule.RegionRestrictionCountries
+	}
+
+	originConfig := buildRouteOriginConfig(effectiveRoute)
+	originConfig.CABundlePath = siteLocationConfig.origin.CABundlePath
+	supportFiles := make([]SupportFile, 0, 1)
+	if caFile := renderOriginCABundleSupportFileForRule(route, rule, indexedRule.index); caFile != nil {
+		supportFiles = append(supportFiles, *caFile)
+		originConfig.CABundlePath = fmt.Sprintf("%s/%s", CertDirPlaceholder, caFile.Path)
+	}
+
+	upstreamConfig := siteLocationConfig.upstreamConfig
+	namedUpstreams := make([]routeUpstreamConfig, 0, 1)
+	if rule.Upstreams != nil || originURLOverridden || resolveModeOverridden {
+		upstreamRoute := buildRouteRuleUpstreamRoute(effectiveRoute, rule, indexedRule.index)
+		upstreams := rule.Upstreams
+		if upstreams == nil && !originURLOverridden {
+			upstreams = effectiveRoute.Upstreams
+		}
+		var err error
+		upstreamConfig, err = buildRouteUpstreamConfig(upstreamRoute, upstreams, options)
+		if err != nil {
+			return routeLocationConfig{}, nil, nil, fmt.Errorf("route %s rule %d origin upstream is invalid: %w", route.Domain, rule.ID, err)
+		}
+		if upstreamConfig.UsesNamedUpstream {
+			namedUpstreams = append(namedUpstreams, upstreamConfig)
+		}
+	}
+
+	return buildRouteLocationConfig(effectiveRoute, originConfig, upstreamConfig), namedUpstreams, supportFiles, nil
+}
+
+func enabledRouteRules(rules []RouteRule) []indexedRouteRule {
+	result := make([]indexedRouteRule, 0, len(rules))
+	for index, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		result = append(result, indexedRouteRule{rule: rule, index: index})
+	}
+	sort.SliceStable(result, func(leftIndex, rightIndex int) bool {
+		left := result[leftIndex].rule
+		right := result[rightIndex].rule
+		if left.Priority != right.Priority {
+			return left.Priority < right.Priority
+		}
+		leftRank := routeRuleMatchTypeRank(left.MatchType)
+		rightRank := routeRuleMatchTypeRank(right.MatchType)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return result[leftIndex].index < result[rightIndex].index
+	})
+	return result
+}
+
+func normalizeRouteRuleMatchType(raw string) (string, error) {
+	matchType := strings.ToLower(strings.TrimSpace(raw))
+	switch matchType {
+	case "", RouteRuleMatchTypeDefault:
+		return RouteRuleMatchTypeDefault, nil
+	case RouteRuleMatchTypeExact, RouteRuleMatchTypePrefix, RouteRuleMatchTypeRegex:
+		return matchType, nil
+	default:
+		return "", fmt.Errorf("unsupported match type %q", raw)
+	}
+}
+
+func routeRuleMatchTypeRank(raw string) int {
+	matchType, err := normalizeRouteRuleMatchType(raw)
+	if err != nil {
+		return 99
+	}
+	switch matchType {
+	case RouteRuleMatchTypeExact:
+		return 0
+	case RouteRuleMatchTypePrefix:
+		return 1
+	case RouteRuleMatchTypeRegex:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func renderRouteRuleLocationSelector(rule RouteRule, matchType string) (string, error) {
+	path := strings.TrimSpace(rule.Path)
+	switch matchType {
+	case RouteRuleMatchTypeExact:
+		path = normalizeLiteralRouteRulePath(path)
+		if path == "" {
+			return "", fmt.Errorf("exact match requires a path")
+		}
+		return fmt.Sprintf("= %s", path), nil
+	case RouteRuleMatchTypePrefix:
+		path = normalizePrefixRouteRulePath(path)
+		if path == "" {
+			return "", fmt.Errorf("prefix match requires a path")
+		}
+		return fmt.Sprintf("^~ %s", path), nil
+	case RouteRuleMatchTypeRegex:
+		if path == "" {
+			return "", fmt.Errorf("regex match requires a pattern")
+		}
+		return fmt.Sprintf("~ %s", path), nil
+	default:
+		return "/", nil
+	}
+}
+
+func normalizeLiteralRouteRulePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func normalizePrefixRouteRulePath(path string) string {
+	path = normalizeLiteralRouteRulePath(path)
+	if path == "" || path == "/" || strings.HasSuffix(path, "/") {
+		return path
+	}
+	return path + "/"
+}
+
+func buildRouteRuleUpstreamRoute(route Route, rule RouteRule, index int) Route {
+	identity := strings.TrimSpace(route.SiteName)
+	if identity == "" {
+		identity = strings.TrimSpace(route.Domain)
+	}
+	if identity == "" && len(route.Domains) > 0 {
+		identity = strings.TrimSpace(route.Domains[0])
+	}
+	if identity == "" {
+		identity = "route"
+	}
+	ruleIdentity := fmt.Sprintf("index_%d", index)
+	if rule.ID != 0 {
+		ruleIdentity = fmt.Sprintf("%d", rule.ID)
+	}
+	route.SiteName = fmt.Sprintf("%s rule %s", identity, ruleIdentity)
+	return route
+}
+
+func appendNamedUpstreamBlock(builder *strings.Builder, seen map[string]struct{}, upstreamConfig routeUpstreamConfig) {
+	if !upstreamConfig.UsesNamedUpstream {
+		return
+	}
+	if _, ok := seen[upstreamConfig.Name]; ok {
+		return
+	}
+	seen[upstreamConfig.Name] = struct{}{}
+	builder.WriteString(renderNamedUpstreamBlock(upstreamConfig))
+}
+
+func renderRouteLocationBlocks(locations []renderedRouteLocation, cfg ConfigSnapshot) string {
+	var builder strings.Builder
+	for _, location := range locations {
+		builder.WriteString(fmt.Sprintf("    location %s {\n%s    }\n", location.selector, renderRouteLocationBody(location.config, cfg)))
+	}
+	return builder.String()
+}
+
+func renderRouteLocationBody(config routeLocationConfig, cfg ConfigSnapshot) string {
+	var builder strings.Builder
+	builder.WriteString(renderBasicAuthBlock(config.basicAuthEnabled, config.basicAuthUsername, config.basicAuthPasswordHash))
+	builder.WriteString(renderProxyHeaderBlock(config.origin, config.customHeaders, config.upstreamConfig, cfg))
+	builder.WriteString(renderRouteProxyBufferingBlock(config.proxyBufferingConfig))
+	builder.WriteString(renderRouteLimitBlock(config.limitConfig))
+	builder.WriteString(renderRouteCacheBlock(config.cacheConfig, cfg))
+	builder.WriteString(renderProxyPassBlock(config.origin.URL, config.upstreamConfig))
+	return builder.String()
+}
+
+func renderRouteLocationServerAccessBlock(locations []renderedRouteLocation) string {
+	for _, location := range locations {
+		config := location.config
+		if config.powEnabled || config.wafConfig.Enabled || config.ccConfig.Enabled || (config.regionConfig.Enabled && len(config.regionConfig.Countries) > 0) {
+			return renderUnifiedAccessBlock(true)
+		}
+	}
+	return ""
+}
+
+func routeLocationSetPowEnabled(locations []renderedRouteLocation) bool {
+	for _, location := range locations {
+		if location.config.powEnabled {
+			return true
+		}
+	}
+	return false
 }
 
 func renderServerNames(domains []string) string {
@@ -223,8 +662,26 @@ func renderOriginCABundleSupportFile(route Route) *SupportFile {
 	}
 }
 
+func renderOriginCABundleSupportFileForRule(route Route, rule RouteRule, index int) *SupportFile {
+	caBundle := strings.TrimSpace(rule.OriginCABundle)
+	if caBundle == "" {
+		return nil
+	}
+	return &SupportFile{
+		Path:    OriginCABundleRuleFileName(route.ID, rule.ID, index),
+		Content: NormalizePEM(caBundle),
+	}
+}
+
 func OriginCABundleFileName(routeID uint) string {
 	return fmt.Sprintf("origin_ca_%d.pem", routeID)
+}
+
+func OriginCABundleRuleFileName(routeID uint, ruleID uint, index int) string {
+	if ruleID != 0 {
+		return fmt.Sprintf("origin_ca_%d_rule_%d.pem", routeID, ruleID)
+	}
+	return fmt.Sprintf("origin_ca_%d_rule_index_%d.pem", routeID, index+1)
 }
 
 func renderRouteProxyBufferingBlock(config routeProxyBufferingConfig) string {

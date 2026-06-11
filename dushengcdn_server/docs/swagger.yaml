@@ -383,6 +383,19 @@ definitions:
       reason:
         type: string
     type: object
+  service.ConfigReleasePlanInput:
+    properties:
+      canary_percent:
+        type: integer
+      config_version_id:
+        type: integer
+      force:
+        type: boolean
+      node_pool:
+        type: string
+      observe_seconds:
+        type: integer
+    type: object
   service.ManagedDomainInput:
     properties:
       cert_id:
@@ -663,6 +676,10 @@ definitions:
         type: string
       remark:
         type: string
+      route_rules:
+        items:
+          $ref: '#/definitions/service.ProxyRouteRuleInput'
+        type: array
       site_name:
         type: string
       upstreams:
@@ -675,6 +692,63 @@ definitions:
         type: boolean
       waf_mode:
         type: string
+    type: object
+  service.ProxyRouteRuleInput:
+    properties:
+      basic_auth_enabled:
+        type: boolean
+      basic_auth_password:
+        type: string
+      basic_auth_username:
+        type: string
+      cache_enabled:
+        type: boolean
+      cache_policy:
+        type: string
+      cache_rules:
+        items:
+          type: string
+        type: array
+      custom_headers:
+        items:
+          $ref: '#/definitions/service.ProxyRouteCustomHeaderInput'
+        type: array
+      enabled:
+        type: boolean
+      id:
+        type: integer
+      limit_conn_per_ip:
+        type: integer
+      limit_conn_per_server:
+        type: integer
+      limit_rate:
+        type: string
+      match_type:
+        type: string
+      name:
+        type: string
+      origin_ca_bundle:
+        type: string
+      origin_host_header:
+        type: string
+      origin_resolve_mode:
+        type: string
+      origin_sni:
+        type: string
+      origin_tls_verify:
+        type: boolean
+      origin_url:
+        type: string
+      path:
+        type: string
+      priority:
+        type: integer
+      proxy_buffering_mode:
+        type: string
+      upstreams:
+        items:
+          type: string
+        type: array
     type: object
   service.TLSApplyInput:
     properties:
@@ -1099,6 +1173,198 @@ paths:
       summary: Cleanup apply logs
       tags:
       - ApplyLogs
+  /api/config-release-plans/:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List config release plans
+      tags:
+      - ConfigVersions
+    post:
+      parameters:
+      - description: Release plan payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/service.ConfigReleasePlanInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create config release plan
+      tags:
+      - ConfigVersions
+  /api/config-release-plans/{id}:
+    get:
+      parameters:
+      - description: Plan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get config release plan
+      tags:
+      - ConfigVersions
+  /api/config-release-plans/{id}/advance:
+    post:
+      parameters:
+      - description: Plan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Advance config release plan
+      tags:
+      - ConfigVersions
+  /api/config-release-plans/{id}/complete:
+    post:
+      parameters:
+      - description: Plan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Complete config release plan
+      tags:
+      - ConfigVersions
+  /api/config-release-plans/{id}/evaluate:
+    post:
+      parameters:
+      - description: Plan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Evaluate config release plan
+      tags:
+      - ConfigVersions
+  /api/config-release-plans/{id}/fail:
+    post:
+      parameters:
+      - description: Plan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Fail config release plan
+      tags:
+      - ConfigVersions
+  /api/config-release-plans/{id}/start:
+    post:
+      parameters:
+      - description: Plan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Start config release plan
+      tags:
+      - ConfigVersions
   /api/config-versions/:
     get:
       produces:

@@ -127,6 +127,18 @@ func SetApiRouter(router *gin.Engine) {
 			proxyRoute.POST("/:id/cache/purge", controller.PurgeProxyRouteCache)
 			proxyRoute.POST("/:id/cache/warm", controller.WarmProxyRouteCache)
 		}
+		configReleasePlanRoute := apiRouter.Group("/config-release-plans")
+		configReleasePlanRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
+		{
+			configReleasePlanRoute.GET("/", controller.ListConfigReleasePlans)
+			configReleasePlanRoute.GET("/:id", controller.GetConfigReleasePlan)
+			configReleasePlanRoute.POST("/", controller.CreateConfigReleasePlan)
+			configReleasePlanRoute.POST("/:id/start", controller.StartConfigReleasePlan)
+			configReleasePlanRoute.POST("/:id/evaluate", controller.EvaluateConfigReleasePlan)
+			configReleasePlanRoute.POST("/:id/advance", controller.AdvanceConfigReleasePlan)
+			configReleasePlanRoute.POST("/:id/complete", controller.CompleteConfigReleasePlan)
+			configReleasePlanRoute.POST("/:id/fail", controller.FailConfigReleasePlan)
+		}
 		originRoute := apiRouter.Group("/origins")
 		originRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{

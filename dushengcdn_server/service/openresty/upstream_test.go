@@ -95,6 +95,136 @@ func TestRenderRouteConfigPublishResolveUsesResolvedUpstream(t *testing.T) {
 	}
 }
 
+func TestRenderRouteConfigRouteRulesLocationOrder(t *testing.T) {
+	config, _, err := RenderRouteConfig([]Route{{
+		ID:        21,
+		Domain:    "cdn.example.com",
+		OriginURL: "https://site-origin.example.com",
+		Rules: []RouteRule{
+			{
+				ID:        4,
+				MatchType: RouteRuleMatchTypeDefault,
+				Path:      "/",
+				Priority:  1,
+				Enabled:   true,
+				OriginURL: "https://ignored-default.example.com",
+			},
+			{
+				ID:        3,
+				MatchType: RouteRuleMatchTypeRegex,
+				Path:      `^/items/[0-9]+$`,
+				Priority:  30,
+				Enabled:   true,
+			},
+			{
+				ID:        2,
+				MatchType: RouteRuleMatchTypePrefix,
+				Path:      "/prefix",
+				Priority:  20,
+				Enabled:   true,
+			},
+			{
+				ID:        1,
+				MatchType: RouteRuleMatchTypeExact,
+				Path:      "/exact",
+				Priority:  10,
+				Enabled:   true,
+			},
+			{
+				ID:        5,
+				MatchType: RouteRuleMatchTypeExact,
+				Path:      "/disabled",
+				Priority:  0,
+				Enabled:   false,
+			},
+		},
+	}}, ConfigSnapshot{}, RenderOptions{})
+	if err != nil {
+		t.Fatalf("RenderRouteConfig returned error: %v", err)
+	}
+	assertInOrder(t, config, []string{
+		"location = /exact {",
+		"location ^~ /prefix/ {",
+		"location ~ ^/items/[0-9]+$ {",
+		"location / {",
+	})
+	if strings.Contains(config, "/disabled") {
+		t.Fatalf("disabled rule should not render:\n%s", config)
+	}
+	if strings.Contains(config, "ignored-default.example.com") {
+		t.Fatalf("default rule overrides should not replace the site fallback:\n%s", config)
+	}
+}
+
+func TestRenderRouteConfigWithoutEnabledRulesKeepsRootLocation(t *testing.T) {
+	config, _, err := RenderRouteConfig([]Route{{
+		ID:        22,
+		Domain:    "cdn.example.com",
+		OriginURL: "https://site-origin.example.com",
+		Rules: []RouteRule{{
+			ID:        1,
+			MatchType: RouteRuleMatchTypePrefix,
+			Path:      "/disabled",
+			Priority:  1,
+			Enabled:   false,
+		}},
+	}}, ConfigSnapshot{}, RenderOptions{})
+	if err != nil {
+		t.Fatalf("RenderRouteConfig returned error: %v", err)
+	}
+	if count := strings.Count(config, "location / {"); count != 1 {
+		t.Fatalf("expected exactly one root location, got %d:\n%s", count, config)
+	}
+	for _, unexpected := range []string{"location =", "location ^~", "location ~", "/disabled"} {
+		if strings.Contains(config, unexpected) {
+			t.Fatalf("unexpected rule location %q rendered:\n%s", unexpected, config)
+		}
+	}
+}
+
+func TestRenderRouteConfigRouteRuleOriginAndUpstreamOverride(t *testing.T) {
+	config, _, err := RenderRouteConfig([]Route{{
+		ID:        31,
+		Domain:    "cdn.example.com",
+		OriginURL: "https://site-origin.example.com",
+		Rules: []RouteRule{
+			{
+				ID:        101,
+				MatchType: RouteRuleMatchTypeExact,
+				Path:      "/direct",
+				Priority:  10,
+				Enabled:   true,
+				OriginURL: "https://direct-origin.example.com/app",
+			},
+			{
+				ID:        102,
+				MatchType: RouteRuleMatchTypePrefix,
+				Path:      "/balanced",
+				Priority:  20,
+				Enabled:   true,
+				OriginURL: "https://balanced-origin.example.com",
+				Upstreams: []string{"https://93.184.216.34:8443"},
+			},
+		},
+	}}, ConfigSnapshot{}, RenderOptions{})
+	if err != nil {
+		t.Fatalf("RenderRouteConfig returned error: %v", err)
+	}
+	for _, want := range []string{
+		"location = /direct {",
+		"proxy_pass https://direct-origin.example.com/app;",
+		"upstream backend_cdn_example_com_rule_102_31 {",
+		"server 93.184.216.34:8443 max_fails=3 fail_timeout=10s;",
+		"proxy_pass https://backend_cdn_example_com_rule_102_31;",
+		"location / {",
+		"proxy_pass https://site-origin.example.com;",
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("rendered config missing %q:\n%s", want, config)
+		}
+	}
+}
+
 func TestRenderRouteConfigOriginTLSOptions(t *testing.T) {
 	verify := false
 	config, files, err := RenderRouteConfig([]Route{{
@@ -169,5 +299,20 @@ func TestBasicAuthCredentialHashIsStable(t *testing.T) {
 	const want = "7f4db006c4751e37a685071c95013d191b9fdce05096ab52b22b36b0b7b4c251"
 	if got != want {
 		t.Fatalf("BasicAuthCredentialHash changed: got %s want %s", got, want)
+	}
+}
+
+func assertInOrder(t *testing.T, text string, needles []string) {
+	t.Helper()
+	lastIndex := -1
+	for _, needle := range needles {
+		index := strings.Index(text, needle)
+		if index < 0 {
+			t.Fatalf("rendered config missing %q:\n%s", needle, text)
+		}
+		if index <= lastIndex {
+			t.Fatalf("rendered config has %q out of order:\n%s", needle, text)
+		}
+		lastIndex = index
 	}
 }

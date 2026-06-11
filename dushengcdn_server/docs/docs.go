@@ -614,6 +614,311 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/config-release-plans/": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ConfigVersions"
+                ],
+                "summary": "List config release plans",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ConfigVersions"
+                ],
+                "summary": "Create config release plan",
+                "parameters": [
+                    {
+                        "description": "Release plan payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.ConfigReleasePlanInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config-release-plans/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ConfigVersions"
+                ],
+                "summary": "Get config release plan",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Plan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config-release-plans/{id}/advance": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ConfigVersions"
+                ],
+                "summary": "Advance config release plan",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Plan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config-release-plans/{id}/complete": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ConfigVersions"
+                ],
+                "summary": "Complete config release plan",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Plan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config-release-plans/{id}/evaluate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ConfigVersions"
+                ],
+                "summary": "Evaluate config release plan",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Plan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config-release-plans/{id}/fail": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ConfigVersions"
+                ],
+                "summary": "Fail config release plan",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Plan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config-release-plans/{id}/start": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ConfigVersions"
+                ],
+                "summary": "Start config release plan",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Plan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/config-versions/": {
             "get": {
                 "security": [
@@ -3831,6 +4136,26 @@ const docTemplate = `{
                 }
             }
         },
+        "service.ConfigReleasePlanInput": {
+            "type": "object",
+            "properties": {
+                "canary_percent": {
+                    "type": "integer"
+                },
+                "config_version_id": {
+                    "type": "integer"
+                },
+                "force": {
+                    "type": "boolean"
+                },
+                "node_pool": {
+                    "type": "string"
+                },
+                "observe_seconds": {
+                    "type": "integer"
+                }
+            }
+        },
         "service.ManagedDomainInput": {
             "type": "object",
             "properties": {
@@ -4255,6 +4580,12 @@ const docTemplate = `{
                 "remark": {
                     "type": "string"
                 },
+                "route_rules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.ProxyRouteRuleInput"
+                    }
+                },
                 "site_name": {
                     "type": "string"
                 },
@@ -4272,6 +4603,92 @@ const docTemplate = `{
                 },
                 "waf_mode": {
                     "type": "string"
+                }
+            }
+        },
+        "service.ProxyRouteRuleInput": {
+            "type": "object",
+            "properties": {
+                "basic_auth_enabled": {
+                    "type": "boolean"
+                },
+                "basic_auth_password": {
+                    "type": "string"
+                },
+                "basic_auth_username": {
+                    "type": "string"
+                },
+                "cache_enabled": {
+                    "type": "boolean"
+                },
+                "cache_policy": {
+                    "type": "string"
+                },
+                "cache_rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "custom_headers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.ProxyRouteCustomHeaderInput"
+                    }
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "limit_conn_per_ip": {
+                    "type": "integer"
+                },
+                "limit_conn_per_server": {
+                    "type": "integer"
+                },
+                "limit_rate": {
+                    "type": "string"
+                },
+                "match_type": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "origin_ca_bundle": {
+                    "type": "string"
+                },
+                "origin_host_header": {
+                    "type": "string"
+                },
+                "origin_resolve_mode": {
+                    "type": "string"
+                },
+                "origin_sni": {
+                    "type": "string"
+                },
+                "origin_tls_verify": {
+                    "type": "boolean"
+                },
+                "origin_url": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "integer"
+                },
+                "proxy_buffering_mode": {
+                    "type": "string"
+                },
+                "upstreams": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

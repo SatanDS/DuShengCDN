@@ -2630,6 +2630,130 @@ func validateDatabaseSchemaV47(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func migrateV48(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	if err := migrateProxyRouteRulePathLevelSchema(db); err != nil {
+		return err
+	}
+	return BackfillProxyRouteNormalizedTables(db)
+}
+
+func validateDatabaseSchemaV48(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV47(db, backend); err != nil {
+		return err
+	}
+	normalizedColumns := []struct {
+		model   any
+		table   string
+		columns []string
+	}{
+		{model: &OriginGroup{}, table: "origin_groups", columns: []string{"is_default"}},
+		{model: &CachePolicy{}, table: "cache_policies", columns: []string{"name", "is_default"}},
+		{model: &SecurityPolicy{}, table: "security_policies", columns: []string{"name", "is_default"}},
+		{model: &ProxyRouteRule{}, table: "proxy_route_rules", columns: []string{
+			"cache_policy_id",
+			"security_policy_id",
+			"name",
+			"match_type",
+			"path",
+			"priority",
+			"enabled",
+			"origin_host_header",
+			"origin_sni",
+			"origin_tls_verify",
+			"origin_ca_bundle",
+			"origin_resolve_mode",
+		}},
+	}
+	for _, item := range normalizedColumns {
+		for _, column := range item.columns {
+			if !db.Migrator().HasColumn(item.model, column) {
+				return fmt.Errorf("column %s.%s is missing", item.table, column)
+			}
+		}
+	}
+	var invalidRuleCount int64
+	if err := db.Model(&ProxyRouteRule{}).
+		Where("match_type NOT IN ?", []string{"default", "prefix", "exact", "regex"}).
+		Count(&invalidRuleCount).Error; err != nil {
+		return fmt.Errorf("validate proxy route rule match_type failed: %w", err)
+	}
+	if invalidRuleCount > 0 {
+		return fmt.Errorf("proxy_route_rules.match_type contains %d invalid values", invalidRuleCount)
+	}
+	releaseTables := []struct {
+		model   any
+		table   string
+		columns []string
+	}{
+		{model: &ConfigReleasePlan{}, table: "config_release_plans", columns: []string{"id", "config_version_id", "rollback_version_id", "status", "strategy", "canary_pool_name", "current_stage", "canary_percent", "observe_seconds", "checksum", "failure_reason", "created_by", "started_at", "completed_at", "failed_at"}},
+		{model: &ConfigReleaseTarget{}, table: "config_release_targets", columns: []string{"id", "plan_id", "config_version_id", "node_id", "pool_name", "checksum", "stage_index", "status", "failure_reason", "started_at", "completed_at"}},
+		{model: &ConfigReleaseBlockedChecksum{}, table: "config_release_blocked_checksums", columns: []string{"id", "config_version_id", "plan_id", "version", "checksum", "reason"}},
+	}
+	for _, item := range releaseTables {
+		if !db.Migrator().HasTable(item.model) {
+			return fmt.Errorf("table %s is missing", item.table)
+		}
+		for _, column := range item.columns {
+			if !db.Migrator().HasColumn(item.model, column) {
+				return fmt.Errorf("column %s.%s is missing", item.table, column)
+			}
+		}
+	}
+	_ = backend
+	return nil
+}
+
+func migrateProxyRouteRulePathLevelSchema(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	for _, item := range []struct {
+		model any
+		index string
+	}{
+		{model: &ProxyRouteRule{}, index: "idx_proxy_route_rules_proxy_route_id"},
+		{model: &OriginGroup{}, index: "idx_origin_groups_proxy_route_id"},
+		{model: &CachePolicy{}, index: "idx_cache_policies_proxy_route_id"},
+		{model: &SecurityPolicy{}, index: "idx_security_policies_proxy_route_id"},
+	} {
+		if db.Migrator().HasIndex(item.model, item.index) {
+			if err := db.Migrator().DropIndex(item.model, item.index); err != nil {
+				return fmt.Errorf("drop legacy unique index %s failed: %w", item.index, err)
+			}
+		}
+	}
+	if db.Migrator().HasTable(&ProxyRouteRule{}) {
+		updates := map[string]any{
+			"match_type":          "default",
+			"path":                "/",
+			"priority":            1000000,
+			"enabled":             true,
+			"origin_tls_verify":   true,
+			"origin_resolve_mode": "publish_resolve",
+		}
+		if err := db.Model(&ProxyRouteRule{}).
+			Where("match_type = '' OR path = '' OR origin_resolve_mode = ''").
+			Updates(updates).Error; err != nil {
+			return fmt.Errorf("backfill proxy_route_rules path fields failed: %w", err)
+		}
+	}
+	for _, modelValue := range []any{&OriginGroup{}, &CachePolicy{}, &SecurityPolicy{}} {
+		if db.Migrator().HasTable(modelValue) {
+			if err := db.Model(modelValue).Where("name = ''").Update("name", "default").Error; err != nil {
+				return fmt.Errorf("backfill default policy names failed: %w", err)
+			}
+			if err := db.Model(modelValue).Where("is_default = ?", false).Update("is_default", true).Error; err != nil {
+				return fmt.Errorf("backfill default policy markers failed: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 func backfillProxyRouteOriginConnectionFields(db *gorm.DB) error {
 	if db == nil || !db.Migrator().HasTable(&ProxyRoute{}) {
 		return nil
@@ -2933,6 +3057,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 44, toVersion: 45, migrate: migrateV45, validate: validateDatabaseSchemaV45},
 		{fromVersion: 45, toVersion: 46, migrate: migrateV46, validate: validateDatabaseSchemaV46},
 		{fromVersion: 46, toVersion: 47, migrate: migrateV47, validate: validateDatabaseSchemaV47},
+		{fromVersion: 47, toVersion: 48, migrate: migrateV48, validate: validateDatabaseSchemaV48},
 	}
 }
 
@@ -2980,7 +3105,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV47(db, backend)
+		return validateDatabaseSchemaV48(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2996,7 +3121,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV47(db, backend)
+	return validateDatabaseSchemaV48(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -3033,7 +3158,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV47(db, backend); err != nil {
+	if err := validateDatabaseSchemaV48(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)
