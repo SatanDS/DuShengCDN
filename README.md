@@ -212,6 +212,32 @@ curl -fsSL https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/lates
 
 DNS Worker 自更新不再使用 `curl | bash`。本地 updater 会先下载 installer、`.sha256`、`.sig`，使用内置 release 公钥验证签名后再执行，默认 channel 为 `stable`。Server 只在 Worker 回报升级成功后清除 update request。
 
+启用 DNSSEC 前，Server 和所有 DNS Worker 必须配置同一个 `DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY`。该值用于加密数据库中的 DNSSEC 私钥，并让 Worker 解密快照后生成 DNSKEY/RRSIG；请保存到密码管理器或备份系统，启用后不要随意更换。
+
+源码 Compose 同机部署示例：
+
+```bash
+KEY="$(openssl rand -base64 48)"
+printf '%s\n' "$KEY"
+
+cd /opt/dushengcdn/dushengcdn_server
+grep -q '^DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=' .env \
+  && sed -i "s|^DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=.*|DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=$KEY|" .env \
+  || echo "DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=$KEY" >> .env
+
+sudo grep -q '^DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=' /opt/dushengcdn-dns-worker/dns-worker.env \
+  && sudo sed -i "s|^DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=.*|DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=$KEY|" /opt/dushengcdn-dns-worker/dns-worker.env \
+  || echo "DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=$KEY" | sudo tee -a /opt/dushengcdn-dns-worker/dns-worker.env >/dev/null
+
+cd /opt/dushengcdn
+docker compose --project-directory dushengcdn_server \
+  -f dushengcdn_server/docker-compose.yaml \
+  up -d --force-recreate dushengcdn
+sudo systemctl restart dushengcdn-dns-worker
+```
+
+面板启用 DNSSEC 后，再把面板导出的 DS 记录添加到注册商。关闭 DNSSEC 时先删除注册商 DS，等待缓存过期后再在面板关闭，避免验证解析失败。
+
 验证：
 
 ```bash

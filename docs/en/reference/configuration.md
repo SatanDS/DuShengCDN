@@ -231,6 +231,7 @@ DNS Worker can be configured by environment variables or CLI flags. The install 
 | `DUSHENGCDN_DNS_WORKER_QUERY_RATE_LIMIT` | Per-source-IP DNS queries per second; `0` disables | `200` |
 | `DUSHENGCDN_DNS_WORKER_UDP_RESPONSE_SIZE` | Maximum UDP response payload size before setting TC | `1232` |
 | `DUSHENGCDN_DNS_WORKER_GEOIP_DATABASE_PATH` | Optional local MaxMind Country MMDB path | empty |
+| `DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY` | DNSSEC private-key encryption key; required before enabling Authoritative DNS DNSSEC and must match the Server value | empty |
 
 | Flag | Purpose | Default |
 | --- | --- | --- |

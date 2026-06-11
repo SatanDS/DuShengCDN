@@ -337,6 +337,32 @@ curl -fsSL https://raw.githubusercontent.com/SatanDS/DuShengCDN/main/scripts/ins
 
 The Agent and DNS Worker install scripts prefer GitHub Release binaries and require matching same-name `.sha256` and `.sig` assets. If a matching binary exists but the checksum or signature asset is missing or invalid, the script stops; only when no matching binary asset exists does it fall back to a source build.
 
+Before enabling DNSSEC, Server and every DNS Worker must use the same `DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY`. Server uses it to encrypt DNSSEC private keys in the database, and Workers use it to decrypt snapshot keys and generate DNSKEY/RRSIG records. Store the value in a password manager or backup system and do not rotate it casually after enabling DNSSEC.
+
+Same-host source Compose example:
+
+```bash
+KEY="$(openssl rand -base64 48)"
+printf '%s\n' "$KEY"
+
+cd /opt/dushengcdn/dushengcdn_server
+grep -q '^DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=' .env \
+  && sed -i "s|^DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=.*|DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=$KEY|" .env \
+  || echo "DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=$KEY" >> .env
+
+sudo grep -q '^DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=' /opt/dushengcdn-dns-worker/dns-worker.env \
+  && sudo sed -i "s|^DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=.*|DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=$KEY|" /opt/dushengcdn-dns-worker/dns-worker.env \
+  || echo "DUSHENGCDN_DNSSEC_KEY_ENCRYPTION_KEY=$KEY" | sudo tee -a /opt/dushengcdn-dns-worker/dns-worker.env >/dev/null
+
+cd /opt/dushengcdn
+docker compose --project-directory dushengcdn_server \
+  -f dushengcdn_server/docker-compose.yaml \
+  up -d --force-recreate dushengcdn
+sudo systemctl restart dushengcdn-dns-worker
+```
+
+After enabling DNSSEC in the panel, add the exported DS record at the registrar. When disabling DNSSEC, remove the registrar DS first, wait for caches to expire, and then disable DNSSEC in the panel.
+
 After installation, run a read-only diagnosis on the Worker host:
 
 ```bash
