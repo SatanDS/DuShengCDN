@@ -92,6 +92,10 @@ func (NodeSystemProfile) TableName() string {
 	return "node_system_profiles"
 }
 
+func (OriginHealthStatus) TableName() string {
+	return "origin_health_statuses"
+}
+
 func (Option) TableName() string {
 	return "options"
 }

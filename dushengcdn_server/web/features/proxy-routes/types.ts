@@ -109,6 +109,15 @@ export interface ProxyRouteItem {
   origin_id: number | null;
   origin_url: string;
   origin_host: string;
+  origin_host_header?: string;
+  origin_sni?: string;
+  origin_tls_verify?: boolean;
+  origin_ca_bundle?: string;
+  origin_resolve_mode?:
+    | 'runtime_dns'
+    | 'publish_resolve'
+    | 'static_ip'
+    | 'origin_group';
   upstreams: string;
   upstream_list: string[];
   node_pool: string;
@@ -182,6 +191,15 @@ export interface ProxyRouteMutationPayload {
   origin_port: string;
   origin_uri: string;
   origin_host: string;
+  origin_host_header?: string;
+  origin_sni?: string;
+  origin_tls_verify?: boolean;
+  origin_ca_bundle?: string;
+  origin_resolve_mode?:
+    | 'runtime_dns'
+    | 'publish_resolve'
+    | 'static_ip'
+    | 'origin_group';
   upstreams: string[];
   node_pool?: string;
   enabled: boolean;

@@ -81,6 +81,11 @@ type snapshotRoute struct {
 	Domains                    []string                      `json:"domains,omitempty"`
 	OriginURL                  string                        `json:"origin_url"`
 	OriginHost                 string                        `json:"origin_host,omitempty"`
+	OriginHostHeader           string                        `json:"origin_host_header,omitempty"`
+	OriginSNI                  string                        `json:"origin_sni,omitempty"`
+	OriginTLSVerify            *bool                         `json:"origin_tls_verify,omitempty"`
+	OriginCABundle             string                        `json:"origin_ca_bundle,omitempty"`
+	OriginResolveMode          string                        `json:"origin_resolve_mode,omitempty"`
 	Upstreams                  []string                      `json:"upstreams,omitempty"`
 	NodePool                   string                        `json:"node_pool,omitempty"`
 	Enabled                    bool                          `json:"enabled"`
@@ -959,7 +964,12 @@ func buildSnapshotRoutesWithContext(
 			Domain:                     domains[0],
 			Domains:                    domains,
 			OriginURL:                  route.OriginURL,
-			OriginHost:                 route.OriginHost,
+			OriginHost:                 normalizeStoredOriginHostHeader(route),
+			OriginHostHeader:           normalizeStoredOriginHostHeader(route),
+			OriginSNI:                  strings.TrimSpace(route.OriginSNI),
+			OriginTLSVerify:            boolPointer(normalizeStoredOriginTLSVerify(route)),
+			OriginCABundle:             strings.TrimSpace(route.OriginCABundle),
+			OriginResolveMode:          normalizeStoredOriginResolveMode(route.OriginResolveMode),
 			Upstreams:                  upstreams,
 			NodePool:                   normalizeNodePoolName(route.NodePool),
 			Enabled:                    route.Enabled,
@@ -1087,6 +1097,17 @@ func normalizeSnapshotRoutes(routes []snapshotRoute) []snapshotRoute {
 			routes[index].OriginURL = normalizedUpstreams[0]
 			routes[index].Upstreams = normalizedUpstreams
 		}
+		if strings.TrimSpace(routes[index].OriginHostHeader) == "" {
+			routes[index].OriginHostHeader = strings.TrimSpace(routes[index].OriginHost)
+		}
+		routes[index].OriginHostHeader = strings.TrimSpace(routes[index].OriginHostHeader)
+		routes[index].OriginHost = routes[index].OriginHostHeader
+		routes[index].OriginSNI = strings.TrimSpace(routes[index].OriginSNI)
+		routes[index].OriginCABundle = strings.TrimSpace(routes[index].OriginCABundle)
+		if routes[index].OriginTLSVerify == nil {
+			routes[index].OriginTLSVerify = boolPointer(true)
+		}
+		routes[index].OriginResolveMode = normalizeStoredOriginResolveMode(routes[index].OriginResolveMode)
 		normalizedCacheRules, err := normalizeCacheRules(routes[index].CacheEnabled, routes[index].CachePolicy, routes[index].CacheRules)
 		if err == nil {
 			routes[index].CachePolicy = normalizeCachePolicy(routes[index].CacheEnabled, routes[index].CachePolicy)
@@ -1181,7 +1202,7 @@ func flattenSnapshotRoutesByDomain(routes []snapshotRoute) map[string]snapshotRo
 }
 
 func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
-	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || normalizeNodePoolName(left.NodePool) != normalizeNodePoolName(right.NodePool) || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || normalizeProxyRouteProxyBufferingMode(left.ProxyBufferingMode) != normalizeProxyRouteProxyBufferingMode(right.ProxyBufferingMode) || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPasswordHash != right.BasicAuthPasswordHash || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
+	if left.SiteName != right.SiteName || left.Domain != right.Domain || left.OriginURL != right.OriginURL || left.OriginHost != right.OriginHost || left.OriginHostHeader != right.OriginHostHeader || left.OriginSNI != right.OriginSNI || snapshotOriginTLSVerify(left) != snapshotOriginTLSVerify(right) || left.OriginCABundle != right.OriginCABundle || left.OriginResolveMode != right.OriginResolveMode || normalizeNodePoolName(left.NodePool) != normalizeNodePoolName(right.NodePool) || left.EnableHTTPS != right.EnableHTTPS || left.RedirectHTTP != right.RedirectHTTP || left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP || left.LimitRate != right.LimitRate || normalizeProxyRouteProxyBufferingMode(left.ProxyBufferingMode) != normalizeProxyRouteProxyBufferingMode(right.ProxyBufferingMode) || left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy || left.PoWEnabled != right.PoWEnabled || left.WAFEnabled != right.WAFEnabled || left.CCEnabled != right.CCEnabled || left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername || left.BasicAuthPasswordHash != right.BasicAuthPasswordHash || left.RegionRestrictionEnabled != right.RegionRestrictionEnabled || !uintSliceEqual(left.CertIDs, right.CertIDs) || !uintSliceEqual(left.DomainCertIDs, right.DomainCertIDs) {
 		return false
 	}
 	if len(left.Domains) != len(right.Domains) {
@@ -1239,6 +1260,17 @@ func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
 		return false
 	}
 	return true
+}
+
+func snapshotOriginTLSVerify(route snapshotRoute) bool {
+	if route.OriginTLSVerify == nil {
+		return true
+	}
+	return *route.OriginTLSVerify
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }
 
 func snapshotRoutesStateChanged(left []snapshotRoute, right []snapshotRoute) bool {
@@ -1468,7 +1500,12 @@ func buildOpenRestyRenderRoutes(routes []*model.ProxyRoute, context proxyRouteTL
 			Domain:                     route.Domain,
 			Domains:                    domains,
 			OriginURL:                  route.OriginURL,
-			OriginHost:                 route.OriginHost,
+			OriginHost:                 normalizeStoredOriginHostHeader(route),
+			OriginHostHeader:           normalizeStoredOriginHostHeader(route),
+			OriginSNI:                  strings.TrimSpace(route.OriginSNI),
+			OriginTLSVerify:            boolPointer(normalizeStoredOriginTLSVerify(route)),
+			OriginCABundle:             strings.TrimSpace(route.OriginCABundle),
+			OriginResolveMode:          normalizeStoredOriginResolveMode(route.OriginResolveMode),
 			Upstreams:                  upstreams,
 			EnableHTTPS:                route.EnableHTTPS,
 			CertID:                     route.CertID,

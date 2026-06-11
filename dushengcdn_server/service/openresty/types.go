@@ -17,17 +17,21 @@ const (
 )
 
 const (
-	CachePolicySuffix          = "suffix"
-	CachePolicyPathPrefix      = "path_prefix"
-	CachePolicyPathContains    = "path_contains"
-	CachePolicyPathContainsAll = "path_contains_all"
-	CachePolicyPathExact       = "path_exact"
-	ProxyBufferingModeOff      = "off"
-	RegionModeAllow            = "allow"
-	RegionModeBlock            = "block"
-	WAFModeBlock               = "block"
-	CCModeBlock                = "block"
-	CCModePoW                  = "pow"
+	CachePolicySuffix               = "suffix"
+	CachePolicyPathPrefix           = "path_prefix"
+	CachePolicyPathContains         = "path_contains"
+	CachePolicyPathContainsAll      = "path_contains_all"
+	CachePolicyPathExact            = "path_exact"
+	ProxyBufferingModeOff           = "off"
+	RegionModeAllow                 = "allow"
+	RegionModeBlock                 = "block"
+	WAFModeBlock                    = "block"
+	CCModeBlock                     = "block"
+	CCModePoW                       = "pow"
+	OriginResolveModeRuntimeDNS     = "runtime_dns"
+	OriginResolveModePublishResolve = "publish_resolve"
+	OriginResolveModeStaticIP       = "static_ip"
+	OriginResolveModeOriginGroup    = "origin_group"
 )
 
 type SupportFile struct {
@@ -91,6 +95,11 @@ type Route struct {
 	Domains                    []string
 	OriginURL                  string
 	OriginHost                 string
+	OriginHostHeader           string
+	OriginSNI                  string
+	OriginTLSVerify            *bool
+	OriginCABundle             string
+	OriginResolveMode          string
 	Upstreams                  []string
 	EnableHTTPS                bool
 	CertID                     *uint
@@ -176,6 +185,16 @@ type routeUpstreamConfig struct {
 	Name              string
 	Scheme            string
 	ProxyPassURI      string
+	RuntimeProxyPass  string
 	Servers           []string
 	UsesNamedUpstream bool
+	UsesRuntimeDNS    bool
+}
+
+type routeOriginConfig struct {
+	URL          string
+	HostHeader   string
+	SNI          string
+	TLSVerify    bool
+	CABundlePath string
 }

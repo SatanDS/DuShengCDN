@@ -1292,6 +1292,48 @@ func TestPublishConfigVersionOverridesOriginHostHeader(t *testing.T) {
 	}
 }
 
+func TestPublishConfigVersionRendersIndependentOriginTLSOptions(t *testing.T) {
+	setupServiceTestDB(t)
+
+	verify := false
+	_, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:            "storage-cdn.example.com",
+		OriginURL:         "https://8.8.8.8:443",
+		OriginHostHeader:  "bucket.storage.example.com",
+		OriginSNI:         "cert.storage.example.com",
+		OriginTLSVerify:   &verify,
+		OriginCABundle:    "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+		OriginResolveMode: "static_ip",
+		Enabled:           true,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+
+	result, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	for _, want := range []string{
+		`proxy_set_header Host "bucket.storage.example.com";`,
+		`proxy_ssl_name "cert.storage.example.com";`,
+		"proxy_ssl_verify off;",
+		"proxy_pass https://backend_storage_cdn_example_com_1;",
+		`"origin_host_header":"bucket.storage.example.com"`,
+		`"origin_sni":"cert.storage.example.com"`,
+		`"origin_tls_verify":false`,
+		`"origin_resolve_mode":"static_ip"`,
+		`"path":"origin_ca_1.pem"`,
+	} {
+		if !strings.Contains(result.Version.RenderedConfig+result.Version.SnapshotJSON+result.Version.SupportFilesJSON, want) {
+			t.Fatalf("expected output to contain %q, rendered:\n%s\nsnapshot:\n%s\nsupport:\n%s", want, result.Version.RenderedConfig, result.Version.SnapshotJSON, result.Version.SupportFilesJSON)
+		}
+	}
+	if strings.Contains(result.Version.RenderedConfig, "proxy_ssl_trusted_certificate") {
+		t.Fatalf("disabled origin TLS verify should not render a trusted certificate path, got:\n%s", result.Version.RenderedConfig)
+	}
+}
+
 func TestPublishConfigVersionUsesNamedUpstreamForOriginBasePath(t *testing.T) {
 	setupServiceTestDB(t)
 

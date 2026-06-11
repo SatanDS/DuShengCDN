@@ -854,6 +854,7 @@ function ReverseProxySection({
               origin_uri: primaryOrigin.uri,
               node_pool: values.node_pool.trim() || 'default',
               origin_host: values.origin_host.trim(),
+              origin_host_header: values.origin_host.trim(),
               proxy_buffering_mode: values.proxy_buffering_mode,
               upstreams: urls.slice(1),
               custom_headers: headers,

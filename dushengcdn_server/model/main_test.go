@@ -777,6 +777,7 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 		"cache_policies",
 		"dns_bindings",
 		"origin_groups",
+		"origin_health_statuses",
 		"origin_servers",
 		"origins",
 		"proxy_route_rules",

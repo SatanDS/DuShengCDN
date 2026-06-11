@@ -15,6 +15,11 @@ type ProxyRoute struct {
 	OriginID                   *uint      `json:"origin_id" gorm:"index"`
 	OriginURL                  string     `json:"origin_url" gorm:"size:2048;not null"`
 	OriginHost                 string     `json:"origin_host" gorm:"size:255"`
+	OriginHostHeader           string     `json:"origin_host_header" gorm:"size:255;not null;default:''"`
+	OriginSNI                  string     `json:"origin_sni" gorm:"size:255;not null;default:''"`
+	OriginTLSVerify            bool       `json:"origin_tls_verify" gorm:"not null;default:true"`
+	OriginCABundle             string     `json:"origin_ca_bundle" gorm:"type:text;not null;default:''"`
+	OriginResolveMode          string     `json:"origin_resolve_mode" gorm:"size:32;not null;default:'publish_resolve'"`
 	Upstreams                  string     `json:"upstreams" gorm:"type:text;not null;default:'[]'"`
 	NodePool                   string     `json:"node_pool" gorm:"size:64;not null;default:'default'"`
 	Enabled                    bool       `json:"enabled" gorm:"not null;default:true"`
@@ -158,6 +163,7 @@ func (route *ProxyRoute) InsertWithDB(db *gorm.DB) error {
 	}
 	route.prepareBasicAuthStorage()
 	enabled := route.Enabled
+	originTLSVerify := route.OriginTLSVerify
 	if err := db.Create(route).Error; err != nil {
 		return err
 	}
@@ -166,6 +172,12 @@ func (route *ProxyRoute) InsertWithDB(db *gorm.DB) error {
 			return err
 		}
 		route.Enabled = false
+	}
+	if !originTLSVerify {
+		if err := db.Model(route).UpdateColumn("origin_tls_verify", false).Error; err != nil {
+			return err
+		}
+		route.OriginTLSVerify = false
 	}
 	return SyncProxyRouteNormalizedTablesWithDB(db, route)
 }
@@ -192,6 +204,11 @@ func (route *ProxyRoute) UpdateWithDB(db *gorm.DB) error {
 		"origin_id":                      route.OriginID,
 		"origin_url":                     route.OriginURL,
 		"origin_host":                    route.OriginHost,
+		"origin_host_header":             route.OriginHostHeader,
+		"origin_sni":                     route.OriginSNI,
+		"origin_tls_verify":              route.OriginTLSVerify,
+		"origin_ca_bundle":               route.OriginCABundle,
+		"origin_resolve_mode":            route.OriginResolveMode,
 		"upstreams":                      route.Upstreams,
 		"node_pool":                      route.NodePool,
 		"enabled":                        route.Enabled,

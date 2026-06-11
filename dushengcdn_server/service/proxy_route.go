@@ -35,6 +35,10 @@ const (
 	proxyRouteCCModePoW                  = "pow"
 	proxyRouteProxyBufferingModeDefault  = "default"
 	proxyRouteProxyBufferingModeOff      = "off"
+	proxyRouteOriginResolveRuntimeDNS    = "runtime_dns"
+	proxyRouteOriginResolvePublish       = "publish_resolve"
+	proxyRouteOriginResolveStaticIP      = "static_ip"
+	proxyRouteOriginResolveOriginGroup   = "origin_group"
 	redactedProxyRouteCustomHeaderValue  = "[redacted sensitive header; preserved on save]"
 	DNSProviderModeCloudflare            = "cloudflare"
 	DNSProviderModeAuthoritative         = "authoritative"
@@ -56,6 +60,11 @@ type ProxyRouteInput struct {
 	OriginPort                 string                        `json:"origin_port"`
 	OriginURI                  string                        `json:"origin_uri"`
 	OriginHost                 string                        `json:"origin_host"`
+	OriginHostHeader           string                        `json:"origin_host_header"`
+	OriginSNI                  string                        `json:"origin_sni"`
+	OriginTLSVerify            *bool                         `json:"origin_tls_verify"`
+	OriginCABundle             string                        `json:"origin_ca_bundle"`
+	OriginResolveMode          string                        `json:"origin_resolve_mode"`
 	Upstreams                  []string                      `json:"upstreams"`
 	NodePool                   string                        `json:"node_pool"`
 	Enabled                    bool                          `json:"enabled"`
@@ -117,6 +126,11 @@ type ProxyRouteView struct {
 	OriginID                    *uint                         `json:"origin_id"`
 	OriginURL                   string                        `json:"origin_url"`
 	OriginHost                  string                        `json:"origin_host"`
+	OriginHostHeader            string                        `json:"origin_host_header"`
+	OriginSNI                   string                        `json:"origin_sni"`
+	OriginTLSVerify             bool                          `json:"origin_tls_verify"`
+	OriginCABundle              string                        `json:"origin_ca_bundle"`
+	OriginResolveMode           string                        `json:"origin_resolve_mode"`
 	Upstreams                   string                        `json:"upstreams"`
 	UpstreamList                []string                      `json:"upstream_list"`
 	NodePool                    string                        `json:"node_pool"`
@@ -271,7 +285,18 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err != nil {
 		return nil, err
 	}
-	originHost := strings.TrimSpace(input.OriginHost)
+	originHostHeader := strings.TrimSpace(input.OriginHostHeader)
+	if originHostHeader == "" {
+		originHostHeader = strings.TrimSpace(input.OriginHost)
+	}
+	originHost := originHostHeader
+	originSNI := strings.TrimSpace(input.OriginSNI)
+	originTLSVerify := normalizeOriginTLSVerify(input.OriginTLSVerify)
+	originCABundle := strings.TrimSpace(input.OriginCABundle)
+	originResolveMode, err := normalizeOriginResolveMode(input.OriginResolveMode)
+	if err != nil {
+		return nil, err
+	}
 	remark := strings.TrimSpace(input.Remark)
 	upstreams, err := normalizeUpstreams(originURL, input.Upstreams)
 	if err != nil {
@@ -397,7 +422,10 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	if err := validateProxyRouteIdentityUniqueness(route, siteName, domains); err != nil {
 		return nil, err
 	}
-	if err := validateOriginHost(originHost); err != nil {
+	if err := validateOriginHostHeader(originHostHeader); err != nil {
+		return nil, err
+	}
+	if err := validateOriginSNI(originSNI); err != nil {
 		return nil, err
 	}
 	nodePool := normalizeNodePoolName(input.NodePool)
@@ -481,6 +509,11 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.OriginID = originID
 	route.OriginURL = upstreams[0]
 	route.OriginHost = originHost
+	route.OriginHostHeader = originHostHeader
+	route.OriginSNI = originSNI
+	route.OriginTLSVerify = originTLSVerify
+	route.OriginCABundle = originCABundle
+	route.OriginResolveMode = originResolveMode
 	route.Upstreams = string(upstreamsJSON)
 	route.NodePool = nodePool
 	route.Enabled = input.Enabled
@@ -859,6 +892,8 @@ func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRoute
 		certID = &certIDs[0]
 	}
 	primaryDomain := domains[0]
+	originHostHeader := normalizeStoredOriginHostHeader(route)
+	originResolveMode := normalizeStoredOriginResolveMode(route.OriginResolveMode)
 	return &ProxyRouteView{
 		ID:                          route.ID,
 		SiteName:                    normalizeProxyRouteSiteNameInput(route, route.SiteName, primaryDomain),
@@ -868,7 +903,12 @@ func buildProxyRouteViewWithContext(route *model.ProxyRoute, context *proxyRoute
 		DomainCount:                 len(domains),
 		OriginID:                    route.OriginID,
 		OriginURL:                   route.OriginURL,
-		OriginHost:                  route.OriginHost,
+		OriginHost:                  originHostHeader,
+		OriginHostHeader:            originHostHeader,
+		OriginSNI:                   strings.TrimSpace(route.OriginSNI),
+		OriginTLSVerify:             normalizeStoredOriginTLSVerify(route),
+		OriginCABundle:              strings.TrimSpace(route.OriginCABundle),
+		OriginResolveMode:           originResolveMode,
 		Upstreams:                   route.Upstreams,
 		UpstreamList:                upstreams,
 		NodePool:                    normalizeNodePoolName(route.NodePool),
@@ -2264,6 +2304,68 @@ func validateOriginHost(raw string) error {
 		}
 	}
 	return nil
+}
+
+func validateOriginHostHeader(raw string) error {
+	if err := validateOriginHost(raw); err != nil {
+		return errors.New(strings.Replace(err.Error(), "origin_host", "origin_host_header", 1))
+	}
+	return nil
+}
+
+func validateOriginSNI(raw string) error {
+	if err := validateOriginHost(raw); err != nil {
+		return errors.New(strings.Replace(err.Error(), "origin_host", "origin_sni", 1))
+	}
+	return nil
+}
+
+func normalizeOriginTLSVerify(value *bool) bool {
+	if value == nil {
+		return true
+	}
+	return *value
+}
+
+func normalizeOriginResolveMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	if mode == "" {
+		return proxyRouteOriginResolvePublish, nil
+	}
+	switch mode {
+	case proxyRouteOriginResolveRuntimeDNS,
+		proxyRouteOriginResolvePublish,
+		proxyRouteOriginResolveStaticIP,
+		proxyRouteOriginResolveOriginGroup:
+		return mode, nil
+	default:
+		return "", errors.New("origin_resolve_mode must be one of runtime_dns, publish_resolve, static_ip, origin_group")
+	}
+}
+
+func normalizeStoredOriginHostHeader(route *model.ProxyRoute) string {
+	if route == nil {
+		return ""
+	}
+	if host := strings.TrimSpace(route.OriginHostHeader); host != "" {
+		return host
+	}
+	return strings.TrimSpace(route.OriginHost)
+}
+
+func normalizeStoredOriginTLSVerify(route *model.ProxyRoute) bool {
+	if route == nil {
+		return true
+	}
+	return route.OriginTLSVerify
+}
+
+func normalizeStoredOriginResolveMode(raw string) string {
+	mode, err := normalizeOriginResolveMode(raw)
+	if err != nil {
+		return proxyRouteOriginResolvePublish
+	}
+	return mode
 }
 
 func isUniqueConstraintError(err error) bool {

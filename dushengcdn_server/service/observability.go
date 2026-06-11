@@ -99,6 +99,15 @@ type AgentNodeHealthEvent struct {
 	Metadata        map[string]string `json:"metadata"`
 }
 
+type AgentOriginHealthReport struct {
+	RouteID       uint   `json:"route_id"`
+	OriginURL     string `json:"origin_url"`
+	Status        string `json:"status"`
+	LatencyMS     int64  `json:"latency_ms"`
+	LastError     string `json:"last_error,omitempty"`
+	CheckedAtUnix int64  `json:"checked_at_unix"`
+}
+
 type AgentDNSProbeReport struct {
 	WorkerID      string                `json:"worker_id"`
 	Name          string                `json:"name"`
@@ -128,6 +137,7 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 		len(payload.AccessLogs) == 0 &&
 		len(payload.BufferedObservability) == 0 &&
 		payload.HealthEvents == nil &&
+		len(payload.OriginHealthReports) == 0 &&
 		len(payload.DNSProbeResults) == 0 {
 		return
 	}
@@ -153,6 +163,9 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 				return err
 			}
 		}
+		if err := persistAgentOriginHealthReports(tx, nodeID, payload.OriginHealthReports, reportedAt); err != nil {
+			return err
+		}
 		if err := persistAgentDNSProbeReports(tx, nodeID, payload.DNSProbeResults, reportedAt, allowedDNSProbeTargets, enforceDNSProbeTargets); err != nil {
 			return err
 		}
@@ -161,6 +174,69 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 		slog.Error("persist heartbeat observability failed", "node_id", nodeID, "error", err)
 	}
 	persistAccessLogsBestEffort(nodeID, accessLogs, bufferedRecords, reportedAt)
+}
+
+func ReportAgentOriginHealth(nodeID string, reports []AgentOriginHealthReport, reportedAt time.Time) error {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return errors.New("node_id 涓嶈兘涓虹┖")
+	}
+	if reportedAt.IsZero() {
+		reportedAt = time.Now().UTC()
+	}
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		return persistAgentOriginHealthReports(tx, nodeID, reports, reportedAt)
+	})
+}
+
+func persistAgentOriginHealthReports(tx *gorm.DB, nodeID string, reports []AgentOriginHealthReport, reportedAt time.Time) error {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" || len(reports) == 0 {
+		return nil
+	}
+	for _, report := range reports {
+		record := buildOriginHealthStatusRecord(nodeID, report, reportedAt)
+		if record == nil {
+			continue
+		}
+		if err := model.UpsertOriginHealthStatus(tx, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func buildOriginHealthStatusRecord(nodeID string, report AgentOriginHealthReport, reportedAt time.Time) *model.OriginHealthStatus {
+	originURL := strings.TrimSpace(report.OriginURL)
+	if originURL == "" {
+		return nil
+	}
+	status := normalizeOriginHealthStatus(report.Status)
+	checkedAt := timeFromUnix(report.CheckedAtUnix, reportedAt)
+	if checkedAt.After(reportedAt.UTC()) {
+		checkedAt = reportedAt.UTC()
+	}
+	return &model.OriginHealthStatus{
+		RouteID:    report.RouteID,
+		NodeID:     strings.TrimSpace(nodeID),
+		OriginURL:  originURL,
+		Status:     status,
+		LatencyMS:  nonNegativeInt64(report.LatencyMS),
+		LastError:  truncateForDatabase(security.RedactSensitiveText(strings.TrimSpace(report.LastError)), 4096),
+		ReportedAt: reportedAt.UTC(),
+		CheckedAt:  checkedAt,
+	}
+}
+
+func normalizeOriginHealthStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "healthy":
+		return "healthy"
+	case "unhealthy":
+		return "unhealthy"
+	default:
+		return "unknown"
+	}
 }
 
 func persistAgentDNSProbeReports(tx *gorm.DB, nodeID string, reports []AgentDNSProbeReport, reportedAt time.Time, allowedTargets map[string]AgentDNSProbeTarget, enforceTargets bool) error {

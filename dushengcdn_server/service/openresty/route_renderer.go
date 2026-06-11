@@ -52,20 +52,25 @@ func RenderRouteConfig(routes []Route, cfg ConfigSnapshot, options RenderOptions
 		powRequired := route.PoWEnabled || (ccConfig.Enabled && ccConfig.Mode == CCModePoW)
 		upstreamConfig, err := buildRouteUpstreamConfig(route, route.Upstreams, options)
 		if err != nil {
-			return "", nil, fmt.Errorf("璺敱 %s 婧愮珯瑙ｆ瀽涓嶅畨鍏? %w", route.Domain, err)
+			return "", nil, fmt.Errorf("route %s origin upstream is invalid: %w", route.Domain, err)
+		}
+		originConfig := buildRouteOriginConfig(route)
+		if caFile := renderOriginCABundleSupportFile(route); caFile != nil {
+			supportFiles = append(supportFiles, *caFile)
+			originConfig.CABundlePath = fmt.Sprintf("%s/%s", CertDirPlaceholder, caFile.Path)
 		}
 		if upstreamConfig.UsesNamedUpstream {
 			builder.WriteString(renderNamedUpstreamBlock(upstreamConfig))
 		}
 		if !route.EnableHTTPS {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, originConfig, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
 			continue
 		}
 		if route.CertID == nil || *route.CertID == 0 {
-			return "", nil, fmt.Errorf("璺敱 %s 鏈厤缃瘉涔?", route.Domain)
+			return "", nil, fmt.Errorf("route %s has no certificate configured", route.Domain)
 		}
 		if len(route.CertIDs) == 0 {
-			return "", nil, fmt.Errorf("璺敱 %s 鏈厤缃瘉涔?", route.Domain)
+			return "", nil, fmt.Errorf("route %s has no certificate configured", route.Domain)
 		}
 		certificateByID := make(map[uint]TLSCertificate, len(route.Certificates))
 		for _, certificate := range route.Certificates {
@@ -107,7 +112,7 @@ func RenderRouteConfig(routes []Route, cfg ConfigSnapshot, options RenderOptions
 
 		if route.RedirectHTTP {
 			if len(httpOnlyDomains) > 0 {
-				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), route.OriginURL, route.OriginHost, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
+				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), originConfig, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
 			}
 			for _, certID := range route.CertIDs {
 				assignedDomains := domainsByCertID[certID]
@@ -117,50 +122,58 @@ func RenderRouteConfig(routes []Route, cfg ConfigSnapshot, options RenderOptions
 				builder.WriteString(renderHTTPRedirectServer(renderServerNames(assignedDomains), regionConfig, wafConfig, ccConfig))
 			}
 		} else {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
+			builder.WriteString(renderHTTPProxyServer(serverNames, originConfig, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
 		}
 		for _, certID := range route.CertIDs {
 			assignedDomains := domainsByCertID[certID]
 			if len(assignedDomains) == 0 {
 				continue
 			}
-			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), route.OriginURL, route.OriginHost, certID, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
+			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), originConfig, certID, route.CustomHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, route.BasicAuthPasswordHash, cfg))
 		}
 	}
 	return builder.String(), DedupeSupportFiles(supportFiles), nil
 }
 
-func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []CustomHeader, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg ConfigSnapshot) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig, cfg), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+func renderHTTPProxyServer(serverNames string, origin routeOriginConfig, customHeaders []CustomHeader, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg ConfigSnapshot) string {
+	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(origin, customHeaders, upstreamConfig, cfg), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(origin.URL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
 	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s\n    return 301 https://$host$request_uri;\n}\n\n", serverNames, renderRegionRestrictionBlock(regionConfig, wafConfig, ccConfig))
 }
 
-func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []CustomHeader, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg ConfigSnapshot) string {
+func renderHTTPSServer(serverNames string, origin routeOriginConfig, certificateID uint, customHeaders []CustomHeader, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg ConfigSnapshot) string {
 	certPath := fmt.Sprintf("%s/%s", CertDirPlaceholder, CertFileName(certificateID))
 	keyPath := fmt.Sprintf("%s/%s", CertDirPlaceholder, KeyFileName(certificateID))
-	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig, cfg), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
+	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(origin, customHeaders, upstreamConfig, cfg), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(origin.URL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
 }
 
 func renderServerNames(domains []string) string {
 	return strings.Join(domains, " ")
 }
 
-func renderProxyHeaderBlock(originURL string, originHost string, customHeaders []CustomHeader, upstreamConfig routeUpstreamConfig, cfg ConfigSnapshot) string {
+func renderProxyHeaderBlock(origin routeOriginConfig, customHeaders []CustomHeader, upstreamConfig routeUpstreamConfig, cfg ConfigSnapshot) string {
 	var builder strings.Builder
-	if strings.TrimSpace(originHost) != "" {
-		builder.WriteString(fmt.Sprintf("        proxy_set_header Host %s;\n", QuoteNginxHeaderValue(originHost)))
+	if strings.TrimSpace(origin.HostHeader) != "" {
+		builder.WriteString(fmt.Sprintf("        proxy_set_header Host %s;\n", QuoteNginxHeaderValue(origin.HostHeader)))
 	} else {
 		builder.WriteString("        proxy_set_header Host $host;\n")
 	}
-	if upstreamServerName := resolveUpstreamServerName(originURL, originHost); upstreamServerName != "" {
+	if upstreamServerName := resolveUpstreamServerName(origin); upstreamServerName != "" {
 		builder.WriteString("        proxy_ssl_server_name on;\n")
 		builder.WriteString(fmt.Sprintf("        proxy_ssl_name %s;\n", QuoteNginxHeaderValue(upstreamServerName)))
-		builder.WriteString("        proxy_ssl_verify on;\n")
-		builder.WriteString("        proxy_ssl_verify_depth 3;\n")
-		builder.WriteString("        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;\n")
+		if origin.TLSVerify {
+			builder.WriteString("        proxy_ssl_verify on;\n")
+			builder.WriteString("        proxy_ssl_verify_depth 3;\n")
+			if strings.TrimSpace(origin.CABundlePath) != "" {
+				builder.WriteString(fmt.Sprintf("        proxy_ssl_trusted_certificate %s;\n", origin.CABundlePath))
+			} else {
+				builder.WriteString("        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;\n")
+			}
+		} else {
+			builder.WriteString("        proxy_ssl_verify off;\n")
+		}
 	}
 	builder.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 	builder.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
@@ -180,6 +193,38 @@ func renderProxyHeaderBlock(originURL string, originHost string, customHeaders [
 		builder.WriteString(fmt.Sprintf("        proxy_set_header %s %s;\n", header.Key, QuoteNginxHeaderValue(header.Value)))
 	}
 	return builder.String()
+}
+
+func buildRouteOriginConfig(route Route) routeOriginConfig {
+	hostHeader := strings.TrimSpace(route.OriginHostHeader)
+	if hostHeader == "" {
+		hostHeader = strings.TrimSpace(route.OriginHost)
+	}
+	tlsVerify := true
+	if route.OriginTLSVerify != nil {
+		tlsVerify = *route.OriginTLSVerify
+	}
+	return routeOriginConfig{
+		URL:        route.OriginURL,
+		HostHeader: hostHeader,
+		SNI:        strings.TrimSpace(route.OriginSNI),
+		TLSVerify:  tlsVerify,
+	}
+}
+
+func renderOriginCABundleSupportFile(route Route) *SupportFile {
+	caBundle := strings.TrimSpace(route.OriginCABundle)
+	if caBundle == "" {
+		return nil
+	}
+	return &SupportFile{
+		Path:    OriginCABundleFileName(route.ID),
+		Content: NormalizePEM(caBundle),
+	}
+}
+
+func OriginCABundleFileName(routeID uint) string {
+	return fmt.Sprintf("origin_ca_%d.pem", routeID)
 }
 
 func renderRouteProxyBufferingBlock(config routeProxyBufferingConfig) string {
@@ -213,6 +258,9 @@ func renderProxyPassBlock(originURL string, upstreamConfig routeUpstreamConfig) 
 	}
 	if upstreamConfig.UsesNamedUpstream {
 		return fmt.Sprintf("        proxy_pass %s://%s%s;\n", upstreamConfig.Scheme, upstreamConfig.Name, upstreamConfig.ProxyPassURI)
+	}
+	if upstreamConfig.UsesRuntimeDNS {
+		return fmt.Sprintf("        set $dushengcdn_origin %s;\n        proxy_pass $dushengcdn_origin%s;\n", QuoteNginxHeaderValue(upstreamConfig.RuntimeProxyPass), upstreamConfig.ProxyPassURI)
 	}
 	return fmt.Sprintf("        proxy_pass %s;\n", originURL)
 }

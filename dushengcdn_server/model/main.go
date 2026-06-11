@@ -60,6 +60,7 @@ func registeredModels() []any {
 		&NodeRequestReport{},
 		&NodeAccessLog{},
 		&NodeHealthEvent{},
+		&OriginHealthStatus{},
 		&TLSCertificate{},
 		&ManagedDomain{},
 		&AcmeAccount{},

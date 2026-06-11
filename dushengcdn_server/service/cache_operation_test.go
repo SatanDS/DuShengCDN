@@ -19,6 +19,37 @@ func TestRequestProxyRouteCachePurgeRejectsUnsafeConfiguredCachePath(t *testing.
 	}
 }
 
+func TestValidateCachePurgeScopeInputSupportsAllAndURL(t *testing.T) {
+	if err := validateCachePurgeScopeInput("all", CacheOperationInput{}); err != nil {
+		t.Fatalf("expected all scope to pass: %v", err)
+	}
+	if err := validateCachePurgeScopeInput("url", CacheOperationInput{URLs: []string{"https://www.example.com/app.js"}}); err != nil {
+		t.Fatalf("expected url scope with URL to pass: %v", err)
+	}
+	if err := validateCachePurgeScopeInput("url", CacheOperationInput{}); err == nil {
+		t.Fatal("expected url scope without URLs to fail")
+	}
+}
+
+func TestValidateCachePurgeScopeInputRejectsPartialScopesWithClearError(t *testing.T) {
+	testCases := []struct {
+		scope string
+		input CacheOperationInput
+	}{
+		{scope: "path_prefix", input: CacheOperationInput{Prefixes: []string{"/assets/"}}},
+		{scope: "suffix", input: CacheOperationInput{Suffixes: []string{".css"}}},
+	}
+	for _, testCase := range testCases {
+		err := validateCachePurgeScopeInput(testCase.scope, testCase.input)
+		if err == nil {
+			t.Fatalf("expected %s scope to fail", testCase.scope)
+		}
+		if !strings.Contains(err.Error(), "not supported yet") || !strings.Contains(err.Error(), "TODO") {
+			t.Fatalf("expected clear TODO error for %s scope, got %v", testCase.scope, err)
+		}
+	}
+}
+
 func TestNormalizeCacheWarmURLsForRouteAllowsOnlyRouteDomains(t *testing.T) {
 	route := &model.ProxyRoute{
 		Domain:  "www.example.com",

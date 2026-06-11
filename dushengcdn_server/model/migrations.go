@@ -2577,6 +2577,88 @@ func validateDatabaseSchemaV46(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func migrateV47(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return backfillProxyRouteOriginConnectionFields(db)
+}
+
+func validateDatabaseSchemaV47(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV46(db, backend); err != nil {
+		return err
+	}
+	for _, column := range []string{
+		"origin_host_header",
+		"origin_sni",
+		"origin_tls_verify",
+		"origin_ca_bundle",
+		"origin_resolve_mode",
+	} {
+		if !db.Migrator().HasColumn(&ProxyRoute{}, column) {
+			return fmt.Errorf("column proxy_routes.%s is missing", column)
+		}
+	}
+	var invalidResolveModeCount int64
+	if err := db.Model(&ProxyRoute{}).
+		Where("origin_resolve_mode NOT IN ?", []string{"runtime_dns", "publish_resolve", "static_ip", "origin_group"}).
+		Count(&invalidResolveModeCount).Error; err != nil {
+		return fmt.Errorf("validate proxy route origin_resolve_mode failed: %w", err)
+	}
+	if invalidResolveModeCount > 0 {
+		return fmt.Errorf("proxy_routes.origin_resolve_mode contains %d invalid values", invalidResolveModeCount)
+	}
+	if !db.Migrator().HasTable(&OriginHealthStatus{}) {
+		return errors.New("table origin_health_statuses is missing")
+	}
+	for _, column := range []string{
+		"route_id",
+		"node_id",
+		"origin_url",
+		"status",
+		"latency_ms",
+		"last_error",
+		"reported_at",
+		"checked_at",
+	} {
+		if !db.Migrator().HasColumn(&OriginHealthStatus{}, column) {
+			return fmt.Errorf("column origin_health_statuses.%s is missing", column)
+		}
+	}
+	_ = backend
+	return nil
+}
+
+func backfillProxyRouteOriginConnectionFields(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&ProxyRoute{}) {
+		return nil
+	}
+	if !db.Migrator().HasColumn(&ProxyRoute{}, "origin_host_header") {
+		return nil
+	}
+	if err := db.Model(&ProxyRoute{}).
+		Where("origin_host_header = '' AND origin_host <> ''").
+		Update("origin_host_header", gorm.Expr("origin_host")).Error; err != nil {
+		return fmt.Errorf("backfill proxy route origin_host_header failed: %w", err)
+	}
+	if db.Migrator().HasColumn(&ProxyRoute{}, "origin_tls_verify") {
+		if err := db.Model(&ProxyRoute{}).
+			Where("origin_tls_verify = ?", false).
+			Update("origin_tls_verify", true).Error; err != nil {
+			return fmt.Errorf("backfill proxy route origin_tls_verify failed: %w", err)
+		}
+	}
+	if db.Migrator().HasColumn(&ProxyRoute{}, "origin_resolve_mode") {
+		if err := db.Model(&ProxyRoute{}).
+			Where("origin_resolve_mode = '' OR origin_resolve_mode NOT IN ?", []string{"runtime_dns", "publish_resolve", "static_ip", "origin_group"}).
+			Update("origin_resolve_mode", "publish_resolve").Error; err != nil {
+			return fmt.Errorf("backfill proxy route origin_resolve_mode failed: %w", err)
+		}
+	}
+	return nil
+}
+
 type legacyProxyRouteBasicAuthPassword struct {
 	ID                         uint
 	BasicAuthEnabled           bool
@@ -2850,6 +2932,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 43, toVersion: 44, migrate: migrateV44, validate: validateDatabaseSchemaV44},
 		{fromVersion: 44, toVersion: 45, migrate: migrateV45, validate: validateDatabaseSchemaV45},
 		{fromVersion: 45, toVersion: 46, migrate: migrateV46, validate: validateDatabaseSchemaV46},
+		{fromVersion: 46, toVersion: 47, migrate: migrateV47, validate: validateDatabaseSchemaV47},
 	}
 }
 
@@ -2897,7 +2980,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 		if err := applyCurrentSchema(db, backend); err != nil {
 			return err
 		}
-		return validateDatabaseSchemaV46(db, backend)
+		return validateDatabaseSchemaV47(db, backend)
 	}
 	migrationMap := databaseSchemaMigrationMap()
 	for version < currentDatabaseSchemaVersion {
@@ -2913,7 +2996,7 @@ func upgradeDatabaseSchema(db *gorm.DB, backend string, version int) error {
 	if err := applyCurrentSchema(db, backend); err != nil {
 		return err
 	}
-	return validateDatabaseSchemaV46(db, backend)
+	return validateDatabaseSchemaV47(db, backend)
 }
 
 func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
@@ -2950,7 +3033,7 @@ func initializeFreshDatabaseSchema(db *gorm.DB, backend string) error {
 	if err := ensureGSLBSchedulingStateScopeIndex(db); err != nil {
 		return err
 	}
-	if err := validateDatabaseSchemaV46(db, backend); err != nil {
+	if err := validateDatabaseSchemaV47(db, backend); err != nil {
 		return err
 	}
 	return saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion)

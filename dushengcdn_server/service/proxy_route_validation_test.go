@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"dushengcdn/model"
+	"testing"
+)
 
 func TestNormalizeProxyRouteDomainsRejectsInjectedDomain(t *testing.T) {
 	_, err := normalizeProxyRouteDomains([]string{"good.example.com; include /etc/passwd"})
@@ -16,6 +19,49 @@ func TestNormalizeProxyRouteDomainsAcceptsWildcard(t *testing.T) {
 	}
 	if len(domains) != 1 || domains[0] != "*.example.com" {
 		t.Fatalf("unexpected normalized domains: %#v", domains)
+	}
+}
+
+func TestNormalizeOriginResolveModeDefaultsAndValidates(t *testing.T) {
+	mode, err := normalizeOriginResolveMode("")
+	if err != nil {
+		t.Fatalf("normalize empty origin_resolve_mode: %v", err)
+	}
+	if mode != proxyRouteOriginResolvePublish {
+		t.Fatalf("expected default publish_resolve, got %s", mode)
+	}
+
+	mode, err = normalizeOriginResolveMode(" STATIC_IP ")
+	if err != nil {
+		t.Fatalf("normalize static_ip origin_resolve_mode: %v", err)
+	}
+	if mode != proxyRouteOriginResolveStaticIP {
+		t.Fatalf("expected static_ip, got %s", mode)
+	}
+
+	if _, err = normalizeOriginResolveMode("dynamic"); err == nil {
+		t.Fatal("expected invalid origin_resolve_mode to be rejected")
+	}
+}
+
+func TestNormalizeOriginTLSVerifyDefaultsTrueAndAllowsFalse(t *testing.T) {
+	if !normalizeOriginTLSVerify(nil) {
+		t.Fatal("expected omitted origin_tls_verify to default true")
+	}
+	disabled := false
+	if normalizeOriginTLSVerify(&disabled) {
+		t.Fatal("expected explicit false origin_tls_verify to be preserved")
+	}
+}
+
+func TestNormalizeStoredOriginHostHeaderFallsBackToLegacyOriginHost(t *testing.T) {
+	route := &model.ProxyRoute{OriginHost: "legacy-origin.example.com"}
+	if got := normalizeStoredOriginHostHeader(route); got != "legacy-origin.example.com" {
+		t.Fatalf("expected legacy origin_host fallback, got %q", got)
+	}
+	route.OriginHostHeader = "header-origin.example.com"
+	if got := normalizeStoredOriginHostHeader(route); got != "header-origin.example.com" {
+		t.Fatalf("expected origin_host_header to win, got %q", got)
 	}
 }
 

@@ -329,6 +329,64 @@ func TestSafeCacheDirectoryAcceptsManagedCachePaths(t *testing.T) {
 	}
 }
 
+func TestManagerPurgeCacheURLRemovesHashedEntryOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	cacheRoot := filepath.Join(tempDir, "var", "cache", "openresty", "dushengcdn")
+	targetURL := "https://www.example.com/assets/app.js?v=1"
+	cacheFile, err := cacheFilePathForURL(cacheRoot, []int{1, 2}, targetURL)
+	if err != nil {
+		t.Fatalf("cacheFilePathForURL failed: %v", err)
+	}
+	if err = os.MkdirAll(filepath.Dir(cacheFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll cache file dir failed: %v", err)
+	}
+	if err = os.WriteFile(cacheFile, []byte("cached response"), 0o644); err != nil {
+		t.Fatalf("WriteFile cache file failed: %v", err)
+	}
+	otherFile := filepath.Join(cacheRoot, "unrelated")
+	if err = os.WriteFile(otherFile, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("WriteFile unrelated cache file failed: %v", err)
+	}
+
+	manager := &Manager{}
+	err = manager.PurgeCache(context.Background(), protocol.CacheOperation{
+		Scope:            "url",
+		CachePath:        cacheRoot,
+		CacheLevels:      "1:2",
+		CacheKeyTemplate: "$scheme$host$request_uri",
+		URLs:             []string{targetURL},
+	})
+	if err != nil {
+		t.Fatalf("PurgeCache url failed: %v", err)
+	}
+	if _, err = os.Stat(cacheFile); !os.IsNotExist(err) {
+		t.Fatalf("expected hashed cache file to be removed, stat err=%v", err)
+	}
+	if _, err = os.Stat(otherFile); err != nil {
+		t.Fatalf("expected unrelated cache file to remain: %v", err)
+	}
+}
+
+func TestManagerPurgeCacheRejectsUnsupportedPartialScopes(t *testing.T) {
+	cacheRoot := filepath.Join(t.TempDir(), "var", "cache", "openresty", "dushengcdn")
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll cache root failed: %v", err)
+	}
+	manager := &Manager{}
+	for _, scope := range []string{"path_prefix", "suffix"} {
+		err := manager.PurgeCache(context.Background(), protocol.CacheOperation{
+			Scope:     scope,
+			CachePath: cacheRoot,
+		})
+		if err == nil {
+			t.Fatalf("expected %s purge to fail", scope)
+		}
+		if !strings.Contains(err.Error(), "not supported yet") {
+			t.Fatalf("expected clear unsupported error for %s, got %v", scope, err)
+		}
+	}
+}
+
 func TestSafeCacheDirectoryRejectsSymlinkToNonCachePath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("windows symlink creation requires elevated privileges")

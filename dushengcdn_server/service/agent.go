@@ -44,6 +44,7 @@ type AgentNodePayload struct {
 	AccessLogs             []AgentNodeAccessLog               `json:"access_logs,omitempty"`
 	BufferedObservability  []AgentBufferedObservabilityRecord `json:"buffered_observability,omitempty"`
 	HealthEvents           []AgentNodeHealthEvent             `json:"health_events"`
+	OriginHealthReports    []AgentOriginHealthReport          `json:"origin_health_reports,omitempty"`
 	DNSProbeResults        []AgentDNSProbeReport              `json:"dns_probe_results,omitempty"`
 	DNSWorkerUpdateResults []AgentDNSWorkerUpdateResult       `json:"dns_worker_update_results,omitempty"`
 }

@@ -16,16 +16,20 @@ type CacheOperationInput struct {
 	Scope    string   `json:"scope"`
 	URLs     []string `json:"urls"`
 	Prefixes []string `json:"prefixes"`
+	Suffixes []string `json:"suffixes"`
 }
 
 type AgentCacheOperation struct {
-	OperationID  string   `json:"operation_id"`
-	Action       string   `json:"action"`
-	Scope        string   `json:"scope"`
-	URLs         []string `json:"urls,omitempty"`
-	Prefixes     []string `json:"prefixes,omitempty"`
-	CachePath    string   `json:"cache_path,omitempty"`
-	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+	OperationID      string   `json:"operation_id"`
+	Action           string   `json:"action"`
+	Scope            string   `json:"scope"`
+	URLs             []string `json:"urls,omitempty"`
+	Prefixes         []string `json:"prefixes,omitempty"`
+	Suffixes         []string `json:"suffixes,omitempty"`
+	CachePath        string   `json:"cache_path,omitempty"`
+	CacheLevels      string   `json:"cache_levels,omitempty"`
+	CacheKeyTemplate string   `json:"cache_key_template,omitempty"`
+	AllowedHosts     []string `json:"allowed_hosts,omitempty"`
 }
 
 type CacheOperationResult struct {
@@ -39,8 +43,8 @@ const maxCacheWarmURLs = 100
 
 func RequestProxyRouteCachePurge(routeID uint, input CacheOperationInput) (*CacheOperationResult, error) {
 	scope := normalizeCacheOperationScope(input.Scope)
-	if scope != "all" {
-		return nil, errors.New("cache purge currently supports scope=all only")
+	if err := validateCachePurgeScopeInput(scope, input); err != nil {
+		return nil, err
 	}
 	cachePath := strings.TrimSpace(common.OpenRestyCachePath)
 	if cachePath == "" {
@@ -53,13 +57,47 @@ func RequestProxyRouteCachePurge(routeID uint, input CacheOperationInput) (*Cach
 	if err != nil {
 		return nil, err
 	}
+	urls := []string(nil)
+	if scope == "url" {
+		urls, err = normalizeCacheWarmURLsForRoute(route, input.URLs)
+		if err != nil {
+			return nil, fmt.Errorf("cache purge URL target is invalid: %w", err)
+		}
+	}
 	operation := &AgentCacheOperation{
-		OperationID: newCacheOperationID(),
-		Action:      "purge",
-		Scope:       scope,
-		CachePath:   cachePath,
+		OperationID:      newCacheOperationID(),
+		Action:           "purge",
+		Scope:            scope,
+		URLs:             urls,
+		CachePath:        cachePath,
+		CacheLevels:      strings.TrimSpace(common.OpenRestyCacheLevels),
+		CacheKeyTemplate: strings.TrimSpace(common.OpenRestyCacheKeyTemplate),
 	}
 	return dispatchRouteCacheOperation(route, operation)
+}
+
+func validateCachePurgeScopeInput(scope string, input CacheOperationInput) error {
+	switch scope {
+	case "all":
+		return nil
+	case "url":
+		if len(input.URLs) == 0 {
+			return errors.New("cache purge scope=url requires at least one URL")
+		}
+		return nil
+	case "path_prefix":
+		if len(trimNonEmptyStrings(input.Prefixes)) == 0 {
+			return errors.New("cache purge scope=path_prefix requires at least one prefix")
+		}
+		return errors.New("cache purge scope=path_prefix is not supported yet because OpenResty stores cache entries under hashed keys; TODO: maintain a URL-to-cache-key index for safe partial purge")
+	case "suffix":
+		if len(trimNonEmptyStrings(input.Suffixes)) == 0 {
+			return errors.New("cache purge scope=suffix requires at least one suffix")
+		}
+		return errors.New("cache purge scope=suffix is not supported yet because OpenResty stores cache entries under hashed keys; TODO: maintain a URL-to-cache-key index for safe partial purge")
+	default:
+		return fmt.Errorf("cache purge scope %q is not supported; supported scopes are all and url", scope)
+	}
 }
 
 func ValidateAgentCachePath(path string) error {
@@ -196,6 +234,17 @@ func normalizeCacheOperationScope(raw string) string {
 		return "all"
 	}
 	return scope
+}
+
+func trimNonEmptyStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func normalizeCacheWarmURLsForRoute(route *model.ProxyRoute, values []string) ([]string, error) {

@@ -1038,6 +1038,505 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/license/activate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Activate or renew commercial license lease",
+                "parameters": [
+                    {
+                        "description": "Activation payload",
+                        "name": "payload",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/service.CommercialLicenseActivateInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/activation/activate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Issue short-lived commercial license lease",
+                "parameters": [
+                    {
+                        "description": "Activation request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.CommercialLicenseActivationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/activation/renew": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Renew short-lived commercial license lease",
+                "parameters": [
+                    {
+                        "description": "Activation request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.CommercialLicenseActivationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/activations": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "List commercial license activations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/clear": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Clear commercial license",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/delete": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Delete commercial license activation records by license id",
+                "parameters": [
+                    {
+                        "description": "License deletion payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.CommercialLicenseRevocationInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/install": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Install commercial license",
+                "parameters": [
+                    {
+                        "description": "License payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.CommercialLicenseInstallInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/issue": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Issue commercial license token",
+                "parameters": [
+                    {
+                        "description": "License issue payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.CommercialLicenseIssueInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/issuer": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Get commercial license issuer status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/renew": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Renew commercial license lease",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/restore": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Restore commercial license by license id",
+                "parameters": [
+                    {
+                        "description": "License revocation payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.CommercialLicenseRevocationInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/revoke": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Revoke commercial license by license id",
+                "parameters": [
+                    {
+                        "description": "License revocation payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.CommercialLicenseRevocationInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/license/status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "License"
+                ],
+                "summary": "Get commercial license status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/managed-domains/": {
             "get": {
                 "security": [
@@ -1381,6 +1880,47 @@ const docTemplate = `{
                         "description": "stable or preview",
                         "name": "channel",
                         "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/nodes/{id}/agent-token/rotate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Rotate node agent token",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Node ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -2328,7 +2868,7 @@ const docTemplate = `{
             }
         },
         "/api/tls-certificates/{id}/content": {
-            "get": {
+            "post": {
                 "security": [
                     {
                         "BearerAuth": []
@@ -2837,9 +3377,44 @@ const docTemplate = `{
                 }
             }
         },
+        "service.AgentDNSWorkerUpdateResult": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string"
+                },
+                "install_dir": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "repo": {
+                    "type": "string"
+                },
+                "reported_at_unix": {
+                    "type": "integer"
+                },
+                "success": {
+                    "type": "boolean"
+                },
+                "tag_name": {
+                    "type": "string"
+                },
+                "worker_id": {
+                    "type": "string"
+                },
+                "worker_name": {
+                    "type": "string"
+                }
+            }
+        },
         "service.AgentNodeAccessLog": {
             "type": "object",
             "properties": {
+                "cache_status": {
+                    "type": "string"
+                },
                 "host": {
                     "type": "string"
                 },
@@ -2849,10 +3424,10 @@ const docTemplate = `{
                 "path": {
                     "type": "string"
                 },
-                "remote_addr": {
+                "reason": {
                     "type": "string"
                 },
-                "reason": {
+                "remote_addr": {
                     "type": "string"
                 },
                 "request_bytes": {
@@ -2954,6 +3529,9 @@ const docTemplate = `{
                         "$ref": "#/definitions/service.AgentBufferedObservabilityRecord"
                     }
                 },
+                "current_checksum": {
+                    "type": "string"
+                },
                 "current_version": {
                     "type": "string"
                 },
@@ -2961,6 +3539,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/service.AgentDNSProbeReport"
+                    }
+                },
+                "dns_worker_update_results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.AgentDNSWorkerUpdateResult"
                     }
                 },
                 "health_events": {
@@ -2989,6 +3573,12 @@ const docTemplate = `{
                 },
                 "openresty_status": {
                     "type": "string"
+                },
+                "origin_health_reports": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.AgentOriginHealthReport"
+                    }
                 },
                 "profile": {
                     "$ref": "#/definitions/service.AgentNodeSystemProfile"
@@ -3098,6 +3688,29 @@ const docTemplate = `{
                 }
             }
         },
+        "service.AgentOriginHealthReport": {
+            "type": "object",
+            "properties": {
+                "checked_at_unix": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "latency_ms": {
+                    "type": "integer"
+                },
+                "origin_url": {
+                    "type": "string"
+                },
+                "route_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "service.ApplyLogPayload": {
             "type": "object",
             "properties": {
@@ -3123,6 +3736,97 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.CommercialLicenseActivateInput": {
+            "type": "object",
+            "properties": {
+                "activation_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.CommercialLicenseActivationRequest": {
+            "type": "object",
+            "properties": {
+                "activation_id": {
+                    "type": "string"
+                },
+                "build_watermark": {
+                    "type": "string"
+                },
+                "instance_hostname": {
+                    "type": "string"
+                },
+                "lease_token": {
+                    "type": "string"
+                },
+                "license_token": {
+                    "type": "string"
+                },
+                "machine_fingerprint": {
+                    "type": "string"
+                },
+                "server_version": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.CommercialLicenseInstallInput": {
+            "type": "object",
+            "properties": {
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.CommercialLicenseIssueInput": {
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string"
+                },
+                "customer_name": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "features": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "issued_at": {
+                    "type": "string"
+                },
+                "license_id": {
+                    "type": "string"
+                },
+                "max_nodes": {
+                    "type": "integer"
+                },
+                "max_sites": {
+                    "type": "integer"
+                },
+                "plan": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.CommercialLicenseRevocationInput": {
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string"
+                },
+                "license_id": {
+                    "type": "string"
+                },
+                "reason": {
                     "type": "string"
                 }
             }
@@ -3245,6 +3949,9 @@ const docTemplate = `{
                 "mode": {
                     "type": "string"
                 },
+                "pool_match_mode": {
+                    "type": "string"
+                },
                 "pools": {
                     "type": "array",
                     "items": {
@@ -3253,6 +3960,9 @@ const docTemplate = `{
                 },
                 "source_ip": {
                     "$ref": "#/definitions/service.ProxyRouteGSLBSourceIPProvider"
+                },
+                "source_pool_fallback_mode": {
+                    "type": "string"
                 },
                 "strategy": {
                     "type": "string"
@@ -3268,6 +3978,12 @@ const docTemplate = `{
         "service.ProxyRouteGSLBPoolPolicy": {
             "type": "object",
             "properties": {
+                "asns": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "countries": {
                     "type": "array",
                     "items": {
@@ -3277,19 +3993,43 @@ const docTemplate = `{
                 "enabled": {
                     "type": "boolean"
                 },
-                "name": {
-                    "type": "string"
+                "exclude_asns": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 },
-                "operators": {
+                "exclude_countries": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
                 },
-                "asns": {
+                "exclude_operators": {
                     "type": "array",
                     "items": {
-                        "type": "integer"
+                        "type": "string"
+                    }
+                },
+                "exclude_source_cidrs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "node_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "operators": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
                     }
                 },
                 "source_cidrs": {
@@ -3340,6 +4080,15 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "cc_config": {
+                    "type": "string"
+                },
+                "cc_enabled": {
+                    "type": "boolean"
+                },
+                "cc_mode": {
+                    "type": "string"
                 },
                 "cert_id": {
                     "type": "integer"
@@ -3446,7 +4195,13 @@ const docTemplate = `{
                 "origin_address": {
                     "type": "string"
                 },
+                "origin_ca_bundle": {
+                    "type": "string"
+                },
                 "origin_host": {
+                    "type": "string"
+                },
+                "origin_host_header": {
                     "type": "string"
                 },
                 "origin_id": {
@@ -3455,8 +4210,17 @@ const docTemplate = `{
                 "origin_port": {
                     "type": "string"
                 },
+                "origin_resolve_mode": {
+                    "type": "string"
+                },
                 "origin_scheme": {
                     "type": "string"
+                },
+                "origin_sni": {
+                    "type": "string"
+                },
+                "origin_tls_verify": {
+                    "type": "boolean"
                 },
                 "origin_uri": {
                     "type": "string"
@@ -3469,6 +4233,9 @@ const docTemplate = `{
                 },
                 "pow_enabled": {
                     "type": "boolean"
+                },
+                "proxy_buffering_mode": {
+                    "type": "string"
                 },
                 "redirect_http": {
                     "type": "boolean"
@@ -3527,6 +4294,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "dns_account_id": {
+                    "type": "integer"
+                },
+                "dns_provider_mode": {
+                    "type": "string"
+                },
+                "dns_zone_id_ref": {
                     "type": "integer"
                 },
                 "key_algorithm": {

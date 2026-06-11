@@ -362,6 +362,7 @@ export function buildPayloadFromRoute(
   overrides: Partial<ProxyRouteMutationPayload>,
 ): ProxyRouteMutationPayload {
   const primaryOrigin = parseOriginUrl(route.origin_url);
+  const originHostHeader = route.origin_host_header || route.origin_host || '';
 
   return {
     site_name: route.site_name,
@@ -373,7 +374,12 @@ export function buildPayloadFromRoute(
     origin_address: primaryOrigin.address,
     origin_port: primaryOrigin.port,
     origin_uri: primaryOrigin.uri,
-    origin_host: route.origin_host || '',
+    origin_host: originHostHeader,
+    origin_host_header: originHostHeader,
+    origin_sni: route.origin_sni || '',
+    origin_tls_verify: route.origin_tls_verify ?? true,
+    origin_ca_bundle: route.origin_ca_bundle || '',
+    origin_resolve_mode: route.origin_resolve_mode || 'publish_resolve',
     upstreams: route.upstream_list.slice(1),
     node_pool: route.node_pool || 'default',
     enabled: route.enabled,

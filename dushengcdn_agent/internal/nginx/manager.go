@@ -2,6 +2,7 @@ package nginx
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -269,7 +271,7 @@ func (m *Manager) writeTargetFiles(mainConfig string, routeConfig string, suppor
 	if err := m.ensureMimeTypes(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(m.OpenrestyResolverDirective) == "" && strings.Contains(routeConfig, "set $dushengcdn_upstream ") {
+	if strings.TrimSpace(m.OpenrestyResolverDirective) == "" && routeConfigUsesRuntimeResolver(routeConfig) {
 		slog.Warn("runtime-resolved hostname upstreams detected without available resolvers; hostname origin requests may fail until resolvers are configured")
 	}
 	renderedMainConfig := m.renderMainConfig(mainConfig)
@@ -284,6 +286,12 @@ func (m *Manager) writeTargetFiles(mainConfig string, routeConfig string, suppor
 		return err
 	}
 	return nil
+}
+
+func routeConfigUsesRuntimeResolver(routeConfig string) bool {
+	return strings.Contains(routeConfig, "set $dushengcdn_upstream ") ||
+		strings.Contains(routeConfig, "set $dushengcdn_origin ") ||
+		strings.Contains(routeConfig, " resolve max_fails=")
 }
 
 func (m *Manager) activateConfig(ctx context.Context) error {
@@ -425,9 +433,6 @@ func (m *Manager) PurgeCache(ctx context.Context, operation protocol.CacheOperat
 	if scope == "" {
 		scope = "all"
 	}
-	if scope != "all" {
-		return fmt.Errorf("cache purge scope %q is not supported yet", operation.Scope)
-	}
 	cachePath := strings.TrimSpace(operation.CachePath)
 	if cachePath == "" {
 		return errors.New("cache_path is empty")
@@ -436,7 +441,31 @@ func (m *Manager) PurgeCache(ctx context.Context, operation protocol.CacheOperat
 	if err != nil {
 		return err
 	}
-	return removeCacheEntries(ctx, cleanPath)
+	switch scope {
+	case "all":
+		return removeCacheEntries(ctx, cleanPath)
+	case "url":
+		urls := normalizePurgeURLs(operation.URLs)
+		if len(urls) == 0 {
+			return errors.New("cache purge scope=url requires at least one URL")
+		}
+		cacheLevels, err := parseProxyCacheLevels(operation.CacheLevels)
+		if err != nil {
+			return err
+		}
+		cacheKeyTemplate := strings.TrimSpace(operation.CacheKeyTemplate)
+		if cacheKeyTemplate == "" {
+			cacheKeyTemplate = "$scheme$host$request_uri"
+		}
+		if cacheKeyTemplate != "$scheme$host$request_uri" {
+			return fmt.Errorf("cache purge scope=url does not support cache_key_template %q yet", cacheKeyTemplate)
+		}
+		return removeCacheURLEntries(ctx, cleanPath, cacheLevels, urls)
+	case "path_prefix", "suffix":
+		return fmt.Errorf("cache purge scope %q is not supported yet because cache entries are stored by hashed key", scope)
+	default:
+		return fmt.Errorf("cache purge scope %q is not supported", operation.Scope)
+	}
 }
 
 func (m *Manager) WarmCache(ctx context.Context, operation protocol.CacheOperation) error {
@@ -501,6 +530,126 @@ func removeCacheEntries(ctx context.Context, cleanPath string) error {
 			return err
 		}
 	}
+}
+
+func normalizePurgeURLs(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		raw := strings.TrimSpace(value)
+		if raw == "" {
+			continue
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			continue
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.User != nil {
+			continue
+		}
+		if parsed.Port() != "" &&
+			!(parsed.Scheme == "http" && parsed.Port() == "80") &&
+			!(parsed.Scheme == "https" && parsed.Port() == "443") {
+			continue
+		}
+		parsed.Fragment = ""
+		parsed.Host = strings.ToLower(parsed.Host)
+		normalized := parsed.String()
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result
+}
+
+func removeCacheURLEntries(ctx context.Context, cacheRoot string, levels []int, urls []string) error {
+	for _, targetURL := range urls {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		cacheFile, err := cacheFilePathForURL(cacheRoot, levels, targetURL)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(cacheFile); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove cache URL entry %s: %w", cacheFile, err)
+		}
+	}
+	return nil
+}
+
+func cacheFilePathForURL(cacheRoot string, levels []int, targetURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(targetURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("cache purge URL %q is invalid", targetURL)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.User != nil {
+		return "", fmt.Errorf("cache purge URL %q must be http/https and must not contain user info", targetURL)
+	}
+	parsed.Fragment = ""
+	parsed.Host = strings.ToLower(parsed.Host)
+	cacheKey := parsed.Scheme + parsed.Host + parsed.RequestURI()
+	sum := md5Hex(cacheKey)
+	parts := make([]string, 0, len(levels)+1)
+	offset := len(sum)
+	for _, level := range levels {
+		offset -= level
+		if offset < 0 {
+			return "", fmt.Errorf("cache levels exceed cache key hash length")
+		}
+		parts = append(parts, sum[offset:offset+level])
+	}
+	parts = append(parts, sum)
+	target := filepath.Join(append([]string{cacheRoot}, parts...)...)
+	if err := ensurePathInside(cacheRoot, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func md5Hex(value string) string {
+	sum := md5.Sum([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func parseProxyCacheLevels(raw string) ([]int, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		value = "1:2"
+	}
+	fields := strings.Split(value, ":")
+	if len(fields) == 0 || len(fields) > 3 {
+		return nil, fmt.Errorf("cache_levels %q is invalid", raw)
+	}
+	levels := make([]int, 0, len(fields))
+	total := 0
+	for _, field := range fields {
+		level, err := strconv.Atoi(strings.TrimSpace(field))
+		if err != nil || level < 1 || level > 2 {
+			return nil, fmt.Errorf("cache_levels %q is invalid", raw)
+		}
+		total += level
+		levels = append(levels, level)
+	}
+	if total > 6 {
+		return nil, fmt.Errorf("cache_levels %q is too deep", raw)
+	}
+	return levels, nil
+}
+
+func ensurePathInside(root string, target string) error {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return err
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("cache target %q escapes cache root %q", target, root)
+	}
+	return nil
 }
 
 func safeCacheDirectory(path string) (string, error) {

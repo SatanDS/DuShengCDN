@@ -85,17 +85,40 @@ definitions:
       reachable:
         type: boolean
     type: object
+  service.AgentDNSWorkerUpdateResult:
+    properties:
+      channel:
+        type: string
+      install_dir:
+        type: string
+      message:
+        type: string
+      repo:
+        type: string
+      reported_at_unix:
+        type: integer
+      success:
+        type: boolean
+      tag_name:
+        type: string
+      worker_id:
+        type: string
+      worker_name:
+        type: string
+    type: object
   service.AgentNodeAccessLog:
     properties:
+      cache_status:
+        type: string
       host:
         type: string
       logged_at_unix:
         type: integer
       path:
         type: string
-      remote_addr:
-        type: string
       reason:
+        type: string
+      remote_addr:
         type: string
       request_bytes:
         type: integer
@@ -162,11 +185,17 @@ definitions:
         items:
           $ref: '#/definitions/service.AgentBufferedObservabilityRecord'
         type: array
+      current_checksum:
+        type: string
       current_version:
         type: string
       dns_probe_results:
         items:
           $ref: '#/definitions/service.AgentDNSProbeReport'
+        type: array
+      dns_worker_update_results:
+        items:
+          $ref: '#/definitions/service.AgentDNSWorkerUpdateResult'
         type: array
       health_events:
         items:
@@ -186,6 +215,10 @@ definitions:
         type: string
       openresty_status:
         type: string
+      origin_health_reports:
+        items:
+          $ref: '#/definitions/service.AgentOriginHealthReport'
+        type: array
       profile:
         $ref: '#/definitions/service.AgentNodeSystemProfile'
       snapshot:
@@ -257,6 +290,21 @@ definitions:
       window_started_at_unix:
         type: integer
     type: object
+  service.AgentOriginHealthReport:
+    properties:
+      checked_at_unix:
+        type: integer
+      last_error:
+        type: string
+      latency_ms:
+        type: integer
+      origin_url:
+        type: string
+      route_id:
+        type: integer
+      status:
+        type: string
+    type: object
   service.ApplyLogPayload:
     properties:
       checksum:
@@ -274,6 +322,65 @@ definitions:
       support_file_count:
         type: integer
       version:
+        type: string
+    type: object
+  service.CommercialLicenseActivateInput:
+    properties:
+      activation_url:
+        type: string
+    type: object
+  service.CommercialLicenseActivationRequest:
+    properties:
+      activation_id:
+        type: string
+      build_watermark:
+        type: string
+      instance_hostname:
+        type: string
+      lease_token:
+        type: string
+      license_token:
+        type: string
+      machine_fingerprint:
+        type: string
+      server_version:
+        type: string
+    type: object
+  service.CommercialLicenseInstallInput:
+    properties:
+      token:
+        type: string
+    type: object
+  service.CommercialLicenseIssueInput:
+    properties:
+      customer_id:
+        type: string
+      customer_name:
+        type: string
+      expires_at:
+        type: string
+      features:
+        items:
+          type: string
+        type: array
+      issued_at:
+        type: string
+      license_id:
+        type: string
+      max_nodes:
+        type: integer
+      max_sites:
+        type: integer
+      plan:
+        type: string
+    type: object
+  service.CommercialLicenseRevocationInput:
+    properties:
+      customer_id:
+        type: string
+      license_id:
+        type: string
+      reason:
         type: string
     type: object
   service.ManagedDomainInput:
@@ -353,12 +460,16 @@ definitions:
         $ref: '#/definitions/service.ProxyRouteGSLBLoadThresholds'
       mode:
         type: string
+      pool_match_mode:
+        type: string
       pools:
         items:
           $ref: '#/definitions/service.ProxyRouteGSLBPoolPolicy'
         type: array
       source_ip:
         $ref: '#/definitions/service.ProxyRouteGSLBSourceIPProvider'
+      source_pool_fallback_mode:
+        type: string
       strategy:
         type: string
       target_count:
@@ -368,21 +479,41 @@ definitions:
     type: object
   service.ProxyRouteGSLBPoolPolicy:
     properties:
+      asns:
+        items:
+          type: integer
+        type: array
       countries:
         items:
           type: string
         type: array
       enabled:
         type: boolean
-      name:
-        type: string
-      operators:
+      exclude_asns:
+        items:
+          type: integer
+        type: array
+      exclude_countries:
         items:
           type: string
         type: array
-      asns:
+      exclude_operators:
         items:
-          type: integer
+          type: string
+        type: array
+      exclude_source_cidrs:
+        items:
+          type: string
+        type: array
+      name:
+        type: string
+      node_ids:
+        items:
+          type: string
+        type: array
+      operators:
+        items:
+          type: string
         type: array
       source_cidrs:
         items:
@@ -416,6 +547,12 @@ definitions:
         items:
           type: string
         type: array
+      cc_config:
+        type: string
+      cc_enabled:
+        type: boolean
+      cc_mode:
+        type: string
       cert_id:
         type: integer
       cert_ids:
@@ -486,14 +623,24 @@ definitions:
         type: string
       origin_address:
         type: string
+      origin_ca_bundle:
+        type: string
       origin_host:
+        type: string
+      origin_host_header:
         type: string
       origin_id:
         type: integer
       origin_port:
         type: string
+      origin_resolve_mode:
+        type: string
       origin_scheme:
         type: string
+      origin_sni:
+        type: string
+      origin_tls_verify:
+        type: boolean
       origin_uri:
         type: string
       origin_url:
@@ -502,6 +649,8 @@ definitions:
         type: string
       pow_enabled:
         type: boolean
+      proxy_buffering_mode:
+        type: string
       redirect_http:
         type: boolean
       region_restriction_countries:
@@ -536,6 +685,10 @@ definitions:
       disable_cname:
         type: boolean
       dns_account_id:
+        type: integer
+      dns_provider_mode:
+        type: string
+      dns_zone_id_ref:
         type: integer
       dns1:
         type: string
@@ -1208,6 +1361,317 @@ paths:
       summary: Update DNS account
       tags:
       - DnsAccounts
+  /api/license/activate:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Activation payload
+        in: body
+        name: payload
+        schema:
+          $ref: '#/definitions/service.CommercialLicenseActivateInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Activate or renew commercial license lease
+      tags:
+      - License
+  /api/license/activation/activate:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Activation request
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/service.CommercialLicenseActivationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Issue short-lived commercial license lease
+      tags:
+      - License
+  /api/license/activation/renew:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Activation request
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/service.CommercialLicenseActivationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Renew short-lived commercial license lease
+      tags:
+      - License
+  /api/license/activations:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List commercial license activations
+      tags:
+      - License
+  /api/license/clear:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Clear commercial license
+      tags:
+      - License
+  /api/license/delete:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: License deletion payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/service.CommercialLicenseRevocationInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete commercial license activation records by license id
+      tags:
+      - License
+  /api/license/install:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: License payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/service.CommercialLicenseInstallInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Install commercial license
+      tags:
+      - License
+  /api/license/issue:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: License issue payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/service.CommercialLicenseIssueInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Issue commercial license token
+      tags:
+      - License
+  /api/license/issuer:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get commercial license issuer status
+      tags:
+      - License
+  /api/license/renew:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Renew commercial license lease
+      tags:
+      - License
+  /api/license/restore:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: License revocation payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/service.CommercialLicenseRevocationInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Restore commercial license by license id
+      tags:
+      - License
+  /api/license/revoke:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: License revocation payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/service.CommercialLicenseRevocationInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Revoke commercial license by license id
+      tags:
+      - License
+  /api/license/status:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get commercial license status
+      tags:
+      - License
   /api/managed-domains/:
     get:
       produces:
@@ -1403,6 +1867,32 @@ paths:
       security:
       - BearerAuth: []
       summary: Check latest agent release for node
+      tags:
+      - Nodes
+  /api/nodes/{id}/agent-token/rotate:
+    post:
+      parameters:
+      - description: Node ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Rotate node agent token
       tags:
       - Nodes
   /api/nodes/{id}/agent-update:
@@ -1956,7 +2446,7 @@ paths:
       tags:
       - TLSCertificates
   /api/tls-certificates/{id}/content:
-    get:
+    post:
       parameters:
       - description: Certificate ID
         in: path
