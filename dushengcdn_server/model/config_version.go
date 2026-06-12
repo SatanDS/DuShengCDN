@@ -37,6 +37,18 @@ type ConfigVersionArtifact struct {
 	CreatedAt           time.Time `json:"created_at" gorm:"column:created_at"`
 }
 
+type ConfigPoolActiveVersion struct {
+	ID                uint      `json:"id" gorm:"primaryKey"`
+	PoolName          string    `json:"pool_name" gorm:"size:64;not null;uniqueIndex"`
+	ConfigVersionID   uint      `json:"config_version_id" gorm:"not null;index"`
+	ArtifactID        uint      `json:"artifact_id" gorm:"not null;index"`
+	Checksum          string    `json:"checksum" gorm:"size:64;not null;index"`
+	ActivatedByPlanID *uint     `json:"activated_by_plan_id" gorm:"index"`
+	ActivatedAt       time.Time `json:"activated_at"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
 func ListConfigVersionSummaries() (versions []*ConfigVersionSummary, err error) {
 	err = DB.Model(&ConfigVersion{}).
 		Select("id", "version", "checksum", "is_active", "created_by", "created_at").
@@ -89,6 +101,38 @@ func GetConfigVersionArtifactMeta(versionID uint, poolName string) (*ConfigVersi
 		Where("config_version_id = ? AND pool_name = ?", versionID, poolName).
 		First(artifact).Error
 	return artifact, err
+}
+
+func GetActiveConfigVersionArtifactForPool(poolName string) (*ConfigVersion, *ConfigVersionArtifact, error) {
+	active := &ConfigPoolActiveVersion{}
+	if err := DB.Where("pool_name = ?", poolName).First(active).Error; err != nil {
+		return nil, nil, err
+	}
+	version, err := GetConfigVersionByID(active.ConfigVersionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	artifact, err := GetConfigVersionArtifact(version.ID, poolName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return version, artifact, nil
+}
+
+func GetActiveConfigVersionArtifactMetaForPool(poolName string) (*ConfigVersion, *ConfigVersionArtifact, error) {
+	active := &ConfigPoolActiveVersion{}
+	if err := DB.Where("pool_name = ?", poolName).First(active).Error; err != nil {
+		return nil, nil, err
+	}
+	version, err := GetConfigVersionMetaByID(active.ConfigVersionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	artifact, err := GetConfigVersionArtifactMeta(version.ID, poolName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return version, artifact, nil
 }
 
 func ListConfigVersionArtifactMetas(versionID uint, poolNames []string) (artifacts []*ConfigVersionArtifact, err error) {

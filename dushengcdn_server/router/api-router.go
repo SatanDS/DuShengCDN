@@ -139,6 +139,12 @@ func SetApiRouter(router *gin.Engine) {
 			configReleasePlanRoute.POST("/:id/complete", controller.CompleteConfigReleasePlan)
 			configReleasePlanRoute.POST("/:id/fail", controller.FailConfigReleasePlan)
 		}
+		configReleaseRoute := apiRouter.Group("/config-release")
+		configReleaseRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
+		{
+			configReleaseRoute.GET("/blocked-checksums", controller.ListConfigReleaseBlockedChecksums)
+			configReleaseRoute.POST("/blocked-checksums/:id/unblock", controller.UnblockConfigReleaseBlockedChecksum)
+		}
 		originRoute := apiRouter.Group("/origins")
 		originRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{

@@ -508,6 +508,7 @@ func createConfigVersionRecord(createdBy string, force bool, activate bool) (*Re
 		IsActive:         activate,
 		CreatedBy:        createdBy,
 	}
+	now := time.Now()
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		if activate {
 			if err := tx.Model(&model.ConfigVersion{}).Where("is_active = ?", true).Update("is_active", false).Error; err != nil {
@@ -519,6 +520,11 @@ func createConfigVersionRecord(createdBy string, force bool, activate bool) (*Re
 		}
 		if err := createConfigVersionArtifacts(tx, record.ID, bundle.Artifacts); err != nil {
 			return err
+		}
+		if activate {
+			if err := syncActiveConfigVersionPoolsTx(tx, record.ID, nil, now); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -550,11 +556,15 @@ func ActivateConfigVersion(id uint) (*model.ConfigVersion, error) {
 	if err := ensureConfigVersionArtifacts(version); err != nil {
 		return nil, err
 	}
+	now := time.Now()
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.ConfigVersion{}).Where("is_active = ?", true).Update("is_active", false).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(version).Update("is_active", true).Error; err != nil {
+			return err
+		}
+		if err := syncActiveConfigVersionPoolsTx(tx, version.ID, nil, now); err != nil {
 			return err
 		}
 		return nil
@@ -565,6 +575,75 @@ func ActivateConfigVersion(id uint) (*model.ConfigVersion, error) {
 	version.IsActive = true
 	BroadcastAgentWSActiveConfigForVersion(version)
 	return version, nil
+}
+
+func ActivateConfigVersionForPool(versionID uint, poolName string, planID *uint) (*model.ConfigVersion, *model.ConfigVersionArtifact, error) {
+	poolName = normalizeNodePoolName(poolName)
+	if poolName == "" {
+		poolName = normalizeNodePoolName("default")
+	}
+	version, err := model.GetConfigVersionByID(versionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := ensureConfigVersionArtifactsForPools(version, []string{poolName}); err != nil {
+		return nil, nil, err
+	}
+	artifact, err := model.GetConfigVersionArtifact(version.ID, poolName)
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		return upsertConfigPoolActiveVersionTx(tx, version.ID, artifact, planID, now)
+	}); err != nil {
+		return nil, nil, err
+	}
+	return version, artifact, nil
+}
+
+func syncActiveConfigVersionPoolsTx(tx *gorm.DB, versionID uint, planID *uint, activatedAt time.Time) error {
+	var artifacts []*model.ConfigVersionArtifact
+	if err := tx.Where("config_version_id = ?", versionID).Find(&artifacts).Error; err != nil {
+		return err
+	}
+	for _, artifact := range artifacts {
+		if artifact == nil {
+			continue
+		}
+		if err := upsertConfigPoolActiveVersionTx(tx, versionID, artifact, planID, activatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func upsertConfigPoolActiveVersionTx(tx *gorm.DB, versionID uint, artifact *model.ConfigVersionArtifact, planID *uint, activatedAt time.Time) error {
+	if artifact == nil {
+		return nil
+	}
+	active := &model.ConfigPoolActiveVersion{
+		PoolName:          normalizeNodePoolName(artifact.PoolName),
+		ConfigVersionID:   versionID,
+		ArtifactID:        artifact.ID,
+		Checksum:          artifact.Checksum,
+		ActivatedByPlanID: planID,
+		ActivatedAt:       activatedAt,
+	}
+	if active.PoolName == "" {
+		active.PoolName = normalizeNodePoolName("default")
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "pool_name"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"config_version_id":    active.ConfigVersionID,
+			"artifact_id":          active.ArtifactID,
+			"checksum":             active.Checksum,
+			"activated_by_plan_id": active.ActivatedByPlanID,
+			"activated_at":         active.ActivatedAt,
+			"updated_at":           activatedAt,
+		}),
+	}).Create(active).Error
 }
 
 func ensureConfigVersionArtifacts(version *model.ConfigVersion) error {

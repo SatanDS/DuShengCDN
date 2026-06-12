@@ -20,6 +20,10 @@ func (ConfigVersionArtifact) TableName() string {
 	return "config_version_artifacts"
 }
 
+func (ConfigPoolActiveVersion) TableName() string {
+	return "config_pool_active_versions"
+}
+
 func (ConfigReleasePlan) TableName() string {
 	return "config_release_plans"
 }
@@ -30,6 +34,10 @@ func (ConfigReleaseTarget) TableName() string {
 
 func (ConfigReleaseBlockedChecksum) TableName() string {
 	return "config_release_blocked_checksums"
+}
+
+func (ConfigReleaseBlockedChecksumAudit) TableName() string {
+	return "config_release_blocked_checksum_audits"
 }
 
 func (DNSQueryRollup) TableName() string {

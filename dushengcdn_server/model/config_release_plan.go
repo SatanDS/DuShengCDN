@@ -44,14 +44,31 @@ type ConfigReleaseTarget struct {
 }
 
 type ConfigReleaseBlockedChecksum struct {
-	ID              uint      `json:"id" gorm:"primaryKey"`
-	ConfigVersionID uint      `json:"config_version_id" gorm:"not null;index"`
-	PlanID          *uint     `json:"plan_id" gorm:"index"`
-	Version         string    `json:"version" gorm:"size:32;not null;default:''"`
-	Checksum        string    `json:"checksum" gorm:"size:64;not null;uniqueIndex"`
-	Reason          string    `json:"reason" gorm:"type:text"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              uint       `json:"id" gorm:"primaryKey"`
+	PoolName        string     `json:"pool_name" gorm:"size:64;not null;default:'default';uniqueIndex:idx_config_release_blocked_pool_checksum,priority:1;index"`
+	ConfigVersionID uint       `json:"config_version_id" gorm:"not null;index"`
+	PlanID          *uint      `json:"plan_id" gorm:"index"`
+	Version         string     `json:"version" gorm:"size:32;not null;default:''"`
+	Checksum        string     `json:"checksum" gorm:"size:64;not null;uniqueIndex:idx_config_release_blocked_pool_checksum,priority:2;index"`
+	Reason          string     `json:"reason" gorm:"type:text"`
+	ExpiresAt       *time.Time `json:"expires_at" gorm:"index"`
+	UnblockedAt     *time.Time `json:"unblocked_at" gorm:"index"`
+	UnblockedBy     string     `json:"unblocked_by" gorm:"size:64;not null;default:''"`
+	UnblockReason   string     `json:"unblock_reason" gorm:"type:text;not null;default:''"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+type ConfigReleaseBlockedChecksumAudit struct {
+	ID                uint      `json:"id" gorm:"primaryKey"`
+	BlockedChecksumID uint      `json:"blocked_checksum_id" gorm:"not null;index"`
+	PoolName          string    `json:"pool_name" gorm:"size:64;not null;default:'default';index"`
+	Checksum          string    `json:"checksum" gorm:"size:64;not null;index"`
+	Action            string    `json:"action" gorm:"size:32;not null;default:'';index"`
+	Operator          string    `json:"operator" gorm:"size:64;not null;default:''"`
+	OriginalReason    string    `json:"original_reason" gorm:"type:text;not null;default:''"`
+	Reason            string    `json:"reason" gorm:"type:text;not null;default:''"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 func ListConfigReleasePlans() (plans []*ConfigReleasePlan, err error) {
@@ -99,8 +116,53 @@ func CountActiveConfigReleasePlans(excludeID uint) (int64, error) {
 	return count, err
 }
 
+func CountActiveConfigReleasePlansByPool(poolName string, excludeID uint) (int64, error) {
+	var count int64
+	poolName = strings.TrimSpace(poolName)
+	if poolName == "" {
+		poolName = "default"
+	}
+	query := DB.Model(&ConfigReleasePlan{}).
+		Where("status IN ?", []string{"running", "observing"}).
+		Where("canary_pool_name = ?", poolName)
+	if excludeID != 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	err := query.Count(&count).Error
+	return count, err
+}
+
 func GetConfigReleaseBlockedChecksum(checksum string) (*ConfigReleaseBlockedChecksum, error) {
 	blocked := &ConfigReleaseBlockedChecksum{}
-	err := DB.Where("checksum = ?", strings.TrimSpace(checksum)).First(blocked).Error
+	err := DB.Where("checksum = ? AND unblocked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", strings.TrimSpace(checksum), time.Now()).
+		Order("id desc").
+		First(blocked).Error
+	return blocked, err
+}
+
+func GetConfigReleaseBlockedChecksumForPool(poolName string, checksum string) (*ConfigReleaseBlockedChecksum, error) {
+	blocked := &ConfigReleaseBlockedChecksum{}
+	err := DB.Where(
+		"pool_name = ? AND checksum = ? AND unblocked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
+		strings.TrimSpace(poolName),
+		strings.TrimSpace(checksum),
+		time.Now(),
+	).First(blocked).Error
+	return blocked, err
+}
+
+func GetConfigReleaseBlockedChecksumByID(id uint) (*ConfigReleaseBlockedChecksum, error) {
+	blocked := &ConfigReleaseBlockedChecksum{}
+	err := DB.First(blocked, id).Error
+	return blocked, err
+}
+
+func ListConfigReleaseBlockedChecksums(includeUnblocked bool) ([]*ConfigReleaseBlockedChecksum, error) {
+	var blocked []*ConfigReleaseBlockedChecksum
+	query := DB.Order("id desc")
+	if !includeUnblocked {
+		query = query.Where("unblocked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", time.Now())
+	}
+	err := query.Find(&blocked).Error
 	return blocked, err
 }

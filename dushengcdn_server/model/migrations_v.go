@@ -2,7 +2,10 @@ package model
 
 import (
 	"fmt"
+	"time"
+
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // migrateV2 upgrades the legacy schema to the first versioned schema by
@@ -431,4 +434,99 @@ func migrateV49(db *gorm.DB, backend string) error {
 		return err
 	}
 	return BackfillProxyRouteNormalizedTables(db)
+}
+
+func migrateV50(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	if err := migrateConfigReleaseBlockedChecksumPoolScope(db); err != nil {
+		return err
+	}
+	return backfillConfigPoolActiveVersions(db)
+}
+
+func migrateConfigReleaseBlockedChecksumPoolScope(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&ConfigReleaseBlockedChecksum{}) {
+		return nil
+	}
+	if db.Migrator().HasColumn(&ConfigReleaseBlockedChecksum{}, "pool_name") {
+		if err := db.Model(&ConfigReleaseBlockedChecksum{}).
+			Where("pool_name = '' OR pool_name IS NULL").
+			Update("pool_name", "default").Error; err != nil {
+			return fmt.Errorf("backfill config release blocked checksum pool_name failed: %w", err)
+		}
+	}
+	legacyIndexNames := []string{
+		"idx_config_release_blocked_checksums_checksum",
+		"uni_config_release_blocked_checksums_checksum",
+	}
+	for _, indexName := range legacyIndexNames {
+		if db.Migrator().HasIndex(&ConfigReleaseBlockedChecksum{}, indexName) {
+			if err := db.Migrator().DropIndex(&ConfigReleaseBlockedChecksum{}, indexName); err != nil {
+				return fmt.Errorf("drop legacy config release blocked checksum index %s failed: %w", indexName, err)
+			}
+		}
+	}
+	if !db.Migrator().HasIndex(&ConfigReleaseBlockedChecksum{}, "idx_config_release_blocked_pool_checksum") {
+		if err := db.Migrator().CreateIndex(&ConfigReleaseBlockedChecksum{}, "idx_config_release_blocked_pool_checksum"); err != nil {
+			return fmt.Errorf("create config release blocked checksum pool index failed: %w", err)
+		}
+	}
+	if !db.Migrator().HasIndex(&ConfigReleaseBlockedChecksum{}, "idx_config_release_blocked_checksums_checksum") {
+		if err := db.Migrator().CreateIndex(&ConfigReleaseBlockedChecksum{}, "idx_config_release_blocked_checksums_checksum"); err != nil {
+			return fmt.Errorf("create config release blocked checksum lookup index failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func backfillConfigPoolActiveVersions(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&ConfigVersion{}) || !db.Migrator().HasTable(&ConfigVersionArtifact{}) || !db.Migrator().HasTable(&ConfigPoolActiveVersion{}) {
+		return nil
+	}
+	activeVersion := &ConfigVersion{}
+	if err := db.Where("is_active = ?", true).Order("id desc").First(activeVersion).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+	var artifacts []*ConfigVersionArtifact
+	if err := db.Where("config_version_id = ?", activeVersion.ID).Order("pool_name asc").Find(&artifacts).Error; err != nil {
+		return err
+	}
+	if len(artifacts) == 0 {
+		return nil
+	}
+	activatedAt := activeVersion.CreatedAt
+	if activatedAt.IsZero() {
+		activatedAt = time.Now()
+	}
+	for _, artifact := range artifacts {
+		if artifact == nil {
+			continue
+		}
+		active := &ConfigPoolActiveVersion{
+			PoolName:        normalizeMigrationPoolName(artifact.PoolName),
+			ConfigVersionID: activeVersion.ID,
+			ArtifactID:      artifact.ID,
+			Checksum:        artifact.Checksum,
+			ActivatedAt:     activatedAt,
+		}
+		if err := db.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "pool_name"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"config_version_id": active.ConfigVersionID,
+				"artifact_id":       active.ArtifactID,
+				"checksum":          active.Checksum,
+				"activated_at":      active.ActivatedAt,
+				"updated_at":        activatedAt,
+			}),
+		}).Create(active).Error; err != nil {
+			return fmt.Errorf("backfill active config pool %s failed: %w", active.PoolName, err)
+		}
+	}
+	return nil
 }

@@ -1062,6 +1062,17 @@ func validateDatabaseSchemaV49(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func validateDatabaseSchemaV50(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV49(db, backend); err != nil {
+		return err
+	}
+	if err := validateConfigReleaseSchema(db); err != nil {
+		return err
+	}
+	_ = backend
+	return nil
+}
+
 func validateProxyRouteReusablePolicySchema(db *gorm.DB) error {
 	return validateProxyRouteReusablePolicySchemaWithCache(newSchemaIntrospectionCache(db))
 }
@@ -1148,9 +1159,11 @@ func validateConfigReleaseSchemaWithCache(schemaCache *schemaIntrospectionCache)
 		table   string
 		columns []string
 	}{
+		{model: &ConfigPoolActiveVersion{}, table: "config_pool_active_versions", columns: []string{"id", "pool_name", "config_version_id", "artifact_id", "checksum", "activated_by_plan_id", "activated_at"}},
 		{model: &ConfigReleasePlan{}, table: "config_release_plans", columns: []string{"id", "config_version_id", "rollback_version_id", "status", "strategy", "canary_pool_name", "current_stage", "canary_percent", "observe_seconds", "checksum", "failure_reason", "created_by", "started_at", "completed_at", "failed_at"}},
 		{model: &ConfigReleaseTarget{}, table: "config_release_targets", columns: []string{"id", "plan_id", "config_version_id", "node_id", "pool_name", "checksum", "stage_index", "status", "failure_reason", "started_at", "completed_at"}},
-		{model: &ConfigReleaseBlockedChecksum{}, table: "config_release_blocked_checksums", columns: []string{"id", "config_version_id", "plan_id", "version", "checksum", "reason"}},
+		{model: &ConfigReleaseBlockedChecksum{}, table: "config_release_blocked_checksums", columns: []string{"id", "pool_name", "config_version_id", "plan_id", "version", "checksum", "reason", "expires_at", "unblocked_at", "unblocked_by", "unblock_reason"}},
+		{model: &ConfigReleaseBlockedChecksumAudit{}, table: "config_release_blocked_checksum_audits", columns: []string{"id", "blocked_checksum_id", "pool_name", "checksum", "action", "operator", "original_reason", "reason", "created_at"}},
 	}
 	for _, item := range releaseTables {
 		if !schemaCache.HasTable(item.model, item.table) {

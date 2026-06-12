@@ -484,16 +484,21 @@ func getActiveConfigVersionArtifactForNode(node *model.Node) (*model.ConfigVersi
 			return nil, nil, err
 		}
 	}
-	version, err := model.GetActiveConfigVersion()
-	if err != nil {
-		return nil, nil, err
-	}
 	poolName := normalizeNodePoolName("default")
 	if node != nil {
 		poolName = normalizeNodePoolName(node.PoolName)
 	}
 	if poolName == "" {
 		poolName = normalizeNodePoolName("default")
+	}
+	if version, artifact, err := model.GetActiveConfigVersionArtifactForPool(poolName); err == nil {
+		return version, artifact, nil
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, err
+	}
+	version, err := model.GetActiveConfigVersion()
+	if err != nil {
+		return nil, nil, err
 	}
 	artifact, err := model.GetConfigVersionArtifact(version.ID, poolName)
 	if err != nil {
@@ -529,16 +534,21 @@ func getActiveConfigVersionArtifactMetaForNode(node *model.Node) (*model.ConfigV
 			return nil, nil, err
 		}
 	}
-	version, err := model.GetActiveConfigVersionMeta()
-	if err != nil {
-		return nil, nil, err
-	}
 	poolName := normalizeNodePoolName("default")
 	if node != nil {
 		poolName = normalizeNodePoolName(node.PoolName)
 	}
 	if poolName == "" {
 		poolName = normalizeNodePoolName("default")
+	}
+	if version, artifact, err := model.GetActiveConfigVersionArtifactMetaForPool(poolName); err == nil {
+		return version, artifact, nil
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, err
+	}
+	version, err := model.GetActiveConfigVersionMeta()
+	if err != nil {
+		return nil, nil, err
 	}
 	artifact, err := model.GetConfigVersionArtifactMeta(version.ID, poolName)
 	if err != nil {

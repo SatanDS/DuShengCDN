@@ -51,6 +51,10 @@ type ConfigReleasePlanEvaluation struct {
 	FailedTargets    int                      `json:"failed_targets"`
 }
 
+type ConfigReleaseBlockedChecksumUnblockInput struct {
+	Reason string `json:"reason"`
+}
+
 type configReleaseForceSyncNotification struct {
 	NodeID   string
 	Version  string
@@ -59,6 +63,49 @@ type configReleaseForceSyncNotification struct {
 
 func ListConfigReleasePlans() ([]*model.ConfigReleasePlan, error) {
 	return model.ListConfigReleasePlans()
+}
+
+func ListConfigReleaseBlockedChecksums(includeUnblocked bool) ([]*model.ConfigReleaseBlockedChecksum, error) {
+	return model.ListConfigReleaseBlockedChecksums(includeUnblocked)
+}
+
+func UnblockConfigReleaseBlockedChecksum(id uint, operator string, input ConfigReleaseBlockedChecksumUnblockInput) (*model.ConfigReleaseBlockedChecksum, error) {
+	blocked, err := model.GetConfigReleaseBlockedChecksumByID(id)
+	if err != nil {
+		return nil, err
+	}
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" {
+		return nil, errors.New("unblock reason is required")
+	}
+	operator = strings.TrimSpace(operator)
+	if operator == "" {
+		operator = "system"
+	}
+	now := time.Now()
+	originalReason := strings.TrimSpace(blocked.Reason)
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(blocked).Updates(map[string]any{
+			"unblocked_at":   &now,
+			"unblocked_by":   operator,
+			"unblock_reason": reason,
+		}).Error; err != nil {
+			return err
+		}
+		audit := &model.ConfigReleaseBlockedChecksumAudit{
+			BlockedChecksumID: blocked.ID,
+			PoolName:          blocked.PoolName,
+			Checksum:          blocked.Checksum,
+			Action:            "unblock",
+			Operator:          operator,
+			OriginalReason:    originalReason,
+			Reason:            reason,
+		}
+		return tx.Create(audit).Error
+	}); err != nil {
+		return nil, err
+	}
+	return model.GetConfigReleaseBlockedChecksumByID(id)
 }
 
 func GetConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
@@ -88,6 +135,18 @@ func ensureConfigReleaseChecksumNotBlocked(checksum string) error {
 	return fmt.Errorf("config checksum %s is blocked by failed release plan: %s", checksum, strings.TrimSpace(blocked.Reason))
 }
 
+func ensureConfigReleaseChecksumNotBlockedForPool(poolName string, checksum string) error {
+	poolName = normalizeConfigReleasePoolName(poolName)
+	blocked, err := model.GetConfigReleaseBlockedChecksumForPool(poolName, checksum)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	return fmt.Errorf("config checksum %s is blocked for node pool %s by failed release plan: %s", checksum, poolName, strings.TrimSpace(blocked.Reason))
+}
+
 func ensureNoActiveConfigReleasePlan(excludeID uint) error {
 	count, err := model.CountActiveConfigReleasePlans(excludeID)
 	if err != nil {
@@ -97,6 +156,26 @@ func ensureNoActiveConfigReleasePlan(excludeID uint) error {
 		return errors.New("another config release plan is already in progress")
 	}
 	return nil
+}
+
+func ensureNoActiveConfigReleasePlanForPool(poolName string, excludeID uint) error {
+	poolName = normalizeConfigReleasePoolName(poolName)
+	count, err := model.CountActiveConfigReleasePlansByPool(poolName, excludeID)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("node pool %s already has a config release plan in progress", poolName)
+	}
+	return nil
+}
+
+func normalizeConfigReleasePoolName(poolName string) string {
+	poolName = normalizeNodePoolName(poolName)
+	if poolName == "" {
+		poolName = normalizeNodePoolName("default")
+	}
+	return poolName
 }
 
 // summarizeConfigReleasePlan reports the stored state of a plan that is not
@@ -141,7 +220,7 @@ func CreateConfigReleasePlan(createdBy string, input ConfigReleasePlanInput) (*C
 		canaryPercent = 100
 	}
 
-	if err := ensureNoActiveConfigReleasePlan(0); err != nil {
+	if err := ensureNoActiveConfigReleasePlanForPool(nodePool, 0); err != nil {
 		return nil, err
 	}
 
@@ -149,7 +228,7 @@ func CreateConfigReleasePlan(createdBy string, input ConfigReleasePlanInput) (*C
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureConfigReleaseChecksumNotBlocked(version.Checksum); err != nil {
+	if err := ensureConfigReleaseChecksumNotBlockedForPool(nodePool, version.Checksum); err != nil {
 		return nil, err
 	}
 	if err := ensureConfigVersionArtifactsForPools(version, []string{nodePool}); err != nil {
@@ -162,11 +241,11 @@ func CreateConfigReleasePlan(createdBy string, input ConfigReleasePlanInput) (*C
 	// Failed plans block the pool-level artifact checksum, which only matches
 	// the version checksum when every route lives in that pool.
 	if artifact.Checksum != version.Checksum {
-		if err := ensureConfigReleaseChecksumNotBlocked(artifact.Checksum); err != nil {
+		if err := ensureConfigReleaseChecksumNotBlockedForPool(nodePool, artifact.Checksum); err != nil {
 			return nil, err
 		}
 	}
-	activeVersion, err := model.GetActiveConfigVersion()
+	activeVersion, err := activeVersionForReleasePlanRollback(nodePool)
 	var rollbackVersionID *uint
 	if err == nil && activeVersion.ID != version.ID {
 		rollbackVersionID = &activeVersion.ID
@@ -231,7 +310,7 @@ func StartConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
 	default:
 		return nil, fmt.Errorf("release plan %d cannot be started from status %s", id, plan.Status)
 	}
-	if err := ensureNoActiveConfigReleasePlan(plan.ID); err != nil {
+	if err := ensureNoActiveConfigReleasePlanForPool(plan.CanaryPoolName, plan.ID); err != nil {
 		return nil, err
 	}
 	version, err := model.GetConfigVersionByID(plan.ConfigVersionID)
@@ -449,6 +528,7 @@ func FailConfigReleasePlan(id uint, reason string) error {
 			return err
 		}
 		blocked := &model.ConfigReleaseBlockedChecksum{
+			PoolName:        normalizeConfigReleasePoolName(plan.CanaryPoolName),
 			ConfigVersionID: version.ID,
 			PlanID:          &plan.ID,
 			Version:         version.Version,
@@ -456,8 +536,18 @@ func FailConfigReleasePlan(id uint, reason string) error {
 			Reason:          reason,
 		}
 		return tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "checksum"}},
-			DoUpdates: clause.AssignmentColumns([]string{"config_version_id", "plan_id", "version", "reason", "updated_at"}),
+			Columns: []clause.Column{{Name: "pool_name"}, {Name: "checksum"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"config_version_id": blocked.ConfigVersionID,
+				"plan_id":           blocked.PlanID,
+				"version":           blocked.Version,
+				"reason":            blocked.Reason,
+				"expires_at":        gorm.Expr("NULL"),
+				"unblocked_at":      gorm.Expr("NULL"),
+				"unblocked_by":      "",
+				"unblock_reason":    "",
+				"updated_at":        now,
+			}),
 		}).Create(blocked).Error
 	}); err != nil {
 		return err
@@ -507,7 +597,7 @@ func rollbackConfigMetaForReleaseTarget(plan *model.ConfigReleasePlan, target *m
 	if plan.RollbackVersionID != nil && *plan.RollbackVersionID != 0 {
 		version, err = model.GetConfigVersionByID(*plan.RollbackVersionID)
 	} else {
-		version, err = model.GetActiveConfigVersion()
+		version, err = activeVersionForReleasePlanRollback(target.PoolName)
 	}
 	if err != nil {
 		return nil, err
@@ -527,6 +617,18 @@ func rollbackConfigMetaForReleaseTarget(plan *model.ConfigReleasePlan, target *m
 		return nil, err
 	}
 	return &ActiveConfigMeta{Version: version.Version, Checksum: artifact.Checksum}, nil
+}
+
+func activeVersionForReleasePlanRollback(poolName string) (*model.ConfigVersion, error) {
+	poolName = normalizeConfigReleasePoolName(poolName)
+	version, _, err := model.GetActiveConfigVersionArtifactForPool(poolName)
+	if err == nil {
+		return version, nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	return model.GetActiveConfigVersion()
 }
 
 func releasePlanVersion(createdBy string, input ConfigReleasePlanInput) (*model.ConfigVersion, error) {
@@ -654,7 +756,7 @@ func sendConfigReleaseForceSyncNotifications(notifications []configReleaseForceS
 }
 
 func completeConfigReleasePlan(plan *model.ConfigReleasePlan) (*ConfigReleasePlanView, error) {
-	version, err := ActivateConfigVersion(plan.ConfigVersionID)
+	version, artifact, err := ActivateConfigVersionForPool(plan.ConfigVersionID, plan.CanaryPoolName, &plan.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -663,10 +765,11 @@ func completeConfigReleasePlan(plan *model.ConfigReleasePlan) (*ConfigReleasePla
 		"status":        ConfigReleaseStatusCompleted,
 		"current_stage": 3,
 		"completed_at":  &now,
-		"checksum":      version.Checksum,
+		"checksum":      artifact.Checksum,
 	}).Error; err != nil {
 		return nil, err
 	}
+	BroadcastAgentWSActiveConfigForPool(version, artifact.PoolName)
 	return GetConfigReleasePlan(plan.ID)
 }
 

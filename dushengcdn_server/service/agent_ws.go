@@ -381,6 +381,60 @@ func BroadcastAgentWSActiveConfigForVersion(version *model.ConfigVersion) AgentW
 	return result
 }
 
+func BroadcastAgentWSActiveConfigForPool(version *model.ConfigVersion, poolName string) AgentWSBroadcastResult {
+	result := AgentWSBroadcastResult{}
+	if version == nil {
+		slog.Debug("agent ws pool-specific broadcast skipped because active config version is nil")
+		return result
+	}
+	poolName = normalizeNodePoolName(poolName)
+	if poolName == "" {
+		poolName = normalizeNodePoolName("default")
+	}
+	result.Version = version.Version
+	result.Checksum = version.Checksum
+
+	clients := snapshotAgentWSClients()
+	contexts, err := buildAgentWSBroadcastContexts(clients)
+	if err != nil {
+		for _, client := range clients {
+			result.FailedNodes = append(result.FailedNodes, client.NodeID())
+		}
+		slog.Debug("agent ws pool-specific broadcast skipped because node batch lookup failed", "pool", poolName, "error", err)
+		logAgentWSBroadcastActivePoolConfig(result)
+		return result
+	}
+	artifact, err := model.GetConfigVersionArtifactMeta(version.ID, poolName)
+	if err != nil {
+		for _, context := range contexts {
+			if context.poolName == poolName {
+				result.FailedNodes = append(result.FailedNodes, context.nodeID)
+			}
+		}
+		slog.Debug("agent ws pool-specific broadcast skipped because artifact meta lookup failed", "version_id", version.ID, "pool", poolName, "error", err)
+		logAgentWSBroadcastActivePoolConfig(result)
+		return result
+	}
+	result.Checksum = artifact.Checksum
+	for _, context := range contexts {
+		if context.poolName != poolName {
+			continue
+		}
+		result.ClientCount++
+		message := AgentWSOutboundMessage{
+			Type:    AgentWSMessageTypeActiveConfig,
+			Payload: activeConfigMetaForVersionArtifact(version, artifact),
+		}
+		if context.client.Send(message) {
+			result.SuccessCount++
+			continue
+		}
+		result.FailedNodes = append(result.FailedNodes, context.nodeID)
+	}
+	logAgentWSBroadcastActivePoolConfig(result)
+	return result
+}
+
 func snapshotAgentWSClients() []*AgentWSClient {
 	defaultAgentWSHub.mu.RLock()
 	clients := make([]*AgentWSClient, 0, len(defaultAgentWSHub.clients))

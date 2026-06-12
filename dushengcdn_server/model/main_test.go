@@ -882,6 +882,8 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 		"commercial_license_activations",
 		"commercial_license_revocations",
 		"commercial_licenses",
+		"config_pool_active_versions",
+		"config_release_blocked_checksum_audits",
 		"config_release_blocked_checksums",
 		"config_release_plans",
 		"config_release_targets",
@@ -4186,6 +4188,96 @@ func TestUpgradeDatabaseSchemaAppliesCurrentSchemaOnceAcrossSchemaOnlyChain(t *t
 	}
 	if state.skippedCurrentSchemaOnlyCount != 22 {
 		t.Fatalf("expected 22 schema-only migrations to be skipped after current schema apply, got %d", state.skippedCurrentSchemaOnlyCount)
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
+func TestMigrateV50BackfillsPoolActiveVersionsAndScopesBlockedChecksums(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "config-release-v50.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+	activeVersion := &ConfigVersion{
+		Version:          "202606130001",
+		SnapshotJSON:     "{}",
+		MainConfig:       "main",
+		RenderedConfig:   "rendered",
+		SupportFilesJSON: "[]",
+		Checksum:         "global-checksum",
+		IsActive:         true,
+		CreatedBy:        "root",
+	}
+	if err := db.Create(activeVersion).Error; err != nil {
+		t.Fatalf("seed active config version: %v", err)
+	}
+	for _, artifact := range []*ConfigVersionArtifact{
+		{ConfigVersionID: activeVersion.ID, PoolName: "hk", Checksum: "hk-checksum", MainConfigChecksum: "main", RouteConfigChecksum: "route-hk", RenderedConfig: "hk", SupportFilesJSON: "[]", RouteCount: 1},
+		{ConfigVersionID: activeVersion.ID, PoolName: "us", Checksum: "us-checksum", MainConfigChecksum: "main", RouteConfigChecksum: "route-us", RenderedConfig: "us", SupportFilesJSON: "[]", RouteCount: 1},
+	} {
+		if err := db.Create(artifact).Error; err != nil {
+			t.Fatalf("seed config version artifact: %v", err)
+		}
+	}
+	blocked := &ConfigReleaseBlockedChecksum{
+		ConfigVersionID: activeVersion.ID,
+		Version:         activeVersion.Version,
+		Checksum:        "shared-checksum",
+		Reason:          "reload failed",
+	}
+	if err := db.Create(blocked).Error; err != nil {
+		t.Fatalf("seed blocked checksum: %v", err)
+	}
+	if err := db.Model(blocked).Update("pool_name", "").Error; err != nil {
+		t.Fatalf("blank blocked checksum pool_name: %v", err)
+	}
+	if err := db.Exec("DELETE FROM config_pool_active_versions").Error; err != nil {
+		t.Fatalf("clear active pool rows: %v", err)
+	}
+	if err := db.Exec("DROP INDEX IF EXISTS idx_config_release_blocked_checksums_checksum").Error; err != nil {
+		t.Fatalf("drop existing checksum index: %v", err)
+	}
+	if err := db.Exec("CREATE UNIQUE INDEX idx_config_release_blocked_checksums_checksum ON config_release_blocked_checksums(checksum)").Error; err != nil {
+		t.Fatalf("create legacy checksum unique index: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 49); err != nil {
+		t.Fatalf("save v49 schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	var activeRows []ConfigPoolActiveVersion
+	if err := db.Order("pool_name asc").Find(&activeRows).Error; err != nil {
+		t.Fatalf("list active pool rows: %v", err)
+	}
+	if len(activeRows) != 2 || activeRows[0].PoolName != "hk" || activeRows[0].Checksum != "hk-checksum" || activeRows[1].PoolName != "us" || activeRows[1].Checksum != "us-checksum" {
+		t.Fatalf("unexpected active pool backfill rows: %+v", activeRows)
+	}
+	var reloaded ConfigReleaseBlockedChecksum
+	if err := db.First(&reloaded, blocked.ID).Error; err != nil {
+		t.Fatalf("reload blocked checksum: %v", err)
+	}
+	if reloaded.PoolName != "default" {
+		t.Fatalf("expected blank blocked checksum pool to backfill to default, got %+v", reloaded)
+	}
+	if err := db.Create(&ConfigReleaseBlockedChecksum{
+		PoolName:        "hk",
+		ConfigVersionID: activeVersion.ID,
+		Version:         activeVersion.Version,
+		Checksum:        "shared-checksum",
+		Reason:          "same checksum failed in hk",
+	}).Error; err != nil {
+		t.Fatalf("expected same checksum to be blockable in a different pool after v50 migration: %v", err)
 	}
 	version, exists, err := loadDatabaseSchemaVersion(db)
 	if err != nil {
