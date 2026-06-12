@@ -27,29 +27,8 @@ func replaceProxyRouteRuleInputsWithDB(db *gorm.DB, route *model.ProxyRoute, inp
 	if err != nil {
 		return err
 	}
-	if err := db.Where("proxy_route_id = ? AND match_type <> ?", route.ID, proxyRouteRuleMatchDefault).Delete(&model.ProxyRouteRule{}).Error; err != nil {
-		return err
-	}
-	var staleGroups []model.OriginGroup
-	if err := db.Where("proxy_route_id = ? AND is_default = ?", route.ID, false).Find(&staleGroups).Error; err != nil {
-		return err
-	}
-	if len(staleGroups) > 0 {
-		groupIDs := make([]uint, 0, len(staleGroups))
-		for _, group := range staleGroups {
-			groupIDs = append(groupIDs, group.ID)
-		}
-		if err := db.Where("origin_group_id IN ?", groupIDs).Delete(&model.OriginServer{}).Error; err != nil {
-			return err
-		}
-		if err := db.Where("id IN ?", groupIDs).Delete(&model.OriginGroup{}).Error; err != nil {
-			return err
-		}
-	}
-	if err := db.Where("proxy_route_id = ? AND is_default = ?", route.ID, false).Delete(&model.CachePolicy{}).Error; err != nil {
-		return err
-	}
-	if err := db.Where("proxy_route_id = ? AND is_default = ?", route.ID, false).Delete(&model.SecurityPolicy{}).Error; err != nil {
+	existingRules, err := loadProxyRouteRulesByMatch(db, route.ID)
+	if err != nil {
 		return err
 	}
 	var defaultOriginGroup model.OriginGroup
@@ -61,6 +40,10 @@ func replaceProxyRouteRuleInputsWithDB(db *gorm.DB, route *model.ProxyRoute, inp
 		return err
 	}
 	seenRuleMatches := make(map[string]struct{}, len(inputs))
+	keptRuleIDs := make(map[uint]struct{}, len(inputs))
+	keptOriginGroupIDs := map[uint]struct{}{defaultOriginGroup.ID: {}}
+	keptCachePolicyIDs := make(map[uint]struct{}, len(inputs))
+	keptSecurityPolicyIDs := make(map[uint]struct{}, len(inputs))
 	for index, input := range inputs {
 		rule, err := normalizeProxyRouteRuleInput(route, site.ID, defaultOriginGroup.ID, input, index)
 		if err != nil {
@@ -70,25 +53,18 @@ func replaceProxyRouteRuleInputsWithDB(db *gorm.DB, route *model.ProxyRoute, inp
 			// The default rule mirrors the route-level settings and is managed
 			// by SyncProxyRouteNormalizedTablesWithDB; storing another row here
 			// would render a duplicate root location and accumulate across
-			// saves (the delete above only removes non-default rules).
+			// saves.
 			continue
 		}
-		matchKey := rule.MatchType + " " + rule.Path
+		matchKey := proxyRouteRuleMatchKey(rule.MatchType, rule.Path)
 		if _, ok := seenRuleMatches[matchKey]; ok {
 			return fmt.Errorf("route_rules contains duplicated match %s %s", rule.MatchType, rule.Path)
 		}
 		seenRuleMatches[matchKey] = struct{}{}
+		existingRule := existingRules[matchKey]
 		if strings.TrimSpace(input.OriginURL) != "" || len(input.Upstreams) > 0 {
-			group := &model.OriginGroup{
-				ProxyRouteID: route.ID,
-				OriginID:     route.OriginID,
-				Name:         rule.Name,
-				IsDefault:    false,
-			}
-			if strings.TrimSpace(group.Name) == "" {
-				group.Name = fmt.Sprintf("rule-%d", index+1)
-			}
-			if err := db.Create(group).Error; err != nil {
+			group, err := upsertProxyRouteRuleOriginGroup(db, route, rule.Name, index, existingRule)
+			if err != nil {
 				return err
 			}
 			originURL := strings.TrimSpace(input.OriginURL)
@@ -110,6 +86,7 @@ func replaceProxyRouteRuleInputsWithDB(db *gorm.DB, route *model.ProxyRoute, inp
 				return err
 			}
 			rule.OriginGroupID = group.ID
+			keptOriginGroupIDs[group.ID] = struct{}{}
 		}
 		if input.CacheEnabled != nil {
 			cacheRules, err := normalizeCacheRules(*input.CacheEnabled, input.CachePolicy, input.CacheRules)
@@ -120,40 +97,262 @@ func replaceProxyRouteRuleInputsWithDB(db *gorm.DB, route *model.ProxyRoute, inp
 			if err != nil {
 				return err
 			}
-			cachePolicy := &model.CachePolicy{
+			cachePolicy, err := upsertProxyRouteRuleCachePolicy(db, existingRule, &model.CachePolicy{
 				ProxyRouteID: route.ID,
 				Name:         rule.Name,
 				IsDefault:    false,
 				Enabled:      *input.CacheEnabled,
 				Policy:       normalizeCachePolicy(*input.CacheEnabled, input.CachePolicy),
 				RulesJSON:    string(cacheRulesJSON),
-			}
-			if strings.TrimSpace(cachePolicy.Name) == "" {
-				cachePolicy.Name = fmt.Sprintf("rule-%d-cache", index+1)
-			}
-			if err := db.Create(cachePolicy).Error; err != nil {
+			}, fmt.Sprintf("rule-%d-cache", index+1))
+			if err != nil {
 				return err
 			}
 			rule.CachePolicyID = &cachePolicy.ID
+			keptCachePolicyIDs[cachePolicy.ID] = struct{}{}
 		}
 		if input.BasicAuthEnabled != nil {
 			securityPolicy, err := buildProxyRouteRuleSecurityPolicy(route.ID, rule.Name, input, previousRuleSecurityPolicies[matchKey])
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(securityPolicy.Name) == "" {
-				securityPolicy.Name = fmt.Sprintf("rule-%d-security", index+1)
-			}
-			if err := db.Create(securityPolicy).Error; err != nil {
+			securityPolicy, err = upsertProxyRouteRuleSecurityPolicy(db, existingRule, securityPolicy, fmt.Sprintf("rule-%d-security", index+1))
+			if err != nil {
 				return err
 			}
 			rule.SecurityPolicyID = &securityPolicy.ID
+			keptSecurityPolicyIDs[securityPolicy.ID] = struct{}{}
 		}
-		if err := db.Create(rule).Error; err != nil {
+		savedRule, err := upsertProxyRouteRuleWithDB(db, existingRule, rule)
+		if err != nil {
 			return err
 		}
+		keptRuleIDs[savedRule.ID] = struct{}{}
+	}
+	if err := deleteStaleProxyRouteRules(db, route.ID, keptRuleIDs); err != nil {
+		return err
+	}
+	if err := deleteStaleProxyRouteRuleOriginGroups(db, route.ID, keptOriginGroupIDs); err != nil {
+		return err
+	}
+	if err := deleteStaleProxyRouteRuleCachePolicies(db, route.ID, keptCachePolicyIDs); err != nil {
+		return err
+	}
+	if err := deleteStaleProxyRouteRuleSecurityPolicies(db, route.ID, keptSecurityPolicyIDs); err != nil {
+		return err
 	}
 	return nil
+}
+
+func loadProxyRouteRulesByMatch(db *gorm.DB, routeID uint) (map[string]*model.ProxyRouteRule, error) {
+	var rules []model.ProxyRouteRule
+	if err := db.Where("proxy_route_id = ? AND match_type <> ?", routeID, proxyRouteRuleMatchDefault).Find(&rules).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]*model.ProxyRouteRule, len(rules))
+	for index := range rules {
+		result[proxyRouteRuleMatchKey(rules[index].MatchType, rules[index].Path)] = &rules[index]
+	}
+	return result, nil
+}
+
+func proxyRouteRuleMatchKey(matchType string, path string) string {
+	return strings.TrimSpace(matchType) + " " + strings.TrimSpace(path)
+}
+
+func upsertProxyRouteRuleOriginGroup(db *gorm.DB, route *model.ProxyRoute, name string, index int, existingRule *model.ProxyRouteRule) (*model.OriginGroup, error) {
+	group := &model.OriginGroup{
+		ProxyRouteID: route.ID,
+		OriginID:     route.OriginID,
+		Name:         strings.TrimSpace(name),
+		IsDefault:    false,
+	}
+	if group.Name == "" {
+		group.Name = fmt.Sprintf("rule-%d", index+1)
+	}
+	if existingRule != nil && existingRule.OriginGroupID != 0 {
+		var current model.OriginGroup
+		err := db.Where("id = ? AND proxy_route_id = ? AND is_default = ?", existingRule.OriginGroupID, route.ID, false).First(&current).Error
+		if err == nil {
+			current.OriginID = group.OriginID
+			current.Name = group.Name
+			current.IsDefault = false
+			if err := db.Save(&current).Error; err != nil {
+				return nil, err
+			}
+			return &current, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	if err := db.Create(group).Error; err != nil {
+		return nil, err
+	}
+	return group, nil
+}
+
+func upsertProxyRouteRuleCachePolicy(db *gorm.DB, existingRule *model.ProxyRouteRule, next *model.CachePolicy, fallbackName string) (*model.CachePolicy, error) {
+	if strings.TrimSpace(next.Name) == "" {
+		next.Name = fallbackName
+	}
+	if existingRule != nil && existingRule.CachePolicyID != nil && *existingRule.CachePolicyID != 0 {
+		var current model.CachePolicy
+		err := db.Where("id = ? AND proxy_route_id = ? AND is_default = ?", *existingRule.CachePolicyID, next.ProxyRouteID, false).First(&current).Error
+		if err == nil {
+			current.Name = next.Name
+			current.IsDefault = false
+			current.Enabled = next.Enabled
+			current.DefaultTTL = next.DefaultTTL
+			current.StatusTTLsJSON = next.StatusTTLsJSON
+			current.CacheKey = next.CacheKey
+			current.BypassCookiesJSON = next.BypassCookiesJSON
+			current.BypassHeadersJSON = next.BypassHeadersJSON
+			current.IncludeQuery = next.IncludeQuery
+			current.IgnoreQueryParams = next.IgnoreQueryParams
+			current.CacheMethodsJSON = next.CacheMethodsJSON
+			current.Policy = next.Policy
+			current.RulesJSON = next.RulesJSON
+			if err := db.Save(&current).Error; err != nil {
+				return nil, err
+			}
+			return &current, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	if err := db.Create(next).Error; err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+func upsertProxyRouteRuleSecurityPolicy(db *gorm.DB, existingRule *model.ProxyRouteRule, next *model.SecurityPolicy, fallbackName string) (*model.SecurityPolicy, error) {
+	if strings.TrimSpace(next.Name) == "" {
+		next.Name = fallbackName
+	}
+	if existingRule != nil && existingRule.SecurityPolicyID != nil && *existingRule.SecurityPolicyID != 0 {
+		var current model.SecurityPolicy
+		err := db.Where("id = ? AND proxy_route_id = ? AND is_default = ?", *existingRule.SecurityPolicyID, next.ProxyRouteID, false).First(&current).Error
+		if err == nil {
+			current.Name = next.Name
+			current.IsDefault = false
+			current.BasicAuthEnabled = next.BasicAuthEnabled
+			current.BasicAuthUsername = next.BasicAuthUsername
+			current.BasicAuthPasswordHash = next.BasicAuthPasswordHash
+			current.BasicAuthPasswordUpdatedAt = next.BasicAuthPasswordUpdatedAt
+			current.RegionRestrictionMode = next.RegionRestrictionMode
+			current.WAFMode = next.WAFMode
+			current.CCMode = next.CCMode
+			current.DDOSProtectionMode = next.DDOSProtectionMode
+			current.DDOSProtectionProvider = next.DDOSProtectionProvider
+			current.DDOSProtectionTarget = next.DDOSProtectionTarget
+			if err := db.Save(&current).Error; err != nil {
+				return nil, err
+			}
+			return &current, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	if err := db.Create(next).Error; err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+func upsertProxyRouteRuleWithDB(db *gorm.DB, existingRule *model.ProxyRouteRule, next *model.ProxyRouteRule) (*model.ProxyRouteRule, error) {
+	if existingRule == nil || existingRule.ID == 0 {
+		if err := db.Create(next).Error; err != nil {
+			return nil, err
+		}
+		return next, nil
+	}
+	current := *existingRule
+	current.ProxySiteID = next.ProxySiteID
+	current.OriginGroupID = next.OriginGroupID
+	current.CachePolicyID = next.CachePolicyID
+	current.SecurityPolicyID = next.SecurityPolicyID
+	current.Name = next.Name
+	current.MatchType = next.MatchType
+	current.Path = next.Path
+	current.Priority = next.Priority
+	current.Enabled = next.Enabled
+	current.OriginHostHeader = next.OriginHostHeader
+	current.OriginSNI = next.OriginSNI
+	current.OriginTLSVerify = next.OriginTLSVerify
+	current.OriginCABundle = next.OriginCABundle
+	current.OriginResolveMode = next.OriginResolveMode
+	current.LimitConnPerServer = next.LimitConnPerServer
+	current.LimitConnPerIP = next.LimitConnPerIP
+	current.LimitRate = next.LimitRate
+	current.ProxyBufferingMode = next.ProxyBufferingMode
+	current.CustomHeadersJSON = next.CustomHeadersJSON
+	if err := db.Save(&current).Error; err != nil {
+		return nil, err
+	}
+	return &current, nil
+}
+
+func deleteStaleProxyRouteRules(db *gorm.DB, routeID uint, keptRuleIDs map[uint]struct{}) error {
+	query := db.Where("proxy_route_id = ? AND match_type <> ?", routeID, proxyRouteRuleMatchDefault)
+	if ids := mapKeysUint(keptRuleIDs); len(ids) > 0 {
+		query = query.Where("id NOT IN ?", ids)
+	}
+	return query.Delete(&model.ProxyRouteRule{}).Error
+}
+
+func deleteStaleProxyRouteRuleOriginGroups(db *gorm.DB, routeID uint, keptGroupIDs map[uint]struct{}) error {
+	var staleGroups []model.OriginGroup
+	query := db.Where("proxy_route_id = ? AND is_default = ?", routeID, false)
+	if ids := mapKeysUint(keptGroupIDs); len(ids) > 0 {
+		query = query.Where("id NOT IN ?", ids)
+	}
+	if err := query.Find(&staleGroups).Error; err != nil {
+		return err
+	}
+	if len(staleGroups) == 0 {
+		return nil
+	}
+	groupIDs := make([]uint, 0, len(staleGroups))
+	for _, group := range staleGroups {
+		groupIDs = append(groupIDs, group.ID)
+	}
+	if err := db.Where("origin_group_id IN ?", groupIDs).Delete(&model.OriginServer{}).Error; err != nil {
+		return err
+	}
+	return db.Where("id IN ?", groupIDs).Delete(&model.OriginGroup{}).Error
+}
+
+func deleteStaleProxyRouteRuleCachePolicies(db *gorm.DB, routeID uint, keptPolicyIDs map[uint]struct{}) error {
+	query := db.Where("proxy_route_id = ? AND is_default = ?", routeID, false)
+	if ids := mapKeysUint(keptPolicyIDs); len(ids) > 0 {
+		query = query.Where("id NOT IN ?", ids)
+	}
+	return query.Delete(&model.CachePolicy{}).Error
+}
+
+func deleteStaleProxyRouteRuleSecurityPolicies(db *gorm.DB, routeID uint, keptPolicyIDs map[uint]struct{}) error {
+	query := db.Where("proxy_route_id = ? AND is_default = ?", routeID, false)
+	if ids := mapKeysUint(keptPolicyIDs); len(ids) > 0 {
+		query = query.Where("id NOT IN ?", ids)
+	}
+	return query.Delete(&model.SecurityPolicy{}).Error
+}
+
+func mapKeysUint(values map[uint]struct{}) []uint {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]uint, 0, len(values))
+	for value := range values {
+		if value != 0 {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func normalizeProxyRouteRuleInput(route *model.ProxyRoute, siteID uint, defaultOriginGroupID uint, input ProxyRouteRuleInput, index int) (*model.ProxyRouteRule, error) {

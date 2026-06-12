@@ -915,16 +915,22 @@ func replaceProxySiteDomains(db *gorm.DB, siteID uint, routeID uint, domains []s
 }
 
 func replaceOriginServers(db *gorm.DB, groupID uint, route *ProxyRoute, originID *uint) error {
-	if err := db.Where("origin_group_id = ?", groupID).Delete(&OriginServer{}).Error; err != nil {
-		return err
-	}
 	upstreams, err := decodeProxyRouteUpstreamsForNormalized(route.Upstreams, route.OriginURL)
 	if err != nil {
 		return err
 	}
 	if len(upstreams) == 0 {
-		return nil
+		return db.Where("origin_group_id = ?", groupID).Delete(&OriginServer{}).Error
 	}
+	var existing []OriginServer
+	if err := db.Where("origin_group_id = ?", groupID).Order("sort_order asc, id asc").Find(&existing).Error; err != nil {
+		return err
+	}
+	existingByOrder := make(map[int]*OriginServer, len(existing))
+	for index := range existing {
+		existingByOrder[existing[index].SortOrder] = &existing[index]
+	}
+	keptIDs := make([]uint, 0, len(upstreams))
 	for index, upstream := range upstreams {
 		parsed, err := url.Parse(upstream)
 		if err != nil {
@@ -950,11 +956,36 @@ func replaceOriginServers(db *gorm.DB, groupID uint, route *ProxyRoute, originID
 			URI:           uri,
 			SortOrder:     index,
 		}
+		if current := existingByOrder[index]; current != nil {
+			current.ProxyRouteID = item.ProxyRouteID
+			current.OriginID = item.OriginID
+			current.URL = item.URL
+			current.Scheme = item.Scheme
+			current.Host = item.Host
+			current.Port = item.Port
+			current.Weight = item.Weight
+			current.Backup = item.Backup
+			current.SNI = item.SNI
+			current.HostHeader = item.HostHeader
+			current.Enabled = item.Enabled
+			current.URI = item.URI
+			current.SortOrder = item.SortOrder
+			if err := db.Save(current).Error; err != nil {
+				return err
+			}
+			keptIDs = append(keptIDs, current.ID)
+			continue
+		}
 		if err := db.Create(item).Error; err != nil {
 			return err
 		}
+		keptIDs = append(keptIDs, item.ID)
 	}
-	return nil
+	staleQuery := db.Where("origin_group_id = ?", groupID)
+	if len(keptIDs) > 0 {
+		staleQuery = staleQuery.Where("id NOT IN ?", keptIDs)
+	}
+	return staleQuery.Delete(&OriginServer{}).Error
 }
 
 func ReplaceOriginServersForProxyRouteRule(db *gorm.DB, groupID uint, route *ProxyRoute, originID *uint) error {
