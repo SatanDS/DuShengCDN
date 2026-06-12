@@ -6,16 +6,12 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
-import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
 import { useToast } from '@/components/feedback/toast-provider';
 import { AppModal } from '@/components/ui/app-modal';
-import { TurnstileWidget } from '@/components/forms/turnstile-widget';
 import { useAuth } from '@/components/providers/auth-provider';
 import { PageHeader } from '@/components/layout/page-header';
-import { AppCard } from '@/components/ui/app-card';
-import { StatusBadge } from '@/components/ui/status-badge';
 import { getOAuthAuthorizeUrl } from '@/features/auth/api/auth';
 import { getPublicStatus } from '@/features/auth/api/public';
 import {
@@ -47,33 +43,49 @@ import {
   updateSelf,
 } from '@/features/settings/api/settings';
 import { AuthSourceModal } from '@/features/settings/components/auth-source-modal';
+import {
+  CommercialLicenseSettingsSection,
+  defaultCommercialLicenseIssueFields,
+  type CommercialLicenseIssueForm,
+} from '@/features/settings/components/settings-commercial-license-section';
+import {
+  SettingsDatabaseSection,
+  type DatabaseSettingsFields,
+} from '@/features/settings/components/settings-database-section';
+import {
+  SettingsOtherSection,
+  type OtherSettingsFields,
+} from '@/features/settings/components/settings-other-section';
+import { SettingsPersonalSection } from '@/features/settings/components/settings-personal-section';
+import {
+  SettingsOperationSection,
+  type DeploymentProtocol,
+  type OperationSettingsFieldKey,
+} from '@/features/settings/components/settings-operation-section';
+import {
+  SystemSettingsSection,
+  type RateLimitOperationFieldKey,
+  type SystemSettingsTextFieldKey,
+} from '@/features/settings/components/settings-system-section';
 import type {
   BootstrapTokenPayload,
   CommercialLicenseActivationRecord,
   CommercialLicenseIssuePayload,
   CommercialLicenseIssueResult,
-  CommercialLicenseStatusPayload,
   DatabaseCleanupResult,
   DatabaseCleanupTarget,
   GeoIPLookupResult,
-  DNSSourceDatabaseMirrorSourceStatus,
   OptionItem,
   UpdateSelfPayload,
 } from '@/features/settings/types';
 import {
-  CodeBlock,
   DangerButton,
-  PrimaryButton,
   ResourceField,
   ResourceInput,
-  ResourceSelect,
-  ResourceTextarea,
   SecondaryButton,
-  ToggleField,
 } from '@/features/shared/components/resource-primitives';
 import { ApiError } from '@/lib/api/client';
 import { copyToClipboard } from '@/lib/utils/clipboard';
-import { formatDateTime } from '@/lib/utils/date';
 import { getErrorMessage } from '@/lib/utils/errors';
 import { normalizeTrustedExternalUrl } from '@/lib/utils/redirect';
 import { shellQuote } from '@/lib/utils/shell';
@@ -183,7 +195,7 @@ const defaultOperationFields = {
   ServerAddress: '',
 };
 
-const defaultOtherFields = {
+const defaultOtherFields: OtherSettingsFields = {
   Notice: '',
   SystemName: '',
   HomePageLink: '',
@@ -191,7 +203,7 @@ const defaultOtherFields = {
   Footer: '',
 };
 
-const defaultDatabaseFields = {
+const defaultDatabaseFields: DatabaseSettingsFields = {
   DatabaseAutoCleanupEnabled: false,
   DatabaseAutoCleanupRetentionDays: '30',
 };
@@ -233,55 +245,6 @@ const defaultProfileFields: UpdateSelfPayload = {
   display_name: '',
   password: '',
 };
-
-type CommercialLicenseIssueForm = Omit<
-  CommercialLicenseIssuePayload,
-  'max_nodes' | 'max_sites'
-> & {
-  max_nodes: string;
-  max_sites: string;
-};
-
-const defaultCommercialLicenseIssueFields: CommercialLicenseIssueForm = {
-  license_id: '',
-  customer_id: '',
-  customer_name: '',
-  plan: 'business',
-  features: ['all'],
-  max_nodes: '20',
-  max_sites: '200',
-  issued_at: '',
-  expires_at: '',
-};
-
-const commercialLicensePlanOptions = [
-  { value: 'business', label: '商业版' },
-  { value: 'professional', label: '专业版' },
-  { value: 'enterprise', label: '企业版' },
-];
-
-const commercialLicenseFeatureOptions = [
-  { value: 'all', label: '全部商业能力' },
-  { value: 'acme-automation', label: 'ACME 自动证书' },
-  { value: 'authoritative-dns', label: '自建权威 DNS' },
-  { value: 'cloudflare-dns', label: 'Cloudflare DNS' },
-  { value: 'gslb', label: 'GSLB 智能调度' },
-  { value: 'ddos-protection', label: 'DDoS 自动防护' },
-  { value: 'waf', label: 'WAF' },
-  { value: 'cc-protection', label: 'CC 防护' },
-  { value: 'country-region-access-control', label: '国家/地区访问控制' },
-  { value: 'operator-access-control', label: '运营商访问控制' },
-  { value: 'source-cidr-access-control', label: '来源网段访问控制' },
-  { value: 'asn-access-control', label: 'ASN 访问控制' },
-];
-
-const commercialLicenseFeatureLabels = new Map(
-  commercialLicenseFeatureOptions.map((option) => [option.value, option.label]),
-);
-
-function getCommercialLicenseFeatureLabel(feature: string) {
-  return commercialLicenseFeatureLabels.get(feature) ?? feature;
-}
 
 type CleanupModalState = {
   target: DatabaseCleanupTarget;
@@ -366,8 +329,6 @@ function normalizeServerUrl(value: string) {
   return value.trim().replace(/\/+$/, '');
 }
 
-type DeploymentProtocol = 'http' | 'https';
-
 function getDeploymentProtocol(value: string): DeploymentProtocol {
   return value.trim().toLowerCase().startsWith('http://') ? 'http' : 'https';
 }
@@ -419,89 +380,9 @@ function formatSecondsLabel(value: string) {
   return `${seconds} 秒`;
 }
 
-function formatLicenseLimit(current: number, max: number) {
-  return max > 0 ? `${current} / ${max}` : `${current} / 不限`;
-}
-
 function parseLicenseLimitInput(value: string) {
   const limit = Number.parseInt(value.trim(), 10);
   return Number.isFinite(limit) && limit > 0 ? limit : 0;
-}
-
-function formatMirrorSize(size: number) {
-  if (!Number.isFinite(size) || size <= 0) {
-    return '0 B';
-  }
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let value = size;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  const fractionDigits = value >= 10 || unitIndex === 0 ? 0 : 1;
-  return `${value.toFixed(fractionDigits)} ${units[unitIndex]}`;
-}
-
-const fallbackDNSSourceDatabaseMirrorSources: DNSSourceDatabaseMirrorSourceStatus[] =
-  [
-    {
-      kind: 'operator',
-      label: '运营商库',
-      name: 'gaoyifan/china-operator-ip',
-      available: false,
-      file_count: 0,
-      total_size: 0,
-    },
-    {
-      kind: 'asn',
-      label: 'ASN 库',
-      name: 'GeoLite2-ASN',
-      available: false,
-      file_count: 0,
-      total_size: 0,
-    },
-    {
-      kind: 'country',
-      label: 'Country 库',
-      name: 'GeoLite2-Country',
-      available: false,
-      file_count: 0,
-      total_size: 0,
-    },
-  ];
-
-function getLicenseBadgeVariant(
-  status: CommercialLicenseStatusPayload['status'],
-) {
-  switch (status) {
-    case 'valid':
-      return 'success';
-    case 'expiring':
-      return 'warning';
-    case 'activation_required':
-    case 'lease_expired':
-      return 'warning';
-    case 'community':
-      return 'info';
-    default:
-      return 'danger';
-  }
-}
-
-function getActivationStatusBadge(record: CommercialLicenseActivationRecord) {
-  switch (record.lease_status) {
-    case 'active':
-      return { label: '租约有效', variant: 'success' as const };
-    case 'license_revoked':
-      return { label: '授权已停用', variant: 'danger' as const };
-    case 'activation_revoked':
-      return { label: '机器已停用', variant: 'danger' as const };
-    case 'expired':
-      return { label: '租约过期', variant: 'warning' as const };
-    default:
-      return { label: '未签租约', variant: 'info' as const };
-  }
 }
 
 function buildDiscoveryCommand(serverUrl: string, discoveryToken: string) {
@@ -1152,6 +1033,168 @@ export function SettingsPage() {
   const geoIPLookupResult: GeoIPLookupResult | undefined =
     geoIPLookupMutation.data;
 
+  const updateOperationField = (
+    key: OperationSettingsFieldKey,
+    value: string | boolean,
+  ) => {
+    setOperationFields((previous) => ({ ...previous, [key]: value }));
+  };
+
+  const handleOperationServerAddressChange = (value: string) => {
+    setDeploymentProtocol(getDeploymentProtocol(value));
+    setOperationFields((previous) => ({
+      ...previous,
+      ServerAddress: stripServerUrlProtocol(value),
+    }));
+  };
+
+  const handleSaveOperationSettings = () =>
+    void runBusyAction(
+      'operation-settings',
+      async () => {
+        const heartbeat = Number.parseInt(
+          operationFields.AgentHeartbeatInterval,
+          10,
+        );
+        const offline = Number.parseInt(
+          operationFields.NodeOfflineThreshold,
+          10,
+        );
+
+        if (Number.isNaN(heartbeat) || heartbeat < 5000) {
+          throw new Error('心跳间隔不能小于 5000 毫秒。');
+        }
+        if (Number.isNaN(offline) || offline < 10000) {
+          throw new Error('离线阈值不能小于 10000 毫秒。');
+        }
+
+        await saveOptionEntries(
+          [
+            ['AgentHeartbeatInterval', String(heartbeat)],
+            [
+              'AgentWebsocketUpgradeEnabled',
+              String(operationFields.AgentWebsocketUpgradeEnabled),
+            ],
+            [
+              'AgentLegacyGlobalTokenEnabled',
+              String(operationFields.AgentLegacyGlobalTokenEnabled),
+            ],
+            ['NodeOfflineThreshold', String(offline)],
+            ['AgentUpdateRepo', operationFields.AgentUpdateRepo.trim()],
+            ['GeoIPProvider', operationFields.GeoIPProvider],
+          ],
+          '运维设置已保存。',
+        );
+      },
+      '保存运维设置',
+    );
+
+  const handleSaveAuthoritativeDnsSettings = () =>
+    void runBusyAction(
+      'operation-authoritative-dns',
+      async () => {
+        const defaultTtl = Number.parseInt(
+          operationFields.AuthoritativeDNSDefaultTTL,
+          10,
+        );
+        const snapshotMaxAge = Number.parseInt(
+          operationFields.AuthoritativeDNSSnapshotMaxAge,
+          10,
+        );
+        const metricFreshness = Number.parseInt(
+          operationFields.GSLBMetricFreshnessSeconds,
+          10,
+        );
+        const queryRateLimit = Number.parseInt(
+          operationFields.AuthoritativeDNSWorkerQueryRateLimit,
+          10,
+        );
+        const responseRateLimit = Number.parseInt(
+          operationFields.AuthoritativeDNSWorkerResponseRateLimit,
+          10,
+        );
+        const udpResponseSize = Number.parseInt(
+          operationFields.AuthoritativeDNSWorkerUDPResponseSize,
+          10,
+        );
+        const ecsIPv4Prefix = Number.parseInt(
+          operationFields.AuthoritativeDNSWorkerECSIPv4Prefix,
+          10,
+        );
+        const ecsIPv6Prefix = Number.parseInt(
+          operationFields.AuthoritativeDNSWorkerECSIPv6Prefix,
+          10,
+        );
+
+        if (Number.isNaN(defaultTtl) || defaultTtl <= 0 || defaultTtl > 86400) {
+          throw new Error('默认缓存时间必须为 1 到 86400 之间的整数秒。');
+        }
+        if (Number.isNaN(snapshotMaxAge) || snapshotMaxAge <= 0) {
+          throw new Error('解析配置有效期必须为大于 0 的整数秒。');
+        }
+        if (Number.isNaN(metricFreshness) || metricFreshness <= 0) {
+          throw new Error('节点状态数据有效时间必须为大于 0 的整数秒。');
+        }
+        if (Number.isNaN(queryRateLimit) || queryRateLimit < 0) {
+          throw new Error(
+            '普通查询限流必须为大于或等于 0 的整数，0 表示关闭。',
+          );
+        }
+        if (Number.isNaN(responseRateLimit) || responseRateLimit < 0) {
+          throw new Error(
+            '异常响应 RRL 必须为大于或等于 0 的整数，0 表示关闭。',
+          );
+        }
+        if (
+          Number.isNaN(udpResponseSize) ||
+          udpResponseSize < 512 ||
+          udpResponseSize > 65535
+        ) {
+          throw new Error('UDP 响应大小必须为 512 到 65535 之间的整数。');
+        }
+        if (
+          Number.isNaN(ecsIPv4Prefix) ||
+          ecsIPv4Prefix < 0 ||
+          ecsIPv4Prefix > 32
+        ) {
+          throw new Error('ECS IPv4 前缀必须为 0 到 32。');
+        }
+        if (
+          Number.isNaN(ecsIPv6Prefix) ||
+          ecsIPv6Prefix < 0 ||
+          ecsIPv6Prefix > 128
+        ) {
+          throw new Error('ECS IPv6 前缀必须为 0 到 128。');
+        }
+
+        await saveOptionEntries(
+          [
+            ['AuthoritativeDNSDefaultTTL', String(defaultTtl)],
+            ['AuthoritativeDNSSnapshotMaxAge', String(snapshotMaxAge)],
+            ['GSLBMetricFreshnessSeconds', String(metricFreshness)],
+            ['AuthoritativeDNSWorkerQueryRateLimit', String(queryRateLimit)],
+            [
+              'AuthoritativeDNSWorkerResponseRateLimit',
+              String(responseRateLimit),
+            ],
+            ['AuthoritativeDNSWorkerUDPResponseSize', String(udpResponseSize)],
+            [
+              'AuthoritativeDNSWorkerECSEnabled',
+              String(operationFields.AuthoritativeDNSWorkerECSEnabled),
+            ],
+            ['AuthoritativeDNSWorkerECSIPv4Prefix', String(ecsIPv4Prefix)],
+            ['AuthoritativeDNSWorkerECSIPv6Prefix', String(ecsIPv6Prefix)],
+            [
+              'GSLBProbeSchedulingEnabled',
+              String(operationFields.GSLBProbeSchedulingEnabled),
+            ],
+          ],
+          '本地解析参数已保存。',
+        );
+      },
+      '保存本地解析参数',
+    );
+
   const handleProfileSave = () => {
     void runBusyAction(
       'profile',
@@ -1265,6 +1308,110 @@ export function SettingsPage() {
         await saveOptionEntries([[key, String(nextValue)]], '系统开关已更新。');
       },
       '更新系统开关',
+    );
+  };
+
+  const updateSystemTextField = (
+    key: SystemSettingsTextFieldKey,
+    value: string,
+  ) => {
+    setSystemFields((previous) => ({ ...previous, [key]: value }));
+  };
+
+  const updateRateLimitOperationField = (
+    key: RateLimitOperationFieldKey,
+    value: string,
+  ) => {
+    setOperationFields((previous) => ({ ...previous, [key]: value }));
+  };
+
+  const handleSaveSystemGeneralSettings = () => {
+    void runBusyAction(
+      'system-general',
+      async () => {
+        await saveOptionEntries(
+          [['ServerAddress', normalizeServerUrl(systemFields.ServerAddress)]],
+          '通用设置已保存。',
+        );
+      },
+      '保存通用设置',
+    );
+  };
+
+  const handleSaveSmtpSettings = () => {
+    void runBusyAction(
+      'system-smtp',
+      async () => {
+        await saveOptionEntries(
+          [
+            ['SMTPServer', systemFields.SMTPServer.trim()],
+            ['SMTPPort', systemFields.SMTPPort.trim()],
+            ['SMTPAccount', systemFields.SMTPAccount.trim()],
+            ['SMTPToken', systemFields.SMTPToken.trim()],
+          ],
+          'SMTP 设置已保存。',
+        );
+      },
+      '保存 SMTP 设置',
+    );
+  };
+
+  const handleSaveRateLimitSettings = () => {
+    void runBusyAction(
+      'operation-rate-limit',
+      async () => {
+        const entries = [
+          ['GlobalApiRateLimitNum', operationFields.GlobalApiRateLimitNum],
+          [
+            'GlobalApiRateLimitDuration',
+            operationFields.GlobalApiRateLimitDuration,
+          ],
+          ['GlobalWebRateLimitNum', operationFields.GlobalWebRateLimitNum],
+          [
+            'GlobalWebRateLimitDuration',
+            operationFields.GlobalWebRateLimitDuration,
+          ],
+          [
+            'DNSWorkerAPIRateLimitNum',
+            operationFields.DNSWorkerAPIRateLimitNum,
+          ],
+          [
+            'DNSWorkerAPIRateLimitDuration',
+            operationFields.DNSWorkerAPIRateLimitDuration,
+          ],
+          ['UploadRateLimitNum', operationFields.UploadRateLimitNum],
+          ['UploadRateLimitDuration', operationFields.UploadRateLimitDuration],
+          ['DownloadRateLimitNum', operationFields.DownloadRateLimitNum],
+          [
+            'DownloadRateLimitDuration',
+            operationFields.DownloadRateLimitDuration,
+          ],
+          ['CriticalRateLimitNum', operationFields.CriticalRateLimitNum],
+          [
+            'CriticalRateLimitDuration',
+            operationFields.CriticalRateLimitDuration,
+          ],
+        ] as const;
+
+        for (const [key, rawValue] of entries) {
+          const parsedValue = Number.parseInt(rawValue, 10);
+          if (Number.isNaN(parsedValue) || parsedValue <= 0) {
+            throw new Error(`${key} 必须为大于 0 的整数。`);
+          }
+          if (key.endsWith('Duration') && parsedValue > 1200) {
+            throw new Error(`${key} 不能超过 1200 秒。`);
+          }
+        }
+
+        await saveOptionEntries(
+          entries.map(([key, value]) => [
+            key,
+            String(Number.parseInt(value, 10)),
+          ]),
+          '限流设置已保存。',
+        );
+      },
+      '保存限流设置',
     );
   };
 
@@ -1506,142 +1653,77 @@ export function SettingsPage() {
     );
   };
 
-  const renderDNSSourceDatabaseMirrorCard = () => {
-    const mirrorStatus = dnsSourceDatabaseMirrorStatusQuery.data;
-    const sourceStatusMap = new Map(
-      mirrorStatus?.sources?.map((source) => [source.kind, source]) ?? [],
-    );
-    const mirrorSources = fallbackDNSSourceDatabaseMirrorSources.map(
-      (source) => sourceStatusMap.get(source.kind) ?? source,
-    );
-
-    return (
-      <AppCard
-        title="DNS 源库镜像"
-        description="在面板服务器端刷新 gaoyifan/china-operator-ip、GeoLite2-ASN 与 GeoLite2-Country 的本地镜像，供 DNS 响应端 GitHub 下载失败时回退使用。"
-        action={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <StatusBadge
-              label={
-                dnsSourceDatabaseMirrorStatusQuery.isLoading
-                  ? '检测中'
-                  : mirrorStatus?.available
-                    ? '已备份'
-                    : '未备份'
-              }
-              variant={
-                dnsSourceDatabaseMirrorStatusQuery.isLoading
-                  ? 'info'
-                  : mirrorStatus?.available
-                    ? 'success'
-                    : 'warning'
-              }
-            />
-            <SecondaryButton
-              type="button"
-              onClick={() =>
-                void runBusyAction(
-                  'dns-source-database-refresh',
-                  async () => {
-                    const result = await refreshDNSSourceDatabaseMirror();
-                    setFeedback({
-                      tone: result.started ? 'success' : 'info',
-                      message: result.message,
-                    });
-                    await queryClient.invalidateQueries({
-                      queryKey: dnsSourceDatabaseMirrorStatusQueryKey,
-                    });
-                  },
-                  '刷新 DNS 源库镜像',
-                )
-              }
-              disabled={busyKey === 'dns-source-database-refresh'}
-            >
-              {busyKey === 'dns-source-database-refresh'
-                ? '触发中...'
-                : '刷新源库镜像'}
-            </SecondaryButton>
-          </div>
+  const handleSaveDatabaseAutoCleanup = () => {
+    void runBusyAction(
+      'database-auto-cleanup',
+      async () => {
+        const retentionDays = Number.parseInt(
+          databaseFields.DatabaseAutoCleanupRetentionDays,
+          10,
+        );
+        if (Number.isNaN(retentionDays) || retentionDays < 1) {
+          throw new Error('自动清理保留天数至少为 1 天。');
         }
-      >
-        <div className="mb-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                备份状态
-              </p>
-              <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                {dnsSourceDatabaseMirrorStatusQuery.isLoading
-                  ? '正在检测源库镜像'
-                  : (mirrorStatus?.message ?? '面板端暂未完成源库备份。')}
-              </p>
-            </div>
-            <p className="text-right text-sm text-[var(--foreground-secondary)]">
-              {mirrorStatus?.updated_at
-                ? `备份时间 ${formatDateTime(new Date(mirrorStatus.updated_at))}`
-                : '暂无备份时间'}
-            </p>
-          </div>
-          {mirrorStatus?.available ? (
-            <p className="mt-3 text-xs text-[var(--foreground-muted)]">
-              已备份 {mirrorStatus.source_count} 类源库，
-              {mirrorStatus.file_count} 个文件，总体积{' '}
-              {formatMirrorSize(mirrorStatus.total_size)}。
-            </p>
-          ) : mirrorStatus?.missing_kinds.length ? (
-            <p className="mt-3 text-xs text-[var(--foreground-muted)]">
-              缺少：{mirrorStatus.missing_kinds.join('、')}
-            </p>
-          ) : null}
-        </div>
-        <div className="grid gap-4 md:grid-cols-3">
-          {mirrorSources.map((source) => (
-            <div
-              key={source.kind}
-              className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                  {source.label}
-                </p>
-                <StatusBadge
-                  className="shrink-0"
-                  label={
-                    dnsSourceDatabaseMirrorStatusQuery.isLoading
-                      ? '检测中'
-                      : source.available
-                        ? '已备份'
-                        : '未备份'
-                  }
-                  variant={
-                    dnsSourceDatabaseMirrorStatusQuery.isLoading
-                      ? 'info'
-                      : source.available
-                        ? 'success'
-                        : 'warning'
-                  }
-                />
-              </div>
-              <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                {source.name}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--foreground-muted)]">
-                <span>{source.file_count} 个文件</span>
-                <span>{formatMirrorSize(source.total_size)}</span>
-              </div>
-              <p className="mt-2 text-xs text-[var(--foreground-muted)]">
-                {source.updated_at
-                  ? `备份时间 ${formatDateTime(new Date(source.updated_at))}`
-                  : '暂无备份时间'}
-              </p>
-            </div>
-          ))}
-        </div>
-        <p className="mt-4 text-sm leading-6 text-[var(--foreground-secondary)]">
-          面板启动时如果没有镜像会自动预热一次，之后每 7 天自动刷新；DNS
-          响应端安装脚本也会创建 7 天更新定时器。
-        </p>
-      </AppCard>
+        await saveOptionEntries(
+          [
+            [
+              'DatabaseAutoCleanupEnabled',
+              String(databaseFields.DatabaseAutoCleanupEnabled),
+            ],
+            ['DatabaseAutoCleanupRetentionDays', String(retentionDays)],
+          ],
+          '数据库自动清理设置已保存。',
+        );
+      },
+      '保存数据库自动清理设置',
+    );
+  };
+
+  const handleRefreshDNSSourceDatabaseMirror = () => {
+    void runBusyAction(
+      'dns-source-database-refresh',
+      async () => {
+        const result = await refreshDNSSourceDatabaseMirror();
+        setFeedback({
+          tone: result.started ? 'success' : 'info',
+          message: result.message,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: dnsSourceDatabaseMirrorStatusQueryKey,
+        });
+      },
+      '刷新 DNS 源库镜像',
+    );
+  };
+
+  const handleSaveOtherBrandSettings = () => {
+    void runBusyAction(
+      'other-brand',
+      async () => {
+        await saveOptionEntries(
+          [
+            ['Notice', otherFields.Notice],
+            ['SystemName', otherFields.SystemName.trim()],
+            ['HomePageLink', otherFields.HomePageLink.trim()],
+            ['Footer', otherFields.Footer],
+          ],
+          '公告与品牌设置已保存。',
+        );
+      },
+      '保存公告与品牌设置',
+    );
+  };
+
+  const handleSaveOtherAboutSettings = () => {
+    void runBusyAction(
+      'other-about',
+      async () => {
+        await saveOptionEntries(
+          [['About', otherFields.About]],
+          '关于页内容已保存。',
+        );
+      },
+      '保存关于页内容',
     );
   };
 
@@ -1695,288 +1777,34 @@ export function SettingsPage() {
 
     if (activeTab === 'personal') {
       return (
-        <div className="space-y-6">
-          <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-            <AppCard
-              title="个人资料"
-              description="可更新用户名、显示名称和密码。留空密码表示保持当前密码不变。"
-              action={
-                <PrimaryButton
-                  type="button"
-                  onClick={handleProfileSave}
-                  disabled={busyKey === 'profile'}
-                >
-                  {busyKey === 'profile' ? '保存中...' : '保存资料'}
-                </PrimaryButton>
-              }
-            >
-              <div className="space-y-5">
-                <ResourceField label="用户名">
-                  <ResourceInput
-                    value={profileFields.username}
-                    onChange={(event) =>
-                      setProfileFields((previous) => ({
-                        ...previous,
-                        username: event.target.value,
-                      }))
-                    }
-                    placeholder="请输入用户名"
-                  />
-                </ResourceField>
-
-                <ResourceField label="显示名称">
-                  <ResourceInput
-                    value={profileFields.display_name}
-                    onChange={(event) =>
-                      setProfileFields((previous) => ({
-                        ...previous,
-                        display_name: event.target.value,
-                      }))
-                    }
-                    placeholder="请输入显示名称"
-                  />
-                </ResourceField>
-
-                <ResourceField label="新密码" hint="留空表示不修改密码。">
-                  <ResourceInput
-                    type="password"
-                    value={profileFields.password}
-                    onChange={(event) =>
-                      setProfileFields((previous) => ({
-                        ...previous,
-                        password: event.target.value,
-                      }))
-                    }
-                    placeholder="请输入新密码"
-                  />
-                </ResourceField>
-              </div>
-            </AppCard>
-
-            <AppCard
-              title="访问令牌"
-              description="重置后会立即生成新的访问令牌，可用于自动化请求。"
-              action={
-                <PrimaryButton
-                  type="button"
-                  onClick={() => accessTokenMutation.mutate()}
-                  disabled={accessTokenMutation.isPending}
-                >
-                  {accessTokenMutation.isPending ? '生成中...' : '重置令牌'}
-                </PrimaryButton>
-              }
-            >
-              <div className="space-y-4">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                    <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                      当前角色
-                    </p>
-                    <div className="mt-2">
-                      <StatusBadge
-                        label={
-                          user?.role === 100
-                            ? '超级管理员'
-                            : user?.role === 10
-                              ? '管理员'
-                              : '普通用户'
-                        }
-                        variant={
-                          user?.role === 100
-                            ? 'warning'
-                            : user?.role === 10
-                              ? 'info'
-                              : 'success'
-                        }
-                      />
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                    <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                      已绑定邮箱
-                    </p>
-                    <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
-                      {profile.email || '未绑定'}
-                    </p>
-                  </div>
-                </div>
-
-                {accessToken ? (
-                  <div className="space-y-3">
-                    <CodeBlock className="break-all whitespace-pre-wrap">
-                      {accessToken}
-                    </CodeBlock>
-                    <SecondaryButton
-                      type="button"
-                      onClick={() =>
-                        void handleCopy(accessToken, '访问令牌已复制。')
-                      }
-                    >
-                      复制令牌
-                    </SecondaryButton>
-                  </div>
-                ) : (
-                  <EmptyState
-                    title="尚未生成令牌"
-                    description="点击“重置令牌”后，新的访问令牌会显示在这里。"
-                  />
-                )}
-              </div>
-            </AppCard>
-          </div>
-
-          <AppCard
-            title="账号绑定"
-            description="支持绑定已启用的认证源和邮箱地址，用于统一个人身份入口。"
-          >
-            <div className="grid gap-6 xl:grid-cols-2">
-              <div className="space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                <div className="space-y-1">
-                  <p className="text-base font-semibold text-[var(--foreground-primary)]">
-                    第三方认证源
-                  </p>
-                  <p className="text-sm leading-6 text-[var(--foreground-secondary)]">
-                    登录状态下发起授权会直接绑定到当前账号。
-                  </p>
-                </div>
-                <div className="space-y-3">
-                  {(publicStatus.auth_sources ?? []).length > 0 ? (
-                    publicStatus.auth_sources.map((source) => {
-                      const binding = externalAccountMap.get(source.name);
-                      const label = source.display_name || source.name;
-
-                      return (
-                        <div
-                          key={source.id}
-                          className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] px-4 py-3"
-                        >
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="min-w-0 space-y-1">
-                              <p className="text-sm font-medium text-[var(--foreground-primary)]">
-                                {label}
-                              </p>
-                              {binding ? (
-                                <>
-                                  <p className="text-sm break-all text-[var(--foreground-secondary)]">
-                                    已绑定：
-                                    {binding.external_username ||
-                                      binding.email ||
-                                      '第三方账号'}
-                                  </p>
-                                  {binding.email ? (
-                                    <p className="text-xs break-all text-[var(--foreground-muted)]">
-                                      邮箱：{binding.email}
-                                    </p>
-                                  ) : null}
-                                  <p className="text-xs text-[var(--foreground-muted)]">
-                                    绑定时间：
-                                    {formatDateTime(binding.created_at)}
-                                  </p>
-                                </>
-                              ) : (
-                                <p className="text-sm text-[var(--foreground-secondary)]">
-                                  未绑定
-                                </p>
-                              )}
-                            </div>
-                            {binding ? (
-                              <DangerButton
-                                type="button"
-                                onClick={() =>
-                                  handleUnbindAuthSource(binding.id, label)
-                                }
-                                disabled={
-                                  busyKey === `auth-source-unbind-${binding.id}`
-                                }
-                              >
-                                解绑
-                              </DangerButton>
-                            ) : (
-                              <PrimaryButton
-                                type="button"
-                                onClick={() =>
-                                  handleBindAuthSource(source.name)
-                                }
-                                disabled={
-                                  busyKey === `auth-source-bind-${source.name}`
-                                }
-                              >
-                                绑定 {label}
-                              </PrimaryButton>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <span className="text-sm text-[var(--foreground-secondary)]">
-                      当前未启用认证源。
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                <div className="space-y-1">
-                  <p className="text-base font-semibold text-[var(--foreground-primary)]">
-                    邮箱地址
-                  </p>
-                  <p className="text-sm leading-6 text-[var(--foreground-secondary)]">
-                    当前状态：
-                    {profile.email ? `已绑定 ${profile.email}` : '未绑定'}
-                  </p>
-                </div>
-                <div className="space-y-4">
-                  <ResourceField label="邮箱地址">
-                    <ResourceInput
-                      value={emailAddress}
-                      onChange={(event) => setEmailAddress(event.target.value)}
-                      placeholder="请输入邮箱地址"
-                    />
-                  </ResourceField>
-                  <ResourceField label="验证码">
-                    <ResourceInput
-                      value={emailCode}
-                      onChange={(event) => setEmailCode(event.target.value)}
-                      placeholder="请输入邮箱验证码"
-                    />
-                  </ResourceField>
-                  {publicStatus.turnstile_check ? (
-                    publicStatus.turnstile_site_key ? (
-                      <TurnstileWidget
-                        siteKey={publicStatus.turnstile_site_key}
-                        onVerify={(token) => setEmailTurnstileToken(token)}
-                        onExpire={() => setEmailTurnstileToken('')}
-                        onError={() => setEmailTurnstileToken('')}
-                      />
-                    ) : (
-                      <EmptyState
-                        title="Turnstile 配置不完整"
-                        description="当前系统已启用 Turnstile，但未配置 Site Key，邮箱绑定暂不可用。"
-                      />
-                    )
-                  ) : null}
-                  <div className="flex flex-wrap gap-2">
-                    <SecondaryButton
-                      type="button"
-                      onClick={handleEmailVerification}
-                      disabled={busyKey === 'email-send'}
-                    >
-                      {busyKey === 'email-send' ? '发送中...' : '发送验证码'}
-                    </SecondaryButton>
-                    <PrimaryButton
-                      type="button"
-                      onClick={handleBindEmail}
-                      disabled={busyKey === 'email-bind'}
-                    >
-                      {busyKey === 'email-bind' ? '绑定中...' : '绑定邮箱'}
-                    </PrimaryButton>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </AppCard>
-        </div>
+        <SettingsPersonalSection
+          accessToken={accessToken}
+          accessTokenIsPending={accessTokenMutation.isPending}
+          busyKey={busyKey}
+          currentUser={user}
+          emailAddress={emailAddress}
+          emailCode={emailCode}
+          externalAccountMap={externalAccountMap}
+          profile={profile}
+          profileFields={profileFields}
+          publicStatus={publicStatus}
+          onBindAuthSource={handleBindAuthSource}
+          onBindEmail={handleBindEmail}
+          onCopyAccessToken={(token) => handleCopy(token, '访问令牌已复制。')}
+          onEmailAddressChange={setEmailAddress}
+          onEmailCodeChange={setEmailCode}
+          onEmailTurnstileTokenChange={setEmailTurnstileToken}
+          onEmailVerification={handleEmailVerification}
+          onGenerateAccessToken={() => accessTokenMutation.mutate()}
+          onProfileFieldChange={(key, value) =>
+            setProfileFields((previous) => ({
+              ...previous,
+              [key]: value,
+            }))
+          }
+          onSaveProfile={handleProfileSave}
+          onUnbindAuthSource={handleUnbindAuthSource}
+        />
       );
     }
 
@@ -2004,2224 +1832,139 @@ export function SettingsPage() {
 
     if (activeTab === 'operation') {
       return (
-        <div className="space-y-6">
-          <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-            <AppCard
-              title="Agent 接入设置"
-              description="运行参数会通过心跳响应下发到 Agent。"
-              action={
-                <PrimaryButton
-                  type="button"
-                  onClick={() =>
-                    void runBusyAction(
-                      'operation-settings',
-                      async () => {
-                        const heartbeat = Number.parseInt(
-                          operationFields.AgentHeartbeatInterval,
-                          10,
-                        );
-                        const offline = Number.parseInt(
-                          operationFields.NodeOfflineThreshold,
-                          10,
-                        );
-
-                        if (Number.isNaN(heartbeat) || heartbeat < 5000) {
-                          throw new Error('心跳间隔不能小于 5000 毫秒。');
-                        }
-                        if (Number.isNaN(offline) || offline < 10000) {
-                          throw new Error('离线阈值不能小于 10000 毫秒。');
-                        }
-
-                        await saveOptionEntries(
-                          [
-                            ['AgentHeartbeatInterval', String(heartbeat)],
-                            [
-                              'AgentWebsocketUpgradeEnabled',
-                              String(
-                                operationFields.AgentWebsocketUpgradeEnabled,
-                              ),
-                            ],
-                            [
-                              'AgentLegacyGlobalTokenEnabled',
-                              String(
-                                operationFields.AgentLegacyGlobalTokenEnabled,
-                              ),
-                            ],
-                            ['NodeOfflineThreshold', String(offline)],
-                            [
-                              'AgentUpdateRepo',
-                              operationFields.AgentUpdateRepo.trim(),
-                            ],
-                            ['GeoIPProvider', operationFields.GeoIPProvider],
-                          ],
-                          '运维设置已保存。',
-                        );
-                      },
-                      '保存运维设置',
-                    )
-                  }
-                >
-                  {busyKey === 'operation-settings' ? '保存中...' : '保存设置'}
-                </PrimaryButton>
-              }
-            >
-              <div className="space-y-6">
-                <div className="space-y-4">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-[var(--foreground-primary)]">
-                      Agent 运行参数
-                    </p>
-                    <p className="text-sm text-[var(--foreground-muted)]">
-                      修改后会在下个心跳周期同步到节点。
-                    </p>
-                  </div>
-                  <div className="grid gap-5 md:grid-cols-2">
-                    <ResourceField
-                      label={`心跳间隔 (${formatDurationLabel(operationFields.AgentHeartbeatInterval)})`}
-                    >
-                      <ResourceInput
-                        type="number"
-                        value={operationFields.AgentHeartbeatInterval}
-                        onChange={(event) =>
-                          setOperationFields((previous) => ({
-                            ...previous,
-                            AgentHeartbeatInterval: event.target.value,
-                          }))
-                        }
-                      />
-                    </ResourceField>
-                    <ResourceField
-                      label={`离线阈值 (${formatDurationLabel(operationFields.NodeOfflineThreshold)})`}
-                    >
-                      <ResourceInput
-                        type="number"
-                        value={operationFields.NodeOfflineThreshold}
-                        onChange={(event) =>
-                          setOperationFields((previous) => ({
-                            ...previous,
-                            NodeOfflineThreshold: event.target.value,
-                          }))
-                        }
-                      />
-                    </ResourceField>
-                  </div>
-                  <ToggleField
-                    label="开启 WS 连接升级"
-                    description="开启后 Agent 会在 HTTP 心跳成功后尝试升级为 WebSocket，发布配置时可立即收到同步通知。"
-                    checked={operationFields.AgentWebsocketUpgradeEnabled}
-                    onChange={(checked) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AgentWebsocketUpgradeEnabled: checked,
-                      }))
-                    }
-                  />
-                  <ToggleField
-                    label="允许旧全局 Agent Token"
-                    description="仅用于迁移旧 Agent；开启后仍要求请求携带已存在的 node_id，迁移完成后应关闭。"
-                    checked={operationFields.AgentLegacyGlobalTokenEnabled}
-                    onChange={(checked) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AgentLegacyGlobalTokenEnabled: checked,
-                      }))
-                    }
-                  />
-                </div>
-
-                <div className="border-t border-[var(--border-default)] pt-6">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-[var(--foreground-primary)]">
-                      Agent 更新仓库
-                    </p>
-                    <p className="text-sm text-[var(--foreground-muted)]">
-                      上游更新仓库
-                    </p>
-                  </div>
-                  <div className="mt-4">
-                    <ResourceField label="GitHub 仓库">
-                      <ResourceInput
-                        value={operationFields.AgentUpdateRepo}
-                        onChange={(event) =>
-                          setOperationFields((previous) => ({
-                            ...previous,
-                            AgentUpdateRepo: event.target.value,
-                          }))
-                        }
-                        placeholder="SatanDS/SatanDS-DuShengCDN-releases"
-                      />
-                    </ResourceField>
-                  </div>
-                </div>
-
-                <div className="border-t border-[var(--border-default)] pt-6">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-[var(--foreground-primary)]">
-                      IP 归属方式
-                    </p>
-                    <p className="text-sm text-[var(--foreground-muted)]">
-                      控制节点地图等场景使用的 IP
-                      归属解析来源。访客访问记录归属地入库固定使用 MaxMind
-                      mmdb。
-                    </p>
-                  </div>
-                  <div className="mt-4">
-                    <ResourceField
-                      label="归属方式"
-                      hint="disabled 关闭节点归属解析；mmdb 使用本地数据库；其余选项调用外部 GeoIP 服务。"
-                    >
-                      <ResourceSelect
-                        value={operationFields.GeoIPProvider}
-                        onChange={(event) =>
-                          setOperationFields((previous) => ({
-                            ...previous,
-                            GeoIPProvider: event.target.value,
-                          }))
-                        }
-                      >
-                        <option value="disabled">关闭</option>
-                        <option value="mmdb">MaxMind mmdb</option>
-                        <option value="ip-api">ip-api.com</option>
-                        <option value="geojs">geojs.io</option>
-                        <option value="ipinfo">ipinfo.io</option>
-                      </ResourceSelect>
-                    </ResourceField>
-                  </div>
-                  <div className="mt-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-                      <ResourceField label="测试 IP">
-                        <ResourceInput
-                          value={geoIPTestIP}
-                          onChange={(event) =>
-                            setGeoIPTestIP(event.target.value)
-                          }
-                          placeholder="例如 8.8.8.8"
-                        />
-                      </ResourceField>
-                      <PrimaryButton
-                        type="button"
-                        onClick={handleGeoIPLookup}
-                        disabled={geoIPLookupMutation.isPending}
-                      >
-                        {geoIPLookupMutation.isPending
-                          ? '查询中...'
-                          : '查询归属'}
-                      </PrimaryButton>
-                    </div>
-
-                    <div className="mt-4 space-y-3">
-                      {geoIPLookupMutation.isError ? (
-                        <InlineMessage
-                          tone="danger"
-                          message={getErrorMessage(geoIPLookupMutation.error)}
-                        />
-                      ) : null}
-
-                      {geoIPLookupResult ? (
-                        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-base)] px-4 py-4">
-                            <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                              查询 IP
-                            </p>
-                            <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                              {geoIPLookupResult.ip}
-                            </p>
-                          </div>
-                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-base)] px-4 py-4">
-                            <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                              国家 / 地区
-                            </p>
-                            <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                              {geoIPLookupResult.name || '—'}
-                            </p>
-                          </div>
-                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-base)] px-4 py-4">
-                            <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                              ISO Code
-                            </p>
-                            <div className="mt-2">
-                              <StatusBadge
-                                label={geoIPLookupResult.iso_code || '—'}
-                                variant="info"
-                              />
-                            </div>
-                          </div>
-                          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-base)] px-4 py-4">
-                            <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                              经纬度
-                            </p>
-                            <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                              {geoIPLookupResult.latitude !== undefined &&
-                              geoIPLookupResult.latitude !== null &&
-                              geoIPLookupResult.longitude !== undefined &&
-                              geoIPLookupResult.longitude !== null
-                                ? `${geoIPLookupResult.latitude.toFixed(4)}, ${geoIPLookupResult.longitude.toFixed(4)}`
-                                : '—'}
-                            </p>
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </AppCard>
-
-            <AppCard
-              title="本地解析运行参数"
-              description="控制解析缓存、响应端配置过期保护，以及节点状态数据多久还可以用于自动选 IP。"
-              action={
-                <PrimaryButton
-                  type="button"
-                  onClick={() =>
-                    void runBusyAction(
-                      'operation-authoritative-dns',
-                      async () => {
-                        const defaultTtl = Number.parseInt(
-                          operationFields.AuthoritativeDNSDefaultTTL,
-                          10,
-                        );
-                        const snapshotMaxAge = Number.parseInt(
-                          operationFields.AuthoritativeDNSSnapshotMaxAge,
-                          10,
-                        );
-                        const metricFreshness = Number.parseInt(
-                          operationFields.GSLBMetricFreshnessSeconds,
-                          10,
-                        );
-                        const queryRateLimit = Number.parseInt(
-                          operationFields.AuthoritativeDNSWorkerQueryRateLimit,
-                          10,
-                        );
-                        const responseRateLimit = Number.parseInt(
-                          operationFields.AuthoritativeDNSWorkerResponseRateLimit,
-                          10,
-                        );
-                        const udpResponseSize = Number.parseInt(
-                          operationFields.AuthoritativeDNSWorkerUDPResponseSize,
-                          10,
-                        );
-                        const ecsIPv4Prefix = Number.parseInt(
-                          operationFields.AuthoritativeDNSWorkerECSIPv4Prefix,
-                          10,
-                        );
-                        const ecsIPv6Prefix = Number.parseInt(
-                          operationFields.AuthoritativeDNSWorkerECSIPv6Prefix,
-                          10,
-                        );
-
-                        if (
-                          Number.isNaN(defaultTtl) ||
-                          defaultTtl <= 0 ||
-                          defaultTtl > 86400
-                        ) {
-                          throw new Error(
-                            '默认缓存时间必须为 1 到 86400 之间的整数秒。',
-                          );
-                        }
-                        if (
-                          Number.isNaN(snapshotMaxAge) ||
-                          snapshotMaxAge <= 0
-                        ) {
-                          throw new Error(
-                            '解析配置有效期必须为大于 0 的整数秒。',
-                          );
-                        }
-                        if (
-                          Number.isNaN(metricFreshness) ||
-                          metricFreshness <= 0
-                        ) {
-                          throw new Error(
-                            '节点状态数据有效时间必须为大于 0 的整数秒。',
-                          );
-                        }
-                        if (
-                          Number.isNaN(queryRateLimit) ||
-                          queryRateLimit < 0
-                        ) {
-                          throw new Error(
-                            '普通查询限流必须为大于或等于 0 的整数，0 表示关闭。',
-                          );
-                        }
-                        if (
-                          Number.isNaN(responseRateLimit) ||
-                          responseRateLimit < 0
-                        ) {
-                          throw new Error(
-                            '异常响应 RRL 必须为大于或等于 0 的整数，0 表示关闭。',
-                          );
-                        }
-                        if (
-                          Number.isNaN(udpResponseSize) ||
-                          udpResponseSize < 512 ||
-                          udpResponseSize > 65535
-                        ) {
-                          throw new Error(
-                            'UDP 响应大小必须为 512 到 65535 之间的整数。',
-                          );
-                        }
-                        if (
-                          Number.isNaN(ecsIPv4Prefix) ||
-                          ecsIPv4Prefix < 0 ||
-                          ecsIPv4Prefix > 32
-                        ) {
-                          throw new Error('ECS IPv4 前缀必须为 0 到 32。');
-                        }
-                        if (
-                          Number.isNaN(ecsIPv6Prefix) ||
-                          ecsIPv6Prefix < 0 ||
-                          ecsIPv6Prefix > 128
-                        ) {
-                          throw new Error('ECS IPv6 前缀必须为 0 到 128。');
-                        }
-
-                        await saveOptionEntries(
-                          [
-                            ['AuthoritativeDNSDefaultTTL', String(defaultTtl)],
-                            [
-                              'AuthoritativeDNSSnapshotMaxAge',
-                              String(snapshotMaxAge),
-                            ],
-                            [
-                              'GSLBMetricFreshnessSeconds',
-                              String(metricFreshness),
-                            ],
-                            [
-                              'AuthoritativeDNSWorkerQueryRateLimit',
-                              String(queryRateLimit),
-                            ],
-                            [
-                              'AuthoritativeDNSWorkerResponseRateLimit',
-                              String(responseRateLimit),
-                            ],
-                            [
-                              'AuthoritativeDNSWorkerUDPResponseSize',
-                              String(udpResponseSize),
-                            ],
-                            [
-                              'AuthoritativeDNSWorkerECSEnabled',
-                              String(
-                                operationFields.AuthoritativeDNSWorkerECSEnabled,
-                              ),
-                            ],
-                            [
-                              'AuthoritativeDNSWorkerECSIPv4Prefix',
-                              String(ecsIPv4Prefix),
-                            ],
-                            [
-                              'AuthoritativeDNSWorkerECSIPv6Prefix',
-                              String(ecsIPv6Prefix),
-                            ],
-                            [
-                              'GSLBProbeSchedulingEnabled',
-                              String(
-                                operationFields.GSLBProbeSchedulingEnabled,
-                              ),
-                            ],
-                          ],
-                          '本地解析参数已保存。',
-                        );
-                      },
-                      '保存本地解析参数',
-                    )
-                  }
-                  disabled={busyKey === 'operation-authoritative-dns'}
-                >
-                  {busyKey === 'operation-authoritative-dns'
-                    ? '保存中...'
-                    : '保存参数'}
-                </PrimaryButton>
-              }
-            >
-              <div className="grid gap-5 md:grid-cols-3">
-                <ResourceField
-                  label="默认缓存时间（秒）"
-                  tooltip="DNS 结果会被递归解析器缓存一段时间。时间越短，切换 IP 越快，但查询量会更高。"
-                >
-                  <ResourceInput
-                    type="number"
-                    value={operationFields.AuthoritativeDNSDefaultTTL}
-                    onChange={(event) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AuthoritativeDNSDefaultTTL: event.target.value,
-                      }))
-                    }
-                  />
-                </ResourceField>
-                <ResourceField
-                  label="解析配置有效期（秒）"
-                  tooltip="DNS 响应端会缓存面板下发的解析配置。超过这个时间还没有拿到新配置时，会提示配置过期。"
-                >
-                  <ResourceInput
-                    type="number"
-                    value={operationFields.AuthoritativeDNSSnapshotMaxAge}
-                    onChange={(event) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AuthoritativeDNSSnapshotMaxAge: event.target.value,
-                      }))
-                    }
-                  />
-                </ResourceField>
-                <ResourceField
-                  label="节点状态数据有效时间（秒）"
-                  hint="不是健康检查间隔。节点上报的连接数、处理器和内存数据超过这个时间后，就不再用于按压力选 IP。"
-                  tooltip="判断依据是节点最近一次上报的压力数据时间。超过该时间的数据会被视为过旧，避免系统拿旧压力数据继续做多节点智能解析。"
-                >
-                  <ResourceInput
-                    type="number"
-                    value={operationFields.GSLBMetricFreshnessSeconds}
-                    onChange={(event) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        GSLBMetricFreshnessSeconds: event.target.value,
-                      }))
-                    }
-                  />
-                </ResourceField>
-              </div>
-              <div className="mt-5 grid gap-5 md:grid-cols-3">
-                <ResourceField
-                  label="普通查询限流（次/秒）"
-                  hint="按来源 IP 统计，0 表示关闭。"
-                  tooltip="用于限制单个来源 IP 每秒可发起的 DNS 查询数。"
-                >
-                  <ResourceInput
-                    type="number"
-                    min={0}
-                    value={operationFields.AuthoritativeDNSWorkerQueryRateLimit}
-                    onChange={(event) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AuthoritativeDNSWorkerQueryRateLimit:
-                          event.target.value,
-                      }))
-                    }
-                  />
-                </ResourceField>
-                <ResourceField
-                  label="异常响应 RRL（次/秒）"
-                  hint="按来源、QNAME、RCODE 统计，0 表示关闭。"
-                  tooltip="用于抑制重复 NXDOMAIN、SERVFAIL、REFUSED 等异常响应被放大滥用。"
-                >
-                  <ResourceInput
-                    type="number"
-                    min={0}
-                    value={
-                      operationFields.AuthoritativeDNSWorkerResponseRateLimit
-                    }
-                    onChange={(event) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AuthoritativeDNSWorkerResponseRateLimit:
-                          event.target.value,
-                      }))
-                    }
-                  />
-                </ResourceField>
-                <ResourceField
-                  label="UDP 响应大小（字节）"
-                  hint="默认 1232，降低可减少分片风险。"
-                  tooltip="DNS Worker 会按这里的上限截断 UDP 响应，客户端可改用 TCP 重试。"
-                >
-                  <ResourceInput
-                    type="number"
-                    min={512}
-                    max={65535}
-                    value={
-                      operationFields.AuthoritativeDNSWorkerUDPResponseSize
-                    }
-                    onChange={(event) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AuthoritativeDNSWorkerUDPResponseSize:
-                          event.target.value,
-                      }))
-                    }
-                  />
-                </ResourceField>
-              </div>
-              <div className="mt-5 grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                <ToggleField
-                  label="启用 ECS 分流"
-                  description="允许 DNS Worker 使用 EDNS Client Subnet 作为来源分流依据。"
-                  tooltip="关闭后只按递归解析器来源 IP 分流；开启后会按下方前缀规范化 ECS 地址。"
-                  checked={operationFields.AuthoritativeDNSWorkerECSEnabled}
-                  onChange={(checked) =>
-                    setOperationFields((previous) => ({
-                      ...previous,
-                      AuthoritativeDNSWorkerECSEnabled: checked,
-                    }))
-                  }
-                />
-                <ResourceField
-                  label="ECS IPv4 前缀"
-                  hint="默认 /24。"
-                  tooltip="DNS Worker 会把收到的 IPv4 ECS 地址规范到不超过该前缀后再参与分流和统计。"
-                >
-                  <ResourceInput
-                    type="number"
-                    min={0}
-                    max={32}
-                    value={operationFields.AuthoritativeDNSWorkerECSIPv4Prefix}
-                    onChange={(event) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AuthoritativeDNSWorkerECSIPv4Prefix: event.target.value,
-                      }))
-                    }
-                  />
-                </ResourceField>
-                <ResourceField
-                  label="ECS IPv6 前缀"
-                  hint="默认 /56。"
-                  tooltip="DNS Worker 会把收到的 IPv6 ECS 地址规范到不超过该前缀后再参与分流和统计。"
-                >
-                  <ResourceInput
-                    type="number"
-                    min={0}
-                    max={128}
-                    value={operationFields.AuthoritativeDNSWorkerECSIPv6Prefix}
-                    onChange={(event) =>
-                      setOperationFields((previous) => ({
-                        ...previous,
-                        AuthoritativeDNSWorkerECSIPv6Prefix: event.target.value,
-                      }))
-                    }
-                  />
-                </ResourceField>
-              </div>
-              <div className="mt-5">
-                <ToggleField
-                  label="按响应端探测结果筛选节点"
-                  description="开启后，本地自建解析只会使用最近探测成功的边缘节点。"
-                  tooltip="边缘节点会主动探测 DNS 响应端。如果开启这个筛选，探测失败或探测结果过期的节点不会被选为解析返回 IP。"
-                  checked={operationFields.GSLBProbeSchedulingEnabled}
-                  onChange={(checked) =>
-                    setOperationFields((previous) => ({
-                      ...previous,
-                      GSLBProbeSchedulingEnabled: checked,
-                    }))
-                  }
-                />
-              </div>
-            </AppCard>
-
-            <AppCard
-              title="接入令牌与部署命令"
-              description="适用于新节点首次接入。安装脚本会自动检测 Linux / macOS 环境，并尝试补齐缺少的代理服务或源码构建依赖。"
-              action={
-                <div className="flex flex-wrap gap-2">
-                  <SecondaryButton
-                    type="button"
-                    onClick={() => rotateTokenMutation.mutate()}
-                    disabled={rotateTokenMutation.isPending}
-                  >
-                    {rotateTokenMutation.isPending
-                      ? '生成中...'
-                      : '重新生成接入令牌'}
-                  </SecondaryButton>
-                  {discoveryCommand ? (
-                    <PrimaryButton
-                      type="button"
-                      onClick={() =>
-                        void handleCopy(discoveryCommand, '部署命令已复制。')
-                      }
-                    >
-                      复制命令
-                    </PrimaryButton>
-                  ) : null}
-                </div>
-              }
-            >
-              {bootstrapQuery.isLoading ? (
-                <LoadingState />
-              ) : bootstrapQuery.isError ? (
-                <ErrorState
-                  title="接入令牌加载失败"
-                  description={getErrorMessage(bootstrapQuery.error)}
-                />
-              ) : (
-                <div className="space-y-4">
-                  <ResourceField
-                    label="面板访问地址"
-                    hint="默认使用当前面板地址，可按需选择 HTTP 或 HTTPS 并改为外部访问地址。"
-                    container="div"
-                  >
-                    <div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)]">
-                      <div className="inline-flex rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1">
-                        {(['https', 'http'] as const).map((protocol) => (
-                          <button
-                            key={protocol}
-                            type="button"
-                            aria-pressed={deploymentProtocol === protocol}
-                            onClick={() => setDeploymentProtocol(protocol)}
-                            className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                              deploymentProtocol === protocol
-                                ? 'bg-[var(--brand-primary)] text-[var(--foreground-inverse)]'
-                                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground-primary)]'
-                            }`}
-                          >
-                            {protocol.toUpperCase()}
-                          </button>
-                        ))}
-                      </div>
-                      <ResourceInput
-                        value={operationFields.ServerAddress}
-                        placeholder="cdn.example.com:3000"
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
-                          setDeploymentProtocol(
-                            getDeploymentProtocol(nextValue),
-                          );
-                          setOperationFields((previous) => ({
-                            ...previous,
-                            ServerAddress: stripServerUrlProtocol(nextValue),
-                          }));
-                        }}
-                      />
-                    </div>
-                  </ResourceField>
-                  <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                    <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                      接入令牌
-                    </p>
-                    <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
-                      {discoveryToken || '未生成'}
-                    </p>
-                  </div>
-                  <ResourceField
-                    label="一键部署命令"
-                    hint="命令会使用安装脚本自动注册节点程序，并默认安装缺少的运行依赖；没有发布包时会从源码构建。"
-                  >
-                    <CodeBlock className="break-all whitespace-pre-wrap">
-                      {discoveryCommand || '请先填写可访问的面板地址。'}
-                    </CodeBlock>
-                  </ResourceField>
-                </div>
-              )}
-            </AppCard>
-            <AppCard title="版本与构建信息">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    服务端版本
-                  </p>
-                  <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                    {publicStatus.version || '未公开'}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    Server 启动时间
-                  </p>
-                  <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                    {publicStatus.start_time
-                      ? formatDateTime(new Date(publicStatus.start_time * 1000))
-                      : '未公开'}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    运行模式
-                  </p>
-                  <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                    静态导出 + Go Server 托管
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4 md:col-span-2">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    版本入口
-                  </p>
-                  <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                    点击顶栏“版本”可检查更新、查看 Release
-                    Notes，并直接触发服务端升级。
-                  </p>
-                </div>
-              </div>
-            </AppCard>
-          </div>
-        </div>
+        <SettingsOperationSection
+          busyKey={busyKey}
+          operationFields={operationFields}
+          deploymentProtocol={deploymentProtocol}
+          discoveryCommand={discoveryCommand}
+          discoveryToken={discoveryToken}
+          geoIPTestIP={geoIPTestIP}
+          geoIPLookupResult={geoIPLookupResult}
+          geoIPLookupIsPending={geoIPLookupMutation.isPending}
+          geoIPLookupIsError={geoIPLookupMutation.isError}
+          geoIPLookupError={geoIPLookupMutation.error}
+          bootstrapTokenIsLoading={bootstrapQuery.isLoading}
+          bootstrapTokenIsError={bootstrapQuery.isError}
+          bootstrapTokenError={bootstrapQuery.error}
+          bootstrapTokenRotateIsPending={rotateTokenMutation.isPending}
+          publicStatus={publicStatus}
+          formatDurationLabel={formatDurationLabel}
+          onOperationFieldChange={updateOperationField}
+          onDeploymentProtocolChange={setDeploymentProtocol}
+          onServerAddressChange={handleOperationServerAddressChange}
+          onGeoIPTestIPChange={setGeoIPTestIP}
+          onGeoIPLookup={handleGeoIPLookup}
+          onSaveOperationSettings={handleSaveOperationSettings}
+          onSaveAuthoritativeDnsSettings={handleSaveAuthoritativeDnsSettings}
+          onRotateBootstrapToken={() => rotateTokenMutation.mutate()}
+          onCopyDiscoveryCommand={() =>
+            void handleCopy(discoveryCommand, '部署命令已复制。')
+          }
+        />
       );
     }
 
     if (activeTab === 'database') {
       return (
-        <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
-          <div className="space-y-6">
-            <AppCard
-              title="自动数据清理"
-              description="每天凌晨 3 点自动清理超出保留期的观测数据，统一作用于访问日志、性能快照和请求聚合。"
-              action={
-                <PrimaryButton
-                  type="button"
-                  onClick={() =>
-                    void runBusyAction(
-                      'database-auto-cleanup',
-                      async () => {
-                        const retentionDays = Number.parseInt(
-                          databaseFields.DatabaseAutoCleanupRetentionDays,
-                          10,
-                        );
-                        if (Number.isNaN(retentionDays) || retentionDays < 1) {
-                          throw new Error('自动清理保留天数至少为 1 天。');
-                        }
-                        await saveOptionEntries(
-                          [
-                            [
-                              'DatabaseAutoCleanupEnabled',
-                              String(databaseFields.DatabaseAutoCleanupEnabled),
-                            ],
-                            [
-                              'DatabaseAutoCleanupRetentionDays',
-                              String(retentionDays),
-                            ],
-                          ],
-                          '数据库自动清理设置已保存。',
-                        );
-                      },
-                      '保存数据库自动清理设置',
-                    )
-                  }
-                  disabled={busyKey === 'database-auto-cleanup'}
-                >
-                  {busyKey === 'database-auto-cleanup'
-                    ? '保存中...'
-                    : '保存自动清理'}
-                </PrimaryButton>
-              }
-            >
-              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                <div className="space-y-5">
-                  <ToggleField
-                    label="启用每日自动清理"
-                    description="开启后，服务端每天自动删除保留天数之外的观测数据。"
-                    checked={databaseFields.DatabaseAutoCleanupEnabled}
-                    onChange={(checked) =>
-                      setDatabaseFields((previous) => ({
-                        ...previous,
-                        DatabaseAutoCleanupEnabled: checked,
-                      }))
-                    }
-                  />
-                  <div className="border-t border-[var(--border-default)] pt-5">
-                    <ResourceField
-                      label="自动清理保留天数"
-                      hint="必须至少保留 1 天，服务端不允许配置为 24 小时以内。"
-                    >
-                      <ResourceInput
-                        type="number"
-                        min={1}
-                        value={databaseFields.DatabaseAutoCleanupRetentionDays}
-                        onChange={(event) =>
-                          setDatabaseFields((previous) => ({
-                            ...previous,
-                            DatabaseAutoCleanupRetentionDays:
-                              event.target.value,
-                          }))
-                        }
-                        placeholder="例如 30"
-                      />
-                    </ResourceField>
-                    <div className="mt-4 grid gap-4 md:grid-cols-3">
-                      <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-base)] px-4 py-4">
-                        <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                          触发频率
-                        </p>
-                        <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                          每天一次
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-base)] px-4 py-4">
-                        <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                          默认执行时间
-                        </p>
-                        <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                          凌晨 3:00
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-base)] px-4 py-4">
-                        <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                          生效范围
-                        </p>
-                        <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                          四类观测表
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </AppCard>
-
-            {renderDNSSourceDatabaseMirrorCard()}
-          </div>
-
-          <AppCard
-            title="数据清理"
-            description="用于手动清理单类观测数据。保留天数留空时会直接删除该类数据的全部历史记录。"
-          >
-            <div className="grid gap-5 xl:grid-cols-3">
-              {[
-                {
-                  target: 'node_access_logs' as const,
-                  label: '访问日志',
-                  description:
-                    '清理 node_access_logs，影响访问明细、IP 汇总与相关趋势查询。',
-                },
-                {
-                  target: 'node_metric_snapshots' as const,
-                  label: '性能快照',
-                  description:
-                    '清理 node_metric_snapshots，影响节点资源趋势和总览资源统计。',
-                },
-                {
-                  target: 'node_request_reports' as const,
-                  label: '请求聚合',
-                  description:
-                    '清理 node_request_reports，影响请求量、错误量与来源聚合展示。',
-                },
-                {
-                  target: 'dns_query_rollups' as const,
-                  label: 'DNS 查询聚合',
-                  description:
-                    '清理 dns_query_rollups，影响本地自建解析查询量、响应码和来源作用域趋势。',
-                },
-              ].map((item) => (
-                <div
-                  key={item.target}
-                  className="rounded-[28px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
-                >
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-lg font-semibold text-[var(--foreground-primary)]">
-                        {item.label}
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-[var(--foreground-secondary)]">
-                        {item.description}
-                      </p>
-                    </div>
-                    <DangerButton
-                      type="button"
-                      onClick={() => {
-                        setCleanupRetentionDays('');
-                        setCleanupModalState({
-                          target: item.target,
-                          label: item.label,
-                        });
-                      }}
-                    >
-                      清理数据
-                    </DangerButton>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </AppCard>
-        </div>
+        <SettingsDatabaseSection
+          busyKey={busyKey}
+          databaseFields={databaseFields}
+          mirrorIsLoading={dnsSourceDatabaseMirrorStatusQuery.isLoading}
+          mirrorStatus={dnsSourceDatabaseMirrorStatusQuery.data}
+          onAutoCleanupFieldChange={(key, value) =>
+            setDatabaseFields((previous) => ({
+              ...previous,
+              [key]: value,
+            }))
+          }
+          onRefreshMirror={handleRefreshDNSSourceDatabaseMirror}
+          onSaveAutoCleanup={handleSaveDatabaseAutoCleanup}
+          onOpenCleanup={(target, label) => {
+            setCleanupRetentionDays('');
+            setCleanupModalState({ target, label });
+          }}
+        />
       );
     }
-
     if (activeTab === 'license') {
-      if (
-        commercialLicenseQuery.isLoading ||
-        commercialLicenseIssuerQuery.isLoading
-      ) {
-        return <LoadingState />;
-      }
-
-      if (commercialLicenseQuery.isError) {
-        return (
-          <ErrorState
-            title="商业授权加载失败"
-            description={getErrorMessage(commercialLicenseQuery.error)}
-          />
-        );
-      }
-
-      if (commercialLicenseIssuerQuery.isError) {
-        return (
-          <ErrorState
-            title="商业授权签发器加载失败"
-            description={getErrorMessage(commercialLicenseIssuerQuery.error)}
-          />
-        );
-      }
-
-      const license = commercialLicenseQuery.data;
-      if (!license) {
-        return (
-          <EmptyState
-            title="商业授权状态不可用"
-            description="服务端未返回授权状态。"
-          />
-        );
-      }
-      const issuer = commercialLicenseIssuerQuery.data;
-
       return (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] xl:items-start">
-          <AppCard
-            title="授权状态"
-            description="服务端会根据授权有效期和资源额度控制节点、站点创建。"
-            action={
-              license.fingerprint ? (
-                <div className="flex flex-wrap gap-3">
-                  {license.online_activation_required ? (
-                    <SecondaryButton
-                      type="button"
-                      onClick={handleActivateCommercialLicense}
-                      disabled={busyKey === 'commercial-license-activate'}
-                    >
-                      {busyKey === 'commercial-license-activate'
-                        ? '续约中...'
-                        : '在线激活/续约'}
-                    </SecondaryButton>
-                  ) : null}
-                  <DangerButton
-                    type="button"
-                    onClick={() => void handleClearCommercialLicense()}
-                    disabled={busyKey === 'commercial-license-clear'}
-                  >
-                    {busyKey === 'commercial-license-clear'
-                      ? '删除中...'
-                      : '删除本机授权'}
-                  </DangerButton>
-                </div>
-              ) : null
-            }
-          >
-            <div className="space-y-5">
-              <div className="flex flex-wrap items-center gap-3">
-                <StatusBadge
-                  label={license.status_label}
-                  variant={getLicenseBadgeVariant(license.status)}
-                />
-                <StatusBadge
-                  label={license.required ? '强制授权' : '兼容社区模式'}
-                  variant={license.required ? 'warning' : 'info'}
-                />
-                {license.signature_verified ? (
-                  <StatusBadge label="签名已验证" variant="success" />
-                ) : null}
-                {license.online_activation_required ? (
-                  <StatusBadge
-                    label={license.lease_status_label || '在线租约'}
-                    variant={
-                      license.lease_status === 'valid' ? 'success' : 'warning'
-                    }
-                  />
-                ) : null}
-              </div>
-
-              {license.last_validation_error ? (
-                <InlineMessage
-                  tone="danger"
-                  message={license.last_validation_error}
-                />
-              ) : null}
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    授权版本
-                  </p>
-                  <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                    {license.plan_label}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    授权指纹
-                  </p>
-                  <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
-                    {license.fingerprint || '未安装'}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    授权客户
-                  </p>
-                  <p className="mt-2 text-sm font-semibold text-[var(--foreground-primary)]">
-                    {license.customer_name || license.customer_id || '未授权'}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    到期时间
-                  </p>
-                  <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                    {license.expires_at
-                      ? formatDateTime(new Date(license.expires_at))
-                      : '长期有效'}
-                  </p>
-                  {license.days_until_expiry !== null &&
-                  license.days_until_expiry !== undefined ? (
-                    <p className="mt-1 text-xs text-[var(--foreground-secondary)]">
-                      剩余 {license.days_until_expiry} 天
-                    </p>
-                  ) : null}
-                </div>
-                {license.online_activation_required ? (
-                  <>
-                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        在线租约
-                      </p>
-                      <p className="mt-2 text-sm text-[var(--foreground-primary)]">
-                        {license.lease_expires_at
-                          ? formatDateTime(new Date(license.lease_expires_at))
-                          : '未激活'}
-                      </p>
-                      {license.lease_renew_before_at ? (
-                        <p className="mt-1 text-xs text-[var(--foreground-secondary)]">
-                          提前续约：
-                          {formatDateTime(
-                            new Date(license.lease_renew_before_at),
-                          )}
-                        </p>
-                      ) : null}
-                    </div>
-                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        激活标识
-                      </p>
-                      <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
-                        {license.activation_id || '未激活'}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4 md:col-span-2">
-                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        机器指纹
-                      </p>
-                      <p className="mt-2 text-xs break-all text-[var(--foreground-primary)]">
-                        {license.machine_fingerprint || '未生成'}
-                      </p>
-                      {license.build_watermark ? (
-                        <p className="mt-1 text-xs break-all text-[var(--foreground-secondary)]">
-                          构建水印：{license.build_watermark}
-                        </p>
-                      ) : null}
-                    </div>
-                  </>
-                ) : null}
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    节点额度
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-[var(--foreground-primary)]">
-                    {formatLicenseLimit(
-                      license.current_nodes,
-                      license.max_nodes,
-                    )}
-                  </p>
-                  {license.node_limit_exceeded ? (
-                    <p className="mt-1 text-xs text-[var(--status-danger-foreground)]">
-                      当前节点数已超过授权额度
-                    </p>
-                  ) : null}
-                </div>
-                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                  <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                    站点额度
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-[var(--foreground-primary)]">
-                    {formatLicenseLimit(
-                      license.current_sites,
-                      license.max_sites,
-                    )}
-                  </p>
-                  {license.site_limit_exceeded ? (
-                    <p className="mt-1 text-xs text-[var(--status-danger-foreground)]">
-                      当前站点数已超过授权额度
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-
-              {license.features.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {license.features.map((feature) => (
-                    <StatusBadge
-                      key={feature}
-                      label={getCommercialLicenseFeatureLabel(feature)}
-                      variant="info"
-                    />
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="space-y-4 border-t border-[var(--border-default)] pt-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-base font-semibold text-[var(--foreground-primary)]">
-                      激活记录
-                    </h3>
-                    <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
-                      查看客户机器最近签发的在线租约，并按授权编号停用后续续租。
-                    </p>
-                  </div>
-                  <SecondaryButton
-                    type="button"
-                    onClick={() =>
-                      void commercialLicenseActivationsQuery.refetch()
-                    }
-                  >
-                    刷新记录
-                  </SecondaryButton>
-                </div>
-
-                {commercialLicenseActivationsQuery.isLoading ? (
-                  <LoadingState />
-                ) : commercialLicenseActivationsQuery.isError ? (
-                  <ErrorState
-                    title="激活记录加载失败"
-                    description={getErrorMessage(
-                      commercialLicenseActivationsQuery.error,
-                    )}
-                  />
-                ) : (commercialLicenseActivationsQuery.data?.length ?? 0) >
-                  0 ? (
-                  <div className="space-y-3">
-                    {commercialLicenseActivationsQuery.data?.map((record) => {
-                      const badge = getActivationStatusBadge(record);
-                      const isRevoked = Boolean(record.license_revoked_at);
-                      const revokeBusyKey = `commercial-license-revoke-${record.license_id}`;
-                      const restoreBusyKey = `commercial-license-restore-${record.license_id}`;
-                      const deleteBusyKey = `commercial-license-delete-${record.license_id}`;
-                      return (
-                        <div
-                          key={record.activation_id || record.id}
-                          className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-4">
-                            <div className="min-w-0 space-y-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <StatusBadge
-                                  label={badge.label}
-                                  variant={badge.variant}
-                                />
-                                <span className="text-sm font-semibold break-all text-[var(--foreground-primary)]">
-                                  {record.license_id || '未知授权编号'}
-                                </span>
-                                {record.customer_id ? (
-                                  <span className="text-sm text-[var(--foreground-secondary)]">
-                                    {record.customer_id}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="grid gap-2 text-xs text-[var(--foreground-secondary)] md:grid-cols-2">
-                                <span className="break-all">
-                                  激活 ID：{record.activation_id || '—'}
-                                </span>
-                                <span className="break-all">
-                                  机器指纹：{record.machine_fingerprint || '—'}
-                                </span>
-                                <span>
-                                  服务端版本：{record.server_version || '—'}
-                                </span>
-                                <span>
-                                  主机名：{record.instance_hostname || '—'}
-                                </span>
-                                <span>
-                                  最近签发：
-                                  {record.last_lease_issued_at
-                                    ? formatDateTime(
-                                        record.last_lease_issued_at,
-                                      )
-                                    : '—'}
-                                </span>
-                                <span>
-                                  租约到期：
-                                  {record.last_lease_expires_at
-                                    ? formatDateTime(
-                                        record.last_lease_expires_at,
-                                      )
-                                    : '—'}
-                                </span>
-                              </div>
-                              {isRevoked ? (
-                                <p className="text-xs text-[var(--status-danger-foreground)]">
-                                  停用时间：
-                                  {formatDateTime(record.license_revoked_at)}
-                                  {record.license_revoke_reason
-                                    ? ` · ${record.license_revoke_reason}`
-                                    : ''}
-                                </p>
-                              ) : null}
-                            </div>
-                            <div className="flex flex-col items-stretch gap-2 sm:items-end">
-                              {isRevoked ? (
-                                <SecondaryButton
-                                  type="button"
-                                  onClick={() =>
-                                    handleRestoreCommercialLicense(record)
-                                  }
-                                  disabled={busyKey === restoreBusyKey}
-                                >
-                                  {busyKey === restoreBusyKey
-                                    ? '恢复中...'
-                                    : '恢复授权'}
-                                </SecondaryButton>
-                              ) : (
-                                <DangerButton
-                                  type="button"
-                                  onClick={() =>
-                                    void handleRevokeCommercialLicense(record)
-                                  }
-                                  disabled={busyKey === revokeBusyKey}
-                                >
-                                  {busyKey === revokeBusyKey
-                                    ? '停用中...'
-                                    : '停用授权'}
-                                </DangerButton>
-                              )}
-                              {isRevoked ? (
-                                <DangerButton
-                                  type="button"
-                                  onClick={() =>
-                                    void handleDeleteCommercialLicenseActivation(
-                                      record,
-                                    )
-                                  }
-                                  disabled={busyKey === deleteBusyKey}
-                                >
-                                  {busyKey === deleteBusyKey
-                                    ? '删除中...'
-                                    : '删除授权'}
-                                </DangerButton>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <EmptyState
-                    title="暂无激活记录"
-                    description="客户安装授权并完成在线激活后，会在这里显示最近签发的租约记录。"
-                  />
-                )}
-              </div>
-            </div>
-          </AppCard>
-
-          <div className="space-y-6">
-            <AppCard
-              title="安装授权"
-              description="许可证支持离线签名校验，安装后会立即刷新资源额度。"
-              action={
-                <PrimaryButton
-                  type="button"
-                  onClick={handleInstallCommercialLicense}
-                  disabled={busyKey === 'commercial-license-install'}
-                >
-                  {busyKey === 'commercial-license-install'
-                    ? '安装中...'
-                    : '安装授权'}
-                </PrimaryButton>
-              }
-            >
-              <div className="space-y-5">
-                <ResourceField
-                  label="许可证内容"
-                  hint="粘贴 dscdn_license_v1 开头的授权令牌。"
-                >
-                  <ResourceTextarea
-                    value={commercialLicenseToken}
-                    onChange={(event) =>
-                      setCommercialLicenseToken(event.target.value)
-                    }
-                    placeholder="dscdn_license_v1..."
-                    className="min-h-52 font-mono"
-                  />
-                </ResourceField>
-                <div className="flex flex-wrap gap-3">
-                  <SecondaryButton
-                    type="button"
-                    onClick={() =>
-                      void handleCopy(
-                        commercialLicenseToken,
-                        '授权 token 已复制。',
-                      )
-                    }
-                    disabled={!commercialLicenseToken.trim()}
-                  >
-                    复制 token
-                  </SecondaryButton>
-                  {license.last_validated_at ? (
-                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--foreground-secondary)]">
-                      最近校验：
-                      {formatDateTime(new Date(license.last_validated_at))}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </AppCard>
-
-            <AppCard
-              title="开发者签发"
-              description="填写客户信息、到期时间和资源额度，直接生成可交付的商业授权 token。"
-              action={
-                <PrimaryButton
-                  type="button"
-                  onClick={handleIssueCommercialLicense}
-                  disabled={
-                    busyKey === 'commercial-license-issue' || !issuer?.available
-                  }
-                >
-                  {busyKey === 'commercial-license-issue'
-                    ? '生成中...'
-                    : '生成授权'}
-                </PrimaryButton>
-              }
-            >
-              <div className="space-y-5">
-                <InlineMessage
-                  tone={issuer?.available ? 'success' : 'warning'}
-                  message={
-                    issuer?.message ||
-                    '未配置签发私钥时，此处只显示安装授权能力。'
-                  }
-                />
-
-                {issuer?.available ? (
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        签发公钥指纹
-                      </p>
-                      <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
-                        {issuer.public_key_fingerprint}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                      <p className="text-xs tracking-[0.2em] text-[var(--foreground-muted)] uppercase">
-                        客户验签公钥
-                      </p>
-                      <button
-                        type="button"
-                        className="mt-2 text-left text-sm break-all text-[var(--brand-primary)]"
-                        onClick={() =>
-                          void handleCopy(issuer.public_key, '签发公钥已复制。')
-                        }
-                      >
-                        {issuer.public_key}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <ResourceField label="授权编号">
-                    <ResourceInput
-                      value={commercialLicenseIssueFields.license_id}
-                      onChange={(event) =>
-                        updateCommercialLicenseIssueField(
-                          'license_id',
-                          event.target.value,
-                        )
-                      }
-                      placeholder="lic-2026-001"
-                    />
-                  </ResourceField>
-                  <ResourceField label="授权版本">
-                    <ResourceSelect
-                      value={commercialLicenseIssueFields.plan}
-                      onChange={(event) =>
-                        updateCommercialLicenseIssueField(
-                          'plan',
-                          event.target.value,
-                        )
-                      }
-                    >
-                      {commercialLicensePlanOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </ResourceSelect>
-                  </ResourceField>
-                  <ResourceField
-                    label="客户名称"
-                    hint="客户名称和客户编号至少填写一项。"
-                  >
-                    <ResourceInput
-                      value={commercialLicenseIssueFields.customer_name}
-                      onChange={(event) =>
-                        updateCommercialLicenseIssueField(
-                          'customer_name',
-                          event.target.value,
-                        )
-                      }
-                      placeholder="Example Ltd."
-                    />
-                  </ResourceField>
-                  <ResourceField label="客户编号">
-                    <ResourceInput
-                      value={commercialLicenseIssueFields.customer_id}
-                      onChange={(event) =>
-                        updateCommercialLicenseIssueField(
-                          'customer_id',
-                          event.target.value,
-                        )
-                      }
-                      placeholder="cust-001"
-                    />
-                  </ResourceField>
-                  <ResourceField label="节点额度" hint="填写 0 表示不限。">
-                    <ResourceInput
-                      type="number"
-                      min="0"
-                      value={commercialLicenseIssueFields.max_nodes}
-                      onChange={(event) =>
-                        updateCommercialLicenseIssueField(
-                          'max_nodes',
-                          event.target.value,
-                        )
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField label="站点额度" hint="填写 0 表示不限。">
-                    <ResourceInput
-                      type="number"
-                      min="0"
-                      value={commercialLicenseIssueFields.max_sites}
-                      onChange={(event) =>
-                        updateCommercialLicenseIssueField(
-                          'max_sites',
-                          event.target.value,
-                        )
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField
-                    label="签发时间"
-                    hint="留空表示当前时间，支持 YYYY-MM-DD 或 RFC3339。"
-                  >
-                    <ResourceInput
-                      value={commercialLicenseIssueFields.issued_at ?? ''}
-                      onChange={(event) =>
-                        updateCommercialLicenseIssueField(
-                          'issued_at',
-                          event.target.value,
-                        )
-                      }
-                      placeholder="now"
-                    />
-                  </ResourceField>
-                  <ResourceField
-                    label="到期时间"
-                    hint="留空表示长期有效，支持 YYYY-MM-DD 或 RFC3339。"
-                  >
-                    <ResourceInput
-                      value={commercialLicenseIssueFields.expires_at ?? ''}
-                      onChange={(event) =>
-                        updateCommercialLicenseIssueField(
-                          'expires_at',
-                          event.target.value,
-                        )
-                      }
-                      placeholder="2027-12-31"
-                    />
-                  </ResourceField>
-                </div>
-
-                <ResourceField label="授权能力" container="div">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {commercialLicenseFeatureOptions.map((option) => (
-                      <ToggleField
-                        key={option.value}
-                        label={option.label}
-                        checked={commercialLicenseIssueFields.features.includes(
-                          option.value,
-                        )}
-                        disabled={
-                          option.value !== 'all' &&
-                          commercialLicenseIssueFields.features.includes('all')
-                        }
-                        onChange={(checked) =>
-                          toggleCommercialLicenseIssueFeature(
-                            option.value,
-                            checked,
-                          )
-                        }
-                      />
-                    ))}
-                  </div>
-                </ResourceField>
-
-                {issuedCommercialLicense ? (
-                  <div className="space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <StatusBadge
-                        label={issuedCommercialLicense.status_label}
-                        variant={getLicenseBadgeVariant(
-                          issuedCommercialLicense.status,
-                        )}
-                      />
-                      {issuedCommercialLicense.signature_verified ? (
-                        <StatusBadge label="签发验签通过" variant="success" />
-                      ) : null}
-                      <SecondaryButton
-                        type="button"
-                        onClick={() =>
-                          void handleCopy(
-                            issuedCommercialLicense.token,
-                            '授权 token 已复制。',
-                          )
-                        }
-                      >
-                        复制新 token
-                      </SecondaryButton>
-                    </div>
-                    <CodeBlock className="max-h-40 break-all whitespace-pre-wrap">
-                      {issuedCommercialLicense.token}
-                    </CodeBlock>
-                  </div>
-                ) : null}
-              </div>
-            </AppCard>
-          </div>
-        </div>
+        <CommercialLicenseSettingsSection
+          busyKey={busyKey}
+          commercialLicense={commercialLicenseQuery.data}
+          commercialLicenseError={commercialLicenseQuery.error}
+          commercialLicenseIsError={commercialLicenseQuery.isError}
+          commercialLicenseIsLoading={commercialLicenseQuery.isLoading}
+          commercialLicenseIssuer={commercialLicenseIssuerQuery.data}
+          commercialLicenseIssuerError={commercialLicenseIssuerQuery.error}
+          commercialLicenseIssuerIsError={commercialLicenseIssuerQuery.isError}
+          commercialLicenseIssuerIsLoading={
+            commercialLicenseIssuerQuery.isLoading
+          }
+          commercialLicenseActivations={commercialLicenseActivationsQuery.data}
+          commercialLicenseActivationsError={
+            commercialLicenseActivationsQuery.error
+          }
+          commercialLicenseActivationsIsError={
+            commercialLicenseActivationsQuery.isError
+          }
+          commercialLicenseActivationsIsLoading={
+            commercialLicenseActivationsQuery.isLoading
+          }
+          commercialLicenseToken={commercialLicenseToken}
+          commercialLicenseIssueFields={commercialLicenseIssueFields}
+          issuedCommercialLicense={issuedCommercialLicense}
+          setCommercialLicenseToken={setCommercialLicenseToken}
+          handleInstallCommercialLicense={handleInstallCommercialLicense}
+          handleActivateCommercialLicense={handleActivateCommercialLicense}
+          handleClearCommercialLicense={handleClearCommercialLicense}
+          updateCommercialLicenseIssueField={updateCommercialLicenseIssueField}
+          toggleCommercialLicenseIssueFeature={
+            toggleCommercialLicenseIssueFeature
+          }
+          handleIssueCommercialLicense={handleIssueCommercialLicense}
+          handleRevokeCommercialLicense={handleRevokeCommercialLicense}
+          handleRestoreCommercialLicense={handleRestoreCommercialLicense}
+          handleDeleteCommercialLicenseActivation={
+            handleDeleteCommercialLicenseActivation
+          }
+          handleCopy={handleCopy}
+          refreshCommercialLicenseActivations={() =>
+            commercialLicenseActivationsQuery.refetch()
+          }
+        />
       );
     }
-
     if (activeTab === 'system') {
       return (
-        <div className="space-y-6">
-          <AppCard
-            title="登录与注册开关"
-            description="切换后立即生效，无需重启服务。"
-            action={
-              <SecondaryButton
-                type="button"
-                onClick={() => setAuthSourceModalOpen(true)}
-              >
-                配置认证源
-              </SecondaryButton>
-            }
-          >
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <ToggleField
-                label="允许密码登录"
-                description="关闭后将无法使用用户名密码登录。"
-                checked={systemFields.PasswordLoginEnabled}
-                onChange={(checked) =>
-                  handleToggleOption('PasswordLoginEnabled', checked)
-                }
-                disabled={busyKey === 'toggle-PasswordLoginEnabled'}
-              />
-              <ToggleField
-                label="允许密码注册"
-                description="关闭后新用户不能通过密码方式注册。"
-                checked={systemFields.PasswordRegisterEnabled}
-                onChange={(checked) =>
-                  handleToggleOption('PasswordRegisterEnabled', checked)
-                }
-                disabled={busyKey === 'toggle-PasswordRegisterEnabled'}
-              />
-              <ToggleField
-                label="注册需要邮箱验证"
-                description="开启后，新用户注册必须先完成邮箱验证码校验。"
-                checked={systemFields.EmailVerificationEnabled}
-                onChange={(checked) =>
-                  handleToggleOption('EmailVerificationEnabled', checked)
-                }
-                disabled={busyKey === 'toggle-EmailVerificationEnabled'}
-              />
-            </div>
-            <div className="mt-5 text-sm text-[var(--foreground-secondary)]">
-              当前已配置 {authSourcesQuery.data?.length ?? 0} 个认证源。
-            </div>
-          </AppCard>
-
-          <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-            <AppCard
-              title="通用设置"
-              description="服务器地址会影响邮件链接、OAuth 回调和部署命令展示。"
-              action={
-                <div className="flex flex-wrap gap-2">
-                  <SecondaryButton
-                    type="button"
-                    onClick={() =>
-                      window.open(
-                        '/swagger/index.html',
-                        '_blank',
-                        'noopener,noreferrer',
-                      )
-                    }
-                  >
-                    打开接口文档
-                  </SecondaryButton>
-                  <PrimaryButton
-                    type="button"
-                    onClick={() =>
-                      void runBusyAction(
-                        'system-general',
-                        async () => {
-                          await saveOptionEntries(
-                            [
-                              [
-                                'ServerAddress',
-                                normalizeServerUrl(systemFields.ServerAddress),
-                              ],
-                            ],
-                            '通用设置已保存。',
-                          );
-                        },
-                        '保存通用设置',
-                      )
-                    }
-                    disabled={busyKey === 'system-general'}
-                  >
-                    {busyKey === 'system-general'
-                      ? '保存中...'
-                      : '保存通用设置'}
-                  </PrimaryButton>
-                </div>
-              }
-            >
-              <ResourceField label="服务器地址">
-                <ResourceInput
-                  value={systemFields.ServerAddress}
-                  onChange={(event) =>
-                    setSystemFields((previous) => ({
-                      ...previous,
-                      ServerAddress: event.target.value,
-                    }))
-                  }
-                  placeholder="https://yourdomain.com"
-                />
-              </ResourceField>
-            </AppCard>
-
-            <AppCard
-              title="SMTP 设置"
-              description="用于邮件验证码、密码重置和其他邮件通知发送。"
-              action={
-                <PrimaryButton
-                  type="button"
-                  onClick={() =>
-                    void runBusyAction(
-                      'system-smtp',
-                      async () => {
-                        await saveOptionEntries(
-                          [
-                            ['SMTPServer', systemFields.SMTPServer.trim()],
-                            ['SMTPPort', systemFields.SMTPPort.trim()],
-                            ['SMTPAccount', systemFields.SMTPAccount.trim()],
-                            ['SMTPToken', systemFields.SMTPToken.trim()],
-                          ],
-                          'SMTP 设置已保存。',
-                        );
-                      },
-                      '保存 SMTP 设置',
-                    )
-                  }
-                  disabled={busyKey === 'system-smtp'}
-                >
-                  {busyKey === 'system-smtp' ? '保存中...' : '保存 SMTP 设置'}
-                </PrimaryButton>
-              }
-            >
-              <div className="grid gap-5 md:grid-cols-2">
-                <ResourceField label="SMTP 服务器">
-                  <ResourceInput
-                    value={systemFields.SMTPServer}
-                    onChange={(event) =>
-                      setSystemFields((previous) => ({
-                        ...previous,
-                        SMTPServer: event.target.value,
-                      }))
-                    }
-                    placeholder="smtp.qq.com"
-                  />
-                </ResourceField>
-                <ResourceField label="SMTP 端口">
-                  <ResourceInput
-                    value={systemFields.SMTPPort}
-                    onChange={(event) =>
-                      setSystemFields((previous) => ({
-                        ...previous,
-                        SMTPPort: event.target.value,
-                      }))
-                    }
-                    placeholder="587"
-                  />
-                </ResourceField>
-                <ResourceField label="SMTP 账户">
-                  <ResourceInput
-                    value={systemFields.SMTPAccount}
-                    onChange={(event) =>
-                      setSystemFields((previous) => ({
-                        ...previous,
-                        SMTPAccount: event.target.value,
-                      }))
-                    }
-                    placeholder="name@example.com"
-                  />
-                </ResourceField>
-                <ResourceField
-                  label="SMTP 凭证"
-                  hint="因安全原因不会回显历史密钥，留空表示不更新。"
-                >
-                  <ResourceInput
-                    type="password"
-                    value={systemFields.SMTPToken}
-                    onChange={(event) =>
-                      setSystemFields((previous) => ({
-                        ...previous,
-                        SMTPToken: event.target.value,
-                      }))
-                    }
-                    placeholder="请输入新的 SMTP 凭证"
-                  />
-                </ResourceField>
-              </div>
-            </AppCard>
-          </div>
-          <AppCard
-            title="请求限流设置"
-            description="按来源 IP 生效，保存后立即影响 Web、API、上传下载及登录注册等敏感接口。时间单位均为秒。"
-            action={
-              <PrimaryButton
-                type="button"
-                onClick={() =>
-                  void runBusyAction(
-                    'operation-rate-limit',
-                    async () => {
-                      const entries = [
-                        [
-                          'GlobalApiRateLimitNum',
-                          operationFields.GlobalApiRateLimitNum,
-                        ],
-                        [
-                          'GlobalApiRateLimitDuration',
-                          operationFields.GlobalApiRateLimitDuration,
-                        ],
-                        [
-                          'GlobalWebRateLimitNum',
-                          operationFields.GlobalWebRateLimitNum,
-                        ],
-                        [
-                          'GlobalWebRateLimitDuration',
-                          operationFields.GlobalWebRateLimitDuration,
-                        ],
-                        [
-                          'DNSWorkerAPIRateLimitNum',
-                          operationFields.DNSWorkerAPIRateLimitNum,
-                        ],
-                        [
-                          'DNSWorkerAPIRateLimitDuration',
-                          operationFields.DNSWorkerAPIRateLimitDuration,
-                        ],
-                        [
-                          'UploadRateLimitNum',
-                          operationFields.UploadRateLimitNum,
-                        ],
-                        [
-                          'UploadRateLimitDuration',
-                          operationFields.UploadRateLimitDuration,
-                        ],
-                        [
-                          'DownloadRateLimitNum',
-                          operationFields.DownloadRateLimitNum,
-                        ],
-                        [
-                          'DownloadRateLimitDuration',
-                          operationFields.DownloadRateLimitDuration,
-                        ],
-                        [
-                          'CriticalRateLimitNum',
-                          operationFields.CriticalRateLimitNum,
-                        ],
-                        [
-                          'CriticalRateLimitDuration',
-                          operationFields.CriticalRateLimitDuration,
-                        ],
-                      ] as const;
-
-                      for (const [key, rawValue] of entries) {
-                        const parsedValue = Number.parseInt(rawValue, 10);
-                        if (Number.isNaN(parsedValue) || parsedValue <= 0) {
-                          throw new Error(`${key} 必须为大于 0 的整数。`);
-                        }
-                        if (key.endsWith('Duration') && parsedValue > 1200) {
-                          throw new Error(`${key} 不能超过 1200 秒。`);
-                        }
-                      }
-
-                      await saveOptionEntries(
-                        entries.map(([key, value]) => [
-                          key,
-                          String(Number.parseInt(value, 10)),
-                        ]),
-                        '限流设置已保存。',
-                      );
-                    },
-                    '保存限流设置',
-                  )
-                }
-                disabled={busyKey === 'operation-rate-limit'}
-              >
-                {busyKey === 'operation-rate-limit'
-                  ? '保存中...'
-                  : '保存限流设置'}
-              </PrimaryButton>
-            }
-          >
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  全局 API 限流
-                </p>
-                <p className="mt-1 text-sm text-[var(--foreground-muted)]">
-                  作用于 `/api` 下的通用请求。
-                </p>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <ResourceField label="请求次数">
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.GlobalApiRateLimitNum}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          GlobalApiRateLimitNum: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField
-                    label={`时间窗口 (${formatSecondsLabel(operationFields.GlobalApiRateLimitDuration)})`}
-                  >
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.GlobalApiRateLimitDuration}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          GlobalApiRateLimitDuration: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  全局 Web 限流
-                </p>
-                <p className="mt-1 text-sm text-[var(--foreground-muted)]">
-                  作用于页面和静态资源请求，过低会更容易触发 429。
-                </p>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <ResourceField label="请求次数">
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.GlobalWebRateLimitNum}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          GlobalWebRateLimitNum: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField
-                    label={`时间窗口 (${formatSecondsLabel(operationFields.GlobalWebRateLimitDuration)})`}
-                  >
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.GlobalWebRateLimitDuration}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          GlobalWebRateLimitDuration: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  DNS Worker API 限流
-                </p>
-                <p className="mt-1 text-sm text-[var(--foreground-muted)]">
-                  作用于 DNS 响应端心跳、快照拉取和统计上报接口。
-                </p>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <ResourceField label="请求次数">
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.DNSWorkerAPIRateLimitNum}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          DNSWorkerAPIRateLimitNum: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField
-                    label={`时间窗口 (${formatSecondsLabel(operationFields.DNSWorkerAPIRateLimitDuration)})`}
-                  >
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.DNSWorkerAPIRateLimitDuration}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          DNSWorkerAPIRateLimitDuration: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  上传 / 下载限流
-                </p>
-                <p className="mt-1 text-sm text-[var(--foreground-muted)]">
-                  用于文件上传与下载接口，建议保留相对严格的阈值。
-                </p>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <ResourceField label="上传请求次数">
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.UploadRateLimitNum}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          UploadRateLimitNum: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField
-                    label={`上传窗口 (${formatSecondsLabel(operationFields.UploadRateLimitDuration)})`}
-                  >
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.UploadRateLimitDuration}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          UploadRateLimitDuration: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField label="下载请求次数">
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.DownloadRateLimitNum}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          DownloadRateLimitNum: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField
-                    label={`下载窗口 (${formatSecondsLabel(operationFields.DownloadRateLimitDuration)})`}
-                  >
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.DownloadRateLimitDuration}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          DownloadRateLimitDuration: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                <p className="text-sm font-semibold text-[var(--foreground-primary)]">
-                  敏感接口限流
-                </p>
-                <p className="mt-1 text-sm text-[var(--foreground-muted)]">
-                  用于登录、注册、验证码、重置密码和 OAuth 等接口。
-                </p>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <ResourceField label="请求次数">
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.CriticalRateLimitNum}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          CriticalRateLimitNum: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                  <ResourceField
-                    label={`时间窗口 (${formatSecondsLabel(operationFields.CriticalRateLimitDuration)})`}
-                  >
-                    <ResourceInput
-                      type="number"
-                      value={operationFields.CriticalRateLimitDuration}
-                      onChange={(event) =>
-                        setOperationFields((previous) => ({
-                          ...previous,
-                          CriticalRateLimitDuration: event.target.value,
-                        }))
-                      }
-                    />
-                  </ResourceField>
-                </div>
-              </div>
-            </div>
-          </AppCard>
-        </div>
+        <SystemSettingsSection
+          authSourcesCount={authSourcesQuery.data?.length ?? 0}
+          busyKey={busyKey}
+          systemFields={systemFields}
+          operationFields={operationFields}
+          formatSecondsLabel={formatSecondsLabel}
+          onOpenAuthSources={() => setAuthSourceModalOpen(true)}
+          onToggleOption={handleToggleOption}
+          onSystemFieldChange={updateSystemTextField}
+          onOperationFieldChange={updateRateLimitOperationField}
+          onSaveGeneralSettings={handleSaveSystemGeneralSettings}
+          onSaveSmtpSettings={handleSaveSmtpSettings}
+          onSaveRateLimitSettings={handleSaveRateLimitSettings}
+        />
       );
     }
-
     return (
-      <div className="space-y-6">
-        <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-          <AppCard
-            title="公告与品牌信息"
-            description="用于控制首页公告、系统名称、默认首页链接和页脚展示。"
-            action={
-              <PrimaryButton
-                type="button"
-                onClick={() =>
-                  void runBusyAction(
-                    'other-brand',
-                    async () => {
-                      await saveOptionEntries(
-                        [
-                          ['Notice', otherFields.Notice],
-                          ['SystemName', otherFields.SystemName.trim()],
-                          ['HomePageLink', otherFields.HomePageLink.trim()],
-                          ['Footer', otherFields.Footer],
-                        ],
-                        '公告与品牌设置已保存。',
-                      );
-                    },
-                    '保存公告与品牌设置',
-                  )
-                }
-                disabled={busyKey === 'other-brand'}
-              >
-                {busyKey === 'other-brand' ? '保存中...' : '保存基础信息'}
-              </PrimaryButton>
-            }
-          >
-            <div className="space-y-5">
-              <ResourceField label="系统名称">
-                <ResourceInput
-                  value={otherFields.SystemName}
-                  onChange={(event) =>
-                    setOtherFields((previous) => ({
-                      ...previous,
-                      SystemName: event.target.value,
-                    }))
-                  }
-                  placeholder="DuShengCDN"
-                />
-              </ResourceField>
-              <ResourceField label="首页链接">
-                <ResourceInput
-                  value={otherFields.HomePageLink}
-                  onChange={(event) =>
-                    setOtherFields((previous) => ({
-                      ...previous,
-                      HomePageLink: event.target.value,
-                    }))
-                  }
-                  placeholder="https://example.com"
-                />
-              </ResourceField>
-              <ResourceField label="公告">
-                <ResourceTextarea
-                  value={otherFields.Notice}
-                  onChange={(event) =>
-                    setOtherFields((previous) => ({
-                      ...previous,
-                      Notice: event.target.value,
-                    }))
-                  }
-                  placeholder="可在此编写首页公告内容"
-                />
-              </ResourceField>
-              <ResourceField label="页脚 HTML">
-                <ResourceTextarea
-                  value={otherFields.Footer}
-                  onChange={(event) =>
-                    setOtherFields((previous) => ({
-                      ...previous,
-                      Footer: event.target.value,
-                    }))
-                  }
-                  placeholder="留空则使用默认页脚"
-                />
-              </ResourceField>
-            </div>
-          </AppCard>
-
-          <AppCard
-            title="关于页内容"
-            description="支持 Markdown / HTML 内容编辑，保存后会同步到公开关于页。"
-            action={
-              <PrimaryButton
-                type="button"
-                onClick={() =>
-                  void runBusyAction(
-                    'other-about',
-                    async () => {
-                      await saveOptionEntries(
-                        [['About', otherFields.About]],
-                        '关于页内容已保存。',
-                      );
-                    },
-                    '保存关于页内容',
-                  )
-                }
-                disabled={busyKey === 'other-about'}
-              >
-                {busyKey === 'other-about' ? '保存中...' : '保存关于内容'}
-              </PrimaryButton>
-            }
-          >
-            <div className="space-y-5">
-              <ResourceField
-                label="关于内容"
-                hint="支持 Markdown 和 HTML，保存后会同步到公开关于页。"
-              >
-                <ResourceTextarea
-                  value={otherFields.About}
-                  onChange={(event) =>
-                    setOtherFields((previous) => ({
-                      ...previous,
-                      About: event.target.value,
-                    }))
-                  }
-                  placeholder="在这里编写关于 DuShengCDN 的介绍内容"
-                  className="min-h-48"
-                />
-              </ResourceField>
-            </div>
-          </AppCard>
-        </div>
-      </div>
+      <SettingsOtherSection
+        busyKey={busyKey}
+        otherFields={otherFields}
+        onFieldChange={(key, value) =>
+          setOtherFields((previous) => ({
+            ...previous,
+            [key]: value,
+          }))
+        }
+        onSaveAbout={handleSaveOtherAboutSettings}
+        onSaveBrand={handleSaveOtherBrandSettings}
+      />
     );
   };
 

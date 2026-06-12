@@ -52,13 +52,17 @@ func (ProxySiteDomain) TableName() string {
 }
 
 type OriginGroup struct {
-	ID           uint      `json:"id" gorm:"primaryKey"`
-	ProxyRouteID uint      `json:"proxy_route_id" gorm:"index;not null"`
-	OriginID     *uint     `json:"origin_id" gorm:"index"`
-	Name         string    `json:"name" gorm:"size:255;not null;default:''"`
-	IsDefault    bool      `json:"is_default" gorm:"not null;default:false;index"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID              uint      `json:"id" gorm:"primaryKey"`
+	ProxyRouteID    uint      `json:"proxy_route_id" gorm:"index;not null"`
+	OriginID        *uint     `json:"origin_id" gorm:"index"`
+	Name            string    `json:"name" gorm:"size:255;not null;default:''"`
+	ResolveMode     string    `json:"resolve_mode" gorm:"size:32;not null;default:'publish_resolve'"`
+	HealthCheckPath string    `json:"health_check_path" gorm:"size:512;not null;default:''"`
+	ConnectTimeout  int       `json:"connect_timeout" gorm:"not null;default:0"`
+	ReadTimeout     int       `json:"read_timeout" gorm:"not null;default:0"`
+	IsDefault       bool      `json:"is_default" gorm:"not null;default:false;index"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (OriginGroup) TableName() string {
@@ -74,6 +78,11 @@ type OriginServer struct {
 	Scheme        string    `json:"scheme" gorm:"size:16;not null;default:''"`
 	Host          string    `json:"host" gorm:"size:255;not null;default:''"`
 	Port          string    `json:"port" gorm:"size:16;not null;default:''"`
+	Weight        int       `json:"weight" gorm:"not null;default:1"`
+	Backup        bool      `json:"backup" gorm:"not null;default:false"`
+	SNI           string    `json:"sni" gorm:"size:255;not null;default:''"`
+	HostHeader    string    `json:"host_header" gorm:"size:255;not null;default:''"`
+	Enabled       bool      `json:"enabled" gorm:"not null;default:true;index"`
 	URI           string    `json:"uri" gorm:"type:text;not null;default:''"`
 	SortOrder     int       `json:"sort_order" gorm:"not null;default:0;index:idx_origin_servers_group_order,priority:2"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -115,15 +124,23 @@ func (ProxyRouteRule) TableName() string {
 }
 
 type CachePolicy struct {
-	ID           uint      `json:"id" gorm:"primaryKey"`
-	ProxyRouteID uint      `json:"proxy_route_id" gorm:"index;not null"`
-	Name         string    `json:"name" gorm:"size:255;not null;default:''"`
-	IsDefault    bool      `json:"is_default" gorm:"not null;default:false;index"`
-	Enabled      bool      `json:"enabled" gorm:"not null;default:false"`
-	Policy       string    `json:"policy" gorm:"size:32;not null;default:''"`
-	RulesJSON    string    `json:"rules_json" gorm:"column:rules_json;type:text;not null;default:'[]'"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                uint      `json:"id" gorm:"primaryKey"`
+	ProxyRouteID      uint      `json:"proxy_route_id" gorm:"index;not null"`
+	Name              string    `json:"name" gorm:"size:255;not null;default:''"`
+	IsDefault         bool      `json:"is_default" gorm:"not null;default:false;index"`
+	Enabled           bool      `json:"enabled" gorm:"not null;default:false"`
+	DefaultTTL        int       `json:"default_ttl" gorm:"not null;default:0"`
+	StatusTTLsJSON    string    `json:"status_ttls" gorm:"column:status_ttls;type:text;not null;default:'{}'"`
+	CacheKey          string    `json:"cache_key" gorm:"type:text;not null;default:''"`
+	BypassCookiesJSON string    `json:"bypass_cookies" gorm:"column:bypass_cookies;type:text;not null;default:'[]'"`
+	BypassHeadersJSON string    `json:"bypass_headers" gorm:"column:bypass_headers;type:text;not null;default:'[]'"`
+	IncludeQuery      bool      `json:"include_query" gorm:"not null;default:true"`
+	IgnoreQueryParams string    `json:"ignore_query_params" gorm:"type:text;not null;default:'[]'"`
+	CacheMethodsJSON  string    `json:"cache_methods" gorm:"column:cache_methods;type:text;not null;default:'[\"GET\",\"HEAD\"]'"`
+	Policy            string    `json:"policy" gorm:"size:32;not null;default:''"`
+	RulesJSON         string    `json:"rules_json" gorm:"column:rules_json;type:text;not null;default:'[]'"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 func (CachePolicy) TableName() string {
@@ -262,7 +279,7 @@ func ListOriginServersByGroupIDs(groupIDs []uint) ([]OriginServer, error) {
 	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &OriginServer{}) || len(groupIDs) == 0 {
 		return servers, nil
 	}
-	err := DB.Where("origin_group_id IN ?", groupIDs).Order("origin_group_id asc").Order("sort_order asc").Find(&servers).Error
+	err := DB.Where("origin_group_id IN ? AND enabled = ?", groupIDs, true).Order("origin_group_id asc").Order("sort_order asc").Find(&servers).Error
 	return servers, err
 }
 
@@ -300,12 +317,12 @@ func GetCachePolicyByRouteID(routeID uint) (*CachePolicy, error) {
 	return policy, err
 }
 
-func ListCachePoliciesByRouteID(routeID uint) ([]CachePolicy, error) {
+func ListCachePoliciesByIDs(policyIDs []uint) ([]CachePolicy, error) {
 	var policies []CachePolicy
-	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &CachePolicy{}) {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &CachePolicy{}) || len(policyIDs) == 0 {
 		return policies, nil
 	}
-	err := DB.Where("proxy_route_id = ?", routeID).Order("is_default desc").Order("id asc").Find(&policies).Error
+	err := DB.Where("id IN ?", policyIDs).Find(&policies).Error
 	return policies, err
 }
 
@@ -316,15 +333,6 @@ func GetSecurityPolicyByRouteID(routeID uint) (*SecurityPolicy, error) {
 	}
 	err := DB.Where("proxy_route_id = ?", routeID).Order("is_default desc").Order("id asc").First(policy).Error
 	return policy, err
-}
-
-func ListSecurityPoliciesByRouteID(routeID uint) ([]SecurityPolicy, error) {
-	var policies []SecurityPolicy
-	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &SecurityPolicy{}) {
-		return policies, nil
-	}
-	err := DB.Where("proxy_route_id = ?", routeID).Order("is_default desc").Order("id asc").Find(&policies).Error
-	return policies, err
 }
 
 func SyncProxyRouteNormalizedTables(route *ProxyRoute) error {
@@ -375,10 +383,14 @@ func SyncProxyRouteNormalizedTablesWithDB(db *gorm.DB, route *ProxyRoute) error 
 	}
 
 	originGroup, err := upsertOriginGroup(db, &OriginGroup{
-		ProxyRouteID: route.ID,
-		OriginID:     route.OriginID,
-		Name:         siteName,
-		IsDefault:    true,
+		ProxyRouteID:    route.ID,
+		OriginID:        route.OriginID,
+		Name:            siteName,
+		ResolveMode:     strings.TrimSpace(route.OriginResolveMode),
+		HealthCheckPath: "",
+		ConnectTimeout:  0,
+		ReadTimeout:     0,
+		IsDefault:       true,
 	})
 	if err != nil {
 		return err
@@ -412,12 +424,20 @@ func SyncProxyRouteNormalizedTablesWithDB(db *gorm.DB, route *ProxyRoute) error 
 		return err
 	}
 	if err := upsertCachePolicy(db, &CachePolicy{
-		ProxyRouteID: route.ID,
-		Name:         "default",
-		IsDefault:    true,
-		Enabled:      route.CacheEnabled,
-		Policy:       strings.TrimSpace(route.CachePolicy),
-		RulesJSON:    normalizedJSONString(route.CacheRules, "[]"),
+		ProxyRouteID:      route.ID,
+		Name:              "default",
+		IsDefault:         true,
+		Enabled:           route.CacheEnabled,
+		DefaultTTL:        0,
+		StatusTTLsJSON:    "{}",
+		CacheKey:          "",
+		BypassCookiesJSON: "[]",
+		BypassHeadersJSON: "[]",
+		IncludeQuery:      true,
+		IgnoreQueryParams: "[]",
+		CacheMethodsJSON:  `["GET","HEAD"]`,
+		Policy:            strings.TrimSpace(route.CachePolicy),
+		RulesJSON:         normalizedJSONString(route.CacheRules, "[]"),
 	}); err != nil {
 		return err
 	}
@@ -728,6 +748,10 @@ func upsertOriginGroup(db *gorm.DB, next *OriginGroup) (*OriginGroup, error) {
 	}
 	current.OriginID = next.OriginID
 	current.Name = next.Name
+	current.ResolveMode = next.ResolveMode
+	current.HealthCheckPath = next.HealthCheckPath
+	current.ConnectTimeout = next.ConnectTimeout
+	current.ReadTimeout = next.ReadTimeout
 	current.IsDefault = next.IsDefault
 	if err := db.Save(&current).Error; err != nil {
 		return nil, err
@@ -784,6 +808,14 @@ func upsertCachePolicy(db *gorm.DB, next *CachePolicy) error {
 	current.Name = next.Name
 	current.IsDefault = next.IsDefault
 	current.Enabled = next.Enabled
+	current.DefaultTTL = next.DefaultTTL
+	current.StatusTTLsJSON = next.StatusTTLsJSON
+	current.CacheKey = next.CacheKey
+	current.BypassCookiesJSON = next.BypassCookiesJSON
+	current.BypassHeadersJSON = next.BypassHeadersJSON
+	current.IncludeQuery = next.IncludeQuery
+	current.IgnoreQueryParams = next.IgnoreQueryParams
+	current.CacheMethodsJSON = next.CacheMethodsJSON
 	current.Policy = next.Policy
 	current.RulesJSON = next.RulesJSON
 	return db.Save(&current).Error
@@ -910,6 +942,11 @@ func replaceOriginServers(db *gorm.DB, groupID uint, route *ProxyRoute, originID
 			Scheme:        parsed.Scheme,
 			Host:          parsed.Hostname(),
 			Port:          parsed.Port(),
+			Weight:        1,
+			Backup:        false,
+			SNI:           strings.TrimSpace(route.OriginSNI),
+			HostHeader:    strings.TrimSpace(route.OriginHostHeader),
+			Enabled:       true,
 			URI:           uri,
 			SortOrder:     index,
 		}

@@ -27,14 +27,15 @@ type ReleaseResult struct {
 type SupportFile = openresty.SupportFile
 
 type ConfigPreviewResult struct {
-	SnapshotJSON   string        `json:"snapshot_json"`
-	MainConfig     string        `json:"main_config"`
-	RouteConfig    string        `json:"route_config"`
-	RenderedConfig string        `json:"rendered_config"`
-	SupportFiles   []SupportFile `json:"support_files"`
-	Checksum       string        `json:"checksum"`
-	RouteCount     int           `json:"route_count"`
-	WebsiteCount   int           `json:"website_count"`
+	SnapshotJSON   string                 `json:"snapshot_json"`
+	MainConfig     string                 `json:"main_config"`
+	RouteConfig    string                 `json:"route_config"`
+	RenderedConfig string                 `json:"rendered_config"`
+	SupportFiles   []SupportFile          `json:"support_files"`
+	Checksum       string                 `json:"checksum"`
+	RouteCount     int                    `json:"route_count"`
+	WebsiteCount   int                    `json:"website_count"`
+	Preflight      *ConfigPreflightReport `json:"preflight,omitempty"`
 }
 
 type ConfigVersionSummary = model.ConfigVersionSummary
@@ -197,6 +198,7 @@ type configBundle struct {
 	Checksum          string
 	Artifacts         []configVersionArtifactBundle
 	ChangedOptionKeys []string
+	Preflight         *ConfigPreflightReport
 }
 
 type configVersionArtifactBundle = configversion.ArtifactBundle
@@ -340,6 +342,7 @@ func PreviewConfigVersion() (*ConfigPreviewResult, error) {
 		Checksum:       bundle.Checksum,
 		RouteCount:     len(bundle.Routes),
 		WebsiteCount:   len(bundle.SnapshotRoutes),
+		Preflight:      bundle.Preflight,
 	}, nil
 }
 
@@ -470,6 +473,9 @@ func createConfigVersionRecord(createdBy string, force bool, activate bool) (*Re
 	}
 	if len(bundle.Routes) == 0 {
 		return nil, errors.New("没有可发布的启用规则")
+	}
+	if err := bundle.Preflight.blockingError(); err != nil {
+		return nil, err
 	}
 	activeVersion, err := model.GetActiveConfigVersion()
 	if err == nil {
@@ -703,6 +709,7 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 	if err != nil {
 		return nil, err
 	}
+	preflight := buildConfigPublishPreflightReport(routes, openRestyConfig, routeConfigContext)
 	return &configBundle{
 		Routes:            routes,
 		SnapshotRoutes:    snapshotRoutes,
@@ -714,6 +721,7 @@ func buildCurrentConfigBundle(requireRoutes bool) (*configBundle, error) {
 		Checksum:          checksumBundle(mainConfig, routeConfig, supportFiles),
 		Artifacts:         artifacts,
 		ChangedOptionKeys: openRestyOptionKeys(),
+		Preflight:         preflight,
 	}, nil
 }
 
@@ -844,13 +852,17 @@ func buildSnapshotRoutesWithContext(
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 自定义请求头无效", route.Domain)
 		}
-		upstreams, err := decodeStoredUpstreams(route.Upstreams, route.OriginURL)
+		upstreams, err := proxyRouteEffectiveUpstreams(route, context)
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 源站配置无效", route.Domain)
 		}
-		cacheRules, err := decodeStoredCacheRules(route.CacheRules)
+		cacheEnabled, cachePolicy, cacheRules, err := proxyRouteEffectiveCacheConfig(route, context)
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 缓存规则无效", route.Domain)
+		}
+		effectiveOriginURL := firstString(upstreams)
+		if effectiveOriginURL == "" {
+			effectiveOriginURL = route.OriginURL
 		}
 		powConfig, err := decodeStoredPoWConfig(route.PoWEnabled, route.PoWConfig)
 		if err != nil {
@@ -886,7 +898,7 @@ func buildSnapshotRoutesWithContext(
 			SiteName:                   normalizeProxyRouteSiteNameInput(route, route.SiteName, domains[0]),
 			Domain:                     domains[0],
 			Domains:                    domains,
-			OriginURL:                  route.OriginURL,
+			OriginURL:                  effectiveOriginURL,
 			OriginHost:                 normalizeStoredOriginHostHeader(route),
 			OriginHostHeader:           normalizeStoredOriginHostHeader(route),
 			OriginSNI:                  strings.TrimSpace(route.OriginSNI),
@@ -905,8 +917,8 @@ func buildSnapshotRoutesWithContext(
 			LimitConnPerIP:             route.LimitConnPerIP,
 			LimitRate:                  route.LimitRate,
 			ProxyBufferingMode:         normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
-			CacheEnabled:               route.CacheEnabled,
-			CachePolicy:                route.CachePolicy,
+			CacheEnabled:               cacheEnabled,
+			CachePolicy:                cachePolicy,
 			CacheRules:                 cacheRules,
 			CustomHeaders:              customHeaders,
 			RouteRules:                 routeRules,

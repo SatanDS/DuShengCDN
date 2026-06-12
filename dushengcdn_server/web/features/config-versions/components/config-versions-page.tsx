@@ -29,6 +29,8 @@ import { CleanupConfigVersionsModal } from '@/features/config-versions/component
 import type {
   ConfigOptionDiffItem,
   ConfigDiffResult,
+  ConfigPreflightReport,
+  ConfigPreflightStatus,
   ConfigPreviewResult,
   ConfigVersionDetail,
   ConfigVersionSummary,
@@ -185,6 +187,106 @@ function OptionDiffTable({ items }: { items: ConfigOptionDiffItem[] }) {
   );
 }
 
+function preflightStatusVariant(status: ConfigPreflightStatus) {
+  switch (status) {
+    case 'pass':
+      return 'success' as const;
+    case 'warning':
+      return 'warning' as const;
+    case 'error':
+      return 'danger' as const;
+    default:
+      return 'info' as const;
+  }
+}
+
+function preflightStatusLabel(status: ConfigPreflightStatus) {
+  switch (status) {
+    case 'pass':
+      return '通过';
+    case 'warning':
+      return '警告';
+    case 'error':
+      return '失败';
+    default:
+      return '跳过';
+  }
+}
+
+function PreflightReportPanel({
+  report,
+}: {
+  report: ConfigPreflightReport | undefined;
+}) {
+  if (!report) {
+    return <InlineMessage tone="info" message="发布前检查报告暂不可用。" />;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+          发布前检查报告
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <StatusBadge
+            label={`${report.error_count} 个失败`}
+            variant={report.error_count > 0 ? 'danger' : 'success'}
+          />
+          <StatusBadge
+            label={`${report.warning_count} 个警告`}
+            variant={report.warning_count > 0 ? 'warning' : 'info'}
+          />
+        </div>
+      </div>
+      {report.error_count > 0 ? (
+        <InlineMessage
+          tone="danger"
+          message="发布前检查存在失败项，请修复后再发布。"
+        />
+      ) : null}
+      <div className="grid gap-3 lg:grid-cols-2">
+        {report.checks.map((check, index) => (
+          <div
+            key={`${check.key}-${index}`}
+            className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-[var(--foreground-primary)]">
+                {check.title}
+              </p>
+              <StatusBadge
+                label={preflightStatusLabel(check.status)}
+                variant={preflightStatusVariant(check.status)}
+              />
+            </div>
+            <p className="mt-2 text-sm leading-6 text-[var(--foreground-secondary)]">
+              {check.message}
+            </p>
+            {check.details && check.details.length > 0 ? (
+              <div className="mt-3 space-y-1">
+                {check.details.slice(0, 6).map((detail) => (
+                  <p
+                    key={detail}
+                    className="text-xs break-all text-[var(--foreground-muted)]"
+                  >
+                    {detail}
+                  </p>
+                ))}
+                {check.details.length > 6 ? (
+                  <p className="text-xs text-[var(--foreground-muted)]">
+                    另有 {check.details.length - 6} 项
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PublishPreviewCard({
   preview,
   diff,
@@ -206,7 +308,9 @@ function PublishPreviewCard({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  const canPublish = preview.route_count > 0 && hasConfigDiff(diff);
+  const preflightPassed = preview.preflight?.passed ?? true;
+  const canPublish =
+    preview.route_count > 0 && hasConfigDiff(diff) && preflightPassed;
 
   return (
     <AppCard
@@ -265,14 +369,18 @@ function PublishPreviewCard({
 
         {!canPublish ? (
           <InlineMessage
-            tone="info"
+            tone={preflightPassed ? 'info' : 'danger'}
             message={
-              hasDraftDiff(diff)
-                ? '当前只有面板展示信息变化，不会改变节点运行配置，无需普通发布；如需留存快照，可使用强制重新发布。'
-                : '当前运行配置与已激活版本一致，已阻止重复发布。'
+              !preflightPassed
+                ? '发布前检查存在失败项，已阻止发布。'
+                : hasDraftDiff(diff)
+                  ? '当前只有面板展示信息变化，不会改变节点运行配置，无需普通发布；如需留存快照，可使用强制重新发布。'
+                  : '当前运行配置与已激活版本一致，已阻止重复发布。'
             }
           />
         ) : null}
+
+        <PreflightReportPanel report={preview.preflight} />
 
         <div className="grid gap-5 xl:grid-cols-3">
           <DiffList title="新增域名" items={diff.added_domains} />
@@ -305,7 +413,10 @@ function PublishPreviewCard({
               {isActiveVersionDetailLoading ? (
                 <LoadingState />
               ) : activeVersionDetailError ? (
-                <InlineMessage tone="danger" message={activeVersionDetailError} />
+                <InlineMessage
+                  tone="danger"
+                  message={activeVersionDetailError}
+                />
               ) : activeVersionDetail ? (
                 <CodeBlock className="max-h-[32rem] whitespace-pre-wrap">
                   {activeVersionDetail.main_config}
@@ -671,7 +782,9 @@ export function ConfigVersionsPage() {
       <CleanupConfigVersionsModal
         isOpen={isCleanupModalOpen}
         onClose={() => setIsCleanupModalOpen(false)}
-        onConfirm={(keepCount) => cleanupMutation.mutate({ keep_count: keepCount })}
+        onConfirm={(keepCount) =>
+          cleanupMutation.mutate({ keep_count: keepCount })
+        }
         isPending={cleanupMutation.isPending}
       />
     </>

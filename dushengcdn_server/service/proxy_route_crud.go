@@ -342,6 +342,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.Domain = domain
 	route.Domains = string(domainsJSON)
 	route.OriginID = originID
+	route.OriginGroupID = input.OriginGroupID
 	route.OriginURL = upstreams[0]
 	route.OriginHost = originHost
 	route.OriginHostHeader = originHostHeader
@@ -361,6 +362,7 @@ func buildProxyRoute(route *model.ProxyRoute, input ProxyRouteInput) (*model.Pro
 	route.LimitConnPerIP = limitConnPerIP
 	route.LimitRate = limitRate
 	route.ProxyBufferingMode = proxyBufferingMode
+	route.CachePolicyID = input.CachePolicyID
 	route.CacheEnabled = input.CacheEnabled
 	route.CachePolicy = normalizeCachePolicy(input.CacheEnabled, cachePolicy)
 	route.CacheRules = string(cacheRulesJSON)

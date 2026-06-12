@@ -925,10 +925,10 @@ func validateProxyRouteNormalizedSchemaWithCache(db *gorm.DB, schemaCache *schem
 	}{
 		{model: &ProxySite{}, table: "proxy_sites", columns: []string{"id", "proxy_route_id", "name", "node_pool", "enabled", "remark"}},
 		{model: &ProxySiteDomain{}, table: "proxy_site_domains", columns: []string{"id", "proxy_site_id", "proxy_route_id", "domain", "is_primary", "sort_order"}},
-		{model: &OriginGroup{}, table: "origin_groups", columns: []string{"id", "proxy_route_id", "origin_id", "name"}},
-		{model: &OriginServer{}, table: "origin_servers", columns: []string{"id", "origin_group_id", "proxy_route_id", "origin_id", "url", "scheme", "host", "port", "uri", "sort_order"}},
+		{model: &OriginGroup{}, table: "origin_groups", columns: []string{"id", "proxy_route_id", "origin_id", "name", "resolve_mode", "health_check_path", "connect_timeout", "read_timeout"}},
+		{model: &OriginServer{}, table: "origin_servers", columns: []string{"id", "origin_group_id", "proxy_route_id", "origin_id", "url", "scheme", "host", "port", "weight", "backup", "sni", "host_header", "enabled", "uri", "sort_order"}},
 		{model: &ProxyRouteRule{}, table: "proxy_route_rules", columns: []string{"id", "proxy_route_id", "proxy_site_id", "origin_group_id", "limit_conn_per_server", "limit_conn_per_ip", "limit_rate", "proxy_buffering_mode", "custom_headers_json"}},
-		{model: &CachePolicy{}, table: "cache_policies", columns: []string{"id", "proxy_route_id", "enabled", "policy", "rules_json"}},
+		{model: &CachePolicy{}, table: "cache_policies", columns: []string{"id", "proxy_route_id", "enabled", "default_ttl", "status_ttls", "cache_key", "bypass_cookies", "bypass_headers", "include_query", "ignore_query_params", "cache_methods", "policy", "rules_json"}},
 		{model: &TLSBinding{}, table: "tls_bindings", columns: []string{"id", "proxy_route_id", "proxy_site_id", "domain", "cert_id", "enable_https", "redirect_http", "is_primary", "sort_order"}},
 		{model: &DNSBinding{}, table: "dns_bindings", columns: []string{"id", "proxy_route_id", "dns_auto_sync", "dns_account_id", "dns_zone_id", "dns_record_type", "dns_record_name", "dns_record_content", "dns_auto_target", "dns_target_count", "dns_schedule_mode", "dns_ttl", "dns_provider_mode", "dns_zone_id_ref", "gslb_enabled", "gslb_policy_json", "dns_record_ids_json", "cloudflare_proxied", "last_sync_status", "last_sync_message", "last_synced_at"}},
 		{model: &SecurityPolicy{}, table: "security_policies", columns: []string{"id", "proxy_route_id", "pow_enabled", "pow_config", "waf_enabled", "waf_mode", "waf_config", "cc_enabled", "cc_mode", "cc_config", "basic_auth_enabled", "basic_auth_username", "basic_auth_password_hash", "region_restriction_enabled", "region_restriction_mode", "region_restriction_countries_json", "ddos_protection_mode", "ddos_protection_provider", "ddos_protection_target"}},
@@ -1051,6 +1051,42 @@ func validateDatabaseSchemaV48(db *gorm.DB, backend string) error {
 	return nil
 }
 
+func validateDatabaseSchemaV49(db *gorm.DB, backend string) error {
+	if err := validateDatabaseSchemaV48(db, backend); err != nil {
+		return err
+	}
+	if err := validateProxyRouteReusablePolicySchema(db); err != nil {
+		return err
+	}
+	_ = backend
+	return nil
+}
+
+func validateProxyRouteReusablePolicySchema(db *gorm.DB) error {
+	return validateProxyRouteReusablePolicySchemaWithCache(newSchemaIntrospectionCache(db))
+}
+
+func validateProxyRouteReusablePolicySchemaWithCache(schemaCache *schemaIntrospectionCache) error {
+	reusableColumns := []struct {
+		model   any
+		table   string
+		columns []string
+	}{
+		{model: &ProxyRoute{}, table: "proxy_routes", columns: []string{"origin_group_id", "cache_policy_id"}},
+		{model: &OriginGroup{}, table: "origin_groups", columns: []string{"resolve_mode", "health_check_path", "connect_timeout", "read_timeout"}},
+		{model: &OriginServer{}, table: "origin_servers", columns: []string{"weight", "backup", "sni", "host_header", "enabled"}},
+		{model: &CachePolicy{}, table: "cache_policies", columns: []string{"default_ttl", "status_ttls", "cache_key", "bypass_cookies", "bypass_headers", "include_query", "ignore_query_params", "cache_methods"}},
+	}
+	for _, item := range reusableColumns {
+		for _, column := range item.columns {
+			if !schemaCache.HasColumn(item.model, item.table, column) {
+				return fmt.Errorf("column %s.%s is missing", item.table, column)
+			}
+		}
+	}
+	return nil
+}
+
 func validateProxyRouteRulePathSchema(db *gorm.DB, validateData bool) error {
 	return validateProxyRouteRulePathSchemaWithCache(db, newSchemaIntrospectionCache(db), validateData)
 }
@@ -1159,6 +1195,9 @@ func validateCurrentDatabaseSchemaLightweightWithCache(db *gorm.DB, backend stri
 		return err
 	}
 	if err := validateCurrentOriginConnectionSchema(schemaCache); err != nil {
+		return err
+	}
+	if err := validateProxyRouteReusablePolicySchemaWithCache(schemaCache); err != nil {
 		return err
 	}
 	if err := validateCurrentObservabilityMaintenanceSchema(schemaCache); err != nil {

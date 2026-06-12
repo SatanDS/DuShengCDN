@@ -46,13 +46,22 @@ var indexPage []byte
 // @name X-Agent-Token
 // @description Agent API 使用节点专属 Agent Token 或全局 Discovery Token
 func main() {
+	shouldExit, err := common.InitServerRuntime()
+	if err != nil {
+		slog.Error("initialize runtime config failed", "error", err)
+		os.Exit(1)
+	}
+	if shouldExit {
+		return
+	}
+
 	common.SetupGinLog()
 	slog.Info("DuShengCDN started", "version", common.Version)
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	// Initialize SQL Database
-	err := model.InitDB()
+	err = model.InitDB()
 	if err != nil {
 		slog.Error("initialize database failed", "error", err)
 		os.Exit(1)

@@ -111,6 +111,7 @@ type ProxyRouteInput struct {
 	Domain                     string                        `json:"domain"`
 	Domains                    []string                      `json:"domains"`
 	OriginID                   *uint                         `json:"origin_id"`
+	OriginGroupID              *uint                         `json:"origin_group_id,omitempty"`
 	OriginURL                  string                        `json:"origin_url"`
 	OriginScheme               string                        `json:"origin_scheme"`
 	OriginAddress              string                        `json:"origin_address"`
@@ -134,6 +135,7 @@ type ProxyRouteInput struct {
 	LimitConnPerIP             int                           `json:"limit_conn_per_ip"`
 	LimitRate                  string                        `json:"limit_rate"`
 	ProxyBufferingMode         string                        `json:"proxy_buffering_mode"`
+	CachePolicyID              *uint                         `json:"cache_policy_id,omitempty"`
 	CacheEnabled               bool                          `json:"cache_enabled"`
 	CachePolicy                string                        `json:"cache_policy"`
 	CacheRules                 []string                      `json:"cache_rules"`
@@ -182,6 +184,7 @@ type ProxyRouteView struct {
 	PrimaryDomain               string                        `json:"primary_domain"`
 	DomainCount                 int                           `json:"domain_count"`
 	OriginID                    *uint                         `json:"origin_id"`
+	OriginGroupID               *uint                         `json:"origin_group_id,omitempty"`
 	OriginURL                   string                        `json:"origin_url"`
 	OriginHost                  string                        `json:"origin_host"`
 	OriginHostHeader            string                        `json:"origin_host_header"`
@@ -202,6 +205,7 @@ type ProxyRouteView struct {
 	LimitConnPerIP              int                           `json:"limit_conn_per_ip"`
 	LimitRate                   string                        `json:"limit_rate"`
 	ProxyBufferingMode          string                        `json:"proxy_buffering_mode"`
+	CachePolicyID               *uint                         `json:"cache_policy_id,omitempty"`
 	CacheEnabled                bool                          `json:"cache_enabled"`
 	CachePolicy                 string                        `json:"cache_policy"`
 	CacheRules                  string                        `json:"cache_rules"`

@@ -105,6 +105,7 @@ func databaseSchemaMigrations() []databaseSchemaMigration {
 		{fromVersion: 45, toVersion: 46, migrate: migrateV46, validate: validateDatabaseSchemaV46},
 		{fromVersion: 46, toVersion: 47, migrate: migrateV47, validate: validateDatabaseSchemaV47},
 		{fromVersion: 47, toVersion: 48, migrate: migrateV48, validate: validateDatabaseSchemaV48, appliesCurrentSchema: true},
+		{fromVersion: 48, toVersion: 49, migrate: migrateV49, validate: validateDatabaseSchemaV49, appliesCurrentSchema: true},
 	}
 }
 

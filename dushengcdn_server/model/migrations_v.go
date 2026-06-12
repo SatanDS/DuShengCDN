@@ -424,3 +424,11 @@ func migrateV48(db *gorm.DB, backend string) error {
 	}
 	return BackfillProxyRouteNormalizedTables(db)
 }
+
+func migrateV49(db *gorm.DB, backend string) error {
+	db = migrationSession(db)
+	if err := applyCurrentSchema(db, backend); err != nil {
+		return err
+	}
+	return BackfillProxyRouteNormalizedTables(db)
+}

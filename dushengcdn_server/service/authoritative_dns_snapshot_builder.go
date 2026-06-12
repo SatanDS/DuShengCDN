@@ -308,10 +308,6 @@ func snapshotDNSZonesWithQueries(queries authoritativeDNSSnapshotZoneQueries) ([
 	return result, nil
 }
 
-func snapshotAuthoritativeRoutes() ([]AuthoritativeDNSSnapshotRoute, error) {
-	return snapshotAuthoritativeRoutesWithOptions(authoritativeDNSSchedulingOptions())
-}
-
 func snapshotAuthoritativeRoutesWithOptions(schedulingOptions gslbDNSSchedulingOptions) ([]AuthoritativeDNSSnapshotRoute, error) {
 	return snapshotAuthoritativeRoutesWithQueries(schedulingOptions, defaultAuthoritativeDNSSnapshotRouteQueries)
 }

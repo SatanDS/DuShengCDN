@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"dushengcdn/model"
@@ -163,6 +164,89 @@ func TestProxyRouteLifecycleSyncsNormalizedTables(t *testing.T) {
 	}
 	if len(servers) != 0 {
 		t.Fatalf("expected normalized origin servers to be deleted, got %+v", servers)
+	}
+}
+
+func TestPublishConfigVersionUsesReusableOriginGroupAndCachePolicy(t *testing.T) {
+	setupServiceTestDB(t)
+	if err := model.UpdateOption("OpenRestyCacheEnabled", "true"); err != nil {
+		t.Fatalf("UpdateOption OpenRestyCacheEnabled failed: %v", err)
+	}
+	if err := model.UpdateOption("OpenRestyCachePath", "/var/cache/openresty/dushengcdn"); err != nil {
+		t.Fatalf("UpdateOption OpenRestyCachePath failed: %v", err)
+	}
+
+	group := model.OriginGroup{
+		ProxyRouteID: 0,
+		Name:         "shared-origin",
+		ResolveMode:  "publish_resolve",
+	}
+	if err := model.DB.Create(&group).Error; err != nil {
+		t.Fatalf("create shared origin group: %v", err)
+	}
+	if err := model.DB.Create(&model.OriginServer{
+		OriginGroupID: group.ID,
+		ProxyRouteID:  0,
+		URL:           "http://8.8.8.8:39010",
+		Scheme:        "http",
+		Host:          "8.8.8.8",
+		Port:          "39010",
+		Weight:        1,
+		Enabled:       true,
+		URI:           "/",
+	}).Error; err != nil {
+		t.Fatalf("create shared origin server: %v", err)
+	}
+	policy := model.CachePolicy{
+		ProxyRouteID:      0,
+		Name:              "shared-cache",
+		Enabled:           true,
+		Policy:            proxyRouteCachePolicySuffix,
+		RulesJSON:         `["png"]`,
+		StatusTTLsJSON:    "{}",
+		BypassCookiesJSON: "[]",
+		BypassHeadersJSON: "[]",
+		IncludeQuery:      true,
+		IgnoreQueryParams: "[]",
+		CacheMethodsJSON:  `["GET","HEAD"]`,
+	}
+	if err := model.DB.Create(&policy).Error; err != nil {
+		t.Fatalf("create shared cache policy: %v", err)
+	}
+
+	route, err := CreateProxyRoute(ProxyRouteInput{
+		Domain:    "reusable.example.com",
+		OriginURL: "http://8.8.4.4:39010",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxyRoute failed: %v", err)
+	}
+	if err := model.DB.Model(&model.ProxyRoute{}).Where("id = ?", route.ID).Updates(map[string]any{
+		"origin_group_id": group.ID,
+		"cache_policy_id": policy.ID,
+	}).Error; err != nil {
+		t.Fatalf("bind reusable origin/cache policy: %v", err)
+	}
+
+	result, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if !strings.Contains(result.Version.RenderedConfig, "server 8.8.8.8:39010 max_fails=3 fail_timeout=10s;") {
+		t.Fatalf("expected reusable origin server to render, got %s", result.Version.RenderedConfig)
+	}
+	if strings.Contains(result.Version.RenderedConfig, "server 8.8.4.4:39010 max_fails=3 fail_timeout=10s;") {
+		t.Fatal("expected legacy route origin to be overridden by reusable origin group")
+	}
+	if !strings.Contains(result.Version.RenderedConfig, `if ($uri !~* "\\.(?:png)$")`) {
+		t.Fatal("expected reusable cache policy suffix rule to render")
+	}
+	if !strings.Contains(result.Version.SnapshotJSON, `"upstreams":["http://8.8.8.8:39010"]`) {
+		t.Fatalf("expected snapshot to use reusable origin upstreams, got %s", result.Version.SnapshotJSON)
+	}
+	if !strings.Contains(result.Version.SnapshotJSON, `"cache_policy":"suffix"`) {
+		t.Fatalf("expected snapshot to use reusable cache policy, got %s", result.Version.SnapshotJSON)
 	}
 }
 

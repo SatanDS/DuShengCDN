@@ -16,6 +16,7 @@ import (
 	"dushengcdn/model"
 	"dushengcdn/utils/security"
 
+	"github.com/glebarez/sqlite"
 	"github.com/miekg/dns"
 	"gorm.io/gorm"
 )
@@ -295,12 +296,21 @@ func TestAuthoritativeDNSSnapshotCacheRevisionUsesEventDrivenStaticMutation(t *t
 	if !ok || initial == "" {
 		t.Fatalf("expected initial cache revision, got %q ok=%v", initial, ok)
 	}
+	versionBeforeRecordWrite := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, model.DB)
 
-	var queryCount atomic.Int32
+	var sentinelQueries atomic.Int32
+	var fallbackProbeQueries atomic.Int32
 	const callbackName = "dushengcdn:test_authoritative_dns_snapshot_revision_cache_queries"
 	queryCallback := model.DB.Callback().Query()
 	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
-		queryCount.Add(1)
+		table := strings.ToLower(strings.TrimSpace(db.Statement.Table))
+		sql := strings.ToLower(db.Statement.SQL.String())
+		if table == authoritativeDNSSnapshotRevisionSentinelTable || strings.Contains(sql, authoritativeDNSSnapshotRevisionSentinelTable) {
+			sentinelQueries.Add(1)
+		}
+		if authoritativeDNSSnapshotRevisionProbeQuery(table, sql) {
+			fallbackProbeQueries.Add(1)
+		}
 	}); err != nil {
 		t.Fatalf("register query callback: %v", err)
 	}
@@ -312,8 +322,11 @@ func TestAuthoritativeDNSSnapshotCacheRevisionUsesEventDrivenStaticMutation(t *t
 	if !ok || cached != initial {
 		t.Fatalf("expected cached revision %q, got %q ok=%v", initial, cached, ok)
 	}
-	if got := queryCount.Load(); got != 0 {
-		t.Fatalf("expected cached revision not to query snapshot tables, got %d queries", got)
+	if got := sentinelQueries.Load(); got == 0 {
+		t.Fatal("expected cached revision to verify the persistent sentinel")
+	}
+	if got := fallbackProbeQueries.Load(); got != 0 {
+		t.Fatalf("expected cached revision not to probe snapshot dependency tables, got %d probe queries", got)
 	}
 
 	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{
@@ -323,23 +336,300 @@ func TestAuthoritativeDNSSnapshotCacheRevisionUsesEventDrivenStaticMutation(t *t
 	}); err != nil {
 		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
 	}
-	queryCount.Store(0)
+	versionAfterRecordWrite := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, model.DB)
+	if versionAfterRecordWrite <= versionBeforeRecordWrite {
+		t.Fatalf("expected DNS record write to bump persistent revision, got before=%d after=%d", versionBeforeRecordWrite, versionAfterRecordWrite)
+	}
+	sentinelQueries.Store(0)
+	fallbackProbeQueries.Store(0)
 	changed, ok := authoritativeDNSSnapshotCacheRevision()
 	if !ok || changed == "" || changed == initial {
 		t.Fatalf("expected DNS record write to bump revision cache, initial=%q changed=%q ok=%v", initial, changed, ok)
 	}
-	if got := queryCount.Load(); got != 0 {
-		t.Fatalf("expected static mutation bump not to query snapshot tables, got %d queries", got)
-	}
 
-	queryCount.Store(0)
+	sentinelQueries.Store(0)
+	fallbackProbeQueries.Store(0)
 	cachedAgain, ok := authoritativeDNSSnapshotCacheRevision()
 	if !ok || cachedAgain != changed {
 		t.Fatalf("expected changed revision to be cached, got %q want %q ok=%v", cachedAgain, changed, ok)
 	}
-	if got := queryCount.Load(); got != 0 {
-		t.Fatalf("expected cached changed revision not to query snapshot tables, got %d queries", got)
+	if got := sentinelQueries.Load(); got == 0 {
+		t.Fatal("expected cached changed revision to verify the persistent sentinel")
 	}
+	if got := fallbackProbeQueries.Load(); got != 0 {
+		t.Fatalf("expected cached changed revision not to probe snapshot dependency tables, got %d probe queries", got)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotPersistentRevisionTracksExternalSessionWrites(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAuthoritativeDNSSnapshotCache()
+	t.Cleanup(resetAuthoritativeDNSSnapshotCache)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	initial, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || initial == "" {
+		t.Fatalf("expected initial cache revision, got %q ok=%v", initial, ok)
+	}
+	versionBefore := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, model.DB)
+
+	externalDB, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open external sqlite session: %v", err)
+	}
+	sqlDB, err := externalDB.DB()
+	if err != nil {
+		t.Fatalf("external sqlite handle: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+	})
+
+	if err := externalDB.Exec(
+		`INSERT INTO dns_records (`+
+			`zone_id, name, type, value, ttl, priority, enabled, created_at, updated_at`+
+			`) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		zone.ID, "external.example.com", "A", "8.8.4.4", 300, 0, true,
+	).Error; err != nil {
+		t.Fatalf("external insert dns record: %v", err)
+	}
+	versionAfter := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, externalDB)
+	if versionAfter <= versionBefore {
+		t.Fatalf("expected external session write to bump persistent revision, got before=%d after=%d", versionBefore, versionAfter)
+	}
+
+	changed, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || changed == "" || changed == initial {
+		t.Fatalf("expected external session write to change cache revision, initial=%q changed=%q ok=%v", initial, changed, ok)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotPersistentRevisionTracksExternalNormalizedDNSBindingWrites(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAuthoritativeDNSSnapshotCache()
+	t.Cleanup(resetAuthoritativeDNSSnapshotCache)
+
+	if !model.DB.Migrator().HasTable(&model.DNSBinding{}) {
+		t.Skip("normalized DNS binding table is not available")
+	}
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-site",
+		Domain:          "www.example.com",
+		Domains:         `["www.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "default",
+		Enabled:         true,
+		DNSProviderMode: DNSProviderModeAuthoritative,
+		DNSZoneIDRef:    &zone.ID,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          30,
+		GSLBEnabled:     false,
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert authoritative route: %v", err)
+	}
+	if revision, ok := authoritativeDNSSnapshotCacheRevision(); !ok || revision == "" {
+		t.Fatalf("expected initial cache revision, got %q ok=%v", revision, ok)
+	}
+	versionBefore := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, model.DB)
+
+	externalDB, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open external sqlite session: %v", err)
+	}
+	sqlDB, err := externalDB.DB()
+	if err != nil {
+		t.Fatalf("external sqlite handle: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+	})
+
+	result := externalDB.Exec(
+		`UPDATE dns_bindings SET dns_ttl = ?, updated_at = CURRENT_TIMESTAMP WHERE proxy_route_id = ?`,
+		45, route.ID,
+	)
+	if result.Error != nil {
+		t.Fatalf("external update dns binding: %v", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		t.Fatalf("expected one normalized dns binding row to update, got %d", result.RowsAffected)
+	}
+	versionAfter := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, externalDB)
+	if versionAfter <= versionBefore {
+		t.Fatalf("expected external normalized DNS binding write to bump persistent revision, got before=%d after=%d", versionBefore, versionAfter)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotPersistentRevisionReinstallsMissingTriggers(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAuthoritativeDNSSnapshotCache()
+	t.Cleanup(resetAuthoritativeDNSSnapshotCache)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if revision, ok := authoritativeDNSSnapshotCacheRevision(); !ok || revision == "" {
+		t.Fatalf("expected initial cache revision, got %q ok=%v", revision, ok)
+	}
+
+	triggerName := authoritativeDNSSnapshotRevisionTriggerName((&model.DNSRecord{}).TableName(), "insert")
+	if err := model.DB.Exec("DROP TRIGGER IF EXISTS " + authoritativeDNSSnapshotQuoteIdentifier(triggerName)).Error; err != nil {
+		t.Fatalf("drop dns record trigger: %v", err)
+	}
+	authoritativeDNSSnapshotPersistentRevisionDBs.Store(model.DB, &authoritativeDNSSnapshotPersistentRevisionInstallState{
+		nextVerifyAt: time.Now().Add(-time.Second),
+	})
+	if revision, ok := authoritativeDNSSnapshotCacheRevision(); !ok || revision == "" {
+		t.Fatalf("expected cache revision after forced trigger verification, got %q ok=%v", revision, ok)
+	}
+	versionBefore := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, model.DB)
+
+	externalDB, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open external sqlite session: %v", err)
+	}
+	sqlDB, err := externalDB.DB()
+	if err != nil {
+		t.Fatalf("external sqlite handle: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+	})
+
+	if err := externalDB.Exec(
+		`INSERT INTO dns_records (`+
+			`zone_id, name, type, value, ttl, priority, enabled, created_at, updated_at`+
+			`) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		zone.ID, "reinstalled.example.com", "A", "1.1.1.1", 300, 0, true,
+	).Error; err != nil {
+		t.Fatalf("external insert dns record after trigger reinstall: %v", err)
+	}
+	versionAfter := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, externalDB)
+	if versionAfter <= versionBefore {
+		t.Fatalf("expected reinstalled trigger to bump persistent revision, got before=%d after=%d", versionBefore, versionAfter)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotPersistentRevisionInstallsTriggersForNewMetricTablesOnVerify(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAuthoritativeDNSSnapshotCache()
+	t.Cleanup(resetAuthoritativeDNSSnapshotCache)
+
+	if revision, ok := authoritativeDNSSnapshotCacheRevision(); !ok || revision == "" {
+		t.Fatalf("expected initial cache revision, got %q ok=%v", revision, ok)
+	}
+	metricTable := "node_metric_snapshots_cache_verify"
+	if err := model.DB.Exec(
+		`CREATE TABLE ` + authoritativeDNSSnapshotQuoteIdentifier(metricTable) + ` (` +
+			`"id" integer PRIMARY KEY, ` +
+			`"node_id" text NOT NULL, ` +
+			`"captured_at" timestamp NOT NULL, ` +
+			`"cpu_usage_percent" real NOT NULL DEFAULT 0, ` +
+			`"memory_used_bytes" integer NOT NULL DEFAULT 0, ` +
+			`"memory_total_bytes" integer NOT NULL DEFAULT 0, ` +
+			`"openresty_connections" integer NOT NULL DEFAULT 0, ` +
+			`"created_at" timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP` +
+			`)`,
+	).Error; err != nil {
+		t.Fatalf("create new metric shard table: %v", err)
+	}
+
+	authoritativeDNSSnapshotPersistentRevisionDBs.Store(model.DB, &authoritativeDNSSnapshotPersistentRevisionInstallState{
+		nextVerifyAt: time.Now().Add(-time.Second),
+	})
+	if revision, ok := authoritativeDNSSnapshotCacheRevision(); !ok || revision == "" {
+		t.Fatalf("expected cache revision after forced metric table verification, got %q ok=%v", revision, ok)
+	}
+	versionBefore := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, model.DB)
+
+	externalDB, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open external sqlite session: %v", err)
+	}
+	sqlDB, err := externalDB.DB()
+	if err != nil {
+		t.Fatalf("external sqlite handle: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+	})
+
+	if err := externalDB.Exec(
+		`INSERT INTO `+authoritativeDNSSnapshotQuoteIdentifier(metricTable)+` (`+
+			`id, node_id, captured_at, cpu_usage_percent, memory_used_bytes, `+
+			`memory_total_bytes, openresty_connections, created_at`+
+			`) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		1, "node-new-metric", 9.5, 512, 1024, 3,
+	).Error; err != nil {
+		t.Fatalf("external insert into new metric shard table: %v", err)
+	}
+	versionAfter := mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t, externalDB)
+	if versionAfter <= versionBefore {
+		t.Fatalf("expected verified new metric table trigger to bump persistent revision, got before=%d after=%d", versionBefore, versionAfter)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotPostgresBumpSQLNotifiesRevisionChannel(t *testing.T) {
+	sql := authoritativeDNSSnapshotPersistentRevisionPostgresBumpSQL()
+	if !strings.Contains(sql, "pg_notify") {
+		t.Fatalf("expected postgres bump SQL to notify revision listeners, got %s", sql)
+	}
+	if !strings.Contains(sql, authoritativeDNSSnapshotRevisionNotifyChannel) {
+		t.Fatalf("expected postgres bump SQL to use notify channel %q, got %s", authoritativeDNSSnapshotRevisionNotifyChannel, sql)
+	}
+}
+
+func mustAuthoritativeDNSSnapshotPersistentRevisionVersion(t *testing.T, db *gorm.DB) uint64 {
+	t.Helper()
+	row, err := loadAuthoritativeDNSSnapshotPersistentRevision(db)
+	if err != nil {
+		t.Fatalf("load persistent snapshot revision: %v", err)
+	}
+	return row.Version
+}
+
+func authoritativeDNSSnapshotRevisionProbeQuery(table string, sql string) bool {
+	if table == authoritativeDNSSnapshotRevisionSentinelTable || strings.Contains(sql, authoritativeDNSSnapshotRevisionSentinelTable) {
+		return false
+	}
+	if strings.HasPrefix(table, strings.ToLower((&model.NodeMetricSnapshot{}).TableName())+"_") {
+		return true
+	}
+	for _, dependencyTable := range []string{
+		(&model.DNSZone{}).TableName(),
+		(&model.DNSRecord{}).TableName(),
+		(&model.DNSSECKey{}).TableName(),
+		(&model.DNSZoneWorkerAssignment{}).TableName(),
+		(&model.Node{}).TableName(),
+		(&model.NodeMetricSnapshot{}).TableName(),
+		(&model.ProxyRoute{}).TableName(),
+		(&model.ProxySite{}).TableName(),
+		(&model.ProxySiteDomain{}).TableName(),
+		(&model.DNSBinding{}).TableName(),
+		(&model.SecurityPolicy{}).TableName(),
+		(&model.GSLBSchedulingState{}).TableName(),
+		(&model.DNSWorkerNodeProbe{}).TableName(),
+	} {
+		normalized := strings.ToLower(dependencyTable)
+		if table == normalized || strings.Contains(sql, "`"+normalized+"`") || strings.Contains(sql, `"`+normalized+`"`) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestAuthoritativeDNSSnapshotCacheRevisionExpiresDynamicNodeStatus(t *testing.T) {

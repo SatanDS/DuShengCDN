@@ -899,6 +899,9 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 		"files",
 		"gslb_scheduling_states",
 		"managed_domains",
+		"node_access_log_bucket_filter_identity_rollups",
+		"node_access_log_bucket_identity_rollups",
+		"node_access_log_bucket_rollups",
 		"node_access_log_rollups",
 		"node_access_logs",
 		"node_health_events",
@@ -1560,6 +1563,312 @@ func TestNodeAccessLogRollupsServeAggregationsWithoutRawShards(t *testing.T) {
 		siteTraffic[0].RequestCount != 2 ||
 		siteTraffic[0].ResponseBytes != 3000 {
 		t.Fatalf("unexpected rollup site traffic: %+v", siteTraffic)
+	}
+}
+
+func TestNodeAccessLogBucketRollupsServeBucketsWithoutDetailedRollups(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "access-log-bucket-rollups.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	baseTime := time.Date(2026, 6, 4, 8, 12, 0, 0, time.UTC)
+	fixtures := []*NodeAccessLog{
+		{
+			NodeID:        "node-a",
+			LoggedAt:      baseTime.Add(-4 * time.Minute),
+			RemoteAddr:    "203.0.113.1",
+			Host:          "app.example.com",
+			Path:          "/index",
+			StatusCode:    200,
+			CacheStatus:   "HIT",
+			ResponseBytes: 1000,
+		},
+		{
+			NodeID:        "node-b",
+			LoggedAt:      baseTime.Add(-3 * time.Minute),
+			RemoteAddr:    "203.0.113.1",
+			Host:          "app.example.com",
+			Path:          "/asset.js",
+			StatusCode:    502,
+			CacheStatus:   "MISS",
+			ResponseBytes: 2000,
+		},
+		{
+			NodeID:        "node-a",
+			LoggedAt:      baseTime.Add(-2 * time.Minute),
+			RemoteAddr:    "203.0.113.2",
+			Host:          "api.example.com",
+			Path:          "/v1",
+			StatusCode:    404,
+			CacheStatus:   "BYPASS",
+			ResponseBytes: 500,
+		},
+	}
+	if inserted, err := InsertNewNodeAccessLogs(db, fixtures); err != nil {
+		t.Fatalf("InsertNewNodeAccessLogs failed: %v", err)
+	} else if inserted != int64(len(fixtures)) {
+		t.Fatalf("expected %d inserted logs, got %d", len(fixtures), inserted)
+	}
+
+	rawDB := sessionIgnoringSharding(db)
+	var bucketRollupCount int64
+	if err := rawDB.Model(&NodeAccessLogBucketRollup{}).Count(&bucketRollupCount).Error; err != nil {
+		t.Fatalf("count bucket rollups: %v", err)
+	}
+	if bucketRollupCount == 0 {
+		t.Fatal("expected access log bucket rollups to be maintained during bulk insert")
+	}
+	var identityRollupCount int64
+	if err := rawDB.Model(&NodeAccessLogBucketIdentityRollup{}).Count(&identityRollupCount).Error; err != nil {
+		t.Fatalf("count bucket identity rollups: %v", err)
+	}
+	if identityRollupCount == 0 {
+		t.Fatal("expected access log bucket identity rollups to be maintained during bulk insert")
+	}
+	for _, table := range observabilityShardTables("node_access_logs") {
+		if err := rawDB.Exec("DROP TABLE IF EXISTS " + quoteIdentifier(table)).Error; err != nil {
+			t.Fatalf("drop raw shard %s: %v", table, err)
+		}
+	}
+	if err := rawDB.Exec("DROP TABLE IF EXISTS " + quoteIdentifier((NodeAccessLogRollup{}).TableName())).Error; err != nil {
+		t.Fatalf("drop detailed rollups: %v", err)
+	}
+
+	totalRecords, totalIPs, err := CountNodeAccessLogs(NodeAccessLogQuery{Since: baseTime.Add(-time.Hour)})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs from bucket rollups failed: %v", err)
+	}
+	if totalRecords != 3 || totalIPs != 2 {
+		t.Fatalf("unexpected bucket rollup counts: records=%d ips=%d", totalRecords, totalIPs)
+	}
+
+	query := NodeAccessLogBucketQuery{
+		Since:       baseTime.Add(-time.Hour),
+		FoldMinutes: 5,
+		PageSize:    10,
+		SortBy:      "request_count",
+		SortOrder:   "desc",
+	}
+	buckets, err := ListNodeAccessLogBuckets(query)
+	if err != nil {
+		t.Fatalf("ListNodeAccessLogBuckets from bucket rollups failed: %v", err)
+	}
+	if len(buckets) != 2 ||
+		buckets[0].RequestCount != 2 ||
+		buckets[0].UniqueIPCount != 1 ||
+		buckets[0].UniqueHostCount != 1 ||
+		buckets[0].SuccessCount != 1 ||
+		buckets[0].ServerErrorCount != 1 {
+		t.Fatalf("unexpected bucket rollup buckets: %+v", buckets)
+	}
+	totalBuckets, err := CountNodeAccessLogBuckets(query)
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogBuckets from bucket rollups failed: %v", err)
+	}
+	if totalBuckets != 2 {
+		t.Fatalf("expected two bucket rollup buckets, got %d", totalBuckets)
+	}
+}
+
+func TestNodeAccessLogFilterIdentityRollupsServeComplexDistinctCounts(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "access-log-filter-identity-rollups.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	baseTime := time.Date(2026, 6, 4, 8, 10, 0, 0, time.UTC)
+	fixtures := []*NodeAccessLog{
+		{
+			NodeID:     "node-a",
+			LoggedAt:   baseTime,
+			RemoteAddr: "203.0.113.1",
+			Host:       "app.example.com",
+			Path:       "/api",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-a",
+			LoggedAt:   baseTime.Add(10 * time.Second),
+			RemoteAddr: "203.0.113.1",
+			Host:       "app.example.com",
+			Path:       "/api",
+			StatusCode: 502,
+		},
+		{
+			NodeID:     "node-a",
+			LoggedAt:   baseTime.Add(20 * time.Second),
+			RemoteAddr: "203.0.113.2",
+			Host:       "app.example.com",
+			Path:       "/api/v1",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-a",
+			LoggedAt:   baseTime.Add(30 * time.Second),
+			RemoteAddr: "203.0.113.3",
+			Host:       "static.example.com",
+			Path:       "/api",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-b",
+			LoggedAt:   baseTime.Add(40 * time.Second),
+			RemoteAddr: "203.0.113.4",
+			Host:       "app.example.com",
+			Path:       "/api",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-a",
+			LoggedAt:   baseTime.Add(70 * time.Second),
+			RemoteAddr: "203.0.113.1",
+			Host:       "app.example.com",
+			Path:       "/api",
+			StatusCode: 200,
+		},
+	}
+	if inserted, err := InsertNewNodeAccessLogs(db, fixtures); err != nil {
+		t.Fatalf("InsertNewNodeAccessLogs failed: %v", err)
+	} else if inserted != int64(len(fixtures)) {
+		t.Fatalf("expected %d inserted logs, got %d", len(fixtures), inserted)
+	}
+
+	rawDB := sessionIgnoringSharding(db)
+	var filterIdentityCount int64
+	if err := rawDB.Model(&NodeAccessLogBucketFilterIdentityRollup{}).Count(&filterIdentityCount).Error; err != nil {
+		t.Fatalf("count filter identity rollups: %v", err)
+	}
+	if filterIdentityCount == 0 {
+		t.Fatal("expected access log filter identity rollups to be maintained during bulk insert")
+	}
+
+	records, ips, err := CountNodeAccessLogs(NodeAccessLogQuery{
+		NodeID: "node-a",
+		Host:   "app.example.com",
+		Path:   "/api",
+		Since:  baseTime,
+	})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs complex filter failed: %v", err)
+	}
+	if records != 4 || ips != 2 {
+		t.Fatalf("unexpected complex rollup counts: records=%d ips=%d", records, ips)
+	}
+
+	partialRecords, partialIPs, err := CountNodeAccessLogs(NodeAccessLogQuery{
+		NodeID: "node-a",
+		Host:   "app.example.com",
+		Path:   "/api",
+		Since:  baseTime.Add(15 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs partial-bucket complex filter failed: %v", err)
+	}
+	if partialRecords != 2 || partialIPs != 2 {
+		t.Fatalf("unexpected partial-bucket complex rollup counts: records=%d ips=%d", partialRecords, partialIPs)
+	}
+
+	directIPs, ok, err := countNodeAccessLogIdentitiesFromFilterRollups(NodeAccessLogQuery{
+		NodeID: "node-a",
+		Host:   "app.example.com",
+		Path:   "/api",
+		Since:  baseTime,
+	}, nodeAccessLogBucketIdentityKindIP)
+	if err != nil {
+		t.Fatalf("count filter identity ips failed: %v", err)
+	}
+	if !ok || directIPs != 2 {
+		t.Fatalf("expected filter identity ip count 2, ok=%v count=%d", ok, directIPs)
+	}
+
+	directHosts, ok, err := countNodeAccessLogIdentitiesFromFilterRollups(NodeAccessLogQuery{
+		NodeID:     "node-a",
+		RemoteAddr: "203.0.113.1",
+		Host:       "example.com",
+		Path:       "/api",
+		Since:      baseTime,
+	}, nodeAccessLogBucketIdentityKindHost)
+	if err != nil {
+		t.Fatalf("count filter identity hosts failed: %v", err)
+	}
+	if !ok || directHosts != 1 {
+		t.Fatalf("expected filter identity host count 1, ok=%v count=%d", ok, directHosts)
+	}
+
+	buckets, err := ListNodeAccessLogBuckets(NodeAccessLogBucketQuery{
+		NodeID:      "node-a",
+		RemoteAddr:  "203.0.113.1",
+		Host:        "example.com",
+		Path:        "/api",
+		Since:       baseTime,
+		FoldMinutes: 5,
+		PageSize:    10,
+	})
+	if err != nil {
+		t.Fatalf("ListNodeAccessLogBuckets complex filter failed: %v", err)
+	}
+	if len(buckets) != 1 ||
+		buckets[0].RequestCount != 3 ||
+		buckets[0].UniqueIPCount != 1 ||
+		buckets[0].UniqueHostCount != 1 ||
+		buckets[0].ServerErrorCount != 1 {
+		t.Fatalf("unexpected complex filter buckets: %+v", buckets)
+	}
+
+	ipSummaryTotal, err := CountNodeAccessLogIPSummaries(NodeAccessLogIPSummaryQuery{
+		NodeID: "node-a",
+		Host:   "app.example.com",
+		Since:  baseTime,
+	})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogIPSummaries complex filter failed: %v", err)
+	}
+	if ipSummaryTotal != 2 {
+		t.Fatalf("expected two complex filtered ip summaries, got %d", ipSummaryTotal)
+	}
+	partialIPSummaryTotal, err := CountNodeAccessLogIPSummaries(NodeAccessLogIPSummaryQuery{
+		NodeID: "node-a",
+		Host:   "app.example.com",
+		Since:  baseTime.Add(15 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogIPSummaries partial-bucket complex filter failed: %v", err)
+	}
+	if partialIPSummaryTotal != 2 {
+		t.Fatalf("expected two partial-bucket complex filtered ip summaries, got %d", partialIPSummaryTotal)
+	}
+
+	if err := rawDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&NodeAccessLogBucketFilterIdentityRollup{}).Error; err != nil {
+		t.Fatalf("clear filter identity rollups: %v", err)
+	}
+	if err := ensureNodeAccessLogRollupSchema(db); err != nil {
+		t.Fatalf("ensureNodeAccessLogRollupSchema backfill failed: %v", err)
+	}
+	filterIdentityCount = 0
+	if err := rawDB.Model(&NodeAccessLogBucketFilterIdentityRollup{}).Count(&filterIdentityCount).Error; err != nil {
+		t.Fatalf("count backfilled filter identity rollups: %v", err)
+	}
+	if filterIdentityCount == 0 {
+		t.Fatal("expected filter identity rollups to be backfilled")
 	}
 }
 

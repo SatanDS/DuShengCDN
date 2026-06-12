@@ -16,6 +16,11 @@ import (
 
 const nodeAccessLogRollupBucketMinutes = 1
 
+const (
+	nodeAccessLogBucketIdentityKindIP   = "ip"
+	nodeAccessLogBucketIdentityKindHost = "host"
+)
+
 type NodeAccessLogRollup struct {
 	ID                    uint      `json:"id" gorm:"primaryKey"`
 	BucketStartedAt       time.Time `json:"bucket_started_at" gorm:"index;uniqueIndex:idx_node_access_log_rollups_bucket_hash,priority:1"`
@@ -45,6 +50,41 @@ type NodeAccessLogRollup struct {
 	UpdatedAt             time.Time `json:"updated_at"`
 }
 
+type NodeAccessLogBucketRollup struct {
+	ID               uint      `json:"id" gorm:"primaryKey"`
+	BucketStartedAt  time.Time `json:"bucket_started_at" gorm:"uniqueIndex;index"`
+	RequestCount     int64     `json:"request_count"`
+	UniqueIPCount    int64     `json:"unique_ip_count"`
+	UniqueHostCount  int64     `json:"unique_host_count"`
+	SuccessCount     int64     `json:"success_count"`
+	ClientErrorCount int64     `json:"client_error_count"`
+	ServerErrorCount int64     `json:"server_error_count"`
+	LastSeenAt       time.Time `json:"last_seen_at" gorm:"index"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type NodeAccessLogBucketIdentityRollup struct {
+	ID              uint      `json:"id" gorm:"primaryKey"`
+	BucketStartedAt time.Time `json:"bucket_started_at" gorm:"index;uniqueIndex:idx_node_access_log_bucket_identity,priority:1"`
+	IdentityKind    string    `json:"identity_kind" gorm:"size:16;index;uniqueIndex:idx_node_access_log_bucket_identity,priority:2"`
+	IdentityValue   string    `json:"identity_value" gorm:"size:255;index;uniqueIndex:idx_node_access_log_bucket_identity,priority:3"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type NodeAccessLogBucketFilterIdentityRollup struct {
+	ID              uint      `json:"id" gorm:"primaryKey"`
+	BucketStartedAt time.Time `json:"bucket_started_at" gorm:"index;uniqueIndex:idx_node_access_log_bucket_filter_identity,priority:1"`
+	DimensionHash   string    `json:"dimension_hash" gorm:"size:64;uniqueIndex:idx_node_access_log_bucket_filter_identity,priority:2"`
+	NodeID          string    `json:"node_id" gorm:"index;size:64"`
+	RemoteAddr      string    `json:"remote_addr" gorm:"index;size:128"`
+	Host            string    `json:"host" gorm:"index;size:255"`
+	Path            string    `json:"path" gorm:"type:text"`
+	IdentityKind    string    `json:"identity_kind" gorm:"size:16;index"`
+	IdentityValue   string    `json:"identity_value" gorm:"size:255;index"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
 type nodeAccessLogRollupAggregateRow struct {
 	BucketEpoch           int64
 	NodeID                string
@@ -69,6 +109,17 @@ type nodeAccessLogRollupAggregateRow struct {
 	LastSeenEpoch         int64
 }
 
+type nodeAccessLogBucketRollupAggregateRow struct {
+	BucketStartedAt  time.Time
+	RequestCount     int64
+	UniqueIPCount    int64
+	UniqueHostCount  int64
+	SuccessCount     int64
+	ClientErrorCount int64
+	ServerErrorCount int64
+	LastSeenEpoch    int64
+}
+
 func (log *NodeAccessLog) AfterCreate(tx *gorm.DB) error {
 	if log == nil {
 		return nil
@@ -81,7 +132,12 @@ func ensureNodeAccessLogRollupSchema(db *gorm.DB) error {
 	if db == nil {
 		return nil
 	}
-	if err := db.AutoMigrate(&NodeAccessLogRollup{}); err != nil {
+	if err := db.AutoMigrate(
+		&NodeAccessLogRollup{},
+		&NodeAccessLogBucketRollup{},
+		&NodeAccessLogBucketIdentityRollup{},
+		&NodeAccessLogBucketFilterIdentityRollup{},
+	); err != nil {
 		return fmt.Errorf("auto migrate node access log rollups failed: %w", err)
 	}
 	return backfillNodeAccessLogRollupsIfEmpty(db)
@@ -97,9 +153,36 @@ func backfillNodeAccessLogRollupsIfEmpty(db *gorm.DB) error {
 		return fmt.Errorf("count node access log rollups failed: %w", err)
 	}
 	if count > 0 {
-		return nil
+		return backfillNodeAccessLogDerivedRollupsIfEmpty(db)
 	}
 	return RebuildNodeAccessLogRollups(db)
+}
+
+func backfillNodeAccessLogDerivedRollupsIfEmpty(db *gorm.DB) error {
+	db = nodeAccessLogRollupSession(db)
+	if db == nil || !nodeAccessLogBucketRollupTablesExist(db) {
+		return nil
+	}
+	for _, item := range []struct {
+		name  string
+		model any
+	}{
+		{name: "node access log bucket rollups", model: &NodeAccessLogBucketRollup{}},
+		{name: "node access log bucket identity rollups", model: &NodeAccessLogBucketIdentityRollup{}},
+		{name: "node access log bucket filter identity rollups", model: &NodeAccessLogBucketFilterIdentityRollup{}},
+	} {
+		if !db.Migrator().HasTable(item.model) {
+			continue
+		}
+		var count int64
+		if err := nodeAccessLogRollupSession(db).Model(item.model).Count(&count).Error; err != nil {
+			return fmt.Errorf("count %s failed: %w", item.name, err)
+		}
+		if count == 0 {
+			return RebuildNodeAccessLogBucketRollups(db)
+		}
+	}
+	return nil
 }
 
 func RebuildNodeAccessLogRollups(db *gorm.DB) error {
@@ -110,6 +193,9 @@ func RebuildNodeAccessLogRollups(db *gorm.DB) error {
 	if err := nodeAccessLogRollupTableDB(db).Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&NodeAccessLogRollup{}).Error; err != nil {
 		return fmt.Errorf("clear node access log rollups failed: %w", err)
 	}
+	if err := clearNodeAccessLogBucketRollups(db); err != nil {
+		return err
+	}
 	for _, table := range observabilityShardTables("node_access_logs") {
 		if !db.Migrator().HasTable(table) {
 			continue
@@ -118,11 +204,11 @@ func RebuildNodeAccessLogRollups(db *gorm.DB) error {
 		if err != nil {
 			return err
 		}
-		if err := upsertNodeAccessLogRollupRows(db, rows); err != nil {
+		if err := upsertNodeAccessLogRollupRowsWithRefresh(db, rows, false); err != nil {
 			return err
 		}
 	}
-	return nil
+	return RebuildNodeAccessLogBucketRollups(db)
 }
 
 func DeleteAllNodeAccessLogRollups(db *gorm.DB) error {
@@ -130,7 +216,10 @@ func DeleteAllNodeAccessLogRollups(db *gorm.DB) error {
 	if db == nil || !db.Migrator().HasTable(&NodeAccessLogRollup{}) {
 		return nil
 	}
-	return nodeAccessLogRollupTableDB(db).Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&NodeAccessLogRollup{}).Error
+	if err := nodeAccessLogRollupTableDB(db).Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&NodeAccessLogRollup{}).Error; err != nil {
+		return err
+	}
+	return clearNodeAccessLogBucketRollups(db)
 }
 
 func nodeAccessLogRollupRowsForShard(db *gorm.DB, table string) ([]*NodeAccessLogRollup, error) {
@@ -299,6 +388,10 @@ func applyNodeAccessLogRollupCacheCounters(row *NodeAccessLogRollup, cacheStatus
 }
 
 func upsertNodeAccessLogRollupRows(db *gorm.DB, rows []*NodeAccessLogRollup) error {
+	return upsertNodeAccessLogRollupRowsWithRefresh(db, rows, true)
+}
+
+func upsertNodeAccessLogRollupRowsWithRefresh(db *gorm.DB, rows []*NodeAccessLogRollup, refreshBuckets bool) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -324,24 +417,267 @@ func upsertNodeAccessLogRollupRows(db *gorm.DB, rows []*NodeAccessLogRollup) err
 		"last_seen_at":             gorm.Expr("CASE WHEN excluded.last_seen_at > node_access_log_rollups.last_seen_at THEN excluded.last_seen_at ELSE node_access_log_rollups.last_seen_at END"),
 		"updated_at":               gorm.Expr("excluded.updated_at"),
 	})
-	return nodeAccessLogRollupTableDB(db).Clauses(clause.OnConflict{
+	if err := nodeAccessLogRollupTableDB(db).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "bucket_started_at"}, {Name: "dimension_hash"}},
 		DoUpdates: updates,
-	}).CreateInBatches(rows, 500).Error
+	}).CreateInBatches(rows, 500).Error; err != nil {
+		return err
+	}
+	if refreshBuckets {
+		return refreshNodeAccessLogBucketRollupsForRows(db, rows)
+	}
+	return nil
+}
+
+func clearNodeAccessLogBucketRollups(db *gorm.DB) error {
+	db = nodeAccessLogRollupSession(db)
+	if db == nil {
+		return nil
+	}
+	if db.Migrator().HasTable(&NodeAccessLogBucketIdentityRollup{}) {
+		if err := nodeAccessLogBucketIdentityRollupTableDB(db).Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&NodeAccessLogBucketIdentityRollup{}).Error; err != nil {
+			return fmt.Errorf("clear node access log bucket identity rollups failed: %w", err)
+		}
+	}
+	if db.Migrator().HasTable(&NodeAccessLogBucketFilterIdentityRollup{}) {
+		if err := nodeAccessLogBucketFilterIdentityRollupTableDB(db).Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&NodeAccessLogBucketFilterIdentityRollup{}).Error; err != nil {
+			return fmt.Errorf("clear node access log bucket filter identity rollups failed: %w", err)
+		}
+	}
+	if db.Migrator().HasTable(&NodeAccessLogBucketRollup{}) {
+		if err := nodeAccessLogBucketRollupTableDB(db).Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&NodeAccessLogBucketRollup{}).Error; err != nil {
+			return fmt.Errorf("clear node access log bucket rollups failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func RebuildNodeAccessLogBucketRollups(db *gorm.DB) error {
+	db = nodeAccessLogRollupSession(db)
+	if db == nil || !nodeAccessLogBucketRollupTablesExist(db) || !db.Migrator().HasTable(&NodeAccessLogRollup{}) {
+		return nil
+	}
+	if err := clearNodeAccessLogBucketRollups(db); err != nil {
+		return err
+	}
+	var buckets []time.Time
+	if err := nodeAccessLogRollupTableDB(db).
+		Distinct("bucket_started_at").
+		Order("bucket_started_at asc").
+		Pluck("bucket_started_at", &buckets).Error; err != nil {
+		return fmt.Errorf("query node access log rollup buckets failed: %w", err)
+	}
+	const batchSize = 500
+	for start := 0; start < len(buckets); start += batchSize {
+		end := start + batchSize
+		if end > len(buckets) {
+			end = len(buckets)
+		}
+		if err := refreshNodeAccessLogBucketRollupsForBuckets(db, buckets[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func refreshNodeAccessLogBucketRollupsForRows(db *gorm.DB, rows []*NodeAccessLogRollup) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	seen := make(map[int64]time.Time, len(rows))
+	for _, row := range rows {
+		if row == nil || row.BucketStartedAt.IsZero() {
+			continue
+		}
+		bucket := nodeAccessLogRollupBucketStart(row.BucketStartedAt)
+		seen[bucket.Unix()] = bucket
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	buckets := make([]time.Time, 0, len(seen))
+	for _, bucket := range seen {
+		buckets = append(buckets, bucket)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].Before(buckets[j])
+	})
+	return refreshNodeAccessLogBucketRollupsForBuckets(db, buckets)
+}
+
+func refreshNodeAccessLogBucketRollupsForBuckets(db *gorm.DB, buckets []time.Time) error {
+	db = nodeAccessLogRollupSession(db)
+	if db == nil || len(buckets) == 0 || !nodeAccessLogBucketRollupTablesExist(db) || !db.Migrator().HasTable(&NodeAccessLogRollup{}) {
+		return nil
+	}
+	if err := nodeAccessLogBucketIdentityRollupTableDB(db).
+		Where("bucket_started_at IN ?", buckets).
+		Delete(&NodeAccessLogBucketIdentityRollup{}).Error; err != nil {
+		return fmt.Errorf("clear changed node access log bucket identity rollups failed: %w", err)
+	}
+	if nodeAccessLogBucketFilterIdentityRollupTableExists(db) {
+		if err := nodeAccessLogBucketFilterIdentityRollupTableDB(db).
+			Where("bucket_started_at IN ?", buckets).
+			Delete(&NodeAccessLogBucketFilterIdentityRollup{}).Error; err != nil {
+			return fmt.Errorf("clear changed node access log bucket filter identity rollups failed: %w", err)
+		}
+	}
+	if err := nodeAccessLogBucketRollupTableDB(db).
+		Where("bucket_started_at IN ?", buckets).
+		Delete(&NodeAccessLogBucketRollup{}).Error; err != nil {
+		return fmt.Errorf("clear changed node access log bucket rollups failed: %w", err)
+	}
+	bucketRows, err := nodeAccessLogBucketRollupRowsForBuckets(db, buckets)
+	if err != nil {
+		return err
+	}
+	if len(bucketRows) > 0 {
+		if err := nodeAccessLogBucketRollupTableDB(db).CreateInBatches(bucketRows, 500).Error; err != nil {
+			return fmt.Errorf("insert node access log bucket rollups failed: %w", err)
+		}
+	}
+	identityRows, err := nodeAccessLogBucketIdentityRollupRowsForBuckets(db, buckets)
+	if err != nil {
+		return err
+	}
+	if len(identityRows) > 0 {
+		if err := nodeAccessLogBucketIdentityRollupTableDB(db).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(identityRows, 500).Error; err != nil {
+			return fmt.Errorf("insert node access log bucket identity rollups failed: %w", err)
+		}
+	}
+	if nodeAccessLogBucketFilterIdentityRollupTableExists(db) {
+		filterIdentityRows, err := nodeAccessLogBucketFilterIdentityRollupRowsForBuckets(db, buckets)
+		if err != nil {
+			return err
+		}
+		if len(filterIdentityRows) > 0 {
+			if err := nodeAccessLogBucketFilterIdentityRollupTableDB(db).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(filterIdentityRows, 500).Error; err != nil {
+				return fmt.Errorf("insert node access log bucket filter identity rollups failed: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func nodeAccessLogBucketRollupRowsForBuckets(db *gorm.DB, buckets []time.Time) ([]*NodeAccessLogBucketRollup, error) {
+	lastSeenExpr := accessLogEpochExpr("MAX(last_seen_at)")
+	var aggregateRows []nodeAccessLogBucketRollupAggregateRow
+	err := nodeAccessLogRollupTableDB(db).
+		Where("bucket_started_at IN ?", buckets).
+		Select(
+			"bucket_started_at, " +
+				"COALESCE(SUM(request_count), 0) AS request_count, " +
+				"COUNT(DISTINCT CASE WHEN remote_addr <> '' THEN remote_addr ELSE NULL END) AS unique_ip_count, " +
+				"COUNT(DISTINCT CASE WHEN host <> '' THEN host ELSE NULL END) AS unique_host_count, " +
+				"COALESCE(SUM(CASE WHEN status_code < 400 THEN request_count ELSE 0 END), 0) AS success_count, " +
+				"COALESCE(SUM(CASE WHEN status_code >= 400 AND status_code < 500 THEN request_count ELSE 0 END), 0) AS client_error_count, " +
+				"COALESCE(SUM(CASE WHEN status_code >= 500 THEN request_count ELSE 0 END), 0) AS server_error_count, " +
+				lastSeenExpr + " AS last_seen_epoch",
+		).
+		Group("bucket_started_at").
+		Scan(&aggregateRows).Error
+	if err != nil {
+		return nil, fmt.Errorf("aggregate node access log bucket rollups failed: %w", err)
+	}
+	rows := make([]*NodeAccessLogBucketRollup, 0, len(aggregateRows))
+	for _, row := range aggregateRows {
+		rows = append(rows, &NodeAccessLogBucketRollup{
+			BucketStartedAt:  row.BucketStartedAt.UTC(),
+			RequestCount:     row.RequestCount,
+			UniqueIPCount:    row.UniqueIPCount,
+			UniqueHostCount:  row.UniqueHostCount,
+			SuccessCount:     row.SuccessCount,
+			ClientErrorCount: row.ClientErrorCount,
+			ServerErrorCount: row.ServerErrorCount,
+			LastSeenAt:       time.Unix(row.LastSeenEpoch, 0).UTC(),
+		})
+	}
+	return rows, nil
+}
+
+func nodeAccessLogBucketIdentityRollupRowsForBuckets(db *gorm.DB, buckets []time.Time) ([]*NodeAccessLogBucketIdentityRollup, error) {
+	rows := []*NodeAccessLogBucketIdentityRollup{}
+	for _, dimension := range []struct {
+		kind   string
+		column string
+	}{
+		{kind: nodeAccessLogBucketIdentityKindIP, column: "remote_addr"},
+		{kind: nodeAccessLogBucketIdentityKindHost, column: "host"},
+	} {
+		var dimensionRows []*NodeAccessLogBucketIdentityRollup
+		err := nodeAccessLogRollupTableDB(db).
+			Where("bucket_started_at IN ?", buckets).
+			Where(dimension.column+" <> ''").
+			Select("bucket_started_at, ? AS identity_kind, "+dimension.column+" AS identity_value", dimension.kind).
+			Group("bucket_started_at, " + dimension.column).
+			Scan(&dimensionRows).Error
+		if err != nil {
+			return nil, fmt.Errorf("aggregate node access log bucket %s identities failed: %w", dimension.kind, err)
+		}
+		rows = append(rows, dimensionRows...)
+	}
+	return rows, nil
+}
+
+func nodeAccessLogBucketFilterIdentityRollupRowsForBuckets(db *gorm.DB, buckets []time.Time) ([]*NodeAccessLogBucketFilterIdentityRollup, error) {
+	rows := []*NodeAccessLogBucketFilterIdentityRollup{}
+	for _, dimension := range []struct {
+		kind   string
+		column string
+	}{
+		{kind: nodeAccessLogBucketIdentityKindIP, column: "remote_addr"},
+		{kind: nodeAccessLogBucketIdentityKindHost, column: "host"},
+	} {
+		var dimensionRows []*NodeAccessLogBucketFilterIdentityRollup
+		err := nodeAccessLogRollupTableDB(db).
+			Where("bucket_started_at IN ?", buckets).
+			Where(dimension.column+" <> ''").
+			Select(
+				"bucket_started_at, node_id, remote_addr, host, path, "+
+					"? AS identity_kind, "+dimension.column+" AS identity_value",
+				dimension.kind,
+			).
+			Group("bucket_started_at, node_id, remote_addr, host, path, " + dimension.column).
+			Scan(&dimensionRows).Error
+		if err != nil {
+			return nil, fmt.Errorf("aggregate node access log bucket filter %s identities failed: %w", dimension.kind, err)
+		}
+		for _, row := range dimensionRows {
+			if row == nil {
+				continue
+			}
+			row.BucketStartedAt = nodeAccessLogRollupBucketStart(row.BucketStartedAt)
+			row.NodeID = strings.TrimSpace(row.NodeID)
+			row.RemoteAddr = strings.TrimSpace(row.RemoteAddr)
+			row.Host = strings.TrimSpace(row.Host)
+			row.Path = strings.TrimSpace(row.Path)
+			row.IdentityKind = strings.TrimSpace(row.IdentityKind)
+			row.IdentityValue = strings.TrimSpace(row.IdentityValue)
+			row.DimensionHash = nodeAccessLogBucketFilterIdentityRollupDimensionHash(row)
+		}
+		rows = append(rows, dimensionRows...)
+	}
+	return rows, nil
 }
 
 func countNodeAccessLogsFromRollups(query NodeAccessLogQuery) (int64, int64, bool, error) {
+	if totalRecords, totalIPs, ok, err := countNodeAccessLogsFromBucketRollups(query); ok || err != nil {
+		return totalRecords, totalIPs, ok, err
+	}
 	db, ok := nodeAccessLogRollupQueryDB()
 	if !ok {
 		return 0, 0, false, nil
 	}
 	if !nodeAccessLogRollupCanServeSince(query.Since) {
-		return 0, 0, false, nil
+		return countNodeAccessLogsFromPartialRawAndRollups(db, query)
 	}
 	base := applyNodeAccessLogRollupFilters(nodeAccessLogRollupTableDB(db), query)
 	var totalRecords int64
 	if err := base.Select("COALESCE(SUM(request_count), 0)").Scan(&totalRecords).Error; err != nil {
 		return 0, 0, false, fmt.Errorf("count access log records from rollups failed: %w", err)
+	}
+	if totalIPs, ok, err := countNodeAccessLogIdentitiesFromFilterRollups(query, nodeAccessLogBucketIdentityKindIP); ok || err != nil {
+		return totalRecords, totalIPs, ok, err
 	}
 	var totalIPs int64
 	if err := applyNodeAccessLogRollupFilters(nodeAccessLogRollupTableDB(db), query).
@@ -353,7 +689,66 @@ func countNodeAccessLogsFromRollups(query NodeAccessLogQuery) (int64, int64, boo
 	return totalRecords, totalIPs, true, nil
 }
 
+func countNodeAccessLogsFromPartialRawAndRollups(db *gorm.DB, query NodeAccessLogQuery) (int64, int64, bool, error) {
+	remainderSince, ok := nodeAccessLogRollupRemainderSince(query.Since)
+	if !ok || remainderSince.IsZero() || !remainderSince.After(query.Since) {
+		return 0, 0, false, nil
+	}
+	remainderQuery := query
+	remainderQuery.Since = remainderSince
+	remainderQuery.Before = time.Time{}
+	if !nodeAccessLogBucketFilterIdentityRollupsCanServe(db, remainderQuery) {
+		return 0, 0, false, nil
+	}
+	partialQuery := query
+	partialQuery.Before = remainderSince
+	partialRecords, err := countNodeAccessLogRawRecords(partialQuery)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	remainderRecords, err := countNodeAccessLogRollupRecords(db, remainderQuery)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	totalIPs, ok, err := countNodeAccessLogIdentitiesFromPartialRawAndFilterRollups(partialQuery, remainderQuery, nodeAccessLogBucketIdentityKindIP)
+	if !ok || err != nil {
+		return 0, 0, ok, err
+	}
+	return partialRecords + remainderRecords, totalIPs, true, nil
+}
+
+func countNodeAccessLogRollupRecords(db *gorm.DB, query NodeAccessLogQuery) (int64, error) {
+	var totalRecords int64
+	if err := applyNodeAccessLogRollupFilters(nodeAccessLogRollupTableDB(db), query).
+		Select("COALESCE(SUM(request_count), 0)").
+		Scan(&totalRecords).Error; err != nil {
+		return 0, fmt.Errorf("count access log records from rollups failed: %w", err)
+	}
+	return totalRecords, nil
+}
+
+func countNodeAccessLogRawRecords(query NodeAccessLogQuery) (int64, error) {
+	db := sessionIgnoringSharding(DB)
+	if db == nil {
+		return 0, fmt.Errorf("database handle is nil")
+	}
+	branches, args := buildNodeAccessLogUnionBranches(query, "COUNT(*) AS total_records")
+	var row struct {
+		TotalRecords int64
+	}
+	sql := "WITH access_log_counts AS (" +
+		strings.Join(branches, " UNION ALL ") +
+		") SELECT COALESCE(SUM(total_records), 0) AS total_records FROM access_log_counts"
+	if err := db.Raw(sql, args...).Scan(&row).Error; err != nil {
+		return 0, fmt.Errorf("count access log records across shards failed: %w", err)
+	}
+	return row.TotalRecords, nil
+}
+
 func listNodeAccessLogBucketsFromRollups(query NodeAccessLogBucketQuery) ([]*NodeAccessLogBucketRow, bool, error) {
+	if rows, ok, err := listNodeAccessLogBucketsFromBucketRollups(query); ok || err != nil {
+		return rows, ok, err
+	}
 	db, ok := nodeAccessLogRollupQueryDB()
 	if !ok {
 		return nil, false, nil
@@ -369,6 +764,9 @@ func listNodeAccessLogBucketsFromRollups(query NodeAccessLogBucketQuery) ([]*Nod
 		Since:      query.Since,
 	}
 	bucketExpr := accessLogBucketEpochExprForColumn("bucket_started_at", query.FoldMinutes)
+	if nodeAccessLogBucketFilterIdentityRollupsCanServe(db, modelQuery) {
+		return listNodeAccessLogBucketsFromRollupsWithFilterIdentities(db, query, modelQuery, bucketExpr)
+	}
 	rollupQuery := applyNodeAccessLogRollupFilters(nodeAccessLogRollupTableDB(db), modelQuery).
 		Select(
 			bucketExpr + " AS bucket_epoch, " +
@@ -395,7 +793,50 @@ func listNodeAccessLogBucketsFromRollups(query NodeAccessLogBucketQuery) ([]*Nod
 	return rows, true, nil
 }
 
+func listNodeAccessLogBucketsFromRollupsWithFilterIdentities(db *gorm.DB, query NodeAccessLogBucketQuery, modelQuery NodeAccessLogQuery, bucketExpr string) ([]*NodeAccessLogBucketRow, bool, error) {
+	bucketCounts := applyNodeAccessLogRollupFilters(nodeAccessLogRollupTableDB(db), modelQuery).
+		Select(
+			bucketExpr + " AS bucket_epoch, " +
+				"COALESCE(SUM(request_count), 0) AS request_count, " +
+				"COALESCE(SUM(CASE WHEN status_code < 400 THEN request_count ELSE 0 END), 0) AS success_count, " +
+				"COALESCE(SUM(CASE WHEN status_code >= 400 AND status_code < 500 THEN request_count ELSE 0 END), 0) AS client_error_count, " +
+				"COALESCE(SUM(CASE WHEN status_code >= 500 THEN request_count ELSE 0 END), 0) AS server_error_count",
+		).
+		Group("bucket_epoch")
+	ipCounts := nodeAccessLogFilterIdentityCountsByFold(db, modelQuery, query.FoldMinutes, nodeAccessLogBucketIdentityKindIP, "unique_ip_count")
+	hostCounts := nodeAccessLogFilterIdentityCountsByFold(db, modelQuery, query.FoldMinutes, nodeAccessLogBucketIdentityKindHost, "unique_host_count")
+	rollupQuery := nodeAccessLogRollupSession(db).
+		Table("(?) AS bucket_counts", bucketCounts).
+		Joins("LEFT JOIN (?) AS ip_counts ON ip_counts.bucket_epoch = bucket_counts.bucket_epoch", ipCounts).
+		Joins("LEFT JOIN (?) AS host_counts ON host_counts.bucket_epoch = bucket_counts.bucket_epoch", hostCounts).
+		Select(
+			"bucket_counts.bucket_epoch, " +
+				"bucket_counts.request_count, " +
+				"COALESCE(ip_counts.unique_ip_count, 0) AS unique_ip_count, " +
+				"COALESCE(host_counts.unique_host_count, 0) AS unique_host_count, " +
+				"bucket_counts.success_count, " +
+				"bucket_counts.client_error_count, " +
+				"bucket_counts.server_error_count",
+		).
+		Order(buildNodeAccessLogBucketRollupSortClause(query.SortBy, query.SortOrder))
+	if query.PageSize > 0 {
+		page := query.Page
+		if page < 0 {
+			page = 0
+		}
+		rollupQuery = rollupQuery.Limit(query.PageSize + max(query.Lookahead, 0)).Offset(page * query.PageSize)
+	}
+	var rows []*NodeAccessLogBucketRow
+	if err := rollupQuery.Scan(&rows).Error; err != nil {
+		return nil, false, fmt.Errorf("query access log buckets from filter identity rollups failed: %w", err)
+	}
+	return rows, true, nil
+}
+
 func countNodeAccessLogBucketsFromRollups(query NodeAccessLogBucketQuery) (int64, bool, error) {
+	if total, ok, err := countNodeAccessLogBucketsFromBucketRollups(query); ok || err != nil {
+		return total, ok, err
+	}
 	db, ok := nodeAccessLogRollupQueryDB()
 	if !ok {
 		return 0, false, nil
@@ -421,15 +862,150 @@ func countNodeAccessLogBucketsFromRollups(query NodeAccessLogBucketQuery) (int64
 	return total, true, nil
 }
 
+func countNodeAccessLogsFromBucketRollups(query NodeAccessLogQuery) (int64, int64, bool, error) {
+	if !nodeAccessLogBucketRollupsCanServe(NodeAccessLogBucketQuery{
+		NodeID:     query.NodeID,
+		RemoteAddr: query.RemoteAddr,
+		Host:       query.Host,
+		Path:       query.Path,
+		Since:      query.Since,
+	}) {
+		return 0, 0, false, nil
+	}
+	db, ok := nodeAccessLogBucketRollupQueryDB()
+	if !ok {
+		return 0, 0, false, nil
+	}
+	bucketBase := applyNodeAccessLogBucketRollupSince(nodeAccessLogBucketRollupTableDB(db), query.Since)
+	var totalRecords int64
+	if err := bucketBase.Select("COALESCE(SUM(request_count), 0)").Scan(&totalRecords).Error; err != nil {
+		return 0, 0, false, fmt.Errorf("count access log records from bucket rollups failed: %w", err)
+	}
+	ipMembers := applyNodeAccessLogBucketIdentityRollupSince(
+		nodeAccessLogBucketIdentityRollupTableDB(db).Where("identity_kind = ?", nodeAccessLogBucketIdentityKindIP),
+		query.Since,
+	).Select("identity_value").Group("identity_value")
+	var totalIPs int64
+	if err := nodeAccessLogRollupSession(db).Table("(?) AS unique_ip_members", ipMembers).Count(&totalIPs).Error; err != nil {
+		return 0, 0, false, fmt.Errorf("count access log ips from bucket rollups failed: %w", err)
+	}
+	return totalRecords, totalIPs, true, nil
+}
+
+func listNodeAccessLogBucketsFromBucketRollups(query NodeAccessLogBucketQuery) ([]*NodeAccessLogBucketRow, bool, error) {
+	if !nodeAccessLogBucketRollupsCanServe(query) {
+		return nil, false, nil
+	}
+	db, ok := nodeAccessLogBucketRollupQueryDB()
+	if !ok {
+		return nil, false, nil
+	}
+	bucketExpr := accessLogBucketEpochExprForColumn("bucket_started_at", query.FoldMinutes)
+	bucketCounts := applyNodeAccessLogBucketRollupSince(nodeAccessLogBucketRollupTableDB(db), query.Since).
+		Select(
+			bucketExpr + " AS bucket_epoch, " +
+				"COALESCE(SUM(request_count), 0) AS request_count, " +
+				"COALESCE(SUM(success_count), 0) AS success_count, " +
+				"COALESCE(SUM(client_error_count), 0) AS client_error_count, " +
+				"COALESCE(SUM(server_error_count), 0) AS server_error_count",
+		).
+		Group("bucket_epoch")
+	ipCounts := nodeAccessLogBucketIdentityCountsByFold(db, query.Since, query.FoldMinutes, nodeAccessLogBucketIdentityKindIP, "unique_ip_count")
+	hostCounts := nodeAccessLogBucketIdentityCountsByFold(db, query.Since, query.FoldMinutes, nodeAccessLogBucketIdentityKindHost, "unique_host_count")
+	rollupQuery := nodeAccessLogRollupSession(db).
+		Table("(?) AS bucket_counts", bucketCounts).
+		Joins("LEFT JOIN (?) AS ip_counts ON ip_counts.bucket_epoch = bucket_counts.bucket_epoch", ipCounts).
+		Joins("LEFT JOIN (?) AS host_counts ON host_counts.bucket_epoch = bucket_counts.bucket_epoch", hostCounts).
+		Select(
+			"bucket_counts.bucket_epoch, " +
+				"bucket_counts.request_count, " +
+				"COALESCE(ip_counts.unique_ip_count, 0) AS unique_ip_count, " +
+				"COALESCE(host_counts.unique_host_count, 0) AS unique_host_count, " +
+				"bucket_counts.success_count, " +
+				"bucket_counts.client_error_count, " +
+				"bucket_counts.server_error_count",
+		).
+		Order(buildNodeAccessLogBucketRollupSortClause(query.SortBy, query.SortOrder))
+	if query.PageSize > 0 {
+		page := query.Page
+		if page < 0 {
+			page = 0
+		}
+		rollupQuery = rollupQuery.Limit(query.PageSize + max(query.Lookahead, 0)).Offset(page * query.PageSize)
+	}
+	var rows []*NodeAccessLogBucketRow
+	if err := rollupQuery.Scan(&rows).Error; err != nil {
+		return nil, false, fmt.Errorf("query access log buckets from bucket rollups failed: %w", err)
+	}
+	return rows, true, nil
+}
+
+func countNodeAccessLogBucketsFromBucketRollups(query NodeAccessLogBucketQuery) (int64, bool, error) {
+	if !nodeAccessLogBucketRollupsCanServe(query) {
+		return 0, false, nil
+	}
+	db, ok := nodeAccessLogBucketRollupQueryDB()
+	if !ok {
+		return 0, false, nil
+	}
+	bucketExpr := accessLogBucketEpochExprForColumn("bucket_started_at", query.FoldMinutes)
+	grouped := applyNodeAccessLogBucketRollupSince(nodeAccessLogBucketRollupTableDB(db), query.Since).
+		Select(bucketExpr + " AS bucket_epoch").
+		Group("bucket_epoch")
+	var total int64
+	if err := nodeAccessLogRollupSession(db).Table("(?) AS grouped_bucket_rows", grouped).Count(&total).Error; err != nil {
+		return 0, false, fmt.Errorf("count access log buckets from bucket rollups failed: %w", err)
+	}
+	return total, true, nil
+}
+
+func nodeAccessLogBucketIdentityCountsByFold(db *gorm.DB, since time.Time, foldMinutes int, identityKind string, alias string) *gorm.DB {
+	bucketExpr := accessLogBucketEpochExprForColumn("bucket_started_at", foldMinutes)
+	members := applyNodeAccessLogBucketIdentityRollupSince(
+		nodeAccessLogBucketIdentityRollupTableDB(db).Where("identity_kind = ?", identityKind),
+		since,
+	).Select(bucketExpr + " AS bucket_epoch, identity_value").Group("bucket_epoch, identity_value")
+	return nodeAccessLogRollupSession(db).
+		Table("(?) AS bucket_identity_members", members).
+		Select("bucket_epoch, COUNT(*) AS " + alias).
+		Group("bucket_epoch")
+}
+
+func nodeAccessLogFilterIdentityCountsByFold(db *gorm.DB, query NodeAccessLogQuery, foldMinutes int, identityKind string, alias string) *gorm.DB {
+	bucketExpr := accessLogBucketEpochExprForColumn("bucket_started_at", foldMinutes)
+	members := applyNodeAccessLogFilterIdentityRollupFilters(
+		nodeAccessLogBucketFilterIdentityRollupTableDB(db),
+		query,
+		identityKind,
+	).Select(bucketExpr + " AS bucket_epoch, identity_value").Group("bucket_epoch, identity_value")
+	return nodeAccessLogRollupSession(db).
+		Table("(?) AS bucket_filter_identity_members", members).
+		Select("bucket_epoch, COUNT(*) AS " + alias).
+		Group("bucket_epoch")
+}
+
+func buildNodeAccessLogBucketRollupSortClause(sortBy string, sortOrder string) string {
+	order := normalizeSortOrder(sortOrder)
+	switch strings.TrimSpace(sortBy) {
+	case "request_count":
+		return fmt.Sprintf("bucket_counts.request_count %s, bucket_counts.bucket_epoch %s", order, order)
+	default:
+		return fmt.Sprintf("bucket_counts.bucket_epoch %s", order)
+	}
+}
+
 func countNodeAccessLogIPSummariesFromRollups(query NodeAccessLogIPSummaryQuery) (int64, bool, error) {
 	db, ok := nodeAccessLogRollupQueryDB()
 	if !ok {
 		return 0, false, nil
 	}
+	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
+	if total, ok, err := countNodeAccessLogIdentitiesFromFilterRollups(modelQuery, nodeAccessLogBucketIdentityKindIP); ok || err != nil {
+		return total, ok, err
+	}
 	if !nodeAccessLogRollupCanServeSince(query.Since) {
 		return 0, false, nil
 	}
-	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
 	var total int64
 	if err := applyNodeAccessLogRollupFilters(nodeAccessLogRollupTableDB(db), modelQuery).
 		Where("remote_addr <> ''").
@@ -691,6 +1267,18 @@ func nodeAccessLogRollupQueryDB() (*gorm.DB, bool) {
 	return db, true
 }
 
+func nodeAccessLogBucketRollupQueryDB() (*gorm.DB, bool) {
+	db := nodeAccessLogRollupSession(DB)
+	if db == nil || !nodeAccessLogBucketRollupTablesExist(db) {
+		return nil, false
+	}
+	var count int64
+	if err := nodeAccessLogBucketRollupTableDB(db).Limit(1).Count(&count).Error; err != nil || count == 0 {
+		return nil, false
+	}
+	return db, true
+}
+
 func nodeAccessLogRollupSession(db *gorm.DB) *gorm.DB {
 	db = normalizeShardedDB(db)
 	if db == nil {
@@ -707,8 +1295,232 @@ func nodeAccessLogRollupTableDB(db *gorm.DB) *gorm.DB {
 	return db.Table((NodeAccessLogRollup{}).TableName())
 }
 
+func nodeAccessLogBucketRollupTableDB(db *gorm.DB) *gorm.DB {
+	db = nodeAccessLogRollupSession(db)
+	if db == nil {
+		return nil
+	}
+	return db.Table((NodeAccessLogBucketRollup{}).TableName())
+}
+
+func nodeAccessLogBucketIdentityRollupTableDB(db *gorm.DB) *gorm.DB {
+	db = nodeAccessLogRollupSession(db)
+	if db == nil {
+		return nil
+	}
+	return db.Table((NodeAccessLogBucketIdentityRollup{}).TableName())
+}
+
+func nodeAccessLogBucketFilterIdentityRollupTableDB(db *gorm.DB) *gorm.DB {
+	db = nodeAccessLogRollupSession(db)
+	if db == nil {
+		return nil
+	}
+	return db.Table((NodeAccessLogBucketFilterIdentityRollup{}).TableName())
+}
+
+func nodeAccessLogBucketRollupTablesExist(db *gorm.DB) bool {
+	db = nodeAccessLogRollupSession(db)
+	return db != nil &&
+		db.Migrator().HasTable(&NodeAccessLogBucketRollup{}) &&
+		db.Migrator().HasTable(&NodeAccessLogBucketIdentityRollup{})
+}
+
+func nodeAccessLogBucketFilterIdentityRollupTableExists(db *gorm.DB) bool {
+	db = nodeAccessLogRollupSession(db)
+	return db != nil && db.Migrator().HasTable(&NodeAccessLogBucketFilterIdentityRollup{})
+}
+
+func nodeAccessLogBucketFilterIdentityRollupQueryDB() (*gorm.DB, bool) {
+	db := nodeAccessLogRollupSession(DB)
+	if db == nil || !nodeAccessLogBucketFilterIdentityRollupTableExists(db) {
+		return nil, false
+	}
+	var count int64
+	if err := nodeAccessLogBucketFilterIdentityRollupTableDB(db).Limit(1).Count(&count).Error; err != nil || count == 0 {
+		return nil, false
+	}
+	return db, true
+}
+
 func nodeAccessLogRollupCanServeSince(since time.Time) bool {
 	return since.IsZero() || since.Equal(nodeAccessLogRollupBucketStart(since))
+}
+
+func nodeAccessLogRollupRemainderSince(since time.Time) (time.Time, bool) {
+	if since.IsZero() {
+		return time.Time{}, false
+	}
+	if nodeAccessLogRollupCanServeSince(since) {
+		return since, true
+	}
+	remainderSince := nodeAccessLogRollupBucketStart(since).Add(time.Duration(nodeAccessLogRollupBucketMinutes) * time.Minute)
+	if !remainderSince.After(since) {
+		return time.Time{}, false
+	}
+	return remainderSince, true
+}
+
+func nodeAccessLogBucketRollupsCanServe(query NodeAccessLogBucketQuery) bool {
+	if !nodeAccessLogRollupCanServeSince(query.Since) {
+		return false
+	}
+	return strings.TrimSpace(query.NodeID) == "" &&
+		strings.TrimSpace(query.RemoteAddr) == "" &&
+		strings.TrimSpace(query.Host) == "" &&
+		strings.TrimSpace(query.Path) == ""
+}
+
+func applyNodeAccessLogBucketRollupSince(db *gorm.DB, since time.Time) *gorm.DB {
+	if db == nil || since.IsZero() {
+		return db
+	}
+	return db.Where("bucket_started_at >= ?", nodeAccessLogRollupBucketStart(since))
+}
+
+func applyNodeAccessLogBucketIdentityRollupSince(db *gorm.DB, since time.Time) *gorm.DB {
+	if db == nil || since.IsZero() {
+		return db
+	}
+	return db.Where("bucket_started_at >= ?", nodeAccessLogRollupBucketStart(since))
+}
+
+func nodeAccessLogBucketFilterIdentityRollupsCanServe(db *gorm.DB, query NodeAccessLogQuery) bool {
+	if !nodeAccessLogRollupCanServeSince(query.Since) {
+		return false
+	}
+	db = nodeAccessLogRollupSession(db)
+	if db == nil || !nodeAccessLogBucketFilterIdentityRollupTableExists(db) {
+		return false
+	}
+	var count int64
+	err := nodeAccessLogBucketFilterIdentityRollupTableDB(db).Limit(1).Count(&count).Error
+	return err == nil && count > 0
+}
+
+func countNodeAccessLogIdentitiesFromFilterRollups(query NodeAccessLogQuery, identityKind string) (int64, bool, error) {
+	if !nodeAccessLogRollupCanServeSince(query.Since) {
+		remainderSince, ok := nodeAccessLogRollupRemainderSince(query.Since)
+		if !ok || remainderSince.IsZero() || !remainderSince.After(query.Since) {
+			return 0, false, nil
+		}
+		partialQuery := query
+		partialQuery.Before = remainderSince
+		remainderQuery := query
+		remainderQuery.Since = remainderSince
+		remainderQuery.Before = time.Time{}
+		return countNodeAccessLogIdentitiesFromPartialRawAndFilterRollups(partialQuery, remainderQuery, identityKind)
+	}
+	db, ok := nodeAccessLogBucketFilterIdentityRollupQueryDB()
+	if !ok {
+		return 0, false, nil
+	}
+	members := applyNodeAccessLogFilterIdentityRollupFilters(
+		nodeAccessLogBucketFilterIdentityRollupTableDB(db),
+		query,
+		identityKind,
+	).Select("identity_value").Group("identity_value")
+	var total int64
+	if err := nodeAccessLogRollupSession(db).Table("(?) AS unique_filter_identity_members", members).Count(&total).Error; err != nil {
+		return 0, false, fmt.Errorf("count access log %s identities from filter rollups failed: %w", identityKind, err)
+	}
+	return total, true, nil
+}
+
+func countNodeAccessLogIdentitiesFromPartialRawAndFilterRollups(partialQuery NodeAccessLogQuery, remainderQuery NodeAccessLogQuery, identityKind string) (int64, bool, error) {
+	remainderTotal, ok, err := countNodeAccessLogIdentitiesFromFilterRollups(remainderQuery, identityKind)
+	if !ok || err != nil {
+		return 0, ok, err
+	}
+	partialIdentities, err := listNodeAccessLogRawIdentityValues(partialQuery, identityKind)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(partialIdentities) == 0 {
+		return remainderTotal, true, nil
+	}
+	db, ok := nodeAccessLogBucketFilterIdentityRollupQueryDB()
+	if !ok {
+		return 0, false, nil
+	}
+	members := applyNodeAccessLogFilterIdentityRollupFilters(
+		nodeAccessLogBucketFilterIdentityRollupTableDB(db),
+		remainderQuery,
+		identityKind,
+	).Where("identity_value IN ?", partialIdentities).
+		Select("identity_value").
+		Group("identity_value")
+	var overlap int64
+	if err := nodeAccessLogRollupSession(db).Table("(?) AS overlapping_filter_identity_members", members).Count(&overlap).Error; err != nil {
+		return 0, false, fmt.Errorf("count overlapping access log %s identities from filter rollups failed: %w", identityKind, err)
+	}
+	total := remainderTotal + int64(len(partialIdentities)) - overlap
+	if total < 0 {
+		total = 0
+	}
+	return total, true, nil
+}
+
+func listNodeAccessLogRawIdentityValues(query NodeAccessLogQuery, identityKind string) ([]string, error) {
+	column := ""
+	switch strings.TrimSpace(identityKind) {
+	case nodeAccessLogBucketIdentityKindIP:
+		column = "remote_addr"
+	case nodeAccessLogBucketIdentityKindHost:
+		column = "host"
+	default:
+		return nil, fmt.Errorf("unsupported access log identity kind %q", identityKind)
+	}
+	db := sessionIgnoringSharding(DB)
+	if db == nil {
+		return nil, fmt.Errorf("database handle is nil")
+	}
+	branches, args := buildNodeAccessLogUnionBranchesWithSuffix(
+		query,
+		column+" AS identity_value",
+		"GROUP BY "+column,
+		column+" <> ''",
+	)
+	sql := "WITH access_log_identity_rows AS (" +
+		strings.Join(branches, " UNION ALL ") +
+		") SELECT identity_value FROM access_log_identity_rows WHERE identity_value <> '' GROUP BY identity_value"
+	var rows []struct {
+		IdentityValue string
+	}
+	if err := db.Raw(sql, args...).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query access log %s identities across shards failed: %w", identityKind, err)
+	}
+	values := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if value := strings.TrimSpace(row.IdentityValue); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values, nil
+}
+
+func applyNodeAccessLogFilterIdentityRollupFilters(db *gorm.DB, query NodeAccessLogQuery, identityKind string) *gorm.DB {
+	if db == nil {
+		return db
+	}
+	db = db.Where("identity_kind = ?", strings.TrimSpace(identityKind))
+	if trimmed := strings.TrimSpace(query.NodeID); trimmed != "" {
+		db = db.Where("node_id = ?", trimmed)
+	}
+	if trimmed := strings.TrimSpace(query.RemoteAddr); trimmed != "" {
+		db = db.Where("remote_addr LIKE ?", trimmed+"%")
+	}
+	if patterns := nodeAccessLogHostFilterPatterns(query.Host); len(patterns) > 0 {
+		db = db.Where(nodeAccessLogHostWhereClause(), patterns...)
+	}
+	if filter := nodeAccessLogPathFilterFromRaw(query.Path); !filter.empty() {
+		clause, args := filter.whereClause()
+		db = db.Where(clause, args...)
+	}
+	if !query.Since.IsZero() {
+		db = db.Where("bucket_started_at >= ?", nodeAccessLogRollupBucketStart(query.Since))
+	}
+	return db.Where("identity_value <> ''")
 }
 
 func applyNodeAccessLogRollupFilters(db *gorm.DB, query NodeAccessLogQuery) *gorm.DB {
@@ -793,6 +1605,23 @@ func nodeAccessLogRollupDimensionHash(row *NodeAccessLogRollup) string {
 		row.Path,
 		strconv.Itoa(row.StatusCode),
 		row.CacheStatus,
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func nodeAccessLogBucketFilterIdentityRollupDimensionHash(row *NodeAccessLogBucketFilterIdentityRollup) string {
+	if row == nil {
+		return ""
+	}
+	parts := []string{
+		strconv.FormatInt(nodeAccessLogRollupBucketStart(row.BucketStartedAt).Unix(), 10),
+		row.NodeID,
+		row.RemoteAddr,
+		row.Host,
+		row.Path,
+		row.IdentityKind,
+		row.IdentityValue,
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])

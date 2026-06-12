@@ -33,22 +33,29 @@ func printHelp() {
 	fmt.Println("Usage: dushengcdn [--port <port>] [--log-dir <log directory>] [--reset-root-password-file <file>|--reset-root-password-stdin] [--create-dns-worker-name <name>] [--create-dns-worker-public-address <address>] [--version] [--help]")
 }
 
-func init() {
-	executableName := strings.ToLower(filepath.Base(os.Args[0]))
-	if !strings.Contains(executableName, ".test") {
+func InitServerRuntime() (bool, error) {
+	if !flag.Parsed() {
 		flag.Parse()
 	}
 
 	if *PrintVersion {
 		fmt.Println(Version)
-		os.Exit(0)
+		return true, nil
 	}
 
 	if *PrintHelp {
 		printHelp()
-		os.Exit(0)
+		return true, nil
 	}
 
+	applyEnvironmentOverrides()
+	if err := prepareRuntimeDirectories(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func applyEnvironmentOverrides() {
 	if os.Getenv("SESSION_SECRET") != "" {
 		SessionSecret = os.Getenv("SESSION_SECRET")
 	}
@@ -172,24 +179,26 @@ func init() {
 		DNSSourceDatabaseOperatorCIDRFiles = strings.TrimSpace(os.Getenv("DUSHENGCDN_DNS_SOURCE_DATABASE_OPERATOR_CIDR_FILES"))
 	}
 	SetLogLevel(os.Getenv("LOG_LEVEL"))
+}
+
+func prepareRuntimeDirectories() error {
 	if *LogDir != "" {
 		var err error
 		*LogDir, err = filepath.Abs(*LogDir)
 		if err != nil {
-			slog.Error("resolve log directory failed", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("resolve log directory failed: %w", err)
 		}
 		if _, err := os.Stat(*LogDir); os.IsNotExist(err) {
 			err = os.Mkdir(*LogDir, 0750)
 			if err != nil {
-				slog.Error("create log directory failed", "error", err)
-				os.Exit(1)
+				return fmt.Errorf("create log directory failed: %w", err)
 			}
 		}
 	}
 	if _, err := os.Stat(UploadPath); os.IsNotExist(err) {
 		_ = os.Mkdir(UploadPath, 0750)
 	}
+	return nil
 }
 
 func readPositiveIntEnv(key string) int {

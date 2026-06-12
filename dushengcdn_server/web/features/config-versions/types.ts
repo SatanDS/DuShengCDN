@@ -29,6 +29,27 @@ export interface ConfigPreviewResult {
   checksum: string;
   route_count: number;
   website_count: number;
+  preflight?: ConfigPreflightReport;
+}
+
+export type ConfigPreflightStatus = 'pass' | 'warning' | 'error' | 'skipped';
+
+export interface ConfigPreflightCheck {
+  key: string;
+  title: string;
+  status: ConfigPreflightStatus;
+  message: string;
+  route_id?: number;
+  site?: string;
+  domain?: string;
+  details?: string[];
+}
+
+export interface ConfigPreflightReport {
+  passed: boolean;
+  error_count: number;
+  warning_count: number;
+  checks: ConfigPreflightCheck[];
 }
 
 export interface ConfigDiffResult {

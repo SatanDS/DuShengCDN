@@ -165,6 +165,8 @@ var defaultRouteConfigQueries = routeConfigQueries{
 type routeConfigRenderContext struct {
 	certificatesByID     map[uint]*model.TLSCertificate
 	ruleConfigsByRouteID map[uint][]proxyRouteRuleConfig
+	originServersByGroup map[uint][]model.OriginServer
+	cachePoliciesByID    map[uint]model.CachePolicy
 	resolvedUpstreams    map[string][]string
 }
 
@@ -173,6 +175,45 @@ func (context *routeConfigRenderContext) loadProxyRouteRuleConfigs(route *model.
 		return loadProxyRouteRuleConfigs(route)
 	}
 	return loadPreloadedProxyRouteRuleConfigs(context.ruleConfigsByRouteID, route)
+}
+
+func (context *routeConfigRenderContext) loadProxyRouteOriginGroupUpstreams(route *model.ProxyRoute) ([]string, bool, error) {
+	groupID, ok := proxyRouteOriginGroupID(route)
+	if !ok {
+		return nil, false, nil
+	}
+	if context == nil {
+		servers, err := model.ListOriginServersByGroupIDs([]uint{groupID})
+		if err != nil {
+			return nil, true, err
+		}
+		return originServerURLs(servers), true, nil
+	}
+	return originServerURLs(context.originServersByGroup[groupID]), true, nil
+}
+
+func (context *routeConfigRenderContext) loadProxyRouteCachePolicy(route *model.ProxyRoute) (*model.CachePolicy, bool, error) {
+	policyID, ok := proxyRouteCachePolicyID(route)
+	if !ok {
+		return nil, false, nil
+	}
+	if context == nil {
+		policies, err := model.ListCachePoliciesByIDs([]uint{policyID})
+		if err != nil {
+			return nil, true, err
+		}
+		for index := range policies {
+			if policies[index].ID == policyID {
+				return &policies[index], true, nil
+			}
+		}
+		return nil, true, gorm.ErrRecordNotFound
+	}
+	policy, ok := context.cachePoliciesByID[policyID]
+	if !ok {
+		return nil, true, gorm.ErrRecordNotFound
+	}
+	return &policy, true, nil
 }
 
 func openRestyRenderOptions() openresty.RenderOptions {
@@ -205,6 +246,107 @@ func openRestyRenderOptionsWithContext(context proxyRouteTLSCertificateLoader) o
 	return openRestyRenderOptions()
 }
 
+type proxyRouteReusableConfigLoader interface {
+	loadProxyRouteOriginGroupUpstreams(route *model.ProxyRoute) ([]string, bool, error)
+	loadProxyRouteCachePolicy(route *model.ProxyRoute) (*model.CachePolicy, bool, error)
+}
+
+func proxyRouteEffectiveUpstreams(route *model.ProxyRoute, context proxyRouteTLSCertificateLoader) ([]string, error) {
+	if loader, ok := context.(proxyRouteReusableConfigLoader); ok {
+		upstreams, linked, err := loader.loadProxyRouteOriginGroupUpstreams(route)
+		if err != nil {
+			return nil, err
+		}
+		if linked {
+			if len(upstreams) == 0 {
+				return nil, errors.New("origin group has no enabled origin servers")
+			}
+			return upstreams, nil
+		}
+	}
+	if groupID, linked := proxyRouteOriginGroupID(route); linked {
+		servers, err := model.ListOriginServersByGroupIDs([]uint{groupID})
+		if err != nil {
+			return nil, err
+		}
+		upstreams := originServerURLs(servers)
+		if len(upstreams) == 0 {
+			return nil, errors.New("origin group has no enabled origin servers")
+		}
+		return upstreams, nil
+	}
+	return decodeStoredUpstreams(route.Upstreams, route.OriginURL)
+}
+
+func proxyRouteEffectiveCacheConfig(route *model.ProxyRoute, context proxyRouteTLSCertificateLoader) (bool, string, []string, error) {
+	if loader, ok := context.(proxyRouteReusableConfigLoader); ok {
+		policy, linked, err := loader.loadProxyRouteCachePolicy(route)
+		if err != nil {
+			return false, "", nil, err
+		}
+		if linked {
+			return cacheConfigFromPolicy(policy)
+		}
+	}
+	if policyID, linked := proxyRouteCachePolicyID(route); linked {
+		policies, err := model.ListCachePoliciesByIDs([]uint{policyID})
+		if err != nil {
+			return false, "", nil, err
+		}
+		for index := range policies {
+			if policies[index].ID == policyID {
+				return cacheConfigFromPolicy(&policies[index])
+			}
+		}
+		return false, "", nil, gorm.ErrRecordNotFound
+	}
+	cacheRules, err := decodeStoredCacheRules(route.CacheRules)
+	if err != nil {
+		return false, "", nil, err
+	}
+	return route.CacheEnabled, route.CachePolicy, cacheRules, nil
+}
+
+func cacheConfigFromPolicy(policy *model.CachePolicy) (bool, string, []string, error) {
+	if policy == nil {
+		return false, "", nil, gorm.ErrRecordNotFound
+	}
+	cacheRules, err := decodeStoredCacheRules(policy.RulesJSON)
+	if err != nil {
+		return false, "", nil, err
+	}
+	return policy.Enabled, strings.TrimSpace(policy.Policy), cacheRules, nil
+}
+
+func proxyRouteOriginGroupID(route *model.ProxyRoute) (uint, bool) {
+	if route == nil || route.OriginGroupID == nil || *route.OriginGroupID == 0 {
+		return 0, false
+	}
+	return *route.OriginGroupID, true
+}
+
+func proxyRouteCachePolicyID(route *model.ProxyRoute) (uint, bool) {
+	if route == nil || route.CachePolicyID == nil || *route.CachePolicyID == 0 {
+		return 0, false
+	}
+	return *route.CachePolicyID, true
+}
+
+func originServerURLs(servers []model.OriginServer) []string {
+	result := make([]string, 0, len(servers))
+	for _, server := range servers {
+		if !server.Enabled {
+			continue
+		}
+		url := strings.TrimSpace(server.URL)
+		if url == "" {
+			continue
+		}
+		result = append(result, url)
+	}
+	return result
+}
+
 func buildOpenRestyRenderRoutes(routes []*model.ProxyRoute, context proxyRouteTLSCertificateLoader) ([]openresty.Route, error) {
 	result := make([]openresty.Route, 0, len(routes))
 	for _, route := range routes {
@@ -219,13 +361,17 @@ func buildOpenRestyRenderRoutes(routes []*model.ProxyRoute, context proxyRouteTL
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 自定义请求头无效", route.Domain)
 		}
-		upstreams, err := decodeStoredUpstreams(route.Upstreams, route.OriginURL)
+		upstreams, err := proxyRouteEffectiveUpstreams(route, context)
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 源站配置无效", route.Domain)
 		}
-		cacheRules, err := decodeStoredCacheRules(route.CacheRules)
+		cacheEnabled, cachePolicy, cacheRules, err := proxyRouteEffectiveCacheConfig(route, context)
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 缓存规则无效", route.Domain)
+		}
+		effectiveOriginURL := firstString(upstreams)
+		if effectiveOriginURL == "" {
+			effectiveOriginURL = route.OriginURL
 		}
 		regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
 		if err != nil {
@@ -236,7 +382,7 @@ func buildOpenRestyRenderRoutes(routes []*model.ProxyRoute, context proxyRouteTL
 			SiteName:                   route.SiteName,
 			Domain:                     route.Domain,
 			Domains:                    domains,
-			OriginURL:                  route.OriginURL,
+			OriginURL:                  effectiveOriginURL,
 			OriginHost:                 normalizeStoredOriginHostHeader(route),
 			OriginHostHeader:           normalizeStoredOriginHostHeader(route),
 			OriginSNI:                  strings.TrimSpace(route.OriginSNI),
@@ -251,8 +397,8 @@ func buildOpenRestyRenderRoutes(routes []*model.ProxyRoute, context proxyRouteTL
 			LimitConnPerIP:             route.LimitConnPerIP,
 			LimitRate:                  route.LimitRate,
 			ProxyBufferingMode:         normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
-			CacheEnabled:               route.CacheEnabled,
-			CachePolicy:                route.CachePolicy,
+			CacheEnabled:               cacheEnabled,
+			CachePolicy:                cachePolicy,
 			CacheRules:                 cacheRules,
 			CustomHeaders:              toOpenRestyCustomHeaders(customHeaders),
 			PoWEnabled:                 route.PoWEnabled,
@@ -370,12 +516,28 @@ func newRouteConfigRenderContext(routes []*model.ProxyRoute, queries routeConfig
 	routeIDs := make([]uint, 0, len(routes))
 	certIDs := make([]uint, 0)
 	seen := make(map[uint]struct{})
+	originGroupIDs := make([]uint, 0)
+	cachePolicyIDs := make([]uint, 0)
+	seenOriginGroups := make(map[uint]struct{})
+	seenCachePolicies := make(map[uint]struct{})
 	for _, route := range routes {
 		if route == nil {
 			continue
 		}
 		if route.ID != 0 {
 			routeIDs = append(routeIDs, route.ID)
+		}
+		if groupID, ok := proxyRouteOriginGroupID(route); ok {
+			if _, exists := seenOriginGroups[groupID]; !exists {
+				seenOriginGroups[groupID] = struct{}{}
+				originGroupIDs = append(originGroupIDs, groupID)
+			}
+		}
+		if policyID, ok := proxyRouteCachePolicyID(route); ok {
+			if _, exists := seenCachePolicies[policyID]; !exists {
+				seenCachePolicies[policyID] = struct{}{}
+				cachePolicyIDs = append(cachePolicyIDs, policyID)
+			}
 		}
 		if !route.EnableHTTPS {
 			continue
@@ -402,7 +564,27 @@ func newRouteConfigRenderContext(routes []*model.ProxyRoute, queries routeConfig
 	context := &routeConfigRenderContext{
 		certificatesByID:     map[uint]*model.TLSCertificate{},
 		ruleConfigsByRouteID: ruleConfigsByRouteID,
+		originServersByGroup: map[uint][]model.OriginServer{},
+		cachePoliciesByID:    map[uint]model.CachePolicy{},
 		resolvedUpstreams:    map[string][]string{},
+	}
+	if len(originGroupIDs) > 0 {
+		originServers, err := model.ListOriginServersByGroupIDs(originGroupIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, server := range originServers {
+			context.originServersByGroup[server.OriginGroupID] = append(context.originServersByGroup[server.OriginGroupID], server)
+		}
+	}
+	if len(cachePolicyIDs) > 0 {
+		cachePolicies, err := model.ListCachePoliciesByIDs(cachePolicyIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, policy := range cachePolicies {
+			context.cachePoliciesByID[policy.ID] = policy
+		}
 	}
 	if len(certIDs) == 0 {
 		return context, nil

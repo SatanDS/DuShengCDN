@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"log/slog"
 	"net"
 	"net/url"
 	"sort"
@@ -41,6 +40,7 @@ type NodeAccessLogQuery struct {
 	Host           string
 	Path           string
 	Since          time.Time
+	Before         time.Time
 	Page           int
 	PageSize       int
 	Lookahead      int
@@ -142,15 +142,6 @@ type NodeAccessLogMeteringTrafficRow struct {
 	UpstreamBytes int64  `json:"upstream_bytes"`
 }
 
-type nodeAccessLogBucketAccumulator struct {
-	requestCount     int64
-	uniqueIPs        map[string]struct{}
-	uniqueHosts      map[string]struct{}
-	successCount     int64
-	clientErrorCount int64
-	serverErrorCount int64
-}
-
 type nodeAccessLogDedupKey struct {
 	nodeID     string
 	loggedAtNS int64
@@ -186,11 +177,7 @@ func CountNodeAccessLogs(query NodeAccessLogQuery) (totalRecords int64, totalIPs
 	if err == nil {
 		return totalRecords, totalIPs, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return 0, 0, err
-	}
-	logNodeAccessLogSQLFallback("count access logs", err)
-	return countNodeAccessLogsInMemory(query)
+	return 0, 0, err
 }
 
 func countNodeAccessLogsSQL(query NodeAccessLogQuery) (totalRecords int64, totalIPs int64, err error) {
@@ -225,30 +212,6 @@ func countNodeAccessLogsSQL(query NodeAccessLogQuery) (totalRecords int64, total
 	return row.TotalRecords, row.TotalIPs, nil
 }
 
-func countNodeAccessLogsInMemory(query NodeAccessLogQuery) (totalRecords int64, totalIPs int64, err error) {
-	db := normalizeShardedDB(DB)
-	ips := make(map[string]struct{})
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var rows []struct {
-			RemoteAddr   string
-			RequestCount int64
-		}
-		if err := applyNodeAccessLogFilters(db.Table(table), query).
-			Select("remote_addr, COUNT(*) AS request_count").
-			Group("remote_addr").
-			Scan(&rows).Error; err != nil {
-			return 0, 0, err
-		}
-		for _, row := range rows {
-			totalRecords += row.RequestCount
-			if trimmed := strings.TrimSpace(row.RemoteAddr); trimmed != "" {
-				ips[trimmed] = struct{}{}
-			}
-		}
-	}
-	return totalRecords, int64(len(ips)), nil
-}
-
 const nodeAccessLogListColumns = "id, node_id, logged_at, remote_addr, region, operator, host, path, status_code, reason, cache_status, request_bytes, response_bytes, upstream_bytes, created_at"
 
 func ListNodeAccessLogRegionCounts(nodeID string, since time.Time, limit int) (items []*NodeAccessLogRegionCount, err error) {
@@ -256,11 +219,7 @@ func ListNodeAccessLogRegionCounts(nodeID string, since time.Time, limit int) (i
 	if err == nil {
 		return items, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return nil, err
-	}
-	logNodeAccessLogSQLFallback("list access log region counts", err)
-	return listNodeAccessLogRegionCountsInMemory(nodeID, since, limit)
+	return nil, err
 }
 
 func listNodeAccessLogRegionCountsSQL(nodeID string, since time.Time, limit int) ([]*NodeAccessLogRegionCount, error) {
@@ -290,52 +249,6 @@ func listNodeAccessLogRegionCountsSQL(nodeID string, since time.Time, limit int)
 	return rows, nil
 }
 
-func listNodeAccessLogRegionCountsInMemory(nodeID string, since time.Time, limit int) (items []*NodeAccessLogRegionCount, err error) {
-	query := NodeAccessLogQuery{
-		NodeID: nodeID,
-		Since:  since,
-	}
-	db := normalizeShardedDB(DB)
-	counts := make(map[string]int64)
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var rows []*NodeAccessLogRegionCount
-		if err := applyNodeAccessLogFilters(db.Table(table), query).
-			Select("region, COUNT(*) AS count").
-			Where("region <> ''").
-			Group("region").
-			Scan(&rows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			if row == nil {
-				continue
-			}
-			region := strings.TrimSpace(row.Region)
-			if region == "" {
-				continue
-			}
-			counts[region] += row.Count
-		}
-	}
-	items = make([]*NodeAccessLogRegionCount, 0, len(counts))
-	for region, count := range counts {
-		items = append(items, &NodeAccessLogRegionCount{
-			Region: region,
-			Count:  count,
-		})
-	}
-	sort.Slice(items, func(i int, j int) bool {
-		if items[i].Count == items[j].Count {
-			return items[i].Region < items[j].Region
-		}
-		return items[i].Count > items[j].Count
-	})
-	if limit > 0 && len(items) > limit {
-		items = items[:limit]
-	}
-	return items, nil
-}
-
 func ListNodeAccessLogBuckets(query NodeAccessLogBucketQuery) (items []*NodeAccessLogBucketRow, err error) {
 	if items, ok, err := listNodeAccessLogBucketsFromRollups(query); ok || err != nil {
 		return items, err
@@ -344,20 +257,7 @@ func ListNodeAccessLogBuckets(query NodeAccessLogBucketQuery) (items []*NodeAcce
 	if err == nil {
 		return items, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return nil, err
-	}
-	logNodeAccessLogSQLFallback("list access log buckets", err)
-
-	rows, err := buildNodeAccessLogBucketRows(query)
-	if err != nil {
-		return nil, err
-	}
-	start, end := paginateBoundsWithLookahead(len(rows), query.Page, query.PageSize, query.Lookahead)
-	if start >= len(rows) {
-		return []*NodeAccessLogBucketRow{}, nil
-	}
-	return rows[start:end], nil
+	return nil, err
 }
 
 func CountNodeAccessLogBuckets(query NodeAccessLogBucketQuery) (total int64, err error) {
@@ -368,12 +268,7 @@ func CountNodeAccessLogBuckets(query NodeAccessLogBucketQuery) (total int64, err
 	if err == nil {
 		return total, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return 0, err
-	}
-	logNodeAccessLogSQLFallback("count access log buckets", err)
-
-	return countNodeAccessLogBucketsInMemory(query)
+	return 0, err
 }
 
 func listNodeAccessLogBucketsSQL(query NodeAccessLogBucketQuery) ([]*NodeAccessLogBucketRow, error) {
@@ -483,34 +378,6 @@ func countNodeAccessLogBucketsSQL(query NodeAccessLogBucketQuery) (int64, error)
 	return row.Total, nil
 }
 
-func countNodeAccessLogBucketsInMemory(query NodeAccessLogBucketQuery) (int64, error) {
-	modelQuery := NodeAccessLogQuery{
-		NodeID:     query.NodeID,
-		RemoteAddr: query.RemoteAddr,
-		Host:       query.Host,
-		Path:       query.Path,
-		Since:      query.Since,
-	}
-	db := normalizeShardedDB(DB)
-	bucketExpr := accessLogBucketEpochExpr(query.FoldMinutes)
-	buckets := make(map[int64]struct{})
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var rows []struct {
-			BucketEpoch int64
-		}
-		if err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Select(bucketExpr + " AS bucket_epoch").
-			Group("bucket_epoch").
-			Scan(&rows).Error; err != nil {
-			return 0, err
-		}
-		for _, row := range rows {
-			buckets[row.BucketEpoch] = struct{}{}
-		}
-	}
-	return int64(len(buckets)), nil
-}
-
 func buildNodeAccessLogBucketUnionBranches(query NodeAccessLogBucketQuery, columns string) ([]string, []any) {
 	return buildNodeAccessLogBucketUnionBranchesWithSuffix(query, columns, "")
 }
@@ -578,24 +445,7 @@ func ListNodeAccessLogIPSummaries(query NodeAccessLogIPSummaryQuery, recentSince
 		}
 		return items, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return nil, err
-	}
-	logNodeAccessLogSQLFallback("list access log ip summaries", err)
-
-	rows, err := buildNodeAccessLogIPSummaryRows(query, recentSince)
-	if err != nil {
-		return nil, err
-	}
-	start, end := paginateBoundsWithLookahead(len(rows), query.Page, query.PageSize, query.Lookahead)
-	if start >= len(rows) {
-		return []*NodeAccessLogIPSummaryRow{}, nil
-	}
-	items = rows[start:end]
-	if err := enrichNodeAccessLogIPSummaryRows(query, items); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return nil, err
 }
 
 func CountNodeAccessLogIPSummaries(query NodeAccessLogIPSummaryQuery) (total int64, err error) {
@@ -606,14 +456,7 @@ func CountNodeAccessLogIPSummaries(query NodeAccessLogIPSummaryQuery) (total int
 	if err == nil {
 		return total, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return 0, err
-	}
-	logNodeAccessLogSQLFallback("count access log ip summaries", err)
-
-	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
-	_, totalIPs, err := countNodeAccessLogsInMemory(modelQuery)
-	return totalIPs, err
+	return 0, err
 }
 
 func listNodeAccessLogIPSummariesSQL(query NodeAccessLogIPSummaryQuery, recentSince time.Time) ([]*NodeAccessLogIPSummaryRow, error) {
@@ -710,35 +553,7 @@ func ListNodeAccessLogIPTrend(query NodeAccessLogIPTrendQuery) (items []*NodeAcc
 	if err == nil {
 		return items, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return nil, err
-	}
-	logNodeAccessLogSQLFallback("list access log ip trend", err)
-	return listNodeAccessLogIPTrendInMemory(query)
-}
-
-func shouldFallbackNodeAccessLogSQL(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	for _, pattern := range []string{
-		"syntax error",
-		"near \"(\"",
-		"window function",
-		"no such function",
-		"does not support",
-		"unsupported",
-	} {
-		if strings.Contains(message, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-func logNodeAccessLogSQLFallback(operation string, err error) {
-	slog.Warn("access log sql query fallback", "operation", operation, "error", err)
+	return nil, err
 }
 
 func listNodeAccessLogIPTrendSQL(query NodeAccessLogIPTrendQuery) ([]*NodeAccessLogTrendPointRow, error) {
@@ -784,49 +599,6 @@ func listNodeAccessLogIPTrendSQL(query NodeAccessLogIPTrendQuery) ([]*NodeAccess
 		return nil, fmt.Errorf("query access log ip trend across shards failed: %w", err)
 	}
 	return rows, nil
-}
-
-func listNodeAccessLogIPTrendInMemory(query NodeAccessLogIPTrendQuery) (items []*NodeAccessLogTrendPointRow, err error) {
-	modelQuery := NodeAccessLogQuery{
-		NodeID:     query.NodeID,
-		RemoteAddr: query.RemoteAddr,
-		Host:       query.Host,
-		Since:      query.Since,
-	}
-	remoteAddr := strings.TrimSpace(query.RemoteAddr)
-	if remoteAddr == "" {
-		return []*NodeAccessLogTrendPointRow{}, nil
-	}
-	buckets := make(map[int64]int64)
-	db := normalizeShardedDB(DB)
-	bucketExpr := accessLogBucketEpochExpr(query.BucketMinutes)
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var rows []*NodeAccessLogTrendPointRow
-		if err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Select(bucketExpr+" AS bucket_epoch, COUNT(*) AS request_count").
-			Where("remote_addr = ?", remoteAddr).
-			Group("bucket_epoch").
-			Scan(&rows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			if row == nil {
-				continue
-			}
-			buckets[row.BucketEpoch] += row.RequestCount
-		}
-	}
-	items = make([]*NodeAccessLogTrendPointRow, 0, len(buckets))
-	for bucketEpoch, requestCount := range buckets {
-		items = append(items, &NodeAccessLogTrendPointRow{
-			BucketEpoch:  bucketEpoch,
-			RequestCount: requestCount,
-		})
-	}
-	sort.Slice(items, func(i int, j int) bool {
-		return items[i].BucketEpoch < items[j].BucketEpoch
-	})
-	return items, nil
 }
 
 func ListNodeAccessLogHostDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
@@ -879,11 +651,7 @@ func GetNodeAccessLogMeteringSummary(since time.Time) (*NodeAccessLogMeteringSum
 	if err == nil {
 		return summary, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return nil, err
-	}
-	logNodeAccessLogSQLFallback("get access log metering summary", err)
-	return getNodeAccessLogMeteringSummaryInMemory(since)
+	return nil, err
 }
 
 func getNodeAccessLogMeteringSummarySQL(since time.Time) (*NodeAccessLogMeteringSummary, error) {
@@ -915,44 +683,6 @@ func getNodeAccessLogMeteringSummarySQL(since time.Time) (*NodeAccessLogMetering
 		return nil, fmt.Errorf("query access log metering summary across shards failed: %w", err)
 	}
 	return &summary, nil
-}
-
-func getNodeAccessLogMeteringSummaryInMemory(since time.Time) (*NodeAccessLogMeteringSummary, error) {
-	query := NodeAccessLogQuery{Since: since}
-	db := normalizeShardedDB(DB)
-	summary := &NodeAccessLogMeteringSummary{}
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var row NodeAccessLogMeteringSummary
-		if err := applyNodeAccessLogFilters(db.Table(table), query).
-			Select(
-				"COUNT(*) AS request_count, " +
-					"COALESCE(SUM(request_bytes), 0) AS request_bytes, " +
-					"COALESCE(SUM(response_bytes), 0) AS response_bytes, " +
-					"COALESCE(SUM(upstream_bytes), 0) AS upstream_bytes, " +
-					"SUM(CASE WHEN upstream_bytes > 0 THEN 1 ELSE 0 END) AS upstream_bytes_hit_count, " +
-					"SUM(CASE WHEN cache_status = 'HIT' THEN 1 ELSE 0 END) AS cache_hit_count, " +
-					"SUM(CASE WHEN cache_status = 'MISS' THEN 1 ELSE 0 END) AS cache_miss_count, " +
-					"SUM(CASE WHEN cache_status = 'BYPASS' THEN 1 ELSE 0 END) AS cache_bypass_count, " +
-					"SUM(CASE WHEN cache_status = 'EXPIRED' THEN 1 ELSE 0 END) AS cache_expired_count, " +
-					"SUM(CASE WHEN cache_status = 'STALE' THEN 1 ELSE 0 END) AS cache_stale_count, " +
-					"SUM(CASE WHEN cache_status IN ('HIT', 'MISS', 'BYPASS', 'EXPIRED', 'STALE') THEN 1 ELSE 0 END) AS cache_classified_count",
-			).
-			Scan(&row).Error; err != nil {
-			return nil, err
-		}
-		summary.RequestCount += row.RequestCount
-		summary.RequestBytes += row.RequestBytes
-		summary.ResponseBytes += row.ResponseBytes
-		summary.UpstreamBytes += row.UpstreamBytes
-		summary.UpstreamBytesHitCount += row.UpstreamBytesHitCount
-		summary.CacheHitCount += row.CacheHitCount
-		summary.CacheMissCount += row.CacheMissCount
-		summary.CacheBypassCount += row.CacheBypassCount
-		summary.CacheExpiredCount += row.CacheExpiredCount
-		summary.CacheStaleCount += row.CacheStaleCount
-		summary.CacheClassifiedCount += row.CacheClassifiedCount
-	}
-	return summary, nil
 }
 
 func ListNodeAccessLogMeteringTrafficByHost(since time.Time, limit int) ([]*NodeAccessLogMeteringTrafficRow, error) {
@@ -1252,11 +982,7 @@ func listNodeAccessLogsAcrossShards(query NodeAccessLogQuery) ([]*NodeAccessLog,
 	if err == nil {
 		return rows, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return nil, err
-	}
-	logNodeAccessLogSQLFallback("list access logs", err)
-	return listNodeAccessLogsAcrossShardsInMemory(query)
+	return nil, err
 }
 
 func listNodeAccessLogsAcrossShardsSQL(query NodeAccessLogQuery) ([]*NodeAccessLog, error) {
@@ -1334,6 +1060,10 @@ func buildNodeAccessLogRawWhereClause(query NodeAccessLogQuery) (string, []any) 
 	if !query.Since.IsZero() {
 		whereClauses = append(whereClauses, "logged_at >= ?")
 		args = append(args, query.Since)
+	}
+	if !query.Before.IsZero() {
+		whereClauses = append(whereClauses, "logged_at < ?")
+		args = append(args, query.Before)
 	}
 	if clause, clauseArgs := nodeAccessLogCursorWhereClause(query); clause != "" {
 		whereClauses = append(whereClauses, clause)
@@ -1466,224 +1196,6 @@ func normalizeNodeAccessLogHostFilter(raw string) string {
 	return value
 }
 
-func listNodeAccessLogsAcrossShardsInMemory(query NodeAccessLogQuery) ([]*NodeAccessLog, error) {
-	pageSize := query.PageSize
-	limit := 0
-	offset := 0
-	shardLimit := 0
-	if pageSize > 0 {
-		page := query.Page
-		if page < 0 {
-			page = 0
-		}
-		limit = pageSize + max(query.Lookahead, 0)
-		offset = page * pageSize
-		shardLimit = offset + limit
-	}
-	items, err := queryAcrossShards("node_access_logs", func(tx *gorm.DB) ([]*NodeAccessLog, error) {
-		var shardRows []*NodeAccessLog
-		db := applyNodeAccessLogFilters(tx, query).Order(buildNodeAccessLogSortClause(query.SortBy, query.SortOrder))
-		if shardLimit > 0 {
-			db = db.Limit(shardLimit)
-		}
-		if err := db.Find(&shardRows).Error; err != nil {
-			return nil, err
-		}
-		return shardRows, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sortNodeAccessLogs(items, query.SortBy, query.SortOrder)
-	if pageSize <= 0 {
-		return items, nil
-	}
-	start := offset
-	if start > len(items) {
-		start = len(items)
-	}
-	end := start + limit
-	if end > len(items) {
-		end = len(items)
-	}
-	if start >= len(items) {
-		return []*NodeAccessLog{}, nil
-	}
-	return items[start:end], nil
-}
-
-func buildNodeAccessLogBucketRows(query NodeAccessLogBucketQuery) ([]*NodeAccessLogBucketRow, error) {
-	rows, err := listNodeAccessLogBucketRowsAcrossShards(query)
-	if err != nil {
-		return nil, err
-	}
-	sortNodeAccessLogBucketRows(rows, query.SortBy, query.SortOrder)
-	return rows, nil
-}
-
-func listNodeAccessLogBucketRowsAcrossShards(query NodeAccessLogBucketQuery) ([]*NodeAccessLogBucketRow, error) {
-	modelQuery := NodeAccessLogQuery{
-		NodeID:     query.NodeID,
-		RemoteAddr: query.RemoteAddr,
-		Host:       query.Host,
-		Path:       query.Path,
-		Since:      query.Since,
-	}
-	accumulators := make(map[int64]*nodeAccessLogBucketAccumulator)
-	db := normalizeShardedDB(DB)
-	bucketExpr := accessLogBucketEpochExpr(query.FoldMinutes)
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var countRows []*NodeAccessLogBucketRow
-		if err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Select(
-				bucketExpr + " AS bucket_epoch, COUNT(*) AS request_count, " +
-					"SUM(CASE WHEN status_code < 400 THEN 1 ELSE 0 END) AS success_count, " +
-					"SUM(CASE WHEN status_code >= 400 AND status_code < 500 THEN 1 ELSE 0 END) AS client_error_count, " +
-					"SUM(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) AS server_error_count",
-			).
-			Group("bucket_epoch").
-			Scan(&countRows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range countRows {
-			if row == nil {
-				continue
-			}
-			accumulator := bucketAccumulatorForEpoch(accumulators, row.BucketEpoch)
-			accumulator.requestCount += row.RequestCount
-			accumulator.successCount += row.SuccessCount
-			accumulator.clientErrorCount += row.ClientErrorCount
-			accumulator.serverErrorCount += row.ServerErrorCount
-		}
-
-		var ipRows []struct {
-			BucketEpoch int64
-			RemoteAddr  string
-		}
-		if err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Select(bucketExpr + " AS bucket_epoch, remote_addr").
-			Where("remote_addr <> ''").
-			Group("bucket_epoch, remote_addr").
-			Scan(&ipRows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range ipRows {
-			if trimmed := strings.TrimSpace(row.RemoteAddr); trimmed != "" {
-				bucketAccumulatorForEpoch(accumulators, row.BucketEpoch).uniqueIPs[trimmed] = struct{}{}
-			}
-		}
-
-		var hostRows []struct {
-			BucketEpoch int64
-			Host        string
-		}
-		if err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Select(bucketExpr + " AS bucket_epoch, host").
-			Where("host <> ''").
-			Group("bucket_epoch, host").
-			Scan(&hostRows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range hostRows {
-			if trimmed := strings.TrimSpace(row.Host); trimmed != "" {
-				bucketAccumulatorForEpoch(accumulators, row.BucketEpoch).uniqueHosts[trimmed] = struct{}{}
-			}
-		}
-	}
-	rows := make([]*NodeAccessLogBucketRow, 0, len(accumulators))
-	for bucketEpoch, accumulator := range accumulators {
-		rows = append(rows, &NodeAccessLogBucketRow{
-			BucketEpoch:      bucketEpoch,
-			RequestCount:     accumulator.requestCount,
-			UniqueIPCount:    int64(len(accumulator.uniqueIPs)),
-			UniqueHostCount:  int64(len(accumulator.uniqueHosts)),
-			SuccessCount:     accumulator.successCount,
-			ClientErrorCount: accumulator.clientErrorCount,
-			ServerErrorCount: accumulator.serverErrorCount,
-		})
-	}
-	return rows, nil
-}
-
-func bucketAccumulatorForEpoch(
-	accumulators map[int64]*nodeAccessLogBucketAccumulator,
-	bucketEpoch int64,
-) *nodeAccessLogBucketAccumulator {
-	accumulator := accumulators[bucketEpoch]
-	if accumulator == nil {
-		accumulator = &nodeAccessLogBucketAccumulator{
-			uniqueIPs:   make(map[string]struct{}),
-			uniqueHosts: make(map[string]struct{}),
-		}
-		accumulators[bucketEpoch] = accumulator
-	}
-	return accumulator
-}
-
-func buildNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, recentSince time.Time) ([]*NodeAccessLogIPSummaryRow, error) {
-	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
-	type accumulator struct {
-		totalRequests  int64
-		recentRequests int64
-		lastSeenEpoch  int64
-	}
-	accumulators := make(map[string]*accumulator)
-	db := normalizeShardedDB(DB)
-	lastSeenExpr := accessLogEpochExpr("MAX(logged_at)")
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var rows []*NodeAccessLogIPSummaryRow
-		shardQuery := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Where("remote_addr <> ''").
-			Group("remote_addr")
-		selectClause, selectArgs := buildNodeAccessLogIPSummarySelectClause(recentSince, lastSeenExpr)
-		shardQuery = shardQuery.Select(selectClause, selectArgs...)
-		if err := shardQuery.Scan(&rows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			if row == nil {
-				continue
-			}
-			remoteAddr := strings.TrimSpace(row.RemoteAddr)
-			if remoteAddr == "" {
-				continue
-			}
-			acc := accumulators[remoteAddr]
-			if acc == nil {
-				acc = &accumulator{}
-				accumulators[remoteAddr] = acc
-			}
-			acc.totalRequests += row.TotalRequests
-			acc.recentRequests += row.RecentRequests
-			if row.LastSeenEpoch > acc.lastSeenEpoch {
-				acc.lastSeenEpoch = row.LastSeenEpoch
-			}
-		}
-	}
-	rows := make([]*NodeAccessLogIPSummaryRow, 0, len(accumulators))
-	for remoteAddr, acc := range accumulators {
-		rows = append(rows, &NodeAccessLogIPSummaryRow{
-			RemoteAddr:     remoteAddr,
-			TotalRequests:  acc.totalRequests,
-			RecentRequests: acc.recentRequests,
-			LastSeenEpoch:  acc.lastSeenEpoch,
-		})
-	}
-	sortNodeAccessLogIPSummaryRows(rows, query.SortBy, query.SortOrder)
-	return rows, nil
-}
-
-func buildNodeAccessLogIPSummarySelectClause(recentSince time.Time, lastSeenExpr string) (string, []any) {
-	selectClause := "remote_addr, COUNT(*) AS total_requests, 0 AS recent_requests, " + lastSeenExpr + " AS last_seen_epoch"
-	if !recentSince.IsZero() {
-		selectClause = "remote_addr, COUNT(*) AS total_requests, " +
-			"SUM(CASE WHEN logged_at >= ? THEN 1 ELSE 0 END) AS recent_requests, " +
-			lastSeenExpr + " AS last_seen_epoch"
-		return selectClause, []any{recentSince}
-	}
-	return selectClause, nil
-}
-
 func enrichNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, rows []*NodeAccessLogIPSummaryRow) error {
 	latestByRemoteAddr, err := latestNodeAccessLogsByRemoteAddr(query, rows)
 	if err != nil {
@@ -1785,11 +1297,7 @@ func buildNodeAccessLogDistributionRows(
 	if err == nil {
 		return rows, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return nil, err
-	}
-	logNodeAccessLogSQLFallback("build access log distribution rows", err)
-	return buildNodeAccessLogDistributionRowsInMemory(query, keyExpr, nonEmptyClause)
+	return nil, err
 }
 
 func buildNodeAccessLogDistributionRowsSQL(
@@ -1826,59 +1334,6 @@ func buildNodeAccessLogDistributionRowsSQL(
 	return rows, nil
 }
 
-func buildNodeAccessLogDistributionRowsInMemory(
-	query NodeAccessLogDistributionQuery,
-	keyExpr string,
-	nonEmptyClause string,
-) ([]*NodeAccessLogDistributionRow, error) {
-	modelQuery := NodeAccessLogQuery{
-		NodeID: query.NodeID,
-		Host:   query.Host,
-		Since:  query.Since,
-	}
-	db := normalizeShardedDB(DB)
-	counts := make(map[string]int64)
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var rows []*NodeAccessLogDistributionRow
-		shardQuery := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Select(keyExpr + " AS key, COUNT(*) AS value").
-			Group("key")
-		if strings.TrimSpace(nonEmptyClause) != "" {
-			shardQuery = shardQuery.Where(nonEmptyClause)
-		}
-		if err := shardQuery.Scan(&rows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			if row == nil {
-				continue
-			}
-			key := strings.TrimSpace(row.Key)
-			if key == "" {
-				continue
-			}
-			counts[key] += row.Value
-		}
-	}
-	rows := make([]*NodeAccessLogDistributionRow, 0, len(counts))
-	for key, value := range counts {
-		rows = append(rows, &NodeAccessLogDistributionRow{
-			Key:   key,
-			Value: value,
-		})
-	}
-	sort.Slice(rows, func(i int, j int) bool {
-		if rows[i].Value == rows[j].Value {
-			return rows[i].Key < rows[j].Key
-		}
-		return rows[i].Value > rows[j].Value
-	})
-	if query.Limit > 0 && len(rows) > query.Limit {
-		rows = rows[:query.Limit]
-	}
-	return rows, nil
-}
-
 func buildNodeAccessLogMeteringTrafficRows(
 	query NodeAccessLogQuery,
 	keyExpr string,
@@ -1889,11 +1344,7 @@ func buildNodeAccessLogMeteringTrafficRows(
 	if err == nil {
 		return rows, nil
 	}
-	if !shouldFallbackNodeAccessLogSQL(err) {
-		return nil, err
-	}
-	logNodeAccessLogSQLFallback("build access log metering traffic rows", err)
-	return buildNodeAccessLogMeteringTrafficRowsInMemory(query, keyExpr, nonEmptyClause, limit)
+	return nil, err
 }
 
 func buildNodeAccessLogMeteringTrafficRowsSQL(
@@ -1932,69 +1383,6 @@ func buildNodeAccessLogMeteringTrafficRowsSQL(
 	return rows, nil
 }
 
-func buildNodeAccessLogMeteringTrafficRowsInMemory(
-	query NodeAccessLogQuery,
-	keyExpr string,
-	nonEmptyClause string,
-	limit int,
-) ([]*NodeAccessLogMeteringTrafficRow, error) {
-	db := normalizeShardedDB(DB)
-	rowsByKey := make(map[string]*NodeAccessLogMeteringTrafficRow)
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var rows []*NodeAccessLogMeteringTrafficRow
-		shardQuery := applyNodeAccessLogFilters(db.Table(table), query).
-			Select(
-				keyExpr + " AS key, " +
-					"COUNT(*) AS request_count, " +
-					"COALESCE(SUM(request_bytes), 0) AS request_bytes, " +
-					"COALESCE(SUM(response_bytes), 0) AS response_bytes, " +
-					"COALESCE(SUM(upstream_bytes), 0) AS upstream_bytes",
-			).
-			Group("key")
-		if strings.TrimSpace(nonEmptyClause) != "" {
-			shardQuery = shardQuery.Where(nonEmptyClause)
-		}
-		if err := shardQuery.Scan(&rows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			if row == nil {
-				continue
-			}
-			key := strings.TrimSpace(row.Key)
-			if key == "" {
-				continue
-			}
-			acc := rowsByKey[key]
-			if acc == nil {
-				acc = &NodeAccessLogMeteringTrafficRow{Key: key}
-				rowsByKey[key] = acc
-			}
-			acc.RequestCount += row.RequestCount
-			acc.RequestBytes += row.RequestBytes
-			acc.ResponseBytes += row.ResponseBytes
-			acc.UpstreamBytes += row.UpstreamBytes
-		}
-	}
-	rows := make([]*NodeAccessLogMeteringTrafficRow, 0, len(rowsByKey))
-	for _, row := range rowsByKey {
-		rows = append(rows, row)
-	}
-	sort.Slice(rows, func(i int, j int) bool {
-		if rows[i].ResponseBytes == rows[j].ResponseBytes {
-			if rows[i].RequestCount == rows[j].RequestCount {
-				return rows[i].Key < rows[j].Key
-			}
-			return rows[i].RequestCount > rows[j].RequestCount
-		}
-		return rows[i].ResponseBytes > rows[j].ResponseBytes
-	})
-	if limit > 0 && len(rows) > limit {
-		rows = rows[:limit]
-	}
-	return rows, nil
-}
-
 func sortNodeAccessLogs(items []*NodeAccessLog, sortBy string, sortOrder string) {
 	desc := normalizeSortOrder(sortOrder) != "asc"
 	sort.Slice(items, func(i int, j int) bool {
@@ -2027,85 +1415,6 @@ func sortNodeAccessLogs(items []*NodeAccessLog, sortBy string, sortOrder string)
 		}
 		return compare < 0
 	})
-}
-
-func sortNodeAccessLogBucketRows(items []*NodeAccessLogBucketRow, sortBy string, sortOrder string) {
-	desc := normalizeSortOrder(sortOrder) != "asc"
-	sort.Slice(items, func(i int, j int) bool {
-		left := items[i]
-		right := items[j]
-		if left == nil || right == nil {
-			return left != nil
-		}
-		var compare int
-		switch strings.TrimSpace(sortBy) {
-		case "request_count":
-			compare = compareInt64(left.RequestCount, right.RequestCount)
-		default:
-			compare = compareInt64(left.BucketEpoch, right.BucketEpoch)
-		}
-		if compare == 0 {
-			compare = compareInt64(left.BucketEpoch, right.BucketEpoch)
-		}
-		if desc {
-			return compare > 0
-		}
-		return compare < 0
-	})
-}
-
-func sortNodeAccessLogIPSummaryRows(items []*NodeAccessLogIPSummaryRow, sortBy string, sortOrder string) {
-	desc := normalizeSortOrder(sortOrder) != "asc"
-	sort.Slice(items, func(i int, j int) bool {
-		left := items[i]
-		right := items[j]
-		if left == nil || right == nil {
-			return left != nil
-		}
-		var compare int
-		switch strings.TrimSpace(sortBy) {
-		case "recent_requests":
-			compare = compareInt64(left.RecentRequests, right.RecentRequests)
-		case "last_seen_at":
-			compare = compareInt64(left.LastSeenEpoch, right.LastSeenEpoch)
-		case "remote_addr":
-			compare = strings.Compare(left.RemoteAddr, right.RemoteAddr)
-		default:
-			compare = compareInt64(left.TotalRequests, right.TotalRequests)
-		}
-		if compare == 0 {
-			compare = compareInt64(left.LastSeenEpoch, right.LastSeenEpoch)
-		}
-		if compare == 0 {
-			compare = strings.Compare(left.RemoteAddr, right.RemoteAddr)
-		}
-		if desc {
-			return compare > 0
-		}
-		return compare < 0
-	})
-}
-
-func paginateBounds(total int, page int, pageSize int) (int, int) {
-	return paginateBoundsWithLookahead(total, page, pageSize, 0)
-}
-
-func paginateBoundsWithLookahead(total int, page int, pageSize int, lookahead int) (int, int) {
-	if page < 0 {
-		page = 0
-	}
-	if pageSize <= 0 {
-		return 0, total
-	}
-	start := page * pageSize
-	if start > total {
-		start = total
-	}
-	end := start + pageSize + max(lookahead, 0)
-	if end > total {
-		end = total
-	}
-	return start, end
 }
 
 func compareTime(left time.Time, right time.Time) int {

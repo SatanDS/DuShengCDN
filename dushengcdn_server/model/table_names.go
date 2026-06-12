@@ -92,6 +92,18 @@ func (NodeAccessLogRollup) TableName() string {
 	return "node_access_log_rollups"
 }
 
+func (NodeAccessLogBucketRollup) TableName() string {
+	return "node_access_log_bucket_rollups"
+}
+
+func (NodeAccessLogBucketIdentityRollup) TableName() string {
+	return "node_access_log_bucket_identity_rollups"
+}
+
+func (NodeAccessLogBucketFilterIdentityRollup) TableName() string {
+	return "node_access_log_bucket_filter_identity_rollups"
+}
+
 func (NodeHealthEvent) TableName() string {
 	return "node_health_events"
 }

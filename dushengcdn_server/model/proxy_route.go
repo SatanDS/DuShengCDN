@@ -13,6 +13,7 @@ type ProxyRoute struct {
 	Domain                     string     `json:"domain" gorm:"uniqueIndex;size:255;not null"`
 	Domains                    string     `json:"domains" gorm:"type:text;not null;default:'[]'"`
 	OriginID                   *uint      `json:"origin_id" gorm:"index"`
+	OriginGroupID              *uint      `json:"origin_group_id" gorm:"index"`
 	OriginURL                  string     `json:"origin_url" gorm:"size:2048;not null"`
 	OriginHost                 string     `json:"origin_host" gorm:"size:255"`
 	OriginHostHeader           string     `json:"origin_host_header" gorm:"size:255;not null;default:''"`
@@ -32,6 +33,7 @@ type ProxyRoute struct {
 	LimitConnPerIP             int        `json:"limit_conn_per_ip" gorm:"not null;default:0"`
 	LimitRate                  string     `json:"limit_rate" gorm:"size:32;not null;default:''"`
 	ProxyBufferingMode         string     `json:"proxy_buffering_mode" gorm:"size:16;not null;default:'default'"`
+	CachePolicyID              *uint      `json:"cache_policy_id" gorm:"index"`
 	CacheEnabled               bool       `json:"cache_enabled" gorm:"not null;default:false"`
 	CachePolicy                string     `json:"cache_policy" gorm:"size:32;not null;default:''"`
 	CacheRules                 string     `json:"cache_rules" gorm:"type:text;not null;default:'[]'"`
@@ -213,6 +215,7 @@ func (route *ProxyRoute) UpdateWithDB(db *gorm.DB) error {
 		"domain":                         route.Domain,
 		"domains":                        route.Domains,
 		"origin_id":                      route.OriginID,
+		"origin_group_id":                route.OriginGroupID,
 		"origin_url":                     route.OriginURL,
 		"origin_host":                    route.OriginHost,
 		"origin_host_header":             route.OriginHostHeader,
@@ -232,6 +235,7 @@ func (route *ProxyRoute) UpdateWithDB(db *gorm.DB) error {
 		"limit_conn_per_ip":              route.LimitConnPerIP,
 		"limit_rate":                     route.LimitRate,
 		"proxy_buffering_mode":           route.ProxyBufferingMode,
+		"cache_policy_id":                route.CachePolicyID,
 		"cache_enabled":                  route.CacheEnabled,
 		"cache_policy":                   route.CachePolicy,
 		"cache_rules":                    route.CacheRules,
