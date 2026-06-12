@@ -111,9 +111,7 @@ func normalizeOriginURI(raw string) (string, error) {
 }
 
 func formatOriginHost(address string, port string) string {
-	if ip := net.ParseIP(address); ip != nil && strings.Contains(address, ":") {
-		return net.JoinHostPort(address, port)
-	}
+	// net.JoinHostPort already brackets IPv6 literals as needed.
 	return net.JoinHostPort(address, port)
 }
 

@@ -9,6 +9,10 @@ vi.mock('echarts-for-react', () => ({
   default: () => <div data-testid="echarts-mock" />,
 }));
 
+vi.mock('echarts-for-react/lib/core', () => ({
+  default: () => <div data-testid="echarts-mock" />,
+}));
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: vi.fn(),
@@ -211,6 +215,17 @@ describe('DashboardOverview', () => {
           );
         }
 
+        if (url.includes('/geo/world-geo.json')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                type: 'FeatureCollection',
+                features: [],
+              }),
+            ),
+          );
+        }
+
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
       }),
     );
@@ -314,6 +329,17 @@ describe('DashboardOverview', () => {
                   top_regions: [],
                   bandwidth_trend: [],
                 },
+              }),
+            ),
+          );
+        }
+
+        if (url.includes('/geo/world-geo.json')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                type: 'FeatureCollection',
+                features: [],
               }),
             ),
           );

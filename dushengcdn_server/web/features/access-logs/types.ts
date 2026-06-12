@@ -3,6 +3,7 @@ export interface AccessLogFilters {
   remote_addr?: string;
   host?: string;
   path?: string;
+  cursor?: string;
   p?: number;
   page_size?: number;
   sort_by?: string;
@@ -28,6 +29,7 @@ export interface AccessLogList {
   page: number;
   page_size: number;
   has_more: boolean;
+  next_cursor?: string;
   total_record: number;
   total_ip: number;
 }

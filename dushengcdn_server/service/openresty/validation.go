@@ -11,11 +11,11 @@ import (
 func normalizeOriginPort(raw string) (string, error) {
 	port := strings.TrimSpace(raw)
 	if port == "" {
-		return "", errors.New("绔彛涓嶈兘涓虹┖")
+		return "", errors.New("端口不能为空")
 	}
 	value, err := strconv.Atoi(port)
 	if err != nil || value < 1 || value > 65535 {
-		return "", errors.New("绔彛鏍煎紡涓嶅悎娉?")
+		return "", errors.New("端口格式不合法")
 	}
 	return strconv.Itoa(value), nil
 }

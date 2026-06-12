@@ -13,11 +13,39 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 var sendEmailVerificationCodeAsyncFunc = sendEmailVerificationCodeAsync
+
+const publicAuthSourcesCacheTTL = 10 * time.Second
+
+var (
+	publicAuthSourcesCacheMutex sync.Mutex
+	publicAuthSourcesCache      []service.PublicAuthSource
+	publicAuthSourcesCachedAt   time.Time
+)
+
+// cachedPublicAuthSources briefly caches the public auth source list because
+// /api/status is unauthenticated and queried on every page load.
+func cachedPublicAuthSources(prefix string) []service.PublicAuthSource {
+	publicAuthSourcesCacheMutex.Lock()
+	defer publicAuthSourcesCacheMutex.Unlock()
+	if !publicAuthSourcesCachedAt.IsZero() && time.Since(publicAuthSourcesCachedAt) < publicAuthSourcesCacheTTL {
+		return publicAuthSourcesCache
+	}
+	authSources, err := service.PublicAuthSources(prefix)
+	if err != nil {
+		// Keep the previous per-request fallback and don't cache failures.
+		return []service.PublicAuthSource{}
+	}
+	publicAuthSourcesCache = authSources
+	publicAuthSourcesCachedAt = time.Now()
+	return authSources
+}
 
 // GetStatus godoc
 // @Summary Get server status
@@ -26,10 +54,7 @@ var sendEmailVerificationCodeAsyncFunc = sendEmailVerificationCodeAsync
 // @Success 200 {object} map[string]interface{}
 // @Router /api/status [get]
 func GetStatus(c *gin.Context) {
-	authSources, err := service.PublicAuthSources("/api")
-	if err != nil {
-		authSources = []service.PublicAuthSource{}
-	}
+	authSources := cachedPublicAuthSources("/api")
 	data := gin.H{
 		"email_verification":        common.EmailVerificationEnabled,
 		"github_oauth":              common.GitHubOAuthEnabled,

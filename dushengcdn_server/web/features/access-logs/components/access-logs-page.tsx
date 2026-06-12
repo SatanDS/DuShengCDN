@@ -41,6 +41,7 @@ import {
 } from '@/features/shared/components/resource-primitives';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
 import { formatCountryName, formatRegionWithCode } from '@/lib/utils/countries';
+import { getErrorMessage } from '@/lib/utils/errors';
 import {
   formatBytes,
   formatBytesPerSecond,
@@ -143,10 +144,6 @@ const cacheStatusMeta: Record<
     hint: 'REVALIDATED：缓存重新验证后继续使用。',
   },
 };
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
 
 function parseSortValue(value: string) {
   const [sortBy = 'logged_at', sortOrder = 'desc'] = value.split(':');
@@ -279,6 +276,9 @@ export function AccessLogsPage() {
     path: '',
   });
   const [detailPage, setDetailPage] = useState(0);
+  const [detailCursors, setDetailCursors] = useState<Record<number, string>>(
+    {},
+  );
   const [ipPage, setIPPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const [foldMinutes, setFoldMinutes] = useState<0 | 3 | 5>(0);
@@ -295,6 +295,12 @@ export function AccessLogsPage() {
   const detailSortState = parseSortValue(detailSort);
   const foldedSortState = parseSortValue(foldedSort);
   const ipSortState = parseSortValue(ipSort);
+  const isDetailCursorMode =
+    foldMinutes === 0 && detailSortState.sortBy === 'logged_at';
+  const detailCursor =
+    isDetailCursorMode && detailPage > 0
+      ? detailCursors[detailPage]
+      : undefined;
 
   const detailQuery = useQuery<AccessLogList | FoldedAccessLogList>({
     queryKey: [
@@ -302,6 +308,7 @@ export function AccessLogsPage() {
       'detail',
       filters,
       detailPage,
+      detailCursor,
       pageSize,
       detailSort,
       foldMinutes,
@@ -326,7 +333,8 @@ export function AccessLogsPage() {
         remote_addr: filters.remoteAddr || undefined,
         host: filters.host || undefined,
         path: filters.path || undefined,
-        p: detailPage,
+        cursor: detailCursor,
+        p: detailCursor ? undefined : detailPage,
         page_size: pageSize,
         sort_by: detailSortState.sortBy,
         sort_order: detailSortState.sortOrder,
@@ -335,6 +343,7 @@ export function AccessLogsPage() {
     placeholderData: (
       previousData: AccessLogList | FoldedAccessLogList | undefined,
     ) => previousData,
+    enabled: activeTab === 'detail',
   });
 
   const ipSummaryQuery = useQuery<AccessLogIPSummaryList>({
@@ -351,6 +360,7 @@ export function AccessLogsPage() {
       }),
     placeholderData: (previousData: AccessLogIPSummaryList | undefined) =>
       previousData,
+    enabled: activeTab === 'ip',
   });
 
   const ipTrendQuery = useQuery({
@@ -369,13 +379,14 @@ export function AccessLogsPage() {
         hours: 24,
         bucket_minutes: 30,
       }),
-    enabled: Boolean(selectedIP?.remote_addr),
+    enabled: activeTab === 'ip' && Boolean(selectedIP?.remote_addr),
   });
 
   const meteringQuery = useQuery<ObservabilityMeteringOverview>({
     queryKey: ['access-logs', 'metering-overview'],
     queryFn: getObservabilityMeteringOverview,
-    refetchInterval: 30000,
+    enabled: activeTab === 'metering',
+    refetchInterval: activeTab === 'metering' ? 30000 : false,
   });
 
   const cleanupMutation = useMutation({
@@ -434,6 +445,25 @@ export function AccessLogsPage() {
     [ipTrendQuery.data?.points],
   );
 
+  const resetDetailPagination = () => {
+    setDetailPage(0);
+    setDetailCursors({});
+  };
+
+  const handleDetailNextPage = () => {
+    const nextCursor = isDetailCursorMode
+      ? (detailQuery.data as AccessLogList | undefined)?.next_cursor
+      : undefined;
+
+    if (nextCursor) {
+      setDetailCursors((current) => ({
+        ...current,
+        [detailPage + 1]: nextCursor,
+      }));
+    }
+    setDetailPage((value) => value + 1);
+  };
+
   const handleSearch = () => {
     setFilters({
       nodeId: draft.nodeId.trim(),
@@ -441,7 +471,7 @@ export function AccessLogsPage() {
       host: draft.host.trim(),
       path: draft.path.trim(),
     });
-    setDetailPage(0);
+    resetDetailPagination();
     setIPPage(0);
   };
 
@@ -456,7 +486,7 @@ export function AccessLogsPage() {
     const empty = { nodeId: '', remoteAddr: '', host: '', path: '' };
     setDraft(empty);
     setFilters(empty);
-    setDetailPage(0);
+    resetDetailPagination();
     setIPPage(0);
     setSelectedIP(null);
   };
@@ -644,7 +674,7 @@ export function AccessLogsPage() {
                     value={String(pageSize)}
                     onChange={(event) => {
                       setPageSize(Number(event.target.value) || 20);
-                      setDetailPage(0);
+                      resetDetailPagination();
                       setIPPage(0);
                     }}
                   >
@@ -674,12 +704,12 @@ export function AccessLogsPage() {
                     onChange={(event) => {
                       if (activeTab === 'detail' && foldMinutes > 0) {
                         setFoldedSort(event.target.value);
-                        setDetailPage(0);
+                        resetDetailPagination();
                         return;
                       }
                       if (activeTab === 'detail') {
                         setDetailSort(event.target.value);
-                        setDetailPage(0);
+                        resetDetailPagination();
                         return;
                       }
                       setIPSort(event.target.value);
@@ -705,7 +735,7 @@ export function AccessLogsPage() {
                       value={String(foldMinutes)}
                       onChange={(event) => {
                         setFoldMinutes(Number(event.target.value) as 0 | 3 | 5);
-                        setDetailPage(0);
+                        resetDetailPagination();
                       }}
                     >
                       {foldOptions.map((option) => (
@@ -742,7 +772,7 @@ export function AccessLogsPage() {
           foldMinutes={foldMinutes}
           query={detailQuery}
           onPrevPage={() => setDetailPage((value) => Math.max(value - 1, 0))}
-          onNextPage={() => setDetailPage((value) => value + 1)}
+          onNextPage={handleDetailNextPage}
         />
       ) : (
         <IPTab

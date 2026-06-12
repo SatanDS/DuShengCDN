@@ -13,7 +13,7 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.GET("/dns-snapshot", workerAPIRateLimit, controller.GetDNSSnapshot)
 	apiRouter.POST("/dns-worker-heartbeat", workerAPIRateLimit, controller.DNSWorkerHeartbeat)
 	apiRouter.GET("/dns-source-databases/manifest", workerAPIRateLimit, controller.GetDNSSourceDatabaseManifest)
-	apiRouter.GET("/dns-source-databases/files/:kind/:name", workerAPIRateLimit, controller.DownloadDNSSourceDatabaseFile)
+	apiRouter.GET("/dns-source-databases/files/:kind/:name", workerAPIRateLimit, middleware.DownloadRateLimit(), controller.DownloadDNSSourceDatabaseFile)
 
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	{
@@ -90,7 +90,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			updateRoute.GET("/latest-release", controller.GetLatestRelease)
 			updateRoute.GET("/logs/ws", controller.StreamServerUpgradeLogs)
-			updateRoute.POST("/manual-upload", controller.UploadManualServerBinary)
+			updateRoute.POST("/manual-upload", middleware.UploadRateLimit(), controller.UploadManualServerBinary)
 			updateRoute.POST("/manual-upgrade", controller.ConfirmManualServerUpgrade)
 			updateRoute.POST("/upgrade", controller.UpgradeServer)
 		}
@@ -167,7 +167,7 @@ func SetApiRouter(router *gin.Engine) {
 			tlsCertificateRoute.POST("/:id/update", controller.UpdateTLSCertificate)
 			tlsCertificateRoute.POST("/:id/update-acme", controller.UpdateAcmeCertificate)
 			tlsCertificateRoute.POST("/:id/convert-acme", controller.ConvertTLSCertificateToAcme)
-			tlsCertificateRoute.POST("/import-file", controller.ImportTLSCertificateFile)
+			tlsCertificateRoute.POST("/import-file", middleware.UploadRateLimit(), controller.ImportTLSCertificateFile)
 			tlsCertificateRoute.POST("/:id/delete", controller.DeleteTLSCertificate)
 			tlsCertificateRoute.POST("/apply", controller.ApplyTLSCertificate)
 			tlsCertificateRoute.POST("/:id/renew", controller.RenewTLSCertificate)
@@ -257,6 +257,7 @@ func SetApiRouter(router *gin.Engine) {
 			nodeRoute.POST("/bootstrap-token/rotate", controller.RotateNodeBootstrapToken)
 			nodeRoute.GET("/", controller.GetNodes)
 			nodeRoute.POST("/", controller.CreateNode)
+			nodeRoute.GET("/:id", controller.GetNode)
 			nodeRoute.GET("/:id/agent-release", controller.GetNodeAgentRelease)
 			nodeRoute.POST("/:id/update", controller.UpdateNode)
 			nodeRoute.POST("/:id/delete", controller.DeleteNode)

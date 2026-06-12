@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { EmptyState } from '@/components/feedback/empty-state';
@@ -74,6 +74,7 @@ import {
 import { ApiError } from '@/lib/api/client';
 import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime } from '@/lib/utils/date';
+import { getErrorMessage } from '@/lib/utils/errors';
 import { normalizeTrustedExternalUrl } from '@/lib/utils/redirect';
 import { shellQuote } from '@/lib/utils/shell';
 
@@ -195,6 +196,38 @@ const defaultDatabaseFields = {
   DatabaseAutoCleanupRetentionDays: '30',
 };
 
+type SystemFieldKey = keyof typeof defaultSystemFields;
+
+const savedSecretSystemFieldKeys = new Set<SystemFieldKey>([
+  'SMTPToken',
+  'GitHubClientSecret',
+  'WeChatServerToken',
+  'TurnstileSecretKey',
+]);
+
+function mergeSyncedFields<TFields extends Record<string, string | boolean>>(
+  current: TFields,
+  next: TFields,
+  baseline: TFields,
+  forceSyncedKeys: ReadonlySet<string> = new Set(),
+) {
+  let merged = next;
+
+  for (const key of Object.keys(next) as Array<keyof TFields>) {
+    if (
+      !forceSyncedKeys.has(String(key)) &&
+      !Object.is(current[key], baseline[key])
+    ) {
+      if (merged === next) {
+        merged = { ...next };
+      }
+      merged[key] = current[key];
+    }
+  }
+
+  return merged;
+}
+
 const defaultProfileFields: UpdateSelfPayload = {
   username: '',
   display_name: '',
@@ -295,10 +328,6 @@ function normalizeSettingsTab(
   }
 
   return value;
-}
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
 }
 
 function getDetailedErrorMessage(error: unknown) {
@@ -530,6 +559,12 @@ export function SettingsPage() {
     useState(defaultCommercialLicenseIssueFields);
   const [issuedCommercialLicense, setIssuedCommercialLicense] =
     useState<CommercialLicenseIssueResult | null>(null);
+  const systemFieldsBaselineRef = useRef(defaultSystemFields);
+  const operationFieldsBaselineRef = useRef(defaultOperationFields);
+  const otherFieldsBaselineRef = useRef(defaultOtherFields);
+  const databaseFieldsBaselineRef = useRef(defaultDatabaseFields);
+  const deploymentProtocolBaselineRef = useRef<DeploymentProtocol>('https');
+  const syncedOptionKeysRef = useRef<Set<string>>(new Set());
 
   const isRoot = (user?.role ?? 0) >= 100;
 
@@ -634,7 +669,7 @@ export function SettingsPage() {
 
   useEffect(() => {
     const publicStatus = publicStatusQuery.data;
-    if (!publicStatus) {
+    if (!publicStatus || optionsQuery.data) {
       return;
     }
 
@@ -663,9 +698,15 @@ export function SettingsPage() {
         : previous.ServerAddress,
     }));
     if (resolvedServerAddress) {
-      setDeploymentProtocol(getDeploymentProtocol(resolvedServerAddress));
+      const nextDeploymentProtocol = getDeploymentProtocol(
+        resolvedServerAddress,
+      );
+      if (deploymentProtocol === deploymentProtocolBaselineRef.current) {
+        setDeploymentProtocol(nextDeploymentProtocol);
+      }
+      deploymentProtocolBaselineRef.current = nextDeploymentProtocol;
     }
-  }, [publicStatusQuery.data]);
+  }, [deploymentProtocol, optionsQuery.data, publicStatusQuery.data]);
 
   useEffect(() => {
     if (!optionsQuery.data) {
@@ -678,7 +719,7 @@ export function SettingsPage() {
       publicStatusQuery.data?.server_address ||
       getBrowserOrigin();
 
-    setSystemFields({
+    const nextSystemFields = {
       ServerAddress: resolvedServerAddress,
       PasswordLoginEnabled: toBoolean(optionMap.PasswordLoginEnabled, true),
       PasswordRegisterEnabled: toBoolean(
@@ -703,10 +744,10 @@ export function SettingsPage() {
       WeChatAccountQRCodeImageURL: optionMap.WeChatAccountQRCodeImageURL ?? '',
       TurnstileSiteKey: optionMap.TurnstileSiteKey ?? '',
       TurnstileSecretKey: '',
-    });
+    };
 
     setDeploymentProtocol(getDeploymentProtocol(resolvedServerAddress));
-    setOperationFields({
+    const nextOperationFields = {
       ServerAddress: stripServerUrlProtocol(resolvedServerAddress),
       AgentHeartbeatInterval: optionMap.AgentHeartbeatInterval ?? '10000',
       AgentWebsocketUpgradeEnabled: toBoolean(
@@ -803,24 +844,146 @@ export function SettingsPage() {
       DownloadRateLimitDuration: optionMap.DownloadRateLimitDuration ?? '60',
       CriticalRateLimitNum: optionMap.CriticalRateLimitNum ?? '100',
       CriticalRateLimitDuration: optionMap.CriticalRateLimitDuration ?? '1200',
-    });
+    };
 
-    setOtherFields({
+    const nextOtherFields = {
       Notice: optionMap.Notice ?? '',
       SystemName: optionMap.SystemName ?? '',
       HomePageLink: optionMap.HomePageLink ?? '',
       About: optionMap.About ?? '',
       Footer: optionMap.Footer ?? '',
-    });
-    setDatabaseFields({
+    };
+    const nextDatabaseFields = {
       DatabaseAutoCleanupEnabled: toBoolean(
         optionMap.DatabaseAutoCleanupEnabled,
         false,
       ),
       DatabaseAutoCleanupRetentionDays:
         optionMap.DatabaseAutoCleanupRetentionDays ?? '30',
-    });
+    };
+
+    const forceSyncedKeys = syncedOptionKeysRef.current;
+    const forceSyncedOperationKeys = new Set(forceSyncedKeys);
+    if (forceSyncedKeys.has('ServerAddress')) {
+      forceSyncedOperationKeys.add('ServerAddress');
+    }
+    const nextDeploymentProtocol = getDeploymentProtocol(resolvedServerAddress);
+    const shouldForceServerAddress = forceSyncedKeys.has('ServerAddress');
+    const hasUnsavedServerAddressChange =
+      operationFields.ServerAddress !==
+        operationFieldsBaselineRef.current.ServerAddress ||
+      systemFields.ServerAddress !==
+        systemFieldsBaselineRef.current.ServerAddress ||
+      deploymentProtocol !== deploymentProtocolBaselineRef.current;
+
+    setSystemFields((previous) =>
+      mergeSyncedFields(
+        previous,
+        nextSystemFields,
+        systemFieldsBaselineRef.current,
+        forceSyncedKeys,
+      ),
+    );
+    setOperationFields((previous) =>
+      mergeSyncedFields(
+        previous,
+        nextOperationFields,
+        operationFieldsBaselineRef.current,
+        forceSyncedOperationKeys,
+      ),
+    );
+    setOtherFields((previous) =>
+      mergeSyncedFields(
+        previous,
+        nextOtherFields,
+        otherFieldsBaselineRef.current,
+        forceSyncedKeys,
+      ),
+    );
+    setDatabaseFields((previous) =>
+      mergeSyncedFields(
+        previous,
+        nextDatabaseFields,
+        databaseFieldsBaselineRef.current,
+        forceSyncedKeys,
+      ),
+    );
+
+    systemFieldsBaselineRef.current = nextSystemFields;
+    operationFieldsBaselineRef.current = nextOperationFields;
+    otherFieldsBaselineRef.current = nextOtherFields;
+    databaseFieldsBaselineRef.current = nextDatabaseFields;
+    if (!hasUnsavedServerAddressChange || shouldForceServerAddress) {
+      setDeploymentProtocol(nextDeploymentProtocol);
+    }
+    deploymentProtocolBaselineRef.current = nextDeploymentProtocol;
+
+    syncedOptionKeysRef.current = new Set(
+      Array.from(forceSyncedKeys).filter((key) =>
+        savedSecretSystemFieldKeys.has(key as SystemFieldKey),
+      ),
+    );
+    if (syncedOptionKeysRef.current.size > 0) {
+      setSystemFields((previous) => {
+        let nextFields = previous;
+        for (const key of syncedOptionKeysRef.current) {
+          if (
+            savedSecretSystemFieldKeys.has(key as SystemFieldKey) &&
+            previous[key as SystemFieldKey]
+          ) {
+            nextFields = { ...nextFields, [key]: '' };
+          }
+        }
+        return nextFields;
+      });
+      systemFieldsBaselineRef.current = {
+        ...systemFieldsBaselineRef.current,
+        ...Object.fromEntries(
+          Array.from(syncedOptionKeysRef.current)
+            .filter((key) =>
+              savedSecretSystemFieldKeys.has(key as SystemFieldKey),
+            )
+            .map((key) => [key, '']),
+        ),
+      };
+      syncedOptionKeysRef.current = new Set();
+    }
   }, [optionsQuery.data, publicStatusQuery.data?.server_address]);
+
+  useEffect(() => {
+    if (!publicStatusQuery.data || optionsQuery.data) {
+      return;
+    }
+
+    systemFieldsBaselineRef.current = {
+      ...systemFieldsBaselineRef.current,
+      ServerAddress: systemFields.ServerAddress,
+      GitHubClientId: systemFields.GitHubClientId,
+      WeChatAccountQRCodeImageURL: systemFields.WeChatAccountQRCodeImageURL,
+      TurnstileSiteKey: systemFields.TurnstileSiteKey,
+    };
+    operationFieldsBaselineRef.current = {
+      ...operationFieldsBaselineRef.current,
+      ServerAddress: operationFields.ServerAddress,
+    };
+    otherFieldsBaselineRef.current = {
+      ...otherFieldsBaselineRef.current,
+      SystemName: otherFields.SystemName,
+      HomePageLink: otherFields.HomePageLink,
+      Footer: otherFields.Footer,
+    };
+  }, [
+    operationFields.ServerAddress,
+    optionsQuery.data,
+    otherFields.Footer,
+    otherFields.HomePageLink,
+    otherFields.SystemName,
+    publicStatusQuery.data,
+    systemFields.GitHubClientId,
+    systemFields.ServerAddress,
+    systemFields.TurnstileSiteKey,
+    systemFields.WeChatAccountQRCodeImageURL,
+  ]);
 
   const rotateTokenMutation = useMutation({
     mutationFn: rotateBootstrapToken,
@@ -970,6 +1133,7 @@ export function SettingsPage() {
     entries: Array<[string, string]>,
     successMessage: string,
   ) => {
+    syncedOptionKeysRef.current = new Set(entries.map(([key]) => key));
     await updateOptions(entries.map(([key, value]) => ({ key, value })));
 
     await queryClient.invalidateQueries({ queryKey: settingsQueryKey });

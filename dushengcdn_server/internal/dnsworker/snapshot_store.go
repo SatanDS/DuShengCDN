@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 const (
@@ -32,8 +36,19 @@ type snapshotIndex struct {
 	zonesByName       map[string]*SnapshotZone
 	routesByDomain    map[string][]*SnapshotRoute
 	routesByWildcard  map[string][]*SnapshotRoute
+	policiesByRouteID map[uint]GSLBPolicy
 	recordsByNameType map[recordKey][]SnapshotRecord
 	namesByZone       map[uint]map[string]struct{}
+	// dnssecKeysByZone caches decrypted and parsed signing keys per
+	// DNSSEC-enabled zone so the per-query signing path never re-reads the
+	// key-encryption env var, re-runs AES-GCM, or re-parses private keys.
+	dnssecKeysByZone map[uint][]dnssecRuntimeKey
+	// sortedNamesByZone and sortedNSEC3HashesByZone hold the precomputed
+	// NSEC owner-name chain and NSEC3 hash chain for DNSSEC-enabled zones so
+	// negative answers only binary-search instead of hashing and sorting the
+	// whole zone per query.
+	sortedNamesByZone       map[uint][]string
+	sortedNSEC3HashesByZone map[uint][]string
 }
 
 type recordKey struct {
@@ -203,6 +218,15 @@ func (s *SnapshotStore) LastError() string {
 
 func (s *SnapshotStore) SetLastError(err error) {
 	s.setLastError(err)
+}
+
+func (s *SnapshotStore) ClearLastError() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.lastError = ""
+	s.mu.Unlock()
 }
 
 func (s *SnapshotStore) setLastError(err error) {
@@ -396,12 +420,16 @@ func normalizeSnapshotSchedulingStateChangedAt(changedAt *time.Time, now time.Ti
 
 func buildSnapshotIndex(snapshot *Snapshot) snapshotIndex {
 	index := snapshotIndex{
-		zonesByID:         map[uint]*SnapshotZone{},
-		zonesByName:       map[string]*SnapshotZone{},
-		routesByDomain:    map[string][]*SnapshotRoute{},
-		routesByWildcard:  map[string][]*SnapshotRoute{},
-		recordsByNameType: map[recordKey][]SnapshotRecord{},
-		namesByZone:       map[uint]map[string]struct{}{},
+		zonesByID:               map[uint]*SnapshotZone{},
+		zonesByName:             map[string]*SnapshotZone{},
+		routesByDomain:          map[string][]*SnapshotRoute{},
+		routesByWildcard:        map[string][]*SnapshotRoute{},
+		policiesByRouteID:       map[uint]GSLBPolicy{},
+		recordsByNameType:       map[recordKey][]SnapshotRecord{},
+		namesByZone:             map[uint]map[string]struct{}{},
+		dnssecKeysByZone:        map[uint][]dnssecRuntimeKey{},
+		sortedNamesByZone:       map[uint][]string{},
+		sortedNSEC3HashesByZone: map[uint][]string{},
 	}
 	if snapshot == nil {
 		return index
@@ -423,6 +451,9 @@ func buildSnapshotIndex(snapshot *Snapshot) snapshotIndex {
 	}
 	for i := range snapshot.Routes {
 		route := &snapshot.Routes[i]
+		if route.ID != 0 {
+			index.policiesByRouteID[route.ID] = route.GSLBPolicy
+		}
 		for _, domain := range route.Domains {
 			domain = normalizeDomain(domain)
 			if domain == "" {
@@ -451,5 +482,47 @@ func buildSnapshotIndex(snapshot *Snapshot) snapshotIndex {
 			}
 		}
 	}
+	buildSnapshotDNSSECIndex(&index)
 	return index
+}
+
+// buildSnapshotDNSSECIndex precomputes per-zone DNSSEC runtime state once at
+// snapshot load so the per-query path only reuses it. It must run after
+// namesByZone is fully populated (records and route domains).
+func buildSnapshotDNSSECIndex(index *snapshotIndex) {
+	for zoneID, zone := range index.zonesByID {
+		if zone == nil || !zone.DNSSEC.Enabled {
+			continue
+		}
+		keys := loadDNSSECKeys(zone)
+		if len(keys) > 0 {
+			index.dnssecKeysByZone[zoneID] = keys
+		} else if len(zone.DNSSECKeys) > 0 {
+			slog.Warn(
+				"dns zone DNSSEC keys are unusable, responses will be served unsigned",
+				"zone", zone.Name,
+				"keys", len(zone.DNSSECKeys),
+			)
+		}
+		names := index.namesByZone[zoneID]
+		sortedNames := make([]string, 0, len(names))
+		for name := range names {
+			if name != "" {
+				sortedNames = append(sortedNames, name)
+			}
+		}
+		sort.Strings(sortedNames)
+		index.sortedNamesByZone[zoneID] = sortedNames
+		if normalizeDNSSECDenialMode(zone.DNSSEC.DenialMode) != dnssecDenialModeNSEC3 {
+			continue
+		}
+		salt := strings.TrimSpace(zone.DNSSEC.NSEC3Salt)
+		iterations := uint16(normalizeDNSSECNSEC3Iterations(zone.DNSSEC.NSEC3Iterations))
+		hashes := make([]string, 0, len(sortedNames))
+		for _, name := range sortedNames {
+			hashes = append(hashes, dns.HashName(dnsName(name), dns.SHA1, iterations, salt))
+		}
+		sort.Strings(hashes)
+		index.sortedNSEC3HashesByZone[zoneID] = hashes
+	}
 }

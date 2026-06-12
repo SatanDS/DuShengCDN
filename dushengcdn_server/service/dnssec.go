@@ -110,10 +110,10 @@ func EnableAuthoritativeDNSSEC(zoneID uint, input DNSSECEnableInput) (*DNSSECVie
 	}
 	now := time.Now().UTC()
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := ensureDNSSECActiveKeyWithDB(tx, zone.ID, dnssecKeyRoleKSK, now); err != nil {
+		if err := ensureDNSSECActiveKeyWithDB(tx, zone, dnssecKeyRoleKSK, now); err != nil {
 			return err
 		}
-		if err := ensureDNSSECActiveKeyWithDB(tx, zone.ID, dnssecKeyRoleZSK, now); err != nil {
+		if err := ensureDNSSECActiveKeyWithDB(tx, zone, dnssecKeyRoleZSK, now); err != nil {
 			return err
 		}
 		zone.DNSSECEnabled = true
@@ -263,19 +263,18 @@ func (view DNSSECKeyView) dsRDATA() string {
 	}, " "))
 }
 
-func ensureDNSSECActiveKeyWithDB(tx *gorm.DB, zoneID uint, role string, now time.Time) error {
+func ensureDNSSECActiveKeyWithDB(tx *gorm.DB, zone *model.DNSZone, role string, now time.Time) error {
+	if zone == nil {
+		return errors.New("DNS zone is nil")
+	}
 	var count int64
 	if err := tx.Model(&model.DNSSECKey{}).
-		Where("zone_id = ? AND role = ? AND status = ?", zoneID, role, dnssecKeyStatusActive).
+		Where("zone_id = ? AND role = ? AND status = ?", zone.ID, role, dnssecKeyStatusActive).
 		Count(&count).Error; err != nil {
 		return err
 	}
 	if count > 0 {
 		return nil
-	}
-	zone := &model.DNSZone{}
-	if err := tx.First(zone, zoneID).Error; err != nil {
-		return err
 	}
 	return createDNSSECKeyWithDB(tx, zone, role, now)
 }

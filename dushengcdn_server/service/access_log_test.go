@@ -3,7 +3,9 @@ package service
 import (
 	"dushengcdn/model"
 	"errors"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,6 +60,145 @@ func TestRunConcurrentQueriesReturnsFirstError(t *testing.T) {
 	)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected query error to be returned, got %v", err)
+	}
+}
+
+func TestLoadAccessLogCountWithCacheCoalescesConcurrentLoads(t *testing.T) {
+	resetAccessLogCountCacheForTest()
+	t.Cleanup(resetAccessLogCountCacheForTest)
+
+	const callers = 12
+	key := "count-coalesce:" + t.Name()
+	var calls atomic.Int32
+	ready := make(chan struct{}, callers)
+	start := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			<-start
+			totalRecords, totalIPs, err := loadAccessLogCountWithCache(key, func() (int64, int64, error) {
+				if calls.Add(1) == 1 {
+					entered <- struct{}{}
+				}
+				<-release
+				return 42, 7, nil
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if totalRecords != 42 || totalIPs != 7 {
+				errs <- errors.New("unexpected coalesced access log count")
+			}
+		}()
+	}
+	for range callers {
+		<-ready
+	}
+	close(start)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("timed out waiting for access log count loader")
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("coalesced access log count failed: %v", err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("expected one access log count load, got %d", calls.Load())
+	}
+
+	totalRecords, totalIPs, err := loadAccessLogCountWithCache(key, func() (int64, int64, error) {
+		calls.Add(1)
+		return 0, 0, errors.New("cached count should not reload")
+	})
+	if err != nil {
+		t.Fatalf("cached access log count failed: %v", err)
+	}
+	if totalRecords != 42 || totalIPs != 7 || calls.Load() != 1 {
+		t.Fatalf("expected cached access log count, got records=%d ips=%d calls=%d", totalRecords, totalIPs, calls.Load())
+	}
+}
+
+func TestLoadAccessLogSingleCountWithCacheCoalescesConcurrentLoads(t *testing.T) {
+	cache := &accessLogSingleCountCacheStore{values: make(map[string]accessLogSingleCountCacheEntry)}
+
+	const callers = 12
+	key := "single-count-coalesce:" + t.Name()
+	var calls atomic.Int32
+	ready := make(chan struct{}, callers)
+	start := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			<-start
+			count, err := loadAccessLogSingleCountWithCache(cache, key, func() (int64, error) {
+				if calls.Add(1) == 1 {
+					entered <- struct{}{}
+				}
+				<-release
+				return 9, nil
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if count != 9 {
+				errs <- errors.New("unexpected coalesced access log single count")
+			}
+		}()
+	}
+	for range callers {
+		<-ready
+	}
+	close(start)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("timed out waiting for access log single count loader")
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("coalesced access log single count failed: %v", err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("expected one access log single count load, got %d", calls.Load())
+	}
+
+	count, err := loadAccessLogSingleCountWithCache(cache, key, func() (int64, error) {
+		calls.Add(1)
+		return 0, errors.New("cached single count should not reload")
+	})
+	if err != nil {
+		t.Fatalf("cached access log single count failed: %v", err)
+	}
+	if count != 9 || calls.Load() != 1 {
+		t.Fatalf("expected cached access log single count, got count=%d calls=%d", count, calls.Load())
 	}
 }
 
@@ -195,6 +336,134 @@ func TestListAccessLogsUsesDefaultPageSize(t *testing.T) {
 	}
 }
 
+func TestListAccessLogsReusesCountAcrossPages(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAccessLogCountCacheForTest()
+
+	now := time.Now()
+	logs := make([]*model.NodeAccessLog, 0, 5)
+	for index := range 5 {
+		logs = append(logs, &model.NodeAccessLog{
+			NodeID:     "node-count-cache",
+			LoggedAt:   now.Add(-time.Duration(index) * time.Minute),
+			RemoteAddr: "203.0.113." + strconv.Itoa(index+1),
+			Host:       "cache.example.com",
+			Path:       "/count-cache",
+			StatusCode: 200,
+		})
+	}
+	seedNodeAccessLogs(t, logs)
+
+	firstPage, err := ListAccessLogs(AccessLogQuery{
+		NodeID:   "node-count-cache",
+		Page:     0,
+		PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogs first page failed: %v", err)
+	}
+	if firstPage.TotalRecord != 5 || firstPage.TotalIP != 5 {
+		t.Fatalf("unexpected first page totals: %+v", firstPage)
+	}
+
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:     "node-count-cache",
+			LoggedAt:   now.Add(time.Minute),
+			RemoteAddr: "203.0.113.99",
+			Host:       "cache.example.com",
+			Path:       "/count-cache/new",
+			StatusCode: 200,
+		},
+	})
+
+	secondPage, err := ListAccessLogs(AccessLogQuery{
+		NodeID:   "node-count-cache",
+		Page:     1,
+		PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogs second page failed: %v", err)
+	}
+	if secondPage.TotalRecord != 5 || secondPage.TotalIP != 5 {
+		t.Fatalf("expected cached totals from first page, got %+v", secondPage)
+	}
+	if len(secondPage.Items) != 2 || !secondPage.HasMore {
+		t.Fatalf("expected lookahead pagination to keep page shape and has_more, got %+v", secondPage)
+	}
+}
+
+func TestListAccessLogsUsesCursorForStableKeysetPagination(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAccessLogCountCacheForTest()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	logs := make([]*model.NodeAccessLog, 0, 5)
+	for index := range 5 {
+		logs = append(logs, &model.NodeAccessLog{
+			NodeID:     "node-cursor",
+			LoggedAt:   now.Add(-time.Duration(index) * time.Minute),
+			RemoteAddr: "203.0.113." + strconv.Itoa(index+1),
+			Host:       "cursor.example.com",
+			Path:       "/cursor/" + strconv.Itoa(index),
+			StatusCode: 200,
+		})
+	}
+	seedNodeAccessLogs(t, logs)
+
+	firstPage, err := ListAccessLogs(AccessLogQuery{
+		NodeID:   "node-cursor",
+		PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogs first page failed: %v", err)
+	}
+	if len(firstPage.Items) != 2 || firstPage.Items[0].Path != "/cursor/0" || firstPage.Items[1].Path != "/cursor/1" {
+		t.Fatalf("unexpected first cursor page: %+v", firstPage.Items)
+	}
+	if firstPage.NextCursor == "" || !firstPage.HasMore {
+		t.Fatalf("expected first cursor page to expose next cursor, got %+v", firstPage)
+	}
+
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:     "node-cursor",
+			LoggedAt:   now.Add(time.Minute),
+			RemoteAddr: "203.0.113.99",
+			Host:       "cursor.example.com",
+			Path:       "/cursor/newer",
+			StatusCode: 200,
+		},
+	})
+	resetAccessLogCountCacheForTest()
+
+	secondPage, err := ListAccessLogs(AccessLogQuery{
+		NodeID:   "node-cursor",
+		PageSize: 2,
+		Cursor:   firstPage.NextCursor,
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogs second cursor page failed: %v", err)
+	}
+	if secondPage.TotalRecord != 6 {
+		t.Fatalf("expected cursor count to include all matching records, got %+v", secondPage)
+	}
+	if len(secondPage.Items) != 2 || secondPage.Items[0].Path != "/cursor/2" || secondPage.Items[1].Path != "/cursor/3" {
+		t.Fatalf("expected cursor page not to drift after newer insert, got %+v", secondPage.Items)
+	}
+	if secondPage.NextCursor == "" || !secondPage.HasMore {
+		t.Fatalf("expected second cursor page to expose next cursor, got %+v", secondPage)
+	}
+}
+
+func TestListAccessLogsRejectsInvalidCursor(t *testing.T) {
+	setupServiceTestDB(t)
+
+	if _, err := ListAccessLogs(AccessLogQuery{Cursor: "not-a-valid-cursor"}); err == nil || !strings.Contains(err.Error(), "invalid access log cursor") {
+		t.Fatalf("expected invalid cursor error, got %v", err)
+	}
+}
+
 func TestListAccessLogsFiltersByHostDomain(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -224,6 +493,14 @@ func TestListAccessLogsFiltersByHostDomain(t *testing.T) {
 			Path:       "/api/dns-snapshot",
 			StatusCode: 200,
 		},
+		{
+			NodeID:     "node-domain-filter",
+			LoggedAt:   now,
+			RemoteAddr: "47.86.192.74",
+			Host:       "not-satandu.com",
+			Path:       "/noise",
+			StatusCode: 200,
+		},
 	})
 
 	result, err := ListAccessLogs(AccessLogQuery{
@@ -241,6 +518,236 @@ func TestListAccessLogsFiltersByHostDomain(t *testing.T) {
 		if !strings.Contains(item.Host, "satandu.com") {
 			t.Fatalf("expected domain filter to exclude unrelated host, got %+v", result.Items)
 		}
+	}
+}
+
+func TestListAccessLogsFiltersPersistedNormalizedHost(t *testing.T) {
+	setupServiceTestDB(t)
+
+	reportedAt := time.Now().UTC()
+	if err := persistNodeAccessLogs(model.DB, "node-host-normalized", []AgentNodeAccessLog{
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "203.0.113.40",
+			Host:         " WWW.SATANDU.COM ",
+			Path:         "/normalized-host",
+			StatusCode:   200,
+		},
+		{
+			LoggedAtUnix: reportedAt.Add(time.Second).Unix(),
+			RemoteAddr:   "203.0.113.41",
+			Host:         "not-satandu.com",
+			Path:         "/noise",
+			StatusCode:   200,
+		},
+	}, reportedAt); err != nil {
+		t.Fatalf("persistNodeAccessLogs failed: %v", err)
+	}
+
+	result, err := ListAccessLogs(AccessLogQuery{
+		Host:     "satandu.com",
+		Page:     0,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogs failed: %v", err)
+	}
+	if result.TotalRecord != 1 || len(result.Items) != 1 {
+		t.Fatalf("expected one normalized host match, got %+v", result)
+	}
+	if result.Items[0].Host != "www.satandu.com" {
+		t.Fatalf("expected persisted host to be normalized, got %+v", result.Items[0])
+	}
+}
+
+func TestListAccessLogsNormalizesHostAndRemoteFilters(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now().UTC()
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:     "node-normalized-filter",
+			LoggedAt:   now,
+			RemoteAddr: "203.0.113.70",
+			Host:       "www.satandu.com",
+			Path:       "/normalized-filter",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-normalized-filter",
+			LoggedAt:   now.Add(time.Second),
+			RemoteAddr: "203.0.113.71",
+			Host:       "www.satandu.com",
+			Path:       "/noise",
+			StatusCode: 200,
+		},
+	})
+
+	result, err := ListAccessLogs(AccessLogQuery{
+		NodeID:     "node-normalized-filter",
+		RemoteAddr: "203.0.113.70:443",
+		Host:       "https://WWW.SATANDU.COM:443/some/path?token=secret",
+		PageSize:   10,
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogs failed: %v", err)
+	}
+	if result.TotalRecord != 1 || len(result.Items) != 1 {
+		t.Fatalf("expected normalized host and remote filters to match one row, got %+v", result)
+	}
+	if result.Items[0].Path != "/normalized-filter" {
+		t.Fatalf("unexpected normalized filter result: %+v", result.Items)
+	}
+}
+
+func TestListFoldedAccessLogsReusesCountAcrossPages(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAccessLogCountCacheForTest()
+
+	base := time.Now().UTC().Truncate(5 * time.Minute)
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:     "node-folded-count-cache",
+			LoggedAt:   base,
+			RemoteAddr: "203.0.113.50",
+			Host:       "folded-count.example.com",
+			Path:       "/first",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-folded-count-cache",
+			LoggedAt:   base.Add(5 * time.Minute),
+			RemoteAddr: "203.0.113.51",
+			Host:       "folded-count.example.com",
+			Path:       "/second",
+			StatusCode: 200,
+		},
+	})
+
+	firstPage, err := ListFoldedAccessLogs(AccessLogQuery{
+		NodeID:      "node-folded-count-cache",
+		Page:        0,
+		PageSize:    1,
+		SortOrder:   "asc",
+		FoldMinutes: 5,
+	})
+	if err != nil {
+		t.Fatalf("ListFoldedAccessLogs first page failed: %v", err)
+	}
+	if firstPage.TotalBucket != 2 || firstPage.TotalRecord != 2 || firstPage.TotalIP != 2 {
+		t.Fatalf("unexpected first page totals: %+v", firstPage)
+	}
+	if len(firstPage.Items) != 1 || !firstPage.HasMore {
+		t.Fatalf("expected first folded page to use lookahead, got %+v", firstPage)
+	}
+
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:     "node-folded-count-cache",
+			LoggedAt:   base.Add(10 * time.Minute),
+			RemoteAddr: "203.0.113.52",
+			Host:       "folded-count.example.com",
+			Path:       "/third",
+			StatusCode: 200,
+		},
+	})
+
+	secondPage, err := ListFoldedAccessLogs(AccessLogQuery{
+		NodeID:      "node-folded-count-cache",
+		Page:        1,
+		PageSize:    1,
+		SortOrder:   "asc",
+		FoldMinutes: 5,
+	})
+	if err != nil {
+		t.Fatalf("ListFoldedAccessLogs second page failed: %v", err)
+	}
+	if secondPage.TotalBucket != 2 || secondPage.TotalRecord != 2 || secondPage.TotalIP != 2 {
+		t.Fatalf("expected cached folded totals, got %+v", secondPage)
+	}
+	if len(secondPage.Items) != 1 || !secondPage.Items[0].BucketStartedAt.Equal(base.Add(5*time.Minute)) {
+		t.Fatalf("expected second page to preserve original offset, got %+v", secondPage.Items)
+	}
+	if !secondPage.HasMore {
+		t.Fatalf("expected folded lookahead to see newly inserted third page, got %+v", secondPage)
+	}
+}
+
+func TestListAccessLogIPSummariesReusesCountAcrossPages(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAccessLogCountCacheForTest()
+
+	base := time.Now().UTC()
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:     "node-ip-count-cache",
+			LoggedAt:   base,
+			RemoteAddr: "203.0.113.61",
+			Host:       "ip-count.example.com",
+			Path:       "/first",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-ip-count-cache",
+			LoggedAt:   base.Add(time.Second),
+			RemoteAddr: "203.0.113.62",
+			Host:       "ip-count.example.com",
+			Path:       "/second",
+			StatusCode: 200,
+		},
+		{
+			NodeID:     "node-ip-count-cache",
+			LoggedAt:   base.Add(2 * time.Second),
+			RemoteAddr: "203.0.113.63",
+			Host:       "ip-count.example.com",
+			Path:       "/third",
+			StatusCode: 200,
+		},
+	})
+
+	firstPage, err := ListAccessLogIPSummaries(AccessLogIPSummaryQuery{
+		NodeID:    "node-ip-count-cache",
+		Page:      0,
+		PageSize:  1,
+		SortBy:    "remote_addr",
+		SortOrder: "asc",
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogIPSummaries first page failed: %v", err)
+	}
+	if firstPage.TotalIP != 3 || len(firstPage.Items) != 1 || !firstPage.HasMore {
+		t.Fatalf("unexpected first ip summary page: %+v", firstPage)
+	}
+
+	seedNodeAccessLogs(t, []*model.NodeAccessLog{
+		{
+			NodeID:     "node-ip-count-cache",
+			LoggedAt:   base.Add(3 * time.Second),
+			RemoteAddr: "203.0.113.64",
+			Host:       "ip-count.example.com",
+			Path:       "/fourth",
+			StatusCode: 200,
+		},
+	})
+
+	secondPage, err := ListAccessLogIPSummaries(AccessLogIPSummaryQuery{
+		NodeID:    "node-ip-count-cache",
+		Page:      1,
+		PageSize:  1,
+		SortBy:    "remote_addr",
+		SortOrder: "asc",
+	})
+	if err != nil {
+		t.Fatalf("ListAccessLogIPSummaries second page failed: %v", err)
+	}
+	if secondPage.TotalIP != 3 {
+		t.Fatalf("expected cached ip summary total, got %+v", secondPage)
+	}
+	if len(secondPage.Items) != 1 || secondPage.Items[0].RemoteAddr != "203.0.113.62" {
+		t.Fatalf("expected second page to preserve original offset, got %+v", secondPage.Items)
+	}
+	if !secondPage.HasMore {
+		t.Fatalf("expected ip summary lookahead to see another page, got %+v", secondPage)
 	}
 }
 
@@ -372,92 +879,7 @@ func TestCleanupAccessLogsDeletesExpiredData(t *testing.T) {
 
 func TestBuildObservabilityMeteringOverviewAggregatesBillingSignals(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Hour)
-	view := buildObservabilityMeteringOverview(meteringOverviewDataSource{
-		now: now,
-		nodes: []*model.Node{
-			{NodeID: "node-a", Name: "AKKO HK", Status: NodeStatusOnline, LastSeenAt: now},
-			{NodeID: "node-b", Name: "AKKO DE", Status: NodeStatusOffline, LastSeenAt: now.Add(-3 * time.Hour)},
-		},
-		logs: []*model.NodeAccessLog{
-			{
-				NodeID:        "node-a",
-				LoggedAt:      now.Add(-10 * time.Minute),
-				RemoteAddr:    "203.0.113.1",
-				Region:        "China",
-				Host:          "app.example.com",
-				Path:          "/index",
-				StatusCode:    200,
-				RequestBytes:  100,
-				ResponseBytes: 1000,
-				UpstreamBytes: 300,
-			},
-			{
-				NodeID:        "node-b",
-				LoggedAt:      now.Add(-8 * time.Minute),
-				RemoteAddr:    "203.0.113.2",
-				Region:        "United States",
-				Host:          "app.example.com",
-				Path:          "/api",
-				StatusCode:    502,
-				RequestBytes:  200,
-				ResponseBytes: 2000,
-				UpstreamBytes: 900,
-			},
-			{
-				NodeID:        "node-a",
-				LoggedAt:      now.Add(-6 * time.Minute),
-				RemoteAddr:    "203.0.113.1",
-				Region:        "China",
-				Host:          "static.example.com",
-				Path:          "/asset.js",
-				StatusCode:    200,
-				ResponseBytes: 500,
-			},
-		},
-		reports: []*model.NodeRequestReport{
-			{
-				CacheHitCount:    7,
-				CacheMissCount:   2,
-				CacheBypassCount: 1,
-				StatusCodesJSON:  `{"200":8,"502":2}`,
-			},
-		},
-		snapshots: []*model.NodeMetricSnapshot{
-			{NodeID: "node-a", CapturedAt: now.Add(-2 * time.Hour), OpenrestyRxBytes: 1000, OpenrestyTxBytes: 2000},
-			{NodeID: "node-a", CapturedAt: now.Add(-1 * time.Hour), OpenrestyRxBytes: 1500, OpenrestyTxBytes: 3200},
-			{NodeID: "node-a", CapturedAt: now, OpenrestyRxBytes: 2200, OpenrestyTxBytes: 5200},
-		},
-	})
-
-	if view.RequestCount != 3 {
-		t.Fatalf("expected request count 3, got %d", view.RequestCount)
-	}
-	if view.ResponseBytes != 3500 || view.UpstreamBytes != 1200 || !view.UpstreamBytesSupported {
-		t.Fatalf("unexpected traffic bytes: %+v", view)
-	}
-	if view.CacheHitRatePercent != 70 {
-		t.Fatalf("expected cache hit rate 70, got %f", view.CacheHitRatePercent)
-	}
-	if view.CacheHitCount != 7 || view.CacheMissCount != 2 || view.CacheBypassCount != 1 || view.CacheClassifiedCount != 10 {
-		t.Fatalf("expected cache status breakdown, got %+v", view)
-	}
-	if view.NodeAvailabilityPercent != 50 {
-		t.Fatalf("expected availability 50, got %f", view.NodeAvailabilityPercent)
-	}
-	if len(view.SiteTraffic) == 0 || view.SiteTraffic[0].Key != "app.example.com" || view.SiteTraffic[0].ResponseBytes != 3000 {
-		t.Fatalf("unexpected site traffic: %+v", view.SiteTraffic)
-	}
-	if len(view.NodeTraffic) == 0 || view.NodeTraffic[0].Key != "AKKO DE" {
-		t.Fatalf("expected node traffic to use node display names, got %+v", view.NodeTraffic)
-	}
-	if len(view.TopURLs) == 0 || view.TopURLs[0].Key == "" {
-		t.Fatalf("expected top URLs, got %+v", view.TopURLs)
-	}
-	if view.BandwidthP95Bps <= 0 {
-		t.Fatalf("expected positive p95 bandwidth, got %f", view.BandwidthP95Bps)
-	}
-
-	aggregatedView := buildAggregatedObservabilityMeteringOverview(meteringOverviewAggregatedDataSource{
+	view := buildAggregatedObservabilityMeteringOverview(meteringOverviewAggregatedDataSource{
 		now: now,
 		nodes: []*model.Node{
 			{NodeID: "node-a", Name: "AKKO HK", Status: NodeStatusOnline, LastSeenAt: now},
@@ -510,18 +932,33 @@ func TestBuildObservabilityMeteringOverviewAggregatesBillingSignals(t *testing.T
 			},
 		},
 	})
-	if aggregatedView.RequestCount != view.RequestCount ||
-		aggregatedView.ResponseBytes != view.ResponseBytes ||
-		aggregatedView.UpstreamBytes != view.UpstreamBytes ||
-		aggregatedView.CacheHitRatePercent != view.CacheHitRatePercent ||
-		aggregatedView.NodeAvailabilityPercent != view.NodeAvailabilityPercent {
-		t.Fatalf("aggregated overview diverged: aggregated=%+v memory=%+v", aggregatedView, view)
+
+	if view.RequestCount != 3 {
+		t.Fatalf("expected request count 3, got %d", view.RequestCount)
 	}
-	if len(aggregatedView.SiteTraffic) == 0 || aggregatedView.SiteTraffic[0].Key != "app.example.com" || aggregatedView.SiteTraffic[0].ResponseBytes != 3000 {
-		t.Fatalf("unexpected aggregated site traffic: %+v", aggregatedView.SiteTraffic)
+	if view.ResponseBytes != 3500 || view.UpstreamBytes != 1200 || !view.UpstreamBytesSupported {
+		t.Fatalf("unexpected traffic bytes: %+v", view)
 	}
-	if len(aggregatedView.NodeTraffic) == 0 || aggregatedView.NodeTraffic[0].Key != "AKKO DE" {
-		t.Fatalf("expected aggregated node traffic to use node display names, got %+v", aggregatedView.NodeTraffic)
+	if view.CacheHitRatePercent != 70 {
+		t.Fatalf("expected cache hit rate 70, got %f", view.CacheHitRatePercent)
+	}
+	if view.CacheHitCount != 7 || view.CacheMissCount != 2 || view.CacheBypassCount != 1 || view.CacheClassifiedCount != 10 {
+		t.Fatalf("expected cache status breakdown, got %+v", view)
+	}
+	if view.NodeAvailabilityPercent != 50 {
+		t.Fatalf("expected availability 50, got %f", view.NodeAvailabilityPercent)
+	}
+	if len(view.SiteTraffic) == 0 || view.SiteTraffic[0].Key != "app.example.com" || view.SiteTraffic[0].ResponseBytes != 3000 {
+		t.Fatalf("unexpected aggregated site traffic: %+v", view.SiteTraffic)
+	}
+	if len(view.NodeTraffic) == 0 || view.NodeTraffic[0].Key != "AKKO DE" {
+		t.Fatalf("expected aggregated node traffic to use node display names, got %+v", view.NodeTraffic)
+	}
+	if len(view.TopURLs) == 0 || view.TopURLs[0].Key == "" {
+		t.Fatalf("expected top URLs, got %+v", view.TopURLs)
+	}
+	if view.BandwidthP95Bps <= 0 {
+		t.Fatalf("expected positive p95 bandwidth, got %f", view.BandwidthP95Bps)
 	}
 }
 

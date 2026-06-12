@@ -3,8 +3,6 @@ package controller
 import (
 	"dushengcdn/model"
 	"dushengcdn/service"
-	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -43,7 +41,7 @@ func GetDnsAccounts(c *gin.Context) {
 // @Router /api/dns-accounts/ [post]
 func CreateDnsAccount(c *gin.Context) {
 	var input DnsAccountInput
-	if err := json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
 		respondBadRequest(c, "无效的参数")
 		return
 	}
@@ -77,19 +75,18 @@ func CreateDnsAccount(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/dns-accounts/{id}/update [post]
 func UpdateDnsAccount(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "无效的参数")
+	id, ok := parseUintParamWithMessage(c, "id", "无效的参数")
+	if !ok {
 		return
 	}
 
 	var input DnsAccountInput
-	if err := json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
 		respondBadRequest(c, "无效的参数")
 		return
 	}
 
-	account, err := model.GetDnsAccountByID(uint(id))
+	account, err := model.GetDnsAccountByID(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -122,13 +119,12 @@ func UpdateDnsAccount(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/dns-accounts/{id}/delete [post]
 func DeleteDnsAccount(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "无效的参数")
+	id, ok := parseUintParamWithMessage(c, "id", "无效的参数")
+	if !ok {
 		return
 	}
 
-	account, err := model.GetDnsAccountByID(uint(id))
+	account, err := model.GetDnsAccountByID(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return

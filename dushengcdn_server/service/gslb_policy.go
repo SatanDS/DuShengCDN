@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"dushengcdn/model"
-	"dushengcdn/utils/geoip/iputil"
 )
 
 const (
@@ -20,7 +20,15 @@ const (
 	gslbSourcePoolFallbackStrict = "strict"
 	gslbSourcePoolFallbackGlobal = "fallback_to_global"
 	defaultGSLBCooldownSeconds   = 60
+	gslbCIDRParseCacheMax        = 4096
 )
+
+var gslbCIDRParseCache sync.Map
+
+type gslbCIDRParseCacheEntry struct {
+	cidr    string
+	network *net.IPNet
+}
 
 type ProxyRouteGSLBPoolPolicy struct {
 	Name               string   `json:"name"`
@@ -300,18 +308,7 @@ func validateGSLBPolicyPoolTargets(policy ProxyRouteGSLBPolicy, recordType strin
 		if !ok || !gslbPoolAllowsNode(poolPolicy, node.NodeID) {
 			continue
 		}
-		for _, value := range resolveNodePublicIPs(node) {
-			ip := iputil.NormalizeIP(value)
-			parsed := net.ParseIP(ip)
-			if parsed == nil || !iputil.IsPublicString(ip) {
-				continue
-			}
-			if recordType == "A" && parsed.To4() == nil {
-				continue
-			}
-			if recordType == "AAAA" && parsed.To4() != nil {
-				continue
-			}
+		for range nodeDNSContents(node, recordType) {
 			availablePools[poolName]++
 		}
 	}
@@ -506,12 +503,15 @@ func sourceIPMatchesCIDRList(sourceIP string, cidrs []string) (string, bool) {
 		ip = ipv4
 	}
 	for _, value := range cidrs {
-		cidr, ok := normalizeGSLBCIDR(value)
-		if !ok {
+		// CIDR lists are normalized at write time (normalizeGSLBCIDRList), so the
+		// matching path only needs a single parse; plain-IP legacy values without
+		// a prefix length still go through normalizeGSLBCIDR first.
+		text := strings.TrimSpace(value)
+		if text == "" {
 			continue
 		}
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
+		cidr, network, ok := parseGSLBCIDRForMatch(text)
+		if !ok {
 			continue
 		}
 		if network.Contains(ip) {
@@ -519,6 +519,51 @@ func sourceIPMatchesCIDRList(sourceIP string, cidrs []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func parseGSLBCIDRForMatch(value string) (string, *net.IPNet, bool) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return "", nil, false
+	}
+	if !strings.Contains(text, "/") {
+		normalized, ok := normalizeGSLBCIDR(text)
+		if !ok {
+			return "", nil, false
+		}
+		text = normalized
+	}
+	if cached, ok := gslbCIDRParseCache.Load(text); ok {
+		entry, ok := cached.(gslbCIDRParseCacheEntry)
+		if ok && entry.network != nil {
+			return entry.cidr, entry.network, true
+		}
+	}
+	_, network, err := net.ParseCIDR(text)
+	if err != nil {
+		return "", nil, false
+	}
+	cidr := network.String()
+	if approximateSyncMapLen(&gslbCIDRParseCache, gslbCIDRParseCacheMax+1) >= gslbCIDRParseCacheMax {
+		gslbCIDRParseCache.Range(func(key, _ any) bool {
+			gslbCIDRParseCache.Delete(key)
+			return false
+		})
+	}
+	gslbCIDRParseCache.Store(text, gslbCIDRParseCacheEntry{cidr: cidr, network: network})
+	return cidr, network, true
+}
+
+func approximateSyncMapLen(values *sync.Map, limit int) int {
+	if values == nil || limit <= 0 {
+		return 0
+	}
+	count := 0
+	values.Range(func(_, _ any) bool {
+		count++
+		return count < limit
+	})
+	return count
 }
 
 func mergeGSLBStringLists(left []string, right []string) []string {

@@ -120,40 +120,56 @@ func validRateLimitConfig(c *gin.Context, maxRequestNum int, duration int64) boo
 	return false
 }
 
-func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gin.Context) {
+type rateLimitConfigProvider func() (int, int64)
+
+func rateLimitFactory(config rateLimitConfigProvider, mark string) func(c *gin.Context) {
 	if common.RedisEnabled {
 		return func(c *gin.Context) {
+			maxRequestNum, duration := config()
 			redisRateLimiter(c, maxRequestNum, duration, mark)
 		}
 	} else {
 		// It's safe to call multi times.
 		inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
 		return func(c *gin.Context) {
+			maxRequestNum, duration := config()
 			memoryRateLimiter(c, maxRequestNum, duration, mark)
 		}
 	}
 }
 
 func GlobalWebRateLimit() func(c *gin.Context) {
-	return rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
+	return rateLimitFactory(func() (int, int64) {
+		return common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration
+	}, "GW")
 }
 
 func GlobalAPIRateLimit() func(c *gin.Context) {
-	return rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+	return rateLimitFactory(func() (int, int64) {
+		return common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration
+	}, "GA")
 }
 
 func CriticalRateLimit() func(c *gin.Context) {
-	return rateLimitFactory(common.CriticalRateLimitNum, common.CriticalRateLimitDuration, "CT")
+	return rateLimitFactory(func() (int, int64) {
+		return common.CriticalRateLimitNum, common.CriticalRateLimitDuration
+	}, "CT")
 }
 
 func DownloadRateLimit() func(c *gin.Context) {
-	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
+	return rateLimitFactory(func() (int, int64) {
+		return common.DownloadRateLimitNum, common.DownloadRateLimitDuration
+	}, "DW")
 }
 
 func UploadRateLimit() func(c *gin.Context) {
-	return rateLimitFactory(common.UploadRateLimitNum, common.UploadRateLimitDuration, "UP")
+	return rateLimitFactory(func() (int, int64) {
+		return common.UploadRateLimitNum, common.UploadRateLimitDuration
+	}, "UP")
 }
 
 func DNSWorkerAPIRateLimit() func(c *gin.Context) {
-	return rateLimitFactory(common.DNSWorkerAPIRateLimitNum, common.DNSWorkerAPIRateLimitDuration, "DWK")
+	return rateLimitFactory(func() (int, int64) {
+		return common.DNSWorkerAPIRateLimitNum, common.DNSWorkerAPIRateLimitDuration
+	}, "DWK")
 }

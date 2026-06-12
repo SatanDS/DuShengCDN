@@ -147,6 +147,9 @@ type GSLBPoolPolicy struct {
 	ExcludeASNs        []uint32 `json:"exclude_asns,omitempty"`
 	NodeIDs            []string `json:"node_ids,omitempty"`
 	Enabled            bool     `json:"enabled"`
+
+	compiledSourceCIDRs        cachedCIDRList
+	compiledExcludeSourceCIDRs cachedCIDRList
 }
 
 type GSLBSourceIPProvider struct {

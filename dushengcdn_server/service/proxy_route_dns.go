@@ -22,10 +22,11 @@ func SyncProxyRouteDNS(route *model.ProxyRoute) error {
 }
 
 type proxyRouteDNSSyncContext struct {
-	accountsByID      map[uint]*model.DnsAccount
-	ddosActiveLoaded  bool
-	ddosActive        bool
-	trafficSummaryErr error
+	accountsByID              map[uint]*model.DnsAccount
+	schedulingOptions         gslbDNSSchedulingOptions
+	markAutoTargetOnSelection bool
+	ddosActiveLoaded          bool
+	ddosActive                bool
 }
 
 var getRequestReportTrafficSummaryForDNSProtection = model.GetRequestReportTrafficSummary
@@ -59,7 +60,18 @@ func newProxyRouteDNSSyncContext(routes []*model.ProxyRoute) (*proxyRouteDNSSync
 		}
 		accountsByID[account.ID] = account
 	}
-	return &proxyRouteDNSSyncContext{accountsByID: accountsByID}, nil
+	context := &proxyRouteDNSSyncContext{
+		accountsByID:              accountsByID,
+		markAutoTargetOnSelection: true,
+	}
+	if proxyRouteDNSSyncNeedsSchedulingData(routes, context) {
+		schedulingData, err := loadGSLBDNSSchedulingData(false)
+		if err != nil {
+			return nil, err
+		}
+		context.schedulingOptions = gslbDNSSchedulingOptions{Data: schedulingData}
+	}
+	return context, nil
 }
 
 func (context *proxyRouteDNSSyncContext) accountByID(id uint) (*model.DnsAccount, error) {
@@ -84,6 +96,37 @@ func (context *proxyRouteDNSSyncContext) ddosProtectionActive(route *model.Proxy
 		return false
 	}
 	return true
+}
+
+func (context *proxyRouteDNSSyncContext) gslbSchedulingOptions() gslbDNSSchedulingOptions {
+	if context == nil {
+		return gslbDNSSchedulingOptions{}
+	}
+	return context.schedulingOptions
+}
+
+func (context *proxyRouteDNSSyncContext) hasGSLBSchedulingData() bool {
+	return context != nil && context.schedulingOptions.Data != nil
+}
+
+func proxyRouteDNSSyncNeedsSchedulingData(routes []*model.ProxyRoute, context *proxyRouteDNSSyncContext) bool {
+	for _, route := range routes {
+		if route == nil || !shouldSyncProxyRouteCloudflareDNS(route) {
+			continue
+		}
+		if route.GSLBEnabled || route.DNSAutoTarget || strings.TrimSpace(route.DNSRecordContent) == "" {
+			return true
+		}
+		if !routeDDOSProtectionActiveWithContext(route, context) {
+			continue
+		}
+		ddosProvider := normalizeDDOSProtectionProvider(route.DDOSProtectionProvider)
+		if ddosProvider == DDOSProtectionProviderCustom ||
+			(ddosProvider == DDOSProtectionProviderCloudflare && isAddressDNSRecordType(route.DNSRecordType)) {
+			return true
+		}
+	}
+	return false
 }
 
 func syncProxyRouteDNSWithContext(route *model.ProxyRoute, syncContext *proxyRouteDNSSyncContext) error {
@@ -119,26 +162,45 @@ func syncProxyRouteDNSWithContext(route *model.ProxyRoute, syncContext *proxyRou
 	}
 	switch {
 	case ddosActive && ddosProvider == DDOSProtectionProviderCustom:
-		selection, err = selectProxyRouteDDOSProtectionTargets(route, recordType)
+		if syncContext.hasGSLBSchedulingData() {
+			selection, err = selectProxyRouteDDOSProtectionTargetsWithOptions(route, recordType, syncContext.gslbSchedulingOptions())
+		} else {
+			selection, err = selectProxyRouteDDOSProtectionTargets(route, recordType)
+		}
 		if err != nil {
 			recordProxyRouteDNSSyncFailure(route, err)
 			return err
 		}
 		targets = selection.Targets
 	case ddosActive && ddosProvider == DDOSProtectionProviderCloudflare && isAddressDNSRecordType(recordType):
-		selection, err = selectProxyRouteDNSDefaultPoolTargets(route, recordType)
+		if syncContext.hasGSLBSchedulingData() {
+			selection, err = selectProxyRouteDNSDefaultPoolTargetsWithOptions(route, recordType, syncContext.gslbSchedulingOptions())
+		} else {
+			selection, err = selectProxyRouteDNSDefaultPoolTargets(route, recordType)
+		}
 		if err != nil {
 			recordProxyRouteDNSSyncFailure(route, err)
 			return err
 		}
 		targets = selection.Targets
 	case route.GSLBEnabled || route.DNSAutoTarget || content == "":
-		selection, err = selectProxyRouteDNSTargets(route, recordType)
+		previousContent := content
+		if syncContext.hasGSLBSchedulingData() {
+			selection, err = selectProxyRouteDNSTargetsWithOptions(route, recordType, syncContext.gslbSchedulingOptions())
+		} else {
+			selection, err = selectProxyRouteDNSTargets(route, recordType)
+		}
 		if err != nil {
 			recordProxyRouteDNSSyncFailure(route, err)
 			return err
 		}
 		targets = selection.Targets
+		if syncContext != nil && syncContext.markAutoTargetOnSelection {
+			desiredContent := strings.Join(targets, ",")
+			if desiredContent != "" && desiredContent != previousContent {
+				route.DNSAutoTarget = true
+			}
+		}
 	default:
 		targets = selection.Targets
 	}
@@ -277,16 +339,6 @@ func ReconcileCloudflareDNSAutomation() error {
 		if route == nil || !shouldSyncProxyRouteCloudflareDNS(route) {
 			continue
 		}
-		if route.GSLBEnabled || route.DNSAutoTarget || strings.TrimSpace(route.DNSRecordContent) == "" {
-			previousContent := strings.TrimSpace(route.DNSRecordContent)
-			selection, selectErr := selectProxyRouteDNSTargets(route, normalizeDNSRecordType(route.DNSRecordType))
-			desiredContent := strings.Join(selection.Targets, ",")
-			if selectErr == nil && desiredContent != "" && desiredContent != previousContent {
-				route.DNSRecordContent = desiredContent
-				route.DNSAutoTarget = true
-				route.DNSTTL = selection.TTL
-			}
-		}
 		if err := syncProxyRouteDNSWithContext(route, context); err != nil {
 			slog.Warn("cloudflare dns reconcile failed", "route_id", route.ID, "site_name", route.SiteName, "error", err)
 			continue
@@ -331,20 +383,37 @@ func formatCloudflareDNSSyncMessage(recordCount int, content string, ddosActive 
 }
 
 func selectProxyRouteDDOSProtectionTargets(route *model.ProxyRoute, recordType string) (proxyRouteDNSTargetSelection, error) {
-	selection := proxyRouteDNSTargetSelection{
-		TTL:      cloudflareDefaultRecordTTL,
-		ScopeKey: defaultGSLBScopeKey,
-		Reason:   "DDoS protection override",
+	return selectProxyRouteDDOSProtectionTargetsWithOptions(route, recordType, gslbDNSSchedulingOptions{})
+}
+
+func selectProxyRouteDDOSProtectionTargetsWithOptions(route *model.ProxyRoute, recordType string, options gslbDNSSchedulingOptions) (proxyRouteDNSTargetSelection, error) {
+	if route == nil {
+		return emptyProxyRouteDNSTargetSelection("DDoS protection override"), errors.New("proxy route is nil")
 	}
+	targetPool := normalizeNodePoolName(route.DDOSProtectionTarget)
+	if targetPool == "" {
+		return proxyRoutePoolDNSTargetSelection(route, "DDoS protection override"), errors.New("DDoS custom protection pool is not configured")
+	}
+	return selectProxyRoutePoolDNSTargetsWithOptions(route, recordType, targetPool, "DDoS protection override", options)
+}
+
+func selectProxyRouteDNSDefaultPoolTargets(route *model.ProxyRoute, recordType string) (proxyRouteDNSTargetSelection, error) {
+	return selectProxyRouteDNSDefaultPoolTargetsWithOptions(route, recordType, gslbDNSSchedulingOptions{})
+}
+
+func selectProxyRouteDNSDefaultPoolTargetsWithOptions(route *model.ProxyRoute, recordType string, options gslbDNSSchedulingOptions) (proxyRouteDNSTargetSelection, error) {
+	if route == nil {
+		return emptyProxyRouteDNSTargetSelection("DDoS protection Cloudflare override"), errors.New("proxy route is nil")
+	}
+	return selectProxyRoutePoolDNSTargetsWithOptions(route, recordType, route.NodePool, "DDoS protection Cloudflare override", options)
+}
+
+func selectProxyRoutePoolDNSTargetsWithOptions(route *model.ProxyRoute, recordType string, poolName string, reason string, options gslbDNSSchedulingOptions) (proxyRouteDNSTargetSelection, error) {
+	selection := proxyRoutePoolDNSTargetSelection(route, reason)
 	if route == nil {
 		return selection, errors.New("proxy route is nil")
 	}
-	selection.TTL = normalizeDNSTTL(route.DNSTTL)
-	targetPool := normalizeNodePoolName(route.DDOSProtectionTarget)
-	if targetPool == "" {
-		return selection, errors.New("DDoS custom protection pool is not configured")
-	}
-	targets, err := selectHealthyNodeDNSTargets(recordType, targetPool, route.DNSTargetCount, route.DNSScheduleMode)
+	targets, err := selectHealthyNodeDNSTargetsWithOptions(recordType, poolName, route.DNSTargetCount, route.DNSScheduleMode, options)
 	if err != nil {
 		return selection, err
 	}
@@ -353,23 +422,20 @@ func selectProxyRouteDDOSProtectionTargets(route *model.ProxyRoute, recordType s
 	return selection, nil
 }
 
-func selectProxyRouteDNSDefaultPoolTargets(route *model.ProxyRoute, recordType string) (proxyRouteDNSTargetSelection, error) {
-	selection := proxyRouteDNSTargetSelection{
+func proxyRoutePoolDNSTargetSelection(route *model.ProxyRoute, reason string) proxyRouteDNSTargetSelection {
+	selection := emptyProxyRouteDNSTargetSelection(reason)
+	if route != nil {
+		selection.TTL = normalizeDNSTTL(route.DNSTTL)
+	}
+	return selection
+}
+
+func emptyProxyRouteDNSTargetSelection(reason string) proxyRouteDNSTargetSelection {
+	return proxyRouteDNSTargetSelection{
 		TTL:      cloudflareDefaultRecordTTL,
 		ScopeKey: defaultGSLBScopeKey,
-		Reason:   "DDoS protection Cloudflare override",
+		Reason:   reason,
 	}
-	if route == nil {
-		return selection, errors.New("proxy route is nil")
-	}
-	selection.TTL = normalizeDNSTTL(route.DNSTTL)
-	targets, err := selectHealthyNodeDNSTargets(recordType, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode)
-	if err != nil {
-		return selection, err
-	}
-	selection.Targets = targets
-	selection.DesiredTargets = targets
-	return selection, nil
 }
 
 func proxyRouteDNSAccount(route *model.ProxyRoute) (*model.DnsAccount, error) {
@@ -381,10 +447,6 @@ func proxyRouteDNSAccountWithContext(route *model.ProxyRoute, context *proxyRout
 		return nil, errors.New("规则未绑定 DNS 账号")
 	}
 	return dnsAccountByIDWithContext(*route.DNSAccountID, context)
-}
-
-func proxyRouteDNSAccountForSync(route *model.ProxyRoute, ddosActive bool) (*model.DnsAccount, error) {
-	return proxyRouteDNSAccountForSyncWithContext(route, ddosActive, nil)
 }
 
 func proxyRouteDNSAccountForSyncWithContext(route *model.ProxyRoute, ddosActive bool, context *proxyRouteDNSSyncContext) (*model.DnsAccount, error) {
@@ -470,23 +532,11 @@ func filterDNSRecordIDsForName(recordIDs map[string]string, recordName string) m
 	return filtered
 }
 
-func selectHealthyNodeDNSContent(recordType string) (string, error) {
-	targets, err := selectHealthyNodeDNSTargets(recordType, "default", 1, "healthy")
-	if err != nil {
-		return "", err
-	}
-	return targets[0], nil
-}
-
 type nodeDNSTargetCandidate struct {
 	NodeID     string
 	Content    string
 	Weight     int
 	LastSeenAt time.Time
-}
-
-func selectHealthyNodeDNSTargets(recordType string, poolName string, count int, scheduleMode string) ([]string, error) {
-	return selectHealthyNodeDNSTargetsWithOptions(recordType, poolName, count, scheduleMode, gslbDNSSchedulingOptions{})
 }
 
 func selectHealthyNodeDNSTargetsWithOptions(recordType string, poolName string, count int, scheduleMode string, options gslbDNSSchedulingOptions) ([]string, error) {
@@ -563,50 +613,6 @@ func selectHealthyNodeDNSTargetsWithOptions(recordType string, poolName string, 
 	return targets, nil
 }
 
-func selectHealthyNodeDNSContentLegacy(recordType string) (string, error) {
-	nodes, err := model.ListNodes()
-	if err != nil {
-		return "", err
-	}
-	recordType = normalizeDNSRecordType(recordType)
-	for _, node := range nodes {
-		if !isNodeHealthyForDNS(node) {
-			continue
-		}
-		ip := iputil.NormalizeIP(node.IP)
-		if ip == "" {
-			continue
-		}
-		parsed := net.ParseIP(ip)
-		if parsed == nil {
-			continue
-		}
-		switch recordType {
-		case "A":
-			if parsed.To4() != nil {
-				return parsed.String(), nil
-			}
-		case "AAAA":
-			if parsed.To4() == nil {
-				return parsed.String(), nil
-			}
-		default:
-			return "", errors.New("自动选择节点仅支持 A/AAAA 记录")
-		}
-	}
-	return "", fmt.Errorf("没有可用于 %s 记录的在线节点公网 IP，请先部署 Agent 或手动填写 DNS 记录内容", recordType)
-}
-
-func isNodeHealthyForDNS(node *model.Node) bool {
-	if node == nil {
-		return false
-	}
-	if iputil.NormalizeIP(node.IP) == "" || !iputil.IsPublicString(node.IP) {
-		return false
-	}
-	return isNodeOnlineAndOpenRestyHealthy(node)
-}
-
 func isNodeOnlineAndOpenRestyHealthy(node *model.Node) bool {
 	if node == nil {
 		return false
@@ -673,7 +679,6 @@ func shouldEnableDDOSProtectionWithContext(context *proxyRouteDNSSyncContext) bo
 	if err != nil {
 		if context != nil {
 			context.ddosActiveLoaded = true
-			context.trafficSummaryErr = err
 		}
 		slog.Warn("load request reports for ddos protection failed", "error", err)
 		return false
@@ -697,8 +702,4 @@ func shouldEnableDDOSProtectionWithContext(context *proxyRouteDNSSyncContext) bo
 		context.ddosActive = active
 	}
 	return active
-}
-
-func shouldEnableCloudflareProxyForDDOS() bool {
-	return shouldEnableDDOSProtection()
 }

@@ -4,11 +4,13 @@ import (
 	"dushengcdn/model"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"sync"
 )
 
 const (
 	AgentWSMessageTypeStatus          = "status"
+	AgentWSMessageTypeStatusAck       = "status_ack"
 	AgentWSMessageTypeSettings        = "settings"
 	AgentWSMessageTypeActiveConfig    = "active_config"
 	AgentWSMessageTypeForceSyncConfig = "force_sync_config"
@@ -29,6 +31,10 @@ type AgentWSInboundMessage struct {
 type AgentWSOutboundMessage struct {
 	Type    string `json:"type"`
 	Payload any    `json:"payload,omitempty"`
+}
+
+type AgentObservabilityAck struct {
+	WindowStartedAtUnix []int64 `json:"window_started_at_unix,omitempty"`
 }
 
 type AgentWSBroadcastResult struct {
@@ -93,6 +99,17 @@ func (client *AgentWSClient) Close() {
 type agentWSHub struct {
 	mu      sync.RWMutex
 	clients map[string]*AgentWSClient
+}
+
+type agentWSBroadcastNode struct {
+	NodeID   string
+	PoolName string
+}
+
+type agentWSBroadcastContext struct {
+	client   *AgentWSClient
+	nodeID   string
+	poolName string
 }
 
 var defaultAgentWSHub = &agentWSHub{
@@ -162,6 +179,19 @@ func SendAgentWSSettings(nodeID string, settings *AgentSettings) bool {
 	})
 }
 
+func SendAgentWSStatusAck(nodeID string, payload AgentNodePayload) bool {
+	windows := agentObservabilityAckWindows(payload)
+	if len(windows) == 0 {
+		return false
+	}
+	return sendAgentWSMessage(nodeID, AgentWSOutboundMessage{
+		Type: AgentWSMessageTypeStatusAck,
+		Payload: &AgentObservabilityAck{
+			WindowStartedAtUnix: windows,
+		},
+	})
+}
+
 func SendAgentWSActiveConfig(nodeID string, activeConfig *ActiveConfigMeta) bool {
 	if activeConfig == nil {
 		return false
@@ -214,6 +244,40 @@ func SendAgentWSPong(nodeID string) bool {
 	})
 }
 
+func agentObservabilityAckWindows(payload AgentNodePayload) []int64 {
+	windows := make(map[int64]struct{}, len(payload.BufferedObservability)+1)
+	if window := agentObservabilityWindowStartedAt(payload.Snapshot, payload.TrafficReport); window > 0 {
+		windows[window] = struct{}{}
+	}
+	for _, record := range payload.BufferedObservability {
+		if record.WindowStartedAtUnix <= 0 {
+			continue
+		}
+		windows[record.WindowStartedAtUnix] = struct{}{}
+	}
+	if len(windows) == 0 {
+		return nil
+	}
+	result := make([]int64, 0, len(windows))
+	for window := range windows {
+		result = append(result, window)
+	}
+	sort.Slice(result, func(i int, j int) bool {
+		return result[i] < result[j]
+	})
+	return result
+}
+
+func agentObservabilityWindowStartedAt(snapshot *AgentNodeMetricSnapshot, traffic *AgentNodeTrafficReport) int64 {
+	if traffic != nil && traffic.WindowStartedAtUnix > 0 {
+		return traffic.WindowStartedAtUnix - (traffic.WindowStartedAtUnix % 60)
+	}
+	if snapshot == nil || snapshot.CapturedAtUnix <= 0 {
+		return 0
+	}
+	return snapshot.CapturedAtUnix - (snapshot.CapturedAtUnix % 60)
+}
+
 func sendAgentWSMessage(nodeID string, message AgentWSOutboundMessage) bool {
 	defaultAgentWSHub.mu.RLock()
 	client := defaultAgentWSHub.clients[nodeID]
@@ -237,13 +301,7 @@ func BroadcastAgentWSActiveConfig(activeConfig *ActiveConfigMeta) AgentWSBroadca
 	result.Version = activeConfig.Version
 	result.Checksum = activeConfig.Checksum
 
-	defaultAgentWSHub.mu.RLock()
-	clients := make([]*AgentWSClient, 0, len(defaultAgentWSHub.clients))
-	for _, client := range defaultAgentWSHub.clients {
-		clients = append(clients, client)
-	}
-	defaultAgentWSHub.mu.RUnlock()
-
+	clients := snapshotAgentWSClients()
 	result.ClientCount = len(clients)
 	message := AgentWSOutboundMessage{
 		Type:    AgentWSMessageTypeActiveConfig,
@@ -275,42 +333,150 @@ func BroadcastAgentWSActiveConfigForVersion(version *model.ConfigVersion) AgentW
 	result.Version = version.Version
 	result.Checksum = version.Checksum
 
+	clients := snapshotAgentWSClients()
+	result.ClientCount = len(clients)
+	contexts, err := buildAgentWSBroadcastContexts(clients)
+	if err != nil {
+		for _, client := range clients {
+			result.FailedNodes = append(result.FailedNodes, client.NodeID())
+		}
+		slog.Debug("agent ws pool broadcast skipped because node batch lookup failed", "error", err)
+		logAgentWSBroadcastActivePoolConfig(result)
+		return result
+	}
+	for _, client := range clients {
+		if _, ok := contexts[client.NodeID()]; !ok {
+			result.FailedNodes = append(result.FailedNodes, client.NodeID())
+		}
+	}
+
+	artifactsByPool, err := loadAgentWSBroadcastArtifactMetas(version.ID, contexts)
+	if err != nil {
+		for _, context := range contexts {
+			result.FailedNodes = append(result.FailedNodes, context.nodeID)
+		}
+		slog.Debug("agent ws pool broadcast skipped because artifact meta batch lookup failed", "version_id", version.ID, "error", err)
+		logAgentWSBroadcastActivePoolConfig(result)
+		return result
+	}
+
+	for _, context := range contexts {
+		artifact := artifactsByPool[context.poolName]
+		if artifact == nil {
+			slog.Debug("agent ws pool broadcast skipped missing artifact", "node_id", context.nodeID, "pool", context.poolName)
+			result.FailedNodes = append(result.FailedNodes, context.nodeID)
+			continue
+		}
+		message := AgentWSOutboundMessage{
+			Type:    AgentWSMessageTypeActiveConfig,
+			Payload: activeConfigMetaForVersionArtifact(version, artifact),
+		}
+		if context.client.Send(message) {
+			result.SuccessCount++
+			continue
+		}
+		result.FailedNodes = append(result.FailedNodes, context.nodeID)
+	}
+	logAgentWSBroadcastActivePoolConfig(result)
+	return result
+}
+
+func snapshotAgentWSClients() []*AgentWSClient {
 	defaultAgentWSHub.mu.RLock()
 	clients := make([]*AgentWSClient, 0, len(defaultAgentWSHub.clients))
 	for _, client := range defaultAgentWSHub.clients {
 		clients = append(clients, client)
 	}
 	defaultAgentWSHub.mu.RUnlock()
+	return clients
+}
 
-	result.ClientCount = len(clients)
+func buildAgentWSBroadcastContexts(clients []*AgentWSClient) (map[string]agentWSBroadcastContext, error) {
+	nodesByID, err := loadAgentWSBroadcastNodes(clients)
+	if err != nil {
+		return nil, err
+	}
+	contexts := make(map[string]agentWSBroadcastContext, len(clients))
 	for _, client := range clients {
 		nodeID := client.NodeID()
-		node, err := model.GetNodeByNodeID(nodeID)
-		if err != nil {
-			slog.Debug("agent ws pool broadcast skipped node lookup failure", "node_id", nodeID, "error", err)
-			result.FailedNodes = append(result.FailedNodes, nodeID)
+		node, ok := nodesByID[nodeID]
+		if !ok {
+			slog.Debug("agent ws pool broadcast skipped missing node", "node_id", nodeID)
 			continue
 		}
-		poolName := normalizeNodePoolName(node.PoolName)
-		artifact, err := model.GetConfigVersionArtifact(version.ID, poolName)
-		if err != nil {
-			slog.Debug("agent ws pool broadcast skipped missing artifact", "node_id", nodeID, "pool", poolName, "error", err)
-			result.FailedNodes = append(result.FailedNodes, nodeID)
-			continue
+		contexts[nodeID] = agentWSBroadcastContext{
+			client:   client,
+			nodeID:   nodeID,
+			poolName: normalizeNodePoolName(node.PoolName),
 		}
-		message := AgentWSOutboundMessage{
-			Type: AgentWSMessageTypeActiveConfig,
-			Payload: &ActiveConfigMeta{
-				Version:  version.Version,
-				Checksum: artifact.Checksum,
-			},
-		}
-		if client.Send(message) {
-			result.SuccessCount++
-			continue
-		}
-		result.FailedNodes = append(result.FailedNodes, nodeID)
 	}
+	return contexts, nil
+}
+
+func loadAgentWSBroadcastNodes(clients []*AgentWSClient) (map[string]agentWSBroadcastNode, error) {
+	nodeIDs := uniqueAgentWSClientNodeIDs(clients)
+	if len(nodeIDs) == 0 {
+		return map[string]agentWSBroadcastNode{}, nil
+	}
+	var nodes []agentWSBroadcastNode
+	if err := model.DB.Model(&model.Node{}).
+		Select("node_id", "pool_name").
+		Where("node_id IN ?", nodeIDs).
+		Find(&nodes).Error; err != nil {
+		return nil, err
+	}
+	nodesByID := make(map[string]agentWSBroadcastNode, len(nodes))
+	for _, node := range nodes {
+		nodesByID[node.NodeID] = node
+	}
+	return nodesByID, nil
+}
+
+func uniqueAgentWSClientNodeIDs(clients []*AgentWSClient) []string {
+	seen := make(map[string]struct{}, len(clients))
+	nodeIDs := make([]string, 0, len(clients))
+	for _, client := range clients {
+		nodeID := client.NodeID()
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	return nodeIDs
+}
+
+func loadAgentWSBroadcastArtifactMetas(versionID uint, contexts map[string]agentWSBroadcastContext) (map[string]*model.ConfigVersionArtifact, error) {
+	poolNames := uniqueAgentWSBroadcastPoolNames(contexts)
+	artifacts, err := model.ListConfigVersionArtifactMetas(versionID, poolNames)
+	if err != nil {
+		return nil, err
+	}
+	artifactsByPool := make(map[string]*model.ConfigVersionArtifact, len(artifacts))
+	for _, artifact := range artifacts {
+		if artifact == nil {
+			continue
+		}
+		artifactsByPool[normalizeNodePoolName(artifact.PoolName)] = artifact
+	}
+	return artifactsByPool, nil
+}
+
+func uniqueAgentWSBroadcastPoolNames(contexts map[string]agentWSBroadcastContext) []string {
+	seen := make(map[string]struct{}, len(contexts))
+	poolNames := make([]string, 0, len(contexts))
+	for _, context := range contexts {
+		if _, ok := seen[context.poolName]; ok {
+			continue
+		}
+		seen[context.poolName] = struct{}{}
+		poolNames = append(poolNames, context.poolName)
+	}
+	sort.Strings(poolNames)
+	return poolNames
+}
+
+func logAgentWSBroadcastActivePoolConfig(result AgentWSBroadcastResult) {
 	slog.Debug("agent ws broadcast active pool config",
 		"version", result.Version,
 		"checksum", result.Checksum,
@@ -318,5 +484,4 @@ func BroadcastAgentWSActiveConfigForVersion(version *model.ConfigVersion) AgentW
 		"success_count", result.SuccessCount,
 		"failed_nodes", result.FailedNodes,
 	)
-	return result
 }

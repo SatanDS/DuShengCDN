@@ -7,7 +7,10 @@ import { AppModal } from '@/components/ui/app-modal';
 import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
-import { useToastFeedback } from '@/components/feedback/toast-provider';
+import {
+  type FeedbackState,
+  useToastFeedback,
+} from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -27,6 +30,7 @@ import {
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
+import { getErrorMessage } from '@/lib/utils/errors';
 
 const applyLogsQueryKey = (
   nodeId: string,
@@ -36,15 +40,6 @@ const applyLogsQueryKey = (
 
 const pageSizeOptions = [20, 50, 100];
 const emptyApplyLogRows: ApplyLogItem[] = [];
-
-type FeedbackState = {
-  tone: 'info' | 'success' | 'danger';
-  message: string;
-};
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
 
 function getResultMeta(result: string) {
   if (result === 'success') {

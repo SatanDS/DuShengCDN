@@ -106,6 +106,82 @@ func TestRunnerSendsHeartbeatImmediatelyAfterInitialSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunnerPullSnapshotSkipsReloadWhenNotModified(t *testing.T) {
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/dns-snapshot" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get(SnapshotSignatureHeader); got != SnapshotSignatureVersion {
+			t.Fatalf("expected signed snapshot request header, got %q", got)
+		}
+		if got := r.Header.Get("If-None-Match"); got != `"snap-1"` {
+			t.Fatalf("expected If-None-Match snap-1, got %q", got)
+		}
+		if got := r.Header.Get("X-DNS-Snapshot-Version"); got != "snap-1" {
+			t.Fatalf("expected X-DNS-Snapshot-Version snap-1, got %q", got)
+		}
+		requestCount.Add(1)
+		w.Header().Set("ETag", `"snap-1"`)
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer server.Close()
+
+	snapshotPath := filepath.Join(t.TempDir(), "snapshot.json")
+	store := NewSnapshotStore(snapshotPath, time.Minute)
+	snapshot := snapshotStoreTestSnapshot("snap-1")
+	snapshot.WorkerPolicy = WorkerPolicy{
+		QueryRateLimit:    17,
+		ResponseRateLimit: 23,
+		UDPResponseSize:   1400,
+		ECSEnabled:        true,
+		ECSIPv4Prefix:     24,
+		ECSIPv6Prefix:     56,
+	}
+	if err := store.Set(snapshot); err != nil {
+		t.Fatalf("set snapshot: %v", err)
+	}
+	store.SetLastError(errors.New("previous pull failed"))
+	dnsServer := NewDNSServerWithProtection(store, NewScheduler(), nil, nil, "127.0.0.1:0", 1, 2, 512)
+	runner := &Runner{
+		Client:    NewAPIClient(server.URL, "dns-worker-token", time.Second),
+		Store:     store,
+		DNSServer: dnsServer,
+	}
+
+	if err := runner.pullSnapshot(context.Background()); err != nil {
+		t.Fatalf("pullSnapshot: %v", err)
+	}
+	if got := requestCount.Load(); got != 1 {
+		t.Fatalf("expected one snapshot request, got %d", got)
+	}
+	if got := store.Version(); got != "snap-1" {
+		t.Fatalf("expected current snapshot version to remain snap-1, got %q", got)
+	}
+	if got := store.LastError(); got != "" {
+		t.Fatalf("expected last error to be cleared, got %q", got)
+	}
+	if _, err := os.Stat(snapshotPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected unchanged snapshot not to be saved, stat err=%v", err)
+	}
+	udpSize, limiter, rrLimiter := dnsServer.runtimePolicy()
+	if udpSize != 1400 {
+		t.Fatalf("expected cached snapshot worker policy to set udp size 1400, got %d", udpSize)
+	}
+	limiter.mu.Lock()
+	queryLimit := limiter.limit
+	limiter.mu.Unlock()
+	if queryLimit != 17 {
+		t.Fatalf("expected cached snapshot query limit 17, got %d", queryLimit)
+	}
+	rrLimiter.mu.Lock()
+	responseLimit := rrLimiter.limit
+	rrLimiter.mu.Unlock()
+	if responseLimit != 23 {
+		t.Fatalf("expected cached snapshot response limit 23, got %d", responseLimit)
+	}
+}
+
 func TestRunnerSendsPendingUpdateResultOnce(t *testing.T) {
 	var heartbeatCount atomic.Int32
 	var firstResult *UpdateResultPayload

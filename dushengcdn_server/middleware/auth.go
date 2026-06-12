@@ -25,8 +25,11 @@ func authHelper(c *gin.Context, minRole int) {
 			c.Abort()
 			return
 		}
+		// Only the auth-relevant columns are needed here: the middleware
+		// exposes just id/username/role/status via the context and checks the
+		// password fingerprint itself.
 		currentUser := &model.User{Id: id}
-		if err := currentUser.FillUserById(); err != nil {
+		if err := currentUser.FillUserAuthInfoById(); err != nil {
 			clearAuthSession(session)
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
@@ -153,22 +156,6 @@ func NoTokenAuth() func(c *gin.Context) {
 				c.Abort()
 				return
 			}
-		}
-		c.Next()
-	}
-}
-
-// TokenOnlyAuth You should always use this after normal auth middlewares.
-func TokenOnlyAuth() func(c *gin.Context) {
-	return func(c *gin.Context) {
-		authByToken := c.GetBool("authByToken")
-		if !authByToken {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "本接口仅支持使用 token 进行验证",
-			})
-			c.Abort()
-			return
 		}
 		c.Next()
 	}

@@ -36,7 +36,7 @@ func signDNSSECResponse(response *dns.Msg, request *dns.Msg, zone *SnapshotZone,
 	if response == nil || zone == nil || !zone.DNSSEC.Enabled || !dnssecRequested(request) {
 		return
 	}
-	keys := loadDNSSECKeys(zone)
+	keys := dnssecRuntimeKeysForZone(zone, index)
 	if len(keys) == 0 {
 		return
 	}
@@ -44,6 +44,16 @@ func signDNSSECResponse(response *dns.Msg, request *dns.Msg, zone *SnapshotZone,
 		addDNSSECDenialProof(response, request, zone, index)
 	}
 	signDNSSECRRsets(response, zone, keys)
+}
+
+// dnssecRuntimeKeysForZone returns the signing keys cached in the snapshot
+// index at load time. Indexes built by buildSnapshotIndex always carry the
+// cache map; the loadDNSSECKeys fallback only serves hand-built indexes.
+func dnssecRuntimeKeysForZone(zone *SnapshotZone, index snapshotIndex) []dnssecRuntimeKey {
+	if index.dnssecKeysByZone != nil {
+		return index.dnssecKeysByZone[zone.ID]
+	}
+	return loadDNSSECKeys(zone)
 }
 
 func loadDNSSECKeys(zone *SnapshotZone) []dnssecRuntimeKey {
@@ -182,7 +192,7 @@ func dnssecDNSKEYRecords(zone *SnapshotZone) []dns.RR {
 }
 
 func dnssecCoveredRRsets(zone *SnapshotZone, index snapshotIndex, qname string) []dns.RR {
-	keys := loadDNSSECKeys(zone)
+	keys := dnssecRuntimeKeysForZone(zone, index)
 	if len(keys) == 0 {
 		return nil
 	}
@@ -277,44 +287,71 @@ func dnssecNSEC3ForName(zone *SnapshotZone, qname string, index snapshotIndex) d
 }
 
 func dnssecNextName(zone *SnapshotZone, name string, index snapshotIndex) string {
-	names := make([]string, 0, len(index.namesByZone[zone.ID])+1)
+	names := dnssecSortedNamesForZone(zone, index)
+	if len(names) == 0 {
+		return zone.Name
+	}
+	if next := sort.SearchStrings(names, name); next < len(names) && names[next] == name {
+		next++
+		if next < len(names) {
+			return names[next]
+		}
+	} else if next < len(names) {
+		return names[next]
+	}
+	return names[0]
+}
+
+func dnssecNextNSEC3Hash(zone *SnapshotZone, name string, index snapshotIndex, iterations uint16, salt string) string {
+	hashes := dnssecSortedNSEC3HashesForZone(zone, index, iterations, salt)
+	if len(hashes) == 0 {
+		return dns.HashName(dnsName(zone.Name), dns.SHA1, iterations, salt)
+	}
+	current := dns.HashName(dnsName(name), dns.SHA1, iterations, salt)
+	if next := sort.SearchStrings(hashes, current); next < len(hashes) && hashes[next] == current {
+		next++
+		if next < len(hashes) {
+			return hashes[next]
+		}
+	} else if next < len(hashes) {
+		return hashes[next]
+	}
+	return hashes[0]
+}
+
+func dnssecSortedNamesForZone(zone *SnapshotZone, index snapshotIndex) []string {
+	if zone == nil {
+		return nil
+	}
+	if index.sortedNamesByZone != nil {
+		if names, ok := index.sortedNamesByZone[zone.ID]; ok {
+			return names
+		}
+	}
+	names := make([]string, 0, len(index.namesByZone[zone.ID]))
 	for item := range index.namesByZone[zone.ID] {
 		if item != "" {
 			names = append(names, item)
 		}
 	}
 	sort.Strings(names)
-	if len(names) == 0 {
-		return zone.Name
-	}
-	for _, item := range names {
-		if item > name {
-			return item
-		}
-	}
-	return names[0]
+	return names
 }
 
-func dnssecNextNSEC3Hash(zone *SnapshotZone, name string, index snapshotIndex, iterations uint16, salt string) string {
-	names := make([]string, 0, len(index.namesByZone[zone.ID])+1)
-	for item := range index.namesByZone[zone.ID] {
-		if item != "" {
-			names = append(names, item)
+func dnssecSortedNSEC3HashesForZone(zone *SnapshotZone, index snapshotIndex, iterations uint16, salt string) []string {
+	if zone == nil {
+		return nil
+	}
+	if index.sortedNSEC3HashesByZone != nil {
+		if hashes, ok := index.sortedNSEC3HashesByZone[zone.ID]; ok {
+			return hashes
 		}
 	}
-	if len(names) == 0 {
-		return dns.HashName(dnsName(zone.Name), dns.SHA1, iterations, salt)
-	}
+	names := dnssecSortedNamesForZone(zone, index)
 	hashes := make([]string, 0, len(names))
 	for _, item := range names {
 		hashes = append(hashes, dns.HashName(dnsName(item), dns.SHA1, iterations, salt))
 	}
 	sort.Strings(hashes)
-	current := dns.HashName(dnsName(name), dns.SHA1, iterations, salt)
-	for _, item := range hashes {
-		if item > current {
-			return item
-		}
-	}
-	return hashes[0]
+	return hashes
 }

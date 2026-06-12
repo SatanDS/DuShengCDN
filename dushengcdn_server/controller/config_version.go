@@ -2,7 +2,6 @@ package controller
 
 import (
 	"dushengcdn/service"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -33,12 +32,11 @@ func GetConfigVersions(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/config-versions/{id} [get]
 func GetConfigVersion(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "invalid id")
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
 		return
 	}
-	version, err := service.GetConfigVersionDetail(uint(id))
+	version, err := service.GetConfigVersionDetail(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -122,12 +120,11 @@ func PublishConfigVersion(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/config-versions/{id}/activate [post]
 func ActivateConfigVersion(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "invalid id")
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
 		return
 	}
-	version, err := service.ActivateConfigVersion(uint(id))
+	version, err := service.ActivateConfigVersion(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return

@@ -2,14 +2,40 @@ package service
 
 import (
 	"errors"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"dushengcdn/model"
+	"dushengcdn/utils/geoip"
 
 	"gorm.io/gorm"
 )
+
+type countingAccessLogGeoProvider struct {
+	calls atomic.Int32
+}
+
+func (p *countingAccessLogGeoProvider) Name() string {
+	return "counting-access-log-geoip"
+}
+
+func (p *countingAccessLogGeoProvider) GetGeoInfo(net.IP) (*geoip.GeoInfo, error) {
+	p.calls.Add(1)
+	return &geoip.GeoInfo{
+		Name:     "Test Region",
+		Operator: "Test ISP",
+	}, nil
+}
+
+func (p *countingAccessLogGeoProvider) UpdateDatabase() error {
+	return nil
+}
+
+func (p *countingAccessLogGeoProvider) Close() error {
+	return nil
+}
 
 func TestLoadNodeObservabilityQueryDataRunsQueriesConcurrently(t *testing.T) {
 	const queryCount = 8
@@ -112,6 +138,123 @@ func TestLoadNodeObservabilityQueryDataReturnsQueryError(t *testing.T) {
 	_, err := loadNodeObservabilityQueryData("node-error", now.Add(-time.Hour), now.Add(-24*time.Hour), now, 10, queries)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected query error to be returned, got %v", err)
+	}
+}
+
+func TestPersistNodeAccessLogsMemoizesGeoLookupPerBatch(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:     "node-access-log-geo-memo",
+		Name:       "geo-memo-edge",
+		IP:         "10.0.0.88",
+		AgentToken: "token-access-log-geo-memo",
+		Status:     NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+
+	provider := &countingAccessLogGeoProvider{}
+	restore := setAccessLogGeoProviderFactoryForTest(func() (geoip.GeoIPService, error) {
+		return provider, nil
+	})
+	t.Cleanup(restore)
+
+	reportedAt := time.Now().UTC()
+	err := persistNodeAccessLogsWithTransaction(node.NodeID, []AgentNodeAccessLog{
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "198.51.100.10",
+			Host:         "memo.example.com",
+			Path:         "/first",
+			StatusCode:   200,
+		},
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "198.51.100.10:443",
+			Host:         "memo.example.com",
+			Path:         "/same-ip",
+			StatusCode:   200,
+		},
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "198.51.100.11",
+			Host:         "memo.example.com",
+			Path:         "/second-ip",
+			StatusCode:   200,
+		},
+	}, reportedAt)
+	if err != nil {
+		t.Fatalf("persistNodeAccessLogsWithTransaction failed: %v", err)
+	}
+
+	if got := provider.calls.Load(); got != 2 {
+		t.Fatalf("expected one GeoIP lookup per normalized IP, got %d", got)
+	}
+}
+
+func TestPersistNodeAccessLogsSkipsGeoProviderForInvalidRemoteAddresses(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAccessLogRegionProviderForTest()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	accessLogRegionState.Lock()
+	previousFactory := accessLogGeoProviderFactory
+	accessLogGeoProviderFactory = func() (geoip.GeoIPService, error) {
+		started <- struct{}{}
+		<-release
+		return &countingAccessLogGeoProvider{}, nil
+	}
+	accessLogRegionState.Unlock()
+	t.Cleanup(func() {
+		close(release)
+		accessLogRegionState.Lock()
+		accessLogGeoProviderFactory = previousFactory
+		accessLogRegionState.Unlock()
+		resetAccessLogRegionProviderForTest()
+	})
+
+	reportedAt := time.Now().UTC()
+	err := persistNodeAccessLogsWithTransaction("node-access-log-invalid-remote", []AgentNodeAccessLog{
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "",
+			Host:         "invalid-remote.example.com",
+			Path:         "/blank",
+			StatusCode:   200,
+		},
+		{
+			LoggedAtUnix: reportedAt.Add(time.Second).Unix(),
+			RemoteAddr:   "not-an-ip",
+			Host:         "invalid-remote.example.com",
+			Path:         "/text",
+			StatusCode:   200,
+		},
+		{
+			LoggedAtUnix: reportedAt.Add(2 * time.Second).Unix(),
+			RemoteAddr:   "example.com:443",
+			Host:         "invalid-remote.example.com",
+			Path:         "/hostname-port",
+			StatusCode:   200,
+		},
+	}, reportedAt)
+	if err != nil {
+		t.Fatalf("persistNodeAccessLogsWithTransaction failed: %v", err)
+	}
+
+	accessLogRegionState.Lock()
+	initializing := accessLogRegionState.initializing
+	providerReady := accessLogRegionState.provider != nil
+	accessLogRegionState.Unlock()
+	if initializing || providerReady {
+		t.Fatalf("expected invalid remote addresses not to initialize GeoIP provider, initializing=%v providerReady=%v", initializing, providerReady)
+	}
+	select {
+	case <-started:
+		t.Fatal("expected invalid remote addresses not to start GeoIP provider factory")
+	default:
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"dushengcdn-agent/internal/config"
@@ -62,6 +63,10 @@ var runSelfUninstallFunc = runSelfUninstall
 var runDNSWorkerUpdateFunc = runDNSWorkerUpdate
 var selfUninstallDelay = 2 * time.Second
 var probeDNSTargetsFunc = dnsprobe.ProbeTargets
+var buildProfileFunc = observability.BuildProfile
+
+var dnsProbeRefreshInterval = time.Minute
+var systemProfileRefreshInterval = 5 * time.Minute
 
 type Runner struct {
 	Config              *config.Config
@@ -82,9 +87,19 @@ type Runner struct {
 	uninstallRequested      bool
 	restartOpenrestyNow     bool
 	websocketUpgradeEnabled bool
-	dnsProbeTargets         []protocol.DNSProbeTarget
-	dnsProbeResults         []protocol.DNSProbeReport
-	dnsWorkerUpdateResults  []protocol.DNSWorkerUpdateResult
+
+	dnsProbeMu         sync.Mutex
+	dnsProbeTargets    []protocol.DNSProbeTarget
+	dnsProbeResults    []protocol.DNSProbeReport
+	dnsProbeInFlight   bool
+	dnsProbeGeneration uint64
+	dnsProbeNextRun    time.Time
+
+	profileMu              sync.Mutex
+	nextSystemProfileCheck time.Time
+
+	dnsWorkerUpdateMu      sync.Mutex
+	dnsWorkerUpdateResults []protocol.DNSWorkerUpdateResult
 }
 
 func (r *Runner) Run(ctx context.Context) error {
@@ -235,6 +250,8 @@ func (r *Runner) runWebSocket(ctx context.Context, nodeID string, conn protocol.
 	slog.Debug("agent ws connected", "url", conn.URL(), "node_id", nodeID)
 	statusTicker := time.NewTicker(r.Config.HeartbeatInterval.Duration())
 	defer statusTicker.Stop()
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
 
 	messages := make(chan protocol.WSMessage, 8)
 	readDone := make(chan error, 1)
@@ -242,13 +259,19 @@ func (r *Runner) runWebSocket(ctx context.Context, nodeID string, conn protocol.
 		for {
 			message, err := conn.Receive()
 			if err != nil {
-				readDone <- err
+				select {
+				case readDone <- err:
+				default:
+				}
 				return
 			}
 			select {
 			case messages <- message:
-			case <-ctx.Done():
-				readDone <- ctx.Err()
+			case <-readCtx.Done():
+				select {
+				case readDone <- readCtx.Err():
+				default:
+				}
 				return
 			}
 		}
@@ -282,17 +305,24 @@ func (r *Runner) runWebSocket(ctx context.Context, nodeID string, conn protocol.
 
 func (r *Runner) sendWebSocketStatus(ctx context.Context, nodeID string, conn protocol.WebSocketConnection) error {
 	r.refreshOpenrestyHealth(ctx)
-	payload, ackWindows := r.prepareHeartbeatPayload(ctx, nodeID)
+	payload, _ := r.prepareHeartbeatPayload(ctx, nodeID)
 	if err := conn.SendStatus(payload); err != nil {
 		r.restoreDNSWorkerUpdateResults(payload.DNSWorkerUpdateResults)
 		return err
 	}
-	r.ackObservabilityWindows(ackWindows)
 	return nil
 }
 
 func (r *Runner) handleWebSocketMessage(ctx context.Context, message protocol.WSMessage, conn protocol.WebSocketConnection) (bool, error) {
 	switch message.Type {
+	case protocol.WSMessageTypeStatusAck:
+		var ack protocol.ObservabilityAck
+		if err := json.Unmarshal(message.Payload, &ack); err != nil {
+			slog.Debug("agent ws status ack decode failed", "error", err)
+			return false, nil
+		}
+		r.ackObservabilityWindows(ack.WindowStartedAtUnix)
+		return false, nil
 	case protocol.WSMessageTypeSettings:
 		var settings protocol.AgentSettings
 		if err := json.Unmarshal(message.Payload, &settings); err != nil {
@@ -578,6 +608,8 @@ func (r *Runner) recordDNSWorkerUpdateResult(request protocol.DNSWorkerUpdateReq
 	if result.WorkerID == "" && result.WorkerName == "" {
 		return
 	}
+	r.dnsWorkerUpdateMu.Lock()
+	defer r.dnsWorkerUpdateMu.Unlock()
 	r.dnsWorkerUpdateResults = append(r.dnsWorkerUpdateResults, result)
 }
 
@@ -911,35 +943,81 @@ func (r *Runner) applySettings(settings *protocol.AgentSettings) bool {
 	r.updateChan = strings.TrimSpace(settings.UpdateChannel)
 	r.updateTag = strings.TrimSpace(settings.UpdateTag)
 	r.restartOpenrestyNow = settings.RestartOpenrestyNow
-	r.dnsProbeTargets = normalizeDNSProbeTargets(settings.DNSProbeTargets)
-	if len(r.dnsProbeTargets) == 0 {
-		r.dnsProbeResults = nil
-	}
+	r.setDNSProbeTargets(settings.DNSProbeTargets)
 	return changed
 }
 
 func (r *Runner) refreshDNSProbeResults(ctx context.Context) {
-	if len(r.dnsProbeTargets) == 0 {
-		r.dnsProbeResults = nil
+	targets, generation, ok := r.beginDNSProbeRefresh()
+	if !ok {
 		return
 	}
-	r.dnsProbeResults = probeDNSTargetsFunc(ctx, r.dnsProbeTargets)
+	go func() {
+		results := probeDNSTargetsFunc(ctx, targets)
+		r.finishDNSProbeRefresh(generation, results)
+	}()
+}
+
+func (r *Runner) setDNSProbeTargets(targets []protocol.DNSProbeTarget) {
+	normalized := normalizeDNSProbeTargets(targets)
+	r.dnsProbeMu.Lock()
+	defer r.dnsProbeMu.Unlock()
+	if dnsProbeTargetsEqual(r.dnsProbeTargets, normalized) {
+		return
+	}
+	r.dnsProbeGeneration++
+	r.dnsProbeTargets = normalized
+	r.dnsProbeResults = nil
+	r.dnsProbeInFlight = false
+	r.dnsProbeNextRun = time.Time{}
+}
+
+func (r *Runner) beginDNSProbeRefresh() ([]protocol.DNSProbeTarget, uint64, bool) {
+	r.dnsProbeMu.Lock()
+	defer r.dnsProbeMu.Unlock()
+	if len(r.dnsProbeTargets) == 0 {
+		r.dnsProbeResults = nil
+		r.dnsProbeInFlight = false
+		r.dnsProbeNextRun = time.Time{}
+		return nil, 0, false
+	}
+	now := time.Now()
+	if r.dnsProbeInFlight || (!r.dnsProbeNextRun.IsZero() && now.Before(r.dnsProbeNextRun)) {
+		return nil, 0, false
+	}
+	r.dnsProbeInFlight = true
+	r.dnsProbeNextRun = now.Add(dnsProbeRefreshInterval)
+	return append([]protocol.DNSProbeTarget(nil), r.dnsProbeTargets...), r.dnsProbeGeneration, true
+}
+
+func (r *Runner) finishDNSProbeRefresh(generation uint64, results []protocol.DNSProbeReport) {
+	r.dnsProbeMu.Lock()
+	defer r.dnsProbeMu.Unlock()
+	if generation != r.dnsProbeGeneration {
+		return
+	}
+	r.dnsProbeInFlight = false
+	r.dnsProbeResults = append([]protocol.DNSProbeReport(nil), results...)
 }
 
 func (r *Runner) consumeDNSProbeResults() []protocol.DNSProbeReport {
+	r.dnsProbeMu.Lock()
+	defer r.dnsProbeMu.Unlock()
 	if len(r.dnsProbeResults) == 0 {
 		return nil
 	}
-	results := r.dnsProbeResults
+	results := append([]protocol.DNSProbeReport(nil), r.dnsProbeResults...)
 	r.dnsProbeResults = nil
 	return results
 }
 
 func (r *Runner) consumeDNSWorkerUpdateResults() []protocol.DNSWorkerUpdateResult {
+	r.dnsWorkerUpdateMu.Lock()
+	defer r.dnsWorkerUpdateMu.Unlock()
 	if len(r.dnsWorkerUpdateResults) == 0 {
 		return nil
 	}
-	results := r.dnsWorkerUpdateResults
+	results := append([]protocol.DNSWorkerUpdateResult(nil), r.dnsWorkerUpdateResults...)
 	r.dnsWorkerUpdateResults = nil
 	return results
 }
@@ -948,6 +1026,8 @@ func (r *Runner) restoreDNSWorkerUpdateResults(results []protocol.DNSWorkerUpdat
 	if len(results) == 0 {
 		return
 	}
+	r.dnsWorkerUpdateMu.Lock()
+	defer r.dnsWorkerUpdateMu.Unlock()
 	r.dnsWorkerUpdateResults = append(results, r.dnsWorkerUpdateResults...)
 }
 
@@ -971,6 +1051,18 @@ func normalizeDNSProbeTargets(targets []protocol.DNSProbeTarget) []protocol.DNSP
 		result = append(result, target)
 	}
 	return result
+}
+
+func dnsProbeTargetsEqual(left []protocol.DNSProbeTarget, right []protocol.DNSProbeTarget) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Runner) tryRestartOpenresty(ctx context.Context) {
@@ -1162,7 +1254,7 @@ func (r *Runner) nodePayloadWithContext(ctx context.Context, nodeID string) prot
 	if openrestyStatus == "" {
 		openrestyStatus = protocol.OpenrestyStatusUnknown
 	}
-	profile := observability.BuildProfile(r.Config, r.StateStore)
+	profile := r.cachedSystemProfile()
 	managedOpenRestyMetrics := observability.CollectManagedOpenRestyMetrics(r.Config)
 	trafficReport, accessLogs, fallbackMetrics := observability.BuildTrafficObservability(r.Config, r.StateStore, managedOpenRestyMetrics)
 	if managedOpenRestyMetrics == nil {
@@ -1193,6 +1285,20 @@ func (r *Runner) nodePayloadWithContext(ctx context.Context, nodeID string) prot
 	}
 }
 
+func (r *Runner) cachedSystemProfile() *protocol.NodeSystemProfile {
+	now := time.Now()
+	r.profileMu.Lock()
+	if systemProfileRefreshInterval > 0 && !r.nextSystemProfileCheck.IsZero() && now.Before(r.nextSystemProfileCheck) {
+		r.profileMu.Unlock()
+		return nil
+	}
+	if systemProfileRefreshInterval > 0 {
+		r.nextSystemProfileCheck = now.Add(systemProfileRefreshInterval)
+	}
+	r.profileMu.Unlock()
+	return buildProfileFunc(r.Config, r.StateStore)
+}
+
 func (r *Runner) prepareHeartbeatPayload(ctx context.Context, nodeID string) (protocol.NodePayload, []int64) {
 	payload := r.nodePayloadWithContext(ctx, nodeID)
 	if r.ObservabilityBuffer == nil || (payload.Snapshot == nil && payload.TrafficReport == nil && len(payload.AccessLogs) == 0) {
@@ -1212,15 +1318,10 @@ func (r *Runner) prepareHeartbeatPayload(ctx context.Context, nodeID string) (pr
 		AccessLogs:          payload.AccessLogs,
 		QueuedAtUnix:        now.Unix(),
 	}
-	if err := r.ObservabilityBuffer.Upsert(record, retainAfterUnix); err != nil {
-		slog.Error("upsert observability buffer failed", "error", err)
-		return payload, nil
-	}
-
-	records, err := r.ObservabilityBuffer.Replayable(windowStartedAtUnix, retainAfterUnix)
+	records, err := r.ObservabilityBuffer.UpsertAndReplayable(record, windowStartedAtUnix, retainAfterUnix)
 	if err != nil {
-		slog.Error("load replayable observability buffer failed", "error", err)
-		return payload, []int64{windowStartedAtUnix}
+		slog.Error("upsert observability buffer and load replayable records failed", "error", err)
+		return payload, nil
 	}
 
 	ackWindows := make([]int64, 0, len(records)+1)

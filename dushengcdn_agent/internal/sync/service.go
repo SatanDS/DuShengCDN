@@ -63,10 +63,6 @@ func (s *Service) sync(ctx context.Context, startup bool, target *protocol.Activ
 	if err != nil {
 		return err
 	}
-	currentChecksum, err := s.nginxManager.CurrentChecksum()
-	if err != nil {
-		return err
-	}
 
 	if target != nil {
 		target.Version = strings.TrimSpace(target.Version)
@@ -88,7 +84,33 @@ func (s *Service) sync(ctx context.Context, startup bool, target *protocol.Activ
 			Version:  config.Version,
 			Checksum: config.Checksum,
 		}
+		currentChecksum, checksumErr := s.nginxManager.CurrentChecksum()
+		if checksumErr != nil {
+			return checksumErr
+		}
 		return s.applyIfNeeded(ctx, mode, startup, snapshot, currentChecksum, target, config)
+	}
+
+	if !startup {
+		if isBlockedTarget(snapshot, target.Version, target.Checksum) {
+			slog.Warn("skipping blocked config version after previous failed apply", "mode", mode, "version", target.Version, "checksum", target.Checksum)
+			return nil
+		}
+		if snapshot.CurrentChecksum == target.Checksum {
+			if hasBlockedTarget(snapshot) {
+				clearBlockedTarget(snapshot)
+			}
+			snapshot.CurrentVersion = target.Version
+			snapshot.CurrentChecksum = target.Checksum
+			snapshot.LastError = ""
+			slog.Debug("sync finished from cached state without local checksum scan", "mode", mode, "version", target.Version)
+			return s.stateStore.Save(snapshot)
+		}
+	}
+
+	currentChecksum, err := s.nginxManager.CurrentChecksum()
+	if err != nil {
+		return err
 	}
 
 	if currentChecksum == target.Checksum {

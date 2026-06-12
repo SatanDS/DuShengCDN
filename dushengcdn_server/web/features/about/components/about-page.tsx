@@ -13,11 +13,8 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { getPublicStatus } from '@/features/auth/api/public';
 import { getAboutContent } from '@/features/settings/api/settings';
 import { formatDateTime } from '@/lib/utils/date';
+import { getErrorMessage } from '@/lib/utils/errors';
 import { sanitizeHtml } from '@/lib/utils/sanitize-html';
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
 
 export function AboutPage() {
   const aboutQuery = useQuery({

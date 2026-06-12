@@ -196,7 +196,7 @@ func TestConfigVersionAdminViewsRedactSensitiveCustomHeadersAndRenderedConfig(t 
 		CustomHeaders: []ProxyRouteCustomHeaderInput{
 			{Key: "Authorization", Value: "Bearer secret-token"},
 			{Key: "X-Api-Key", Value: "secret-api-key"},
-			{Key: "X-Trace-Id", Value: "$request_id"},
+			{Key: "X-Trace-Id", Value: "request-id-literal"},
 		},
 	}); err != nil {
 		t.Fatalf("CreateProxyRoute failed: %v", err)
@@ -231,7 +231,7 @@ func TestConfigVersionAdminViewsRedactSensitiveCustomHeadersAndRenderedConfig(t 
 	if !strings.Contains(detail.RenderedConfig, `proxy_set_header Authorization "[redacted sensitive header; preserved on save]";`) {
 		t.Fatal("expected admin rendered config detail to include redacted Authorization header")
 	}
-	if !strings.Contains(detail.RenderedConfig, `proxy_set_header X-Trace-Id "$request_id";`) {
+	if !strings.Contains(detail.RenderedConfig, `proxy_set_header X-Trace-Id "request-id-literal";`) {
 		t.Fatal("expected admin rendered config detail to keep non-sensitive custom header")
 	}
 
@@ -267,6 +267,22 @@ func TestNextVersionNumberUsesMaxDailySequence(t *testing.T) {
 			Checksum:         "checksum-3",
 			CreatedBy:        "root",
 		},
+		{
+			Version:          "20260526-999",
+			SnapshotJSON:     "{}",
+			RenderedConfig:   "server {}",
+			SupportFilesJSON: "[]",
+			Checksum:         "checksum-999",
+			CreatedBy:        "root",
+		},
+		{
+			Version:          "20260526-1000",
+			SnapshotJSON:     "{}",
+			RenderedConfig:   "server {}",
+			SupportFilesJSON: "[]",
+			Checksum:         "checksum-1000",
+			CreatedBy:        "root",
+		},
 	}
 	for _, version := range seed {
 		if err := model.DB.Create(&version).Error; err != nil {
@@ -278,7 +294,7 @@ func TestNextVersionNumberUsesMaxDailySequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nextVersionNumber failed: %v", err)
 	}
-	if next != "20260526-004" {
+	if next != "20260526-1001" {
 		t.Fatalf("expected next version to follow max suffix, got %s", next)
 	}
 }
@@ -362,7 +378,7 @@ func TestPublishConfigVersionRendersCustomHeaders(t *testing.T) {
 		OriginURL: "https://origin.internal",
 		Enabled:   true,
 		CustomHeaders: []ProxyRouteCustomHeaderInput{
-			{Key: "X-Trace-Id", Value: "$request_id"},
+			{Key: "X-Trace-Id", Value: "request-id-literal"},
 			{Key: "X-Env", Value: "staging edge"},
 		},
 	})
@@ -374,7 +390,7 @@ func TestPublishConfigVersionRendersCustomHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishConfigVersion failed: %v", err)
 	}
-	if !strings.Contains(result.Version.RenderedConfig, `proxy_set_header X-Trace-Id "$request_id";`) {
+	if !strings.Contains(result.Version.RenderedConfig, `proxy_set_header X-Trace-Id "request-id-literal";`) {
 		t.Fatal("expected rendered config to include custom header")
 	}
 	if !strings.Contains(result.Version.RenderedConfig, `proxy_set_header X-Env "staging edge";`) {
@@ -418,7 +434,7 @@ func TestProxyRouteViewRedactsSensitiveCustomHeadersAndPreservesOnSave(t *testin
 		Enabled:   true,
 		CustomHeaders: []ProxyRouteCustomHeaderInput{
 			{Key: "Authorization", Value: "Bearer origin-secret"},
-			{Key: "X-Trace-Id", Value: "$request_id"},
+			{Key: "X-Trace-Id", Value: "request-id-literal"},
 		},
 	})
 	if err != nil {
@@ -430,7 +446,7 @@ func TestProxyRouteViewRedactsSensitiveCustomHeadersAndPreservesOnSave(t *testin
 	if route.CustomHeaderList[0].Value != redactedProxyRouteCustomHeaderValue {
 		t.Fatalf("expected sensitive custom header to be redacted in route view, got %#v", route.CustomHeaderList)
 	}
-	if route.CustomHeaderList[1].Value != "$request_id" {
+	if route.CustomHeaderList[1].Value != "request-id-literal" {
 		t.Fatalf("expected non-sensitive custom header to remain visible, got %#v", route.CustomHeaderList)
 	}
 	if strings.Contains(route.CustomHeaders, "origin-secret") {
@@ -443,7 +459,7 @@ func TestProxyRouteViewRedactsSensitiveCustomHeadersAndPreservesOnSave(t *testin
 		Enabled:   route.Enabled,
 		CustomHeaders: []ProxyRouteCustomHeaderInput{
 			{Key: "Authorization", Value: redactedProxyRouteCustomHeaderValue},
-			{Key: "X-Trace-Id", Value: "$request_id"},
+			{Key: "X-Trace-Id", Value: "request-id-literal"},
 		},
 	})
 	if err != nil {
@@ -2031,6 +2047,8 @@ func TestOpenRestyProxyRequestBufferingDefaultsToOff(t *testing.T) {
 func setupServiceTestDB(t *testing.T) {
 	t.Helper()
 	nodeAgentTokenCache.reset()
+	resetGSLBDNSSchedulingDataCache()
+	resetAuthoritativeDNSSnapshotCache()
 	previousSQLitePath := common.SQLitePath
 	previousSQLDSN := common.SQLDSN
 	previousInitialRootPassword := common.InitialRootPassword
@@ -2047,6 +2065,8 @@ func setupServiceTestDB(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		nodeAgentTokenCache.reset()
+		resetGSLBDNSSchedulingDataCache()
+		resetAuthoritativeDNSSnapshotCache()
 		if err := model.CloseDB(); err != nil {
 			t.Fatalf("failed to close db: %v", err)
 		}

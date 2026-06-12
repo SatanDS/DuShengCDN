@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
+	"time"
 
 	"dushengcdn/utils/security"
 )
 
 const multiOriginShapeError = "multi-origin upstreams must be scheme://host:port without path/query/fragment"
+const defaultLookupIPTimeout = 5 * time.Second
 
 func buildRouteUpstreamConfig(route Route, upstreams []string, options RenderOptions) (routeUpstreamConfig, error) {
 	if len(upstreams) == 0 {
@@ -186,11 +189,26 @@ func resolvePublicUpstreamServers(ctx context.Context, scheme string, hostPort s
 		}
 		return []string{formatUpstreamServer(ip.String(), port)}, nil
 	}
+	cacheKey := resolvedUpstreamCacheKey(scheme, host, port)
+	if options.ResolvedUpstreams != nil {
+		if cached, ok := options.ResolvedUpstreams[cacheKey]; ok {
+			return append([]string(nil), cached...), nil
+		}
+	}
 	lookupIPAddr := options.LookupIPAddr
 	if lookupIPAddr == nil {
 		lookupIPAddr = net.DefaultResolver.LookupIPAddr
 	}
-	addresses, err := lookupIPAddr(ctx, host)
+	timeout := options.LookupIPTimeout
+	if timeout <= 0 {
+		timeout = defaultLookupIPTimeout
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	addresses, err := lookupIPAddr(lookupCtx, host)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +228,17 @@ func resolvePublicUpstreamServers(ctx context.Context, scheme string, hostPort s
 		seen[server] = struct{}{}
 		servers = append(servers, server)
 	}
+	// DNS answers rotate between lookups; sort so the same address set always
+	// renders the same config and does not fake a checksum change.
+	sort.Strings(servers)
+	if options.ResolvedUpstreams != nil {
+		options.ResolvedUpstreams[cacheKey] = append([]string(nil), servers...)
+	}
 	return servers, nil
+}
+
+func resolvedUpstreamCacheKey(scheme string, host string, port string) string {
+	return strings.ToLower(strings.TrimSpace(scheme)) + "|" + strings.ToLower(strings.Trim(host, "[]")) + "|" + strings.TrimSpace(port)
 }
 
 func splitUpstreamHostPort(scheme string, hostPort string) (string, string) {

@@ -10,6 +10,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -55,14 +56,45 @@ type gslbDNSSchedulingData struct {
 	Nodes            []*model.Node
 	MetricsByNode    map[string]*model.NodeMetricSnapshot
 	ProbeStatsByNode map[string]*dnsWorkerNodeProbeStats
+	// SchedulingStates holds all GSLB scheduling state rows keyed exactly by their
+	// stored (route, record type, scope key) values so per-route selections do not
+	// have to query the table again. SchedulingStatesLoaded distinguishes an empty
+	// table from data that was never preloaded.
+	SchedulingStates       map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState
+	SchedulingStatesLoaded bool
 }
 
 type gslbDNSSchedulingDataQueries struct {
-	ListNodes func() ([]*model.Node, error)
+	ListNodes                func() ([]*model.Node, error)
+	ListGSLBSchedulingStates func() ([]*model.GSLBSchedulingState, error)
 }
 
 var defaultGSLBDNSSchedulingDataQueries = gslbDNSSchedulingDataQueries{
-	ListNodes: model.ListNodes,
+	ListNodes:                model.ListNodes,
+	ListGSLBSchedulingStates: listGSLBSchedulingStatesForScheduling,
+}
+
+const defaultGSLBDNSSchedulingDataCacheTTL = 2 * time.Second
+
+var gslbDNSSchedulingDataCache struct {
+	mu        sync.Mutex
+	db        *gorm.DB
+	expiresAt time.Time
+	data      *gslbDNSSchedulingData
+}
+
+func resetGSLBDNSSchedulingDataCache() {
+	gslbDNSSchedulingDataCache.mu.Lock()
+	gslbDNSSchedulingDataCache.db = nil
+	gslbDNSSchedulingDataCache.expiresAt = time.Time{}
+	gslbDNSSchedulingDataCache.data = nil
+	gslbDNSSchedulingDataCache.mu.Unlock()
+}
+
+func listGSLBSchedulingStatesForScheduling() ([]*model.GSLBSchedulingState, error) {
+	var states []*model.GSLBSchedulingState
+	err := model.DB.Order("id asc").Find(&states).Error
+	return states, err
 }
 
 func loadGSLBDNSSchedulingData(includeProbeStats bool) (*gslbDNSSchedulingData, error) {
@@ -78,13 +110,70 @@ func loadGSLBDNSSchedulingDataWithQueries(includeProbeStats bool, queries gslbDN
 	if err != nil {
 		return nil, err
 	}
+	listSchedulingStates := queries.ListGSLBSchedulingStates
+	if listSchedulingStates == nil {
+		listSchedulingStates = listGSLBSchedulingStatesForScheduling
+	}
+	states, err := listSchedulingStates()
+	if err != nil {
+		return nil, err
+	}
+	statesByKey := make(map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState, len(states))
+	for _, state := range states {
+		if state == nil {
+			continue
+		}
+		key := dnsWorkerSchedulingStateKey{
+			routeID:    state.ProxyRouteID,
+			recordType: normalizeDNSRecordType(state.DNSRecordType),
+			scopeKey:   normalizeDNSSourceScope(state.ScopeKey),
+		}
+		if _, ok := statesByKey[key]; ok {
+			continue
+		}
+		statesByKey[key] = state
+	}
 	data := &gslbDNSSchedulingData{
-		Nodes:         nodes,
-		MetricsByNode: latestNodeMetricSnapshots(),
+		Nodes:                  nodes,
+		MetricsByNode:          latestNodeMetricSnapshots(),
+		SchedulingStates:       statesByKey,
+		SchedulingStatesLoaded: true,
 	}
 	if includeProbeStats {
 		data.ProbeStatsByNode = buildDNSWorkerNodeProbeStatsByNodeForNodes(time.Now().UTC(), nodes)
 	}
+	return data, nil
+}
+
+func cachedGSLBDNSSchedulingOptions() (gslbDNSSchedulingOptions, error) {
+	data, err := cachedGSLBDNSSchedulingData()
+	if err != nil {
+		return gslbDNSSchedulingOptions{}, err
+	}
+	return gslbDNSSchedulingOptions{Data: data}, nil
+}
+
+func cachedGSLBDNSSchedulingData() (*gslbDNSSchedulingData, error) {
+	now := time.Now()
+	gslbDNSSchedulingDataCache.mu.Lock()
+	if gslbDNSSchedulingDataCache.data != nil &&
+		gslbDNSSchedulingDataCache.db == model.DB &&
+		now.Before(gslbDNSSchedulingDataCache.expiresAt) {
+		data := gslbDNSSchedulingDataCache.data
+		gslbDNSSchedulingDataCache.mu.Unlock()
+		return data, nil
+	}
+	gslbDNSSchedulingDataCache.mu.Unlock()
+
+	data, err := loadGSLBDNSSchedulingData(false)
+	if err != nil {
+		return nil, err
+	}
+	gslbDNSSchedulingDataCache.mu.Lock()
+	gslbDNSSchedulingDataCache.db = model.DB
+	gslbDNSSchedulingDataCache.data = data
+	gslbDNSSchedulingDataCache.expiresAt = now.Add(defaultGSLBDNSSchedulingDataCacheTTL)
+	gslbDNSSchedulingDataCache.mu.Unlock()
 	return data, nil
 }
 
@@ -109,8 +198,30 @@ func gslbDNSSchedulingProbeStatsByNode(options gslbDNSSchedulingOptions) map[str
 	return buildDNSWorkerNodeProbeStatsByNode(time.Now().UTC())
 }
 
+func gslbDNSSchedulingStateForKey(options gslbDNSSchedulingOptions, routeID uint, recordType string, scopeKey string) (*model.GSLBSchedulingState, error) {
+	if options.Data != nil && options.Data.SchedulingStatesLoaded {
+		return options.Data.SchedulingStates[dnsWorkerSchedulingStateKey{
+			routeID:    routeID,
+			recordType: recordType,
+			scopeKey:   scopeKey,
+		}], nil
+	}
+	state, err := model.GetGSLBSchedulingState(routeID, recordType, scopeKey)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return state, nil
+}
+
 func selectProxyRouteDNSTargets(route *model.ProxyRoute, recordType string) (proxyRouteDNSTargetSelection, error) {
-	return selectProxyRouteDNSTargetsWithOptions(route, recordType, gslbDNSSchedulingOptions{})
+	options, err := cachedGSLBDNSSchedulingOptions()
+	if err != nil {
+		return proxyRouteDNSTargetSelection{}, err
+	}
+	return selectProxyRouteDNSTargetsWithOptions(route, recordType, options)
 }
 
 func selectProxyRouteDNSTargetsWithOptions(route *model.ProxyRoute, recordType string, options gslbDNSSchedulingOptions) (proxyRouteDNSTargetSelection, error) {
@@ -140,7 +251,11 @@ func selectGSLBDNSTargets(route *model.ProxyRoute, recordType string) (proxyRout
 }
 
 func selectGSLBDNSTargetsForSource(route *model.ProxyRoute, recordType string, source GSLBSourceContext) (proxyRouteDNSTargetSelection, error) {
-	return selectGSLBDNSTargetsWithOptions(route, recordType, source, gslbDNSSchedulingOptions{})
+	options, err := cachedGSLBDNSSchedulingOptions()
+	if err != nil {
+		return proxyRouteDNSTargetSelection{}, err
+	}
+	return selectGSLBDNSTargetsWithOptions(route, recordType, source, options)
 }
 
 func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string, source GSLBSourceContext, options gslbDNSSchedulingOptions) (proxyRouteDNSTargetSelection, error) {
@@ -157,11 +272,9 @@ func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string,
 	if recordType != "A" && recordType != "AAAA" {
 		return selection, errors.New("GSLB scheduling only supports A/AAAA records")
 	}
+	// decodeStoredGSLBPolicy already returns a fully normalized policy, so no
+	// second normalizeGSLBPolicy pass is needed here.
 	policy, err := decodeStoredGSLBPolicy(route.GSLBPolicy)
-	if err != nil {
-		return selection, err
-	}
-	policy, err = normalizeGSLBPolicy(policy, route.NodePool, route.DNSTargetCount, route.DNSScheduleMode, route.DNSTTL)
 	if err != nil {
 		return selection, err
 	}
@@ -175,14 +288,14 @@ func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string,
 	desiredTargets := selectWeightedGSLBTargets(candidates, policy)
 	if len(desiredTargets) == 0 {
 		if options.RequireHealthyDNSProbe && gslbHasCandidatesWithoutDNSProbe(recordType, policy, source, options) {
-			return selection, fmt.Errorf("Agent 探测未达到调度门槛，当前来源没有可用于 %s 记录的边缘节点", recordType)
+			return selection, fmt.Errorf("DNS probe threshold is not satisfied for %s records", recordType)
 		}
 		return selection, fmt.Errorf("no online public node IP is available for %s records in GSLB pools", recordType)
 	}
 
 	now := time.Now()
-	state, err := model.GetGSLBSchedulingState(route.ID, recordType, selection.ScopeKey)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	state, err := gslbDNSSchedulingStateForKey(options, route.ID, recordType, selection.ScopeKey)
+	if err != nil {
 		return selection, err
 	}
 	previousTargets := decodeGSLBTargetList("")
@@ -249,64 +362,41 @@ func selectGSLBDNSTargetsWithOptions(route *model.ProxyRoute, recordType string,
 
 const defaultGSLBScopeKey = "global"
 
-func gslbScopeKeyFromSource(source GSLBSourceContext) string {
-	if source.ASN > 0 {
-		return fmt.Sprintf("asn:%d", source.ASN)
+const (
+	gslbSourceMatchKindCIDR     = "cidr"
+	gslbSourceMatchKindASN      = "asn"
+	gslbSourceMatchKindOperator = "operator"
+	gslbSourceMatchKindCountry  = "country"
+)
+
+var (
+	gslbSourceMatchPriority          = []string{gslbSourceMatchKindCIDR, gslbSourceMatchKindASN, gslbSourceMatchKindOperator, gslbSourceMatchKindCountry}
+	gslbScopePoolSourceMatchPriority = []string{gslbSourceMatchKindCIDR, gslbSourceMatchKindASN, gslbSourceMatchKindOperator}
+)
+
+type gslbSourceMatch struct {
+	kind  string
+	value string
+}
+
+func (match gslbSourceMatch) scopeKey() string {
+	if match.kind == "" || match.value == "" {
+		return defaultGSLBScopeKey
 	}
-	operator := normalizeGSLBOperator(source.Operator)
-	if operator != "" {
-		return "operator:" + operator
-	}
-	country := strings.ToUpper(strings.TrimSpace(source.Country))
-	if country != "" {
-		return "country:" + country
-	}
-	return defaultGSLBScopeKey
+	return match.kind + ":" + match.value
 }
 
 func gslbScopeKeyForPolicy(policy ProxyRouteGSLBPolicy, source GSLBSourceContext) string {
-	for _, pool := range policy.Pools {
-		if !pool.Enabled || gslbPoolExcludesSource(pool, source) {
-			continue
-		}
-		if cidr, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
-			return "cidr:" + cidr
-		}
+	if _, match, ok := firstMatchingPoolSource(policy.Pools, source, gslbScopePoolSourceMatchPriority...); ok {
+		return match.scopeKey()
 	}
-	if source.ASN > 0 {
-		for _, pool := range policy.Pools {
-			if !pool.Enabled || gslbPoolExcludesSource(pool, source) {
-				continue
-			}
-			for _, asn := range pool.ASNs {
-				if source.ASN == asn {
-					return fmt.Sprintf("asn:%d", source.ASN)
-				}
-			}
-		}
-	}
-	operator := normalizeGSLBOperator(source.Operator)
-	if operator != "" {
-		for _, pool := range policy.Pools {
-			if !pool.Enabled || gslbPoolExcludesSource(pool, source) {
-				continue
-			}
-			for _, poolOperator := range pool.Operators {
-				if operator == normalizeGSLBOperator(poolOperator) {
-					return "operator:" + operator
-				}
-			}
-		}
-	}
-	country := strings.ToUpper(strings.TrimSpace(source.Country))
+	// Country scope is source-derived rather than pool-derived to preserve the
+	// existing debounce partitioning for countries without a matching country pool.
+	country := normalizeGSLBSourceCountry(source.Country)
 	if country != "" {
-		return "country:" + country
+		return gslbSourceMatch{kind: gslbSourceMatchKindCountry, value: country}.scopeKey()
 	}
 	return defaultGSLBScopeKey
-}
-
-func buildGSLBDNSTargetCandidates(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext) ([]gslbDNSTargetCandidate, error) {
-	return buildGSLBDNSTargetCandidatesWithOptions(recordType, policy, source, gslbDNSSchedulingOptions{})
 }
 
 func gslbHasCandidatesWithoutDNSProbe(recordType string, policy ProxyRouteGSLBPolicy, source GSLBSourceContext, options gslbDNSSchedulingOptions) bool {
@@ -357,19 +447,7 @@ func buildGSLBDNSTargetCandidatesForPools(nodes []*model.Node, metrics map[strin
 		if hasMetric && !metricWithinGSLBThresholds(metric, policy.LoadThresholds) {
 			continue
 		}
-		for _, value := range resolveNodePublicIPs(node) {
-			ip := iputil.NormalizeIP(value)
-			parsed := net.ParseIP(ip)
-			if parsed == nil || !iputil.IsPublicString(ip) {
-				continue
-			}
-			if recordType == "A" && parsed.To4() == nil {
-				continue
-			}
-			if recordType == "AAAA" && parsed.To4() != nil {
-				continue
-			}
-			content := parsed.String()
+		for _, content := range nodeDNSContents(node, recordType) {
 			if _, ok := seen[content]; ok {
 				continue
 			}
@@ -401,6 +479,39 @@ func buildGSLBDNSTargetCandidatesForPools(nodes []*model.Node, metrics map[strin
 	}
 	sortGSLBCandidates(candidates, policy.Strategy)
 	return candidates
+}
+
+func nodeDNSContents(node *model.Node, recordType string) []string {
+	if node == nil {
+		return []string{}
+	}
+	return normalizeNodeDNSContents(resolveNodePublicIPs(node), recordType)
+}
+
+func normalizeNodeDNSContents(values []string, recordType string) []string {
+	recordType = normalizeDNSRecordType(recordType)
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		ip := iputil.NormalizeIP(value)
+		parsed := net.ParseIP(ip)
+		if parsed == nil || !iputil.IsPublicString(ip) {
+			continue
+		}
+		if recordType == "A" && parsed.To4() == nil {
+			continue
+		}
+		if recordType == "AAAA" && parsed.To4() != nil {
+			continue
+		}
+		content := parsed.String()
+		if _, ok := seen[content]; ok {
+			continue
+		}
+		seen[content] = struct{}{}
+		result = append(result, content)
+	}
+	return result
 }
 
 func gslbMatchedPoolsHaveSourceConditions(pools map[string]ProxyRouteGSLBPoolPolicy) bool {
@@ -484,65 +595,24 @@ func matchMixedGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBS
 
 func matchPriorityGSLBPoolsForSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) map[string]ProxyRouteGSLBPoolPolicy {
 	result := make(map[string]ProxyRouteGSLBPoolPolicy, len(pools))
-	country := strings.ToUpper(strings.TrimSpace(source.Country))
-	operator := normalizeGSLBOperator(source.Operator)
-	matchedByCIDR := make(map[string]ProxyRouteGSLBPoolPolicy)
-	matchedByASN := make(map[string]ProxyRouteGSLBPoolPolicy)
-	matchedByOperator := make(map[string]ProxyRouteGSLBPoolPolicy)
-	matchedByCountry := make(map[string]ProxyRouteGSLBPoolPolicy)
+	matchedByKind := make(map[string]map[string]ProxyRouteGSLBPoolPolicy, len(gslbSourceMatchPriority))
+	for _, kind := range gslbSourceMatchPriority {
+		matchedByKind[kind] = map[string]ProxyRouteGSLBPoolPolicy{}
+	}
 	for _, pool := range pools {
 		name := normalizeNodePoolName(pool.Name)
 		if name == "" || !pool.Enabled || gslbPoolExcludesSource(pool, source) {
 			continue
 		}
 		result[name] = pool
-		if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
-			matchedByCIDR[name] = pool
-			continue
-		}
-		if source.ASN > 0 {
-			for _, asn := range pool.ASNs {
-				if source.ASN == asn {
-					matchedByASN[name] = pool
-					break
-				}
-			}
-			if _, ok := matchedByASN[name]; ok {
-				continue
-			}
-		}
-		if operator != "" {
-			for _, poolOperator := range pool.Operators {
-				if operator == normalizeGSLBOperator(poolOperator) {
-					matchedByOperator[name] = pool
-					break
-				}
-			}
-			if _, ok := matchedByOperator[name]; ok {
-				continue
-			}
-		}
-		if country == "" {
-			continue
-		}
-		for _, poolCountry := range pool.Countries {
-			if country == strings.ToUpper(strings.TrimSpace(poolCountry)) {
-				matchedByCountry[name] = pool
-				break
-			}
+		if match, ok := matchPoolSource(pool, source); ok {
+			matchedByKind[match.kind][name] = pool
 		}
 	}
-	if len(matchedByCIDR) > 0 {
-		return matchedByCIDR
-	}
-	if len(matchedByASN) > 0 {
-		return matchedByASN
-	}
-	if len(matchedByOperator) > 0 {
-		return matchedByOperator
-	}
-	if len(matchedByCountry) > 0 {
-		return matchedByCountry
+	for _, kind := range gslbSourceMatchPriority {
+		if len(matchedByKind[kind]) > 0 {
+			return matchedByKind[kind]
+		}
 	}
 	return result
 }
@@ -552,63 +622,108 @@ func gslbPoolHasSourceConditions(pool ProxyRouteGSLBPoolPolicy) bool {
 }
 
 func gslbPoolMatchesSource(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) bool {
-	if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
-		return true
-	}
-	if source.ASN > 0 {
-		for _, asn := range pool.ASNs {
-			if source.ASN == asn {
-				return true
-			}
-		}
-	}
-	operator := normalizeGSLBOperator(source.Operator)
-	if operator != "" {
-		for _, item := range pool.Operators {
-			if operator == normalizeGSLBOperator(item) {
-				return true
-			}
-		}
-	}
-	country := strings.ToUpper(strings.TrimSpace(source.Country))
-	if country != "" {
-		for _, item := range pool.Countries {
-			if country == strings.ToUpper(strings.TrimSpace(item)) {
-				return true
-			}
-		}
-	}
-	return false
+	_, ok := matchPoolSource(pool, source)
+	return ok
 }
 
 func gslbPoolExcludesSource(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) bool {
-	if _, ok := sourceIPMatchesCIDRList(source.IP, pool.ExcludeSourceCIDRs); ok {
-		return true
+	_, ok := matchPoolExcludedSource(pool, source)
+	return ok
+}
+
+func gslbPoolSourceMatchKind(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) string {
+	if match, ok := matchPoolSource(pool, source); ok {
+		return match.kind
 	}
-	if source.ASN > 0 {
-		for _, asn := range pool.ExcludeASNs {
-			if source.ASN == asn {
-				return true
+	return ""
+}
+
+func gslbPoolExcludeMatchKind(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) string {
+	if match, ok := matchPoolExcludedSource(pool, source); ok {
+		return match.kind
+	}
+	return ""
+}
+
+func gslbSourceMatchKind(source GSLBSourceContext, cidrs []string, asns []uint32, operators []string, countries []string) string {
+	if match, ok := matchGSLBSource(source, cidrs, asns, operators, countries, gslbSourceMatchPriority...); ok {
+		return match.kind
+	}
+	return ""
+}
+
+func firstMatchingPoolSource(pools []ProxyRouteGSLBPoolPolicy, source GSLBSourceContext, kinds ...string) (ProxyRouteGSLBPoolPolicy, gslbSourceMatch, bool) {
+	for _, kind := range kinds {
+		for _, pool := range pools {
+			if !pool.Enabled || gslbPoolExcludesSource(pool, source) {
+				continue
+			}
+			if match, ok := matchPoolSourceByKind(pool, source, kind); ok {
+				return pool, match, true
 			}
 		}
 	}
-	operator := normalizeGSLBOperator(source.Operator)
-	if operator != "" {
-		for _, item := range pool.ExcludeOperators {
-			if operator == normalizeGSLBOperator(item) {
-				return true
+	return ProxyRouteGSLBPoolPolicy{}, gslbSourceMatch{}, false
+}
+
+func matchPoolSource(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) (gslbSourceMatch, bool) {
+	return matchGSLBSource(source, pool.SourceCIDRs, pool.ASNs, pool.Operators, pool.Countries, gslbSourceMatchPriority...)
+}
+
+func matchPoolSourceByKind(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext, kind string) (gslbSourceMatch, bool) {
+	return matchGSLBSource(source, pool.SourceCIDRs, pool.ASNs, pool.Operators, pool.Countries, kind)
+}
+
+func matchPoolExcludedSource(pool ProxyRouteGSLBPoolPolicy, source GSLBSourceContext) (gslbSourceMatch, bool) {
+	return matchGSLBSource(source, pool.ExcludeSourceCIDRs, pool.ExcludeASNs, pool.ExcludeOperators, pool.ExcludeCountries, gslbSourceMatchPriority...)
+}
+
+func matchGSLBSource(source GSLBSourceContext, cidrs []string, asns []uint32, operators []string, countries []string, kinds ...string) (gslbSourceMatch, bool) {
+	if len(kinds) == 0 {
+		kinds = gslbSourceMatchPriority
+	}
+	for _, kind := range kinds {
+		switch kind {
+		case gslbSourceMatchKindCIDR:
+			if cidr, ok := sourceIPMatchesCIDRList(source.IP, cidrs); ok {
+				return gslbSourceMatch{kind: kind, value: cidr}, true
+			}
+		case gslbSourceMatchKindASN:
+			if source.ASN == 0 {
+				continue
+			}
+			for _, asn := range asns {
+				if source.ASN == asn {
+					return gslbSourceMatch{kind: kind, value: fmt.Sprintf("%d", source.ASN)}, true
+				}
+			}
+		case gslbSourceMatchKindOperator:
+			operator := normalizeGSLBOperator(source.Operator)
+			if operator == "" {
+				continue
+			}
+			for _, item := range operators {
+				if operator == normalizeGSLBOperator(item) {
+					return gslbSourceMatch{kind: kind, value: operator}, true
+				}
+			}
+		case gslbSourceMatchKindCountry:
+			country := normalizeGSLBSourceCountry(source.Country)
+			if country == "" {
+				continue
+			}
+			for _, item := range countries {
+				if country == normalizeGSLBSourceCountry(item) {
+					return gslbSourceMatch{kind: kind, value: country}, true
+				}
 			}
 		}
 	}
-	country := strings.ToUpper(strings.TrimSpace(source.Country))
-	if country != "" {
-		for _, item := range pool.ExcludeCountries {
-			if country == strings.ToUpper(strings.TrimSpace(item)) {
-				return true
-			}
-		}
-	}
-	return false
+	return gslbSourceMatch{}, false
+}
+
+func normalizeGSLBSourceCountry(value string) string {
+	return strings.ToUpper(strings.TrimSpace(value))
 }
 
 func metricWithinGSLBThresholds(metric *model.NodeMetricSnapshot, thresholds ProxyRouteGSLBLoadThresholds) bool {
@@ -917,5 +1032,30 @@ func recordProxyRouteGSLBDecision(route *model.ProxyRoute, recordType string, se
 	state.LastReason = selection.Reason
 	state.LastChangedAt = lastChangedAt
 	state.LastEvaluatedAt = &now
-	return model.DB.Save(&state).Error
+	if err := model.DB.Save(&state).Error; err != nil {
+		return err
+	}
+	updateCachedGSLBDNSSchedulingState(&state)
+	return nil
+}
+
+func updateCachedGSLBDNSSchedulingState(state *model.GSLBSchedulingState) {
+	if state == nil {
+		return
+	}
+	gslbDNSSchedulingDataCache.mu.Lock()
+	defer gslbDNSSchedulingDataCache.mu.Unlock()
+	if gslbDNSSchedulingDataCache.data == nil || !gslbDNSSchedulingDataCache.data.SchedulingStatesLoaded {
+		return
+	}
+	if gslbDNSSchedulingDataCache.data.SchedulingStates == nil {
+		gslbDNSSchedulingDataCache.data.SchedulingStates = map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState{}
+	}
+	key := dnsWorkerSchedulingStateKey{
+		routeID:    state.ProxyRouteID,
+		recordType: normalizeDNSRecordType(state.DNSRecordType),
+		scopeKey:   normalizeDNSSourceScope(state.ScopeKey),
+	}
+	copyState := *state
+	gslbDNSSchedulingDataCache.data.SchedulingStates[key] = &copyState
 }

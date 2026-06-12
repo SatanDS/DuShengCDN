@@ -2,9 +2,7 @@ package controller
 
 import (
 	"dushengcdn/service"
-	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,17 +17,10 @@ import (
 func GetProxyRoutes(c *gin.Context) {
 	routes, err := service.ListProxyRoutes()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    routes,
-	})
+	respondSuccess(c, routes)
 }
 
 // GetProxyRoute godoc
@@ -42,27 +33,16 @@ func GetProxyRoutes(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/proxy-routes/{id} [get]
 func GetProxyRoute(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "invalid id",
-		})
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
 		return
 	}
-	route, err := service.GetProxyRoute(uint(id))
+	route, err := service.GetProxyRoute(id)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    route,
-	})
+	respondSuccess(c, route)
 }
 
 // CreateProxyRoute godoc
@@ -77,26 +57,16 @@ func GetProxyRoute(c *gin.Context) {
 // @Router /api/proxy-routes/ [post]
 func CreateProxyRoute(c *gin.Context) {
 	var input service.ProxyRouteInput
-	if err := json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "invalid payload",
-		})
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "invalid payload")
 		return
 	}
 	route, err := service.CreateProxyRoute(input)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    route,
-	})
+	respondSuccess(c, route)
 }
 
 // UpdateProxyRoute godoc
@@ -111,63 +81,40 @@ func CreateProxyRoute(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/proxy-routes/{id}/update [post]
 func UpdateProxyRoute(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "invalid id",
-		})
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
 		return
 	}
 	var input service.ProxyRouteInput
-	if err = json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "invalid payload",
-		})
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "invalid payload")
 		return
 	}
-	route, err := service.UpdateProxyRoute(uint(id), input)
+	route, err := service.UpdateProxyRoute(id, input)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    route,
-	})
+	respondSuccess(c, route)
 }
 
 func SwitchProxyRouteToAuthoritativeDNS(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "invalid id",
-		})
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
 		return
 	}
+	// Empty body keeps the defaults; a malformed body must not be ignored.
 	var input service.AuthoritativeDNSMigrationInput
-	if err = json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		input = service.AuthoritativeDNSMigrationInput{}
-	}
-	route, err := service.SwitchProxyRouteToAuthoritativeDNS(uint(id), input)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+	if err := decodeOptionalJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "invalid payload")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    route,
-	})
+	route, err := service.SwitchProxyRouteToAuthoritativeDNS(id, input)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, route)
 }
 
 // DeleteProxyRoute godoc
@@ -180,60 +127,51 @@ func SwitchProxyRouteToAuthoritativeDNS(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/proxy-routes/{id}/delete [post]
 func DeleteProxyRoute(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "invalid id",
-		})
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
 		return
 	}
-	if err = service.DeleteProxyRoute(uint(id)); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+	if err := service.DeleteProxyRoute(id); err != nil {
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
+	respondSuccessMessage(c, "")
 }
 
 func PurgeProxyRouteCache(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid id"})
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
 		return
 	}
-	var input service.CacheOperationInput
-	if err = json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		input = service.CacheOperationInput{Scope: "all"}
+	// Empty body keeps the full-purge default; a malformed body must be
+	// rejected instead of silently triggering a full cache purge.
+	input := service.CacheOperationInput{Scope: "all"}
+	if err := decodeOptionalJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "invalid payload")
+		return
 	}
-	result, err := service.RequestProxyRouteCachePurge(uint(id), input)
+	result, err := service.RequestProxyRouteCachePurge(id, input)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error(), "data": result})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": result})
+	respondSuccess(c, result)
 }
 
 func WarmProxyRouteCache(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid id"})
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
 		return
 	}
 	var input service.CacheOperationInput
-	if err = json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid payload"})
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "invalid payload")
 		return
 	}
-	result, err := service.RequestProxyRouteCacheWarm(uint(id), input)
+	result, err := service.RequestProxyRouteCacheWarm(id, input)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error(), "data": result})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": result})
+	respondSuccess(c, result)
 }

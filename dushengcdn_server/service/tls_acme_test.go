@@ -390,6 +390,46 @@ func TestAuthoritativeDNSChallengeProviderAllowsSnapshotPropagation(t *testing.T
 	}
 }
 
+func TestParseTLSCertificateDomainsSplitsCommaAndWhitespace(t *testing.T) {
+	domains, err := parseTLSCertificateDomains("example.com", "www.example.com, api.example.com\n*.example.net static.example.net")
+	if err != nil {
+		t.Fatalf("parseTLSCertificateDomains failed: %v", err)
+	}
+	expected := []string{"example.com", "www.example.com", "api.example.com", "*.example.net", "static.example.net"}
+	if len(domains) != len(expected) {
+		t.Fatalf("unexpected domains: got %#v want %#v", domains, expected)
+	}
+	for index := range expected {
+		if domains[index] != expected[index] {
+			t.Fatalf("unexpected domain at %d: got %q want %q", index, domains[index], expected[index])
+		}
+	}
+}
+
+func TestObtainSSLReturnsApplyingStatusSaveError(t *testing.T) {
+	setupServiceTestDB(t)
+
+	cert := &model.TLSCertificate{
+		Name:          "save-failure-cert",
+		CertPEM:       " ",
+		KeyPEM:        " ",
+		Provider:      "acme",
+		PrimaryDomain: "example.com",
+		DnsAccountID:  1,
+	}
+	if err := cert.Insert(); err != nil {
+		t.Fatalf("insert certificate failed: %v", err)
+	}
+
+	if err := model.DB.Migrator().DropTable(&model.TLSCertificate{}); err != nil {
+		t.Fatalf("drop tls certificate table failed: %v", err)
+	}
+	err := ObtainSSL(cert)
+	if err == nil || !strings.Contains(err.Error(), "persist tls certificate applying status") {
+		t.Fatalf("expected applying status save error, got %v", err)
+	}
+}
+
 func TestApplyTLSCertificateWithAuthoritativeDNS(t *testing.T) {
 	setupServiceTestDB(t)
 

@@ -1,11 +1,14 @@
 package openresty
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 func CertFileName(id uint) string {
@@ -24,7 +27,7 @@ func validateCertificateCoverage(certificate TLSCertificate, domains []string) e
 	if certificate.ID == 0 {
 		return errors.New("certificate is nil")
 	}
-	leaf, err := parseLeafCertificate(certificate.CertPEM)
+	leaf, err := parseCachedLeafCertificate(certificate.CertPEM)
 	if err != nil {
 		return err
 	}
@@ -36,10 +39,41 @@ func validateCertificateCoverage(certificate TLSCertificate, domains []string) e
 	return nil
 }
 
+func ValidateCertificateCoverage(certificate TLSCertificate, domains []string) error {
+	return validateCertificateCoverage(certificate, domains)
+}
+
+var (
+	leafCertificateParseCache sync.Map
+	leafCertificateParser     = parseLeafCertificate
+)
+
+type leafCertificateCacheEntry struct {
+	once        sync.Once
+	certPEM     string
+	certificate *x509.Certificate
+	err         error
+}
+
+func parseCachedLeafCertificate(certPEM string) (*x509.Certificate, error) {
+	cacheKey := leafCertificateCacheKey(certPEM)
+	value, _ := leafCertificateParseCache.LoadOrStore(cacheKey, &leafCertificateCacheEntry{certPEM: certPEM})
+	entry := value.(*leafCertificateCacheEntry)
+	entry.once.Do(func() {
+		entry.certificate, entry.err = leafCertificateParser(entry.certPEM)
+	})
+	return entry.certificate, entry.err
+}
+
+func leafCertificateCacheKey(certPEM string) string {
+	sum := sha256.Sum256([]byte(certPEM))
+	return hex.EncodeToString(sum[:])
+}
+
 func parseLeafCertificate(certPEM string) (*x509.Certificate, error) {
 	certPEMBlock, _ := pem.Decode([]byte(certPEM))
 	if certPEMBlock == nil {
-		return nil, errors.New("璇佷功 PEM 鍐呭涓嶅悎娉?")
+		return nil, errors.New("证书 PEM 内容不合法")
 	}
 	leaf, err := x509.ParseCertificate(certPEMBlock.Bytes)
 	if err != nil {

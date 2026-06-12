@@ -1,19 +1,25 @@
 package model
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
 )
 
-const proxyRouteBasicAuthHashMaterial = "dushengcdn basic auth v1\n"
+type proxyRouteRuntimeSchemaState struct {
+	tables              sync.Map
+	normalizedOnce      sync.Once
+	normalizedAvailable bool
+}
+
+var proxyRouteRuntimeSchemaCaches sync.Map
 
 type ProxySite struct {
 	ID           uint      `json:"id" gorm:"primaryKey"`
@@ -225,7 +231,7 @@ func GetProxySiteDomainByDomainWithDB(db *gorm.DB, domain string) (*ProxySiteDom
 		db = DB
 	}
 	domain = normalizeProxyRouteDomainForMigration(domain)
-	if domain == "" || !db.Migrator().HasTable(&ProxySiteDomain{}) {
+	if domain == "" || !proxyRouteRuntimeTableAvailable(db, &ProxySiteDomain{}) {
 		return nil, gorm.ErrRecordNotFound
 	}
 	item := &ProxySiteDomain{}
@@ -235,7 +241,7 @@ func GetProxySiteDomainByDomainWithDB(db *gorm.DB, domain string) (*ProxySiteDom
 
 func ListProxySiteDomainsByRouteID(routeID uint) ([]ProxySiteDomain, error) {
 	var domains []ProxySiteDomain
-	if DB == nil || !DB.Migrator().HasTable(&ProxySiteDomain{}) {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &ProxySiteDomain{}) {
 		return domains, nil
 	}
 	err := DB.Where("proxy_route_id = ?", routeID).Order("sort_order asc").Find(&domains).Error
@@ -244,7 +250,7 @@ func ListProxySiteDomainsByRouteID(routeID uint) ([]ProxySiteDomain, error) {
 
 func ListOriginServersByRouteID(routeID uint) ([]OriginServer, error) {
 	var servers []OriginServer
-	if DB == nil || !DB.Migrator().HasTable(&OriginServer{}) {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &OriginServer{}) {
 		return servers, nil
 	}
 	err := DB.Where("proxy_route_id = ?", routeID).Order("sort_order asc").Find(&servers).Error
@@ -253,7 +259,7 @@ func ListOriginServersByRouteID(routeID uint) ([]OriginServer, error) {
 
 func ListOriginServersByGroupIDs(groupIDs []uint) ([]OriginServer, error) {
 	var servers []OriginServer
-	if DB == nil || !DB.Migrator().HasTable(&OriginServer{}) || len(groupIDs) == 0 {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &OriginServer{}) || len(groupIDs) == 0 {
 		return servers, nil
 	}
 	err := DB.Where("origin_group_id IN ?", groupIDs).Order("origin_group_id asc").Order("sort_order asc").Find(&servers).Error
@@ -262,7 +268,7 @@ func ListOriginServersByGroupIDs(groupIDs []uint) ([]OriginServer, error) {
 
 func ListProxyRouteRulesByRouteID(routeID uint) ([]ProxyRouteRule, error) {
 	var rules []ProxyRouteRule
-	if DB == nil || !DB.Migrator().HasTable(&ProxyRouteRule{}) {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &ProxyRouteRule{}) {
 		return rules, nil
 	}
 	err := DB.Where("proxy_route_id = ?", routeID).
@@ -274,7 +280,7 @@ func ListProxyRouteRulesByRouteID(routeID uint) ([]ProxyRouteRule, error) {
 
 func ListProxyRouteRulesByRouteIDs(routeIDs []uint) ([]ProxyRouteRule, error) {
 	var rules []ProxyRouteRule
-	if DB == nil || !DB.Migrator().HasTable(&ProxyRouteRule{}) || len(routeIDs) == 0 {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &ProxyRouteRule{}) || len(routeIDs) == 0 {
 		return rules, nil
 	}
 	err := DB.Where("proxy_route_id IN ?", routeIDs).
@@ -287,7 +293,7 @@ func ListProxyRouteRulesByRouteIDs(routeIDs []uint) ([]ProxyRouteRule, error) {
 
 func GetCachePolicyByRouteID(routeID uint) (*CachePolicy, error) {
 	policy := &CachePolicy{}
-	if DB == nil || !DB.Migrator().HasTable(policy) {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, policy) {
 		return nil, gorm.ErrRecordNotFound
 	}
 	err := DB.Where("proxy_route_id = ?", routeID).Order("is_default desc").Order("id asc").First(policy).Error
@@ -296,7 +302,7 @@ func GetCachePolicyByRouteID(routeID uint) (*CachePolicy, error) {
 
 func ListCachePoliciesByRouteID(routeID uint) ([]CachePolicy, error) {
 	var policies []CachePolicy
-	if DB == nil || !DB.Migrator().HasTable(&CachePolicy{}) {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &CachePolicy{}) {
 		return policies, nil
 	}
 	err := DB.Where("proxy_route_id = ?", routeID).Order("is_default desc").Order("id asc").Find(&policies).Error
@@ -305,7 +311,7 @@ func ListCachePoliciesByRouteID(routeID uint) ([]CachePolicy, error) {
 
 func GetSecurityPolicyByRouteID(routeID uint) (*SecurityPolicy, error) {
 	policy := &SecurityPolicy{}
-	if DB == nil || !DB.Migrator().HasTable(policy) {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, policy) {
 		return nil, gorm.ErrRecordNotFound
 	}
 	err := DB.Where("proxy_route_id = ?", routeID).Order("is_default desc").Order("id asc").First(policy).Error
@@ -314,7 +320,7 @@ func GetSecurityPolicyByRouteID(routeID uint) (*SecurityPolicy, error) {
 
 func ListSecurityPoliciesByRouteID(routeID uint) ([]SecurityPolicy, error) {
 	var policies []SecurityPolicy
-	if DB == nil || !DB.Migrator().HasTable(&SecurityPolicy{}) {
+	if DB == nil || !proxyRouteRuntimeTableAvailable(DB, &SecurityPolicy{}) {
 		return policies, nil
 	}
 	err := DB.Where("proxy_route_id = ?", routeID).Order("is_default desc").Order("id asc").Find(&policies).Error
@@ -337,7 +343,7 @@ func SyncProxyRouteNormalizedTablesWithDB(db *gorm.DB, route *ProxyRoute) error 
 	if db == nil || route == nil || route.ID == 0 {
 		return nil
 	}
-	if !proxyRouteNormalizedTablesAvailable(db) {
+	if !proxyRouteNormalizedTablesAvailableForMigration(db) {
 		return nil
 	}
 
@@ -485,7 +491,7 @@ func DeleteProxyRouteNormalizedTablesWithDB(db *gorm.DB, routeID uint) error {
 	if db == nil {
 		db = DB
 	}
-	if db == nil || routeID == 0 || !proxyRouteNormalizedTablesAvailable(db) {
+	if db == nil || routeID == 0 || !proxyRouteNormalizedTablesAvailableForMigration(db) {
 		return nil
 	}
 	deleteModels := []any{
@@ -509,14 +515,14 @@ func DeleteProxyRouteNormalizedTablesWithDB(db *gorm.DB, routeID uint) error {
 
 func BackfillProxyRouteNormalizedTables(db *gorm.DB) error {
 	db = migrationSession(db)
-	if db == nil || !db.Migrator().HasTable(&ProxyRoute{}) || !proxyRouteNormalizedTablesAvailable(db) {
+	if db == nil || !db.Migrator().HasTable(&ProxyRoute{}) || !proxyRouteNormalizedTablesAvailableForMigration(db) {
 		return nil
 	}
 	var routes []ProxyRoute
 	if err := db.Order("id asc").Find(&routes).Error; err != nil {
 		return fmt.Errorf("list proxy routes for normalized table backfill failed: %w", err)
 	}
-	if err := clearProxyRouteNormalizedTables(db); err != nil {
+	if err := deleteOrphanProxyRouteNormalizedRows(db); err != nil {
 		return err
 	}
 	for index := range routes {
@@ -527,11 +533,15 @@ func BackfillProxyRouteNormalizedTables(db *gorm.DB) error {
 	return nil
 }
 
-func clearProxyRouteNormalizedTables(db *gorm.DB) error {
+// deleteOrphanProxyRouteNormalizedRows removes sidecar rows whose proxy route
+// no longer exists. The backfill must not clear-and-rebuild the tables:
+// SyncProxyRouteNormalizedTablesWithDB only recreates the default rows, so a
+// full clear would drop user-created path rules and their origin/cache/
+// security overrides.
+func deleteOrphanProxyRouteNormalizedRows(db *gorm.DB) error {
 	if db == nil {
 		return nil
 	}
-	db = db.Session(&gorm.Session{AllowGlobalUpdate: true})
 	for _, modelValue := range []any{
 		&ProxySiteDomain{},
 		&TLSBinding{},
@@ -543,7 +553,8 @@ func clearProxyRouteNormalizedTables(db *gorm.DB) error {
 		&OriginGroup{},
 		&ProxySite{},
 	} {
-		if err := db.Delete(modelValue).Error; err != nil {
+		routeIDs := db.Session(&gorm.Session{NewDB: true}).Model(&ProxyRoute{}).Select("id")
+		if err := db.Where("proxy_route_id NOT IN (?)", routeIDs).Delete(modelValue).Error; err != nil {
 			return err
 		}
 	}
@@ -552,7 +563,7 @@ func clearProxyRouteNormalizedTables(db *gorm.DB) error {
 
 func EnsureProxyRouteNormalizedTablesBackfilled(db *gorm.DB) error {
 	db = migrationSession(db)
-	if db == nil || !db.Migrator().HasTable(&ProxyRoute{}) || !proxyRouteNormalizedTablesAvailable(db) {
+	if db == nil || !db.Migrator().HasTable(&ProxyRoute{}) || !proxyRouteNormalizedTablesAvailableForMigration(db) {
 		return nil
 	}
 	var routeCount int64
@@ -573,6 +584,10 @@ func EnsureProxyRouteNormalizedTablesBackfilled(db *gorm.DB) error {
 }
 
 func proxyRouteNormalizedTablesAvailable(db *gorm.DB) bool {
+	return proxyRouteRuntimeNormalizedTablesAvailable(db)
+}
+
+func proxyRouteNormalizedTablesAvailableForMigration(db *gorm.DB) bool {
 	if db == nil {
 		return false
 	}
@@ -592,6 +607,69 @@ func proxyRouteNormalizedTablesAvailable(db *gorm.DB) bool {
 		}
 	}
 	return true
+}
+
+func proxyRouteRuntimeNormalizedTablesAvailable(db *gorm.DB) bool {
+	if db == nil {
+		return false
+	}
+	state := proxyRouteRuntimeSchemaCacheForDB(db)
+	state.normalizedOnce.Do(func() {
+		state.normalizedAvailable = proxyRouteNormalizedTablesAvailableForMigration(db)
+	})
+	return state.normalizedAvailable
+}
+
+func proxyRouteRuntimeTableAvailable(db *gorm.DB, modelValue any) bool {
+	if db == nil {
+		return false
+	}
+	state := proxyRouteRuntimeSchemaCacheForDB(db)
+	key := proxyRouteRuntimeSchemaTableName(db, modelValue)
+	if value, ok := state.tables.Load(key); ok {
+		return value.(bool)
+	}
+	available := db.Migrator().HasTable(modelValue)
+	value, _ := state.tables.LoadOrStore(key, available)
+	return value.(bool)
+}
+
+func proxyRouteRuntimeSchemaCacheForDB(db *gorm.DB) *proxyRouteRuntimeSchemaState {
+	key := proxyRouteRuntimeSchemaCacheKey(db)
+	value, _ := proxyRouteRuntimeSchemaCaches.LoadOrStore(key, &proxyRouteRuntimeSchemaState{})
+	return value.(*proxyRouteRuntimeSchemaState)
+}
+
+func proxyRouteRuntimeSchemaCacheKey(db *gorm.DB) any {
+	if db == nil {
+		return nil
+	}
+	if sqlDB, err := db.DB(); err == nil && sqlDB != nil {
+		return sqlDB
+	}
+	return db
+}
+
+func proxyRouteRuntimeSchemaTableName(db *gorm.DB, modelValue any) string {
+	if named, ok := modelValue.(interface{ TableName() string }); ok {
+		return named.TableName()
+	}
+	statement := &gorm.Statement{DB: db}
+	if err := statement.Parse(modelValue); err == nil && statement.Schema != nil && statement.Schema.Table != "" {
+		return statement.Schema.Table
+	}
+	return fmt.Sprintf("%T", modelValue)
+}
+
+func resetProxyRouteRuntimeSchemaCache(db *gorm.DB) {
+	if db == nil {
+		proxyRouteRuntimeSchemaCaches.Range(func(key, _ any) bool {
+			proxyRouteRuntimeSchemaCaches.Delete(key)
+			return true
+		})
+		return
+	}
+	proxyRouteRuntimeSchemaCaches.Delete(proxyRouteRuntimeSchemaCacheKey(db))
 }
 
 func ensureProxyRouteDomainSidecarConflicts(db *gorm.DB, routeID uint, domains []string) error {
@@ -929,12 +1007,7 @@ func normalizedJSONString(raw string, fallback string) string {
 }
 
 func BasicAuthCredentialHash(username, password string) string {
-	credentials := strings.TrimSpace(username) + ":" + strings.TrimSpace(password)
-	if credentials == ":" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(proxyRouteBasicAuthHashMaterial + credentials))
-	return hex.EncodeToString(sum[:])
+	return security.BasicAuthCredentialHash(username, password)
 }
 
 func proxyRouteBasicAuthPasswordHash(route *ProxyRoute) string {

@@ -169,7 +169,7 @@ func OAuthAuthorize(c *gin.Context) {
 		respondFailure(c, "无法保存授权状态，请重试")
 		return
 	}
-	redirectURL := oauthFrontendCallbackURL(c, source.ID)
+	redirectURL := oauthFrontendCallbackURL(c, source)
 	authorizeURL, err := service.BuildAuthorizeURLWithNonce(c.Request.Context(), source, redirectURL, state, nonce)
 	if err != nil {
 		respondFailure(c, err.Error())
@@ -214,7 +214,7 @@ func OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	profile, err := service.ExchangeOAuthProfileWithNonce(c.Request.Context(), source, c.Query("code"), oauthFrontendCallbackURL(c, source.ID), expectedNonce)
+	profile, err := service.ExchangeOAuthProfileWithNonce(c.Request.Context(), source, c.Query("code"), oauthFrontendCallbackURL(c, source), expectedNonce)
 	if err != nil {
 		_ = session.Save()
 		slog.Warn("oauth profile exchange failed", "source_id", source.ID, "source_name", source.Name, "error", err)
@@ -402,7 +402,7 @@ func oauthNonceSessionKey(sourceID uint) string {
 	return fmt.Sprintf("oauth_nonce_%d", sourceID)
 }
 
-func oauthFrontendCallbackURL(c *gin.Context, sourceID uint) string {
+func oauthFrontendCallbackURL(c *gin.Context, source *model.AuthSource) string {
 	base := strings.TrimRight(common.ServerAddress, "/")
 	if base == "" {
 		scheme := "http"
@@ -415,9 +415,8 @@ func oauthFrontendCallbackURL(c *gin.Context, sourceID uint) string {
 		}
 		base = scheme + "://" + host
 	}
-	source, err := model.GetAuthSourceByID(sourceID)
-	sourceName := strconv.FormatUint(uint64(sourceID), 10)
-	if err == nil && strings.TrimSpace(source.Name) != "" {
+	sourceName := strconv.FormatUint(uint64(source.ID), 10)
+	if strings.TrimSpace(source.Name) != "" {
 		sourceName = source.Name
 	}
 	callback, _ := url.JoinPath(base, "oauth", sourceName)

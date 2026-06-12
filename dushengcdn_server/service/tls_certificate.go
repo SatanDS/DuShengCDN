@@ -405,13 +405,17 @@ func RenewTLSCertificate(id uint) (*model.TLSCertificate, error) {
 		return nil, errors.New("only acme certificates can be renewed")
 	}
 
+	// Persist the applying status before the async issuance starts, matching
+	// the other ACME entry points.
+	cert.ApplyStatus = "applying"
+	if err := cert.Update(); err != nil {
+		return nil, err
+	}
+
 	// Async obtain SSL
 	go func(c *model.TLSCertificate) {
 		_ = obtainTLSCertificate(c)
 	}(cert)
-
-	cert.ApplyStatus = "applying"
-	cert.Update()
 
 	return cert, nil
 }

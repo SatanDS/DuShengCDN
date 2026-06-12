@@ -10,7 +10,6 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { EmptyState } from '@/components/feedback/empty-state';
-import worldGeoJson from '@/features/dashboard/data/world-geo.json';
 import type {
   DashboardNodeHealth,
   DistributionItem,
@@ -19,6 +18,7 @@ import {
   getNodeStatusLabel,
   getOpenrestyStatusLabel,
 } from '@/features/nodes/utils';
+import { loadWorldGeoJson, type WorldGeoJson } from '@/lib/geo/world';
 
 echarts.use([
   GeoComponent,
@@ -42,21 +42,6 @@ const fallbackCoordinates = [
 ] as const;
 
 type Tone = 'healthy' | 'warning' | 'danger';
-
-type WorldGeoJson = {
-  type: string;
-  features?: WorldFeature[];
-};
-
-type WorldFeature = {
-  properties?: {
-    name?: string;
-  };
-  geometry?: {
-    type?: 'Polygon' | 'MultiPolygon';
-    coordinates?: number[][][] | number[][][][];
-  };
-};
 
 type MapNodeDatum = {
   id: number;
@@ -100,6 +85,7 @@ type CountryRegionDatum = {
 
 let worldMapRegistrationAttempted = false;
 let worldMapRegistrationSucceeded = false;
+let worldMapRegistrationPromise: Promise<boolean> | null = null;
 
 const baseWorldMapLayoutSizePercent = 168;
 const baseWorldMapZoom = 1;
@@ -153,44 +139,41 @@ function getNodeCoordinates(node: DashboardNodeHealth, index: number) {
 function ensureWorldMapRegistered() {
   if (worldMapRegistrationSucceeded || echarts.getMap('world')) {
     worldMapRegistrationSucceeded = true;
-    return true;
+    return Promise.resolve(true);
   }
 
   if (worldMapRegistrationAttempted) {
-    return false;
+    return worldMapRegistrationPromise ?? Promise.resolve(false);
   }
 
   worldMapRegistrationAttempted = true;
 
-  try {
-    const geoJson = worldGeoJson as WorldGeoJson;
+  worldMapRegistrationPromise = loadWorldGeoJson()
+    .then((geoJson: WorldGeoJson) => {
+      echarts.registerMap(
+        'world',
+        geoJson as unknown as Parameters<typeof echarts.registerMap>[1],
+      );
 
-    if (
-      geoJson.type !== 'FeatureCollection' ||
-      !Array.isArray(geoJson.features)
-    ) {
-      throw new Error('invalid world geojson payload');
-    }
+      if (!echarts.getMap('world')) {
+        throw new Error('world map registration failed');
+      }
 
-    echarts.registerMap(
-      'world',
-      geoJson as unknown as Parameters<typeof echarts.registerMap>[1],
-    );
+      worldMapRegistrationSucceeded = true;
+      return true;
+    })
+    .catch((error) => {
+      worldMapRegistrationAttempted = false;
+      worldMapRegistrationPromise = null;
+      const registrationError =
+        error instanceof Error
+          ? error
+          : new Error('unknown world map registration error');
+      console.error('Failed to register ECharts world map', registrationError);
+      return false;
+    });
 
-    if (!echarts.getMap('world')) {
-      throw new Error('world map registration failed');
-    }
-
-    worldMapRegistrationSucceeded = true;
-    return true;
-  } catch (error) {
-    const registrationError =
-      error instanceof Error
-        ? error
-        : new Error('unknown world map registration error');
-    console.error('Failed to register ECharts world map', registrationError);
-    return false;
-  }
+  return worldMapRegistrationPromise;
 }
 
 export function WorldStageMap({
@@ -209,9 +192,19 @@ export function WorldStageMap({
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
-    const ready = ensureWorldMapRegistered();
-    setMapReady(ready);
-    setMapFailed(!ready);
+    let cancelled = false;
+
+    ensureWorldMapRegistered().then((ready) => {
+      if (cancelled) {
+        return;
+      }
+      setMapReady(ready);
+      setMapFailed(!ready);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

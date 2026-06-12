@@ -190,6 +190,351 @@ func TestAuthoritativeDNSZoneRecordWorkerAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestSignedAuthoritativeDNSSnapshotConditionalUsesCachedVersion(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	initial, err := GetSignedAuthoritativeDNSSnapshotConditional(authenticated, worker.Token, "")
+	if err != nil {
+		t.Fatalf("GetSignedAuthoritativeDNSSnapshotConditional initial: %v", err)
+	}
+	if initial.NotModified || initial.Snapshot == nil || initial.SnapshotVersion == "" {
+		t.Fatalf("expected initial conditional request to return snapshot, got %+v", initial)
+	}
+
+	unchanged, err := GetSignedAuthoritativeDNSSnapshotConditional(authenticated, worker.Token, `"`+initial.SnapshotVersion+`"`)
+	if err != nil {
+		t.Fatalf("GetSignedAuthoritativeDNSSnapshotConditional unchanged: %v", err)
+	}
+	if !unchanged.NotModified || unchanged.Snapshot != nil || unchanged.SnapshotVersion != initial.SnapshotVersion {
+		t.Fatalf("expected matching cached version to short-circuit, got %+v", unchanged)
+	}
+
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{
+		Name:  "www",
+		Type:  "A",
+		Value: "8.8.8.8",
+	}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+	}
+	changed, err := GetSignedAuthoritativeDNSSnapshotConditional(authenticated, worker.Token, initial.SnapshotVersion)
+	if err != nil {
+		t.Fatalf("GetSignedAuthoritativeDNSSnapshotConditional changed: %v", err)
+	}
+	if changed.NotModified || changed.Snapshot == nil || changed.SnapshotVersion == "" || changed.SnapshotVersion == initial.SnapshotVersion {
+		t.Fatalf("expected changed revision to return a fresh snapshot, got initial=%s changed=%+v", initial.SnapshotVersion, changed)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotCacheRevisionIgnoresWorkerRuntimeMetadata(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	revisionBefore, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || revisionBefore == "" {
+		t.Fatalf("expected initial cache revision, got %q ok=%v", revisionBefore, ok)
+	}
+
+	now := time.Now().UTC()
+	if err := model.DB.Model(&model.DNSWorker{}).Where("id = ?", worker.ID).Updates(map[string]any{
+		"status":                dnsWorkerStatusOnline,
+		"last_seen_at":          now,
+		"last_snapshot_at":      now,
+		"last_snapshot_version": "snapshot-a",
+	}).Error; err != nil {
+		t.Fatalf("update worker runtime metadata: %v", err)
+	}
+	revisionAfterWorkerRuntimeUpdate, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok {
+		t.Fatal("expected cache revision after worker runtime update")
+	}
+	if revisionAfterWorkerRuntimeUpdate != revisionBefore {
+		t.Fatalf("expected worker runtime metadata not to change snapshot cache revision, got %s then %s", revisionBefore, revisionAfterWorkerRuntimeUpdate)
+	}
+
+	if _, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	revisionAfterZoneChange, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok {
+		t.Fatal("expected cache revision after zone change")
+	}
+	if revisionAfterZoneChange == revisionBefore {
+		t.Fatalf("expected DNS content change to update cache revision, got %s", revisionAfterZoneChange)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotCacheRevisionUsesEventDrivenStaticMutation(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAuthoritativeDNSSnapshotCache()
+	t.Cleanup(resetAuthoritativeDNSSnapshotCache)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	initial, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || initial == "" {
+		t.Fatalf("expected initial cache revision, got %q ok=%v", initial, ok)
+	}
+
+	var queryCount atomic.Int32
+	const callbackName = "dushengcdn:test_authoritative_dns_snapshot_revision_cache_queries"
+	queryCallback := model.DB.Callback().Query()
+	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		queryCount.Add(1)
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queryCallback.Remove(callbackName)
+	})
+
+	cached, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || cached != initial {
+		t.Fatalf("expected cached revision %q, got %q ok=%v", initial, cached, ok)
+	}
+	if got := queryCount.Load(); got != 0 {
+		t.Fatalf("expected cached revision not to query snapshot tables, got %d queries", got)
+	}
+
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{
+		Name:  "www",
+		Type:  "A",
+		Value: "8.8.8.8",
+	}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+	}
+	queryCount.Store(0)
+	changed, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || changed == "" || changed == initial {
+		t.Fatalf("expected DNS record write to bump revision cache, initial=%q changed=%q ok=%v", initial, changed, ok)
+	}
+	if got := queryCount.Load(); got != 0 {
+		t.Fatalf("expected static mutation bump not to query snapshot tables, got %d queries", got)
+	}
+
+	queryCount.Store(0)
+	cachedAgain, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || cachedAgain != changed {
+		t.Fatalf("expected changed revision to be cached, got %q want %q ok=%v", cachedAgain, changed, ok)
+	}
+	if got := queryCount.Load(); got != 0 {
+		t.Fatalf("expected cached changed revision not to query snapshot tables, got %d queries", got)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotCacheRevisionExpiresDynamicNodeStatus(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAgentWSHubForAuthoritativeDNSTest()
+	resetAuthoritativeDNSSnapshotCache()
+	t.Cleanup(func() {
+		resetAgentWSHubForAuthoritativeDNSTest()
+		resetAuthoritativeDNSSnapshotCache()
+	})
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = 2 * time.Second
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	lastSeenAt := time.Now().UTC().Add(-1 * time.Second)
+	if err := model.DB.Create(&model.Node{
+		NodeID:            "node-revision-expire",
+		Name:              "node-revision-expire",
+		IP:                "198.51.100.10",
+		PoolName:          "default",
+		Weight:            100,
+		PublicIPs:         `["8.8.8.8"]`,
+		SchedulingEnabled: true,
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		LastSeenAt:        lastSeenAt,
+	}).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	initial, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || initial == "" {
+		t.Fatalf("expected initial revision, got %q ok=%v", initial, ok)
+	}
+	cached, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || cached != initial {
+		t.Fatalf("expected revision to cache before threshold expires, got %q want %q ok=%v", cached, initial, ok)
+	}
+
+	time.Sleep(time.Until(lastSeenAt.Add(common.NodeOfflineThreshold)) + 50*time.Millisecond)
+	changed, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || changed == "" {
+		t.Fatalf("expected revision after node status expiry, got %q ok=%v", changed, ok)
+	}
+	if changed == initial {
+		t.Fatalf("expected node offline threshold expiry to change revision, got %s", changed)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotCacheRevisionTracksAgentWSConnections(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAgentWSHubForAuthoritativeDNSTest()
+	resetAuthoritativeDNSSnapshotCache()
+	t.Cleanup(func() {
+		resetAgentWSHubForAuthoritativeDNSTest()
+		resetAuthoritativeDNSSnapshotCache()
+	})
+
+	if err := model.DB.Create(&model.Node{
+		NodeID:            "node-revision-ws",
+		Name:              "node-revision-ws",
+		IP:                "198.51.100.11",
+		PoolName:          "default",
+		Weight:            100,
+		PublicIPs:         `["8.8.4.4"]`,
+		SchedulingEnabled: true,
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+	}).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	initial, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || initial == "" {
+		t.Fatalf("expected initial revision, got %q ok=%v", initial, ok)
+	}
+	client := RegisterAgentWSClient("node-revision-ws")
+	connected, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || connected == "" || connected == initial {
+		t.Fatalf("expected agent ws connection to change revision, initial=%q connected=%q ok=%v", initial, connected, ok)
+	}
+	UnregisterAgentWSClient(client)
+	disconnected, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || disconnected != initial {
+		t.Fatalf("expected agent ws disconnection to restore baseline revision, got %q want %q ok=%v", disconnected, initial, ok)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotCacheRevisionInvalidatesOnNodeMetrics(t *testing.T) {
+	setupServiceTestDB(t)
+	resetAuthoritativeDNSSnapshotCache()
+	t.Cleanup(resetAuthoritativeDNSSnapshotCache)
+
+	oldFreshness := common.GSLBMetricFreshnessSeconds
+	common.GSLBMetricFreshnessSeconds = 60
+	t.Cleanup(func() {
+		common.GSLBMetricFreshnessSeconds = oldFreshness
+	})
+
+	if err := model.DB.Create(&model.Node{
+		NodeID:            "node-revision-metric",
+		Name:              "node-revision-metric",
+		IP:                "198.51.100.12",
+		PoolName:          "default",
+		Weight:            100,
+		PublicIPs:         `["1.1.1.1"]`,
+		SchedulingEnabled: true,
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		LastSeenAt:        time.Now().UTC(),
+	}).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	initial, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || initial == "" {
+		t.Fatalf("expected initial revision, got %q ok=%v", initial, ok)
+	}
+
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:               "node-revision-metric",
+		CapturedAt:           time.Now().UTC(),
+		CPUUsagePercent:      90,
+		MemoryUsedBytes:      9,
+		MemoryTotalBytes:     10,
+		OpenrestyConnections: 42,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node metric snapshot: %v", err)
+	}
+	changed, ok := authoritativeDNSSnapshotCacheRevision()
+	if !ok || changed == "" || changed == initial {
+		t.Fatalf("expected node metric write to invalidate revision, initial=%q changed=%q ok=%v", initial, changed, ok)
+	}
+}
+
+func resetAgentWSHubForAuthoritativeDNSTest() {
+	defaultAgentWSHub.mu.Lock()
+	for _, client := range defaultAgentWSHub.clients {
+		if client != nil {
+			client.Close()
+		}
+	}
+	defaultAgentWSHub.clients = make(map[string]*AgentWSClient)
+	defaultAgentWSHub.mu.Unlock()
+}
+
+func TestAuthoritativeDNSSnapshotCacheKeepsEntriesUntilPruned(t *testing.T) {
+	resetAuthoritativeDNSSnapshotCache()
+	previousMaxEntries := authoritativeDNSSnapshotCache.maxEntries
+	authoritativeDNSSnapshotCache.maxEntries = 8
+	t.Cleanup(func() {
+		authoritativeDNSSnapshotCache.maxEntries = previousMaxEntries
+		resetAuthoritativeDNSSnapshotCache()
+	})
+
+	key := "authoritative-dns:test:revision-a"
+	authoritativeDNSSnapshotCache.storeSnapshot(key, &AuthoritativeDNSSnapshot{SnapshotVersion: "snapshot-a"})
+	authoritativeDNSSnapshotCache.mu.Lock()
+	authoritativeDNSSnapshotCache.entries[key].lastAccessAt = time.Now().Add(-24 * time.Hour)
+	authoritativeDNSSnapshotCache.mu.Unlock()
+
+	cached, ok := authoritativeDNSSnapshotCache.getSnapshot(key)
+	if !ok || cached == nil || cached.SnapshotVersion != "snapshot-a" {
+		t.Fatalf("expected aged revision cache entry to remain available, got cached=%+v ok=%v", cached, ok)
+	}
+}
+
+func TestAuthoritativeDNSSnapshotCachePrunesLeastRecentlyUsedEntries(t *testing.T) {
+	resetAuthoritativeDNSSnapshotCache()
+	previousMaxEntries := authoritativeDNSSnapshotCache.maxEntries
+	authoritativeDNSSnapshotCache.maxEntries = 2
+	t.Cleanup(func() {
+		authoritativeDNSSnapshotCache.maxEntries = previousMaxEntries
+		resetAuthoritativeDNSSnapshotCache()
+	})
+
+	authoritativeDNSSnapshotCache.storeSnapshot("authoritative-dns:test:old", &AuthoritativeDNSSnapshot{SnapshotVersion: "old"})
+	time.Sleep(time.Millisecond)
+	authoritativeDNSSnapshotCache.storeSnapshot("authoritative-dns:test:keep", &AuthoritativeDNSSnapshot{SnapshotVersion: "keep"})
+	if _, ok := authoritativeDNSSnapshotCache.getSnapshot("authoritative-dns:test:old"); !ok {
+		t.Fatal("expected old entry to be available before capacity pressure")
+	}
+	time.Sleep(time.Millisecond)
+	authoritativeDNSSnapshotCache.storeSnapshot("authoritative-dns:test:new", &AuthoritativeDNSSnapshot{SnapshotVersion: "new"})
+
+	if _, ok := authoritativeDNSSnapshotCache.getSnapshot("authoritative-dns:test:keep"); ok {
+		t.Fatal("expected least recently used entry to be pruned")
+	}
+	if _, ok := authoritativeDNSSnapshotCache.getSnapshot("authoritative-dns:test:old"); !ok {
+		t.Fatal("expected recently accessed entry to survive pruning")
+	}
+	if _, ok := authoritativeDNSSnapshotCache.getSnapshot("authoritative-dns:test:new"); !ok {
+		t.Fatal("expected newest entry to survive pruning")
+	}
+}
+
 func TestAuthoritativeDNSWorkerTokenHashRotateRevokeAndLegacyFallback(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -561,6 +906,52 @@ func TestAuthoritativeDNSSnapshotAllowsLegacyUnassignedZonesWhenNoAssignmentsExi
 	}
 }
 
+func TestAuthoritativeDNSSnapshotPropagatesAssignmentQueryError(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	workerModel, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID: %v", err)
+	}
+
+	const callbackName = "dushengcdn:test_dns_zone_worker_assignment_query_error"
+	forcedErr := errors.New("forced assignment query error")
+	queryCallback := model.DB.Callback().Query()
+	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		if db.Statement.Table == "dns_zone_worker_assignments" ||
+			(db.Statement.Schema != nil && db.Statement.Schema.Table == "dns_zone_worker_assignments") ||
+			strings.Contains(db.Statement.SQL.String(), "dns_zone_worker_assignments") {
+			db.AddError(forcedErr)
+		}
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queryCallback.Remove(callbackName)
+	})
+
+	if _, err = GetAuthoritativeDNSSnapshot(workerModel); !errors.Is(err, forcedErr) {
+		t.Fatalf("expected assignment query error to propagate, got %v", err)
+	}
+	reloaded, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("reload worker: %v", err)
+	}
+	if reloaded.LastSnapshotVersion != "" || reloaded.LastSnapshotAt != nil {
+		t.Fatalf("failed snapshot should not record snapshot pull metadata, got %+v", reloaded)
+	}
+}
+
 func TestAuthoritativeDNSZoneCreationAssignsExistingWorkers(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -607,6 +998,51 @@ func TestAuthoritativeDNSZoneWorkerAssignmentsExpandEmptyInputToAllWorkers(t *te
 	}
 	if !sameUintSet(assignments.WorkerIDs, []uint{workerA.ID, workerB.ID}) {
 		t.Fatalf("expected empty input to assign all workers, got %+v", assignments.WorkerIDs)
+	}
+}
+
+func TestDeleteAuthoritativeDNSZoneRollsBackRecordsWhenZoneDeleteFails(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := CreateAuthoritativeDNSRecord(zone.ID, DNSRecordInput{Name: "www", Type: "A", Value: "203.0.113.10"}); err != nil {
+		t.Fatalf("CreateAuthoritativeDNSRecord: %v", err)
+	}
+
+	const callbackName = "dushengcdn:test_dns_zone_delete_error"
+	forcedErr := errors.New("forced zone delete error")
+	deleteCallback := model.DB.Callback().Delete()
+	if err := deleteCallback.After("gorm:delete").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		if db.Statement.Table == "dns_zones" ||
+			(db.Statement.Schema != nil && db.Statement.Schema.Table == "dns_zones") ||
+			strings.Contains(db.Statement.SQL.String(), "dns_zones") {
+			db.AddError(forcedErr)
+		}
+	}); err != nil {
+		t.Fatalf("register delete callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = deleteCallback.Remove(callbackName)
+	})
+
+	if err := DeleteAuthoritativeDNSZone(zone.ID); !errors.Is(err, forcedErr) {
+		t.Fatalf("expected forced zone delete error, got %v", err)
+	}
+	if _, err := model.GetDNSZoneByID(zone.ID); err != nil {
+		t.Fatalf("zone should remain after rollback: %v", err)
+	}
+	records, err := model.ListDNSRecordsByZoneID(zone.ID)
+	if err != nil {
+		t.Fatalf("ListDNSRecordsByZoneID: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("record delete should roll back with zone delete failure, got %+v", records)
 	}
 }
 
@@ -749,6 +1185,106 @@ func TestAuthoritativeDNSSnapshotReusesTargetSelectionNodeSnapshot(t *testing.T)
 	}
 	if got := int(listNodesCalls.Load()); got != 1 {
 		t.Fatalf("expected snapshot generation to load nodes once, got %d listNodes calls", got)
+	}
+}
+
+func TestSelectProxyRouteDNSTargetsUsesCachedSchedulingData(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+	now := time.Now().UTC()
+	if err := (&model.Node{
+		NodeID:            "node-cache",
+		Name:              "node-cache",
+		PoolName:          "edge",
+		PublicIPs:         `["8.8.4.4"]`,
+		Weight:            100,
+		SchedulingEnabled: true,
+		AgentToken:        "token-cache",
+		AgentVersion:      "dev",
+		OpenrestyStatus:   OpenrestyStatusHealthy,
+		Status:            NodeStatusOnline,
+		LastSeenAt:        now,
+	}).Insert(); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	route := &model.ProxyRoute{
+		SiteName:        "edge-cache",
+		Domain:          "cache.example.com",
+		Domains:         `["cache.example.com"]`,
+		OriginURL:       "https://origin.internal",
+		Upstreams:       `["https://origin.internal"]`,
+		NodePool:        "edge",
+		Enabled:         true,
+		DNSRecordType:   "A",
+		DNSAutoTarget:   true,
+		DNSTargetCount:  1,
+		DNSScheduleMode: "weighted",
+		DNSTTL:          60,
+	}
+	if err := route.Insert(); err != nil {
+		t.Fatalf("insert route: %v", err)
+	}
+	resetGSLBDNSSchedulingDataCache()
+	defer resetGSLBDNSSchedulingDataCache()
+
+	first, err := selectProxyRouteDNSTargets(route, "A")
+	if err != nil {
+		t.Fatalf("select first: %v", err)
+	}
+	if len(first.Targets) != 1 || first.Targets[0] != "8.8.4.4" {
+		t.Fatalf("unexpected first selection: %+v", first)
+	}
+	if err := model.DB.Where("node_id = ?", "node-cache").Delete(&model.Node{}).Error; err != nil {
+		t.Fatalf("delete node: %v", err)
+	}
+	second, err := selectProxyRouteDNSTargets(route, "A")
+	if err != nil {
+		t.Fatalf("select second: %v", err)
+	}
+	if len(second.Targets) != 1 || second.Targets[0] != "8.8.4.4" {
+		t.Fatalf("expected second selection to reuse cached scheduling data, got %+v", second)
+	}
+	resetGSLBDNSSchedulingDataCache()
+	if _, err := selectProxyRouteDNSTargets(route, "A"); err == nil {
+		t.Fatal("expected selection after cache reset to observe deleted node")
+	}
+}
+
+func TestSnapshotGSLBSchedulingStatesUsesPreloadedData(t *testing.T) {
+	setupServiceTestDB(t)
+
+	route := AuthoritativeDNSSnapshotRoute{
+		ID:         42,
+		RecordType: "A",
+	}
+	lastChangedAt := time.Now().Add(-time.Minute).UTC()
+	data := &gslbDNSSchedulingData{
+		SchedulingStatesLoaded: true,
+		SchedulingStates: map[dnsWorkerSchedulingStateKey]*model.GSLBSchedulingState{
+			{routeID: 42, recordType: "A", scopeKey: "global"}: {
+				ProxyRouteID:    42,
+				DNSRecordType:   "A",
+				ScopeKey:        "global",
+				SelectedTargets: `["8.8.4.4"]`,
+				DesiredTargets:  `["8.8.4.4"]`,
+				LastChangedAt:   &lastChangedAt,
+			},
+		},
+	}
+	if err := model.DB.Migrator().DropTable(&model.GSLBSchedulingState{}); err != nil {
+		t.Fatalf("drop gslb scheduling states: %v", err)
+	}
+	states, err := snapshotGSLBSchedulingStatesWithData([]AuthoritativeDNSSnapshotRoute{route}, data)
+	if err != nil {
+		t.Fatalf("snapshotGSLBSchedulingStatesWithData: %v", err)
+	}
+	if len(states) != 1 || states[0].RouteID != 42 || states[0].SelectedTargets[0] != "8.8.4.4" {
+		t.Fatalf("expected preloaded scheduling state, got %+v", states)
 	}
 }
 
@@ -3468,6 +4004,143 @@ func TestDNSWorkerHeartbeatPersistsRollupsWithoutTokenLeak(t *testing.T) {
 	}
 }
 
+func TestDNSWorkerSchedulingTargetsReusePreloadedNodes(t *testing.T) {
+	setupServiceTestDB(t)
+
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	routeA := seedAuthoritativeSnapshotFilterRoute(t, zone.ID, "a.example.com")
+	routeB := seedAuthoritativeSnapshotFilterRoute(t, zone.ID, "b.example.com")
+	now := time.Now().UTC()
+	nodes := []*model.Node{
+		{
+			NodeID:            "node-a",
+			Name:              "node-a",
+			PoolName:          "hk",
+			PublicIPs:         `["8.8.4.4"]`,
+			SchedulingEnabled: true,
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now,
+		},
+	}
+	if err := model.DB.Migrator().DropTable(&model.Node{}); err != nil {
+		t.Fatalf("drop nodes: %v", err)
+	}
+
+	targetsA := allowedDNSSchedulingTargetsForRouteWithNodes(routeA, "A", nodes)
+	targetsB := allowedDNSSchedulingTargetsForRouteWithNodes(routeB, "A", nodes)
+	if _, ok := targetsA["8.8.4.4"]; !ok {
+		t.Fatalf("expected route A to allow preloaded node target, got %+v", targetsA)
+	}
+	if _, ok := targetsB["8.8.4.4"]; !ok {
+		t.Fatalf("expected route B to allow preloaded node target, got %+v", targetsB)
+	}
+	empty := allowedDNSSchedulingTargetsForRoute(nil, routeA, "A")
+	if _, ok := empty["8.8.4.4"]; ok {
+		t.Fatalf("expected fallback wrapper to avoid per-route node table scan after nodes table was dropped, got %+v", empty)
+	}
+}
+
+func TestDNSWorkerHeartbeatDoesNotOverwriteManagerUpdateStateFromStaleModel(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	staleWorker, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID stale: %v", err)
+	}
+	dispatchedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	if err := model.DB.Model(&model.DNSWorker{}).Where("id = ?", worker.ID).Updates(map[string]any{
+		"update_requested":        true,
+		"update_channel":          "preview",
+		"update_tag":              "v9.9.9",
+		"update_dispatch_mode":    "agent_ws",
+		"update_dispatch_message": "manager dispatched",
+		"update_dispatched_at":    dispatchedAt,
+	}).Error; err != nil {
+		t.Fatalf("simulate manager update: %v", err)
+	}
+
+	if _, err := RecordDNSWorkerHeartbeat(staleWorker, DNSWorkerHeartbeatInput{
+		Status:  dnsWorkerStatusOnline,
+		Version: "v1.0.0",
+	}); err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+
+	reloaded, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("reload worker: %v", err)
+	}
+	if !reloaded.UpdateRequested ||
+		reloaded.UpdateChannel != "preview" ||
+		reloaded.UpdateTag != "v9.9.9" ||
+		reloaded.UpdateDispatchMode != "agent_ws" ||
+		reloaded.UpdateDispatchMessage != "manager dispatched" ||
+		reloaded.UpdateDispatchedAt == nil ||
+		!reloaded.UpdateDispatchedAt.Equal(dispatchedAt) {
+		t.Fatalf("heartbeat should not overwrite manager update state, got %+v", reloaded)
+	}
+}
+
+func TestRecordDNSWorkerSnapshotPullDoesNotOverwriteManagerUpdateStateFromStaleModel(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+	staleWorker, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("GetDNSWorkerByID stale: %v", err)
+	}
+	dispatchedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	if err := model.DB.Model(&model.DNSWorker{}).Where("id = ?", worker.ID).Updates(map[string]any{
+		"update_requested":        true,
+		"update_channel":          "preview",
+		"update_tag":              "v9.9.9",
+		"update_dispatch_mode":    "worker_heartbeat",
+		"update_dispatch_message": "manager requested",
+		"update_dispatched_at":    dispatchedAt,
+	}).Error; err != nil {
+		t.Fatalf("simulate manager update: %v", err)
+	}
+
+	snapshot, err := GetAuthoritativeDNSSnapshot(staleWorker)
+	if err != nil {
+		t.Fatalf("GetAuthoritativeDNSSnapshot: %v", err)
+	}
+	reloaded, err := model.GetDNSWorkerByID(worker.ID)
+	if err != nil {
+		t.Fatalf("reload worker: %v", err)
+	}
+	if reloaded.LastSnapshotVersion != snapshot.SnapshotVersion || reloaded.LastSnapshotAt == nil {
+		t.Fatalf("expected snapshot pull metadata to update, got %+v", reloaded)
+	}
+	if !reloaded.UpdateRequested ||
+		reloaded.UpdateChannel != "preview" ||
+		reloaded.UpdateTag != "v9.9.9" ||
+		reloaded.UpdateDispatchMode != "worker_heartbeat" ||
+		reloaded.UpdateDispatchMessage != "manager requested" ||
+		reloaded.UpdateDispatchedAt == nil ||
+		!reloaded.UpdateDispatchedAt.Equal(dispatchedAt) {
+		t.Fatalf("snapshot pull should not overwrite manager update state, got %+v", reloaded)
+	}
+}
+
 func TestDNSWorkerHeartbeatRedactsReportedErrors(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -4522,6 +5195,64 @@ func TestPersistDNSQueryRollupsRejectsExcessHeartbeatRollups(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected rejected heartbeat to persist no rollups, got %d", count)
+	}
+}
+
+func TestDNSWorkerHeartbeatLimitsFilteredRollupBatch(t *testing.T) {
+	setupServiceTestDB(t)
+
+	worker, err := CreateAuthoritativeDNSWorker(DNSWorkerInput{Name: "ns1"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	zone, err := CreateAuthoritativeDNSZone(DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+	authenticated, err := AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	inputs := make([]DNSQueryRollupInput, defaultDNSMaxHeartbeatRollups+25)
+	windowStart := time.Now().UTC().Add(-time.Minute).Truncate(time.Minute)
+	for index := range inputs {
+		inputs[index] = DNSQueryRollupInput{
+			WindowStart:   windowStart.Add(-time.Duration(index) * time.Minute),
+			WindowMinutes: 1,
+			ZoneID:        zone.ID,
+			QName:         fmt.Sprintf("www-%04d.example.com", index),
+			QType:         "A",
+			RCode:         "NOERROR",
+			QueryCount:    1,
+		}
+	}
+
+	view, err := RecordDNSWorkerHeartbeat(authenticated, DNSWorkerHeartbeatInput{
+		Status:  dnsWorkerStatusOnline,
+		Rollups: inputs,
+	})
+	if err != nil {
+		t.Fatalf("RecordDNSWorkerHeartbeat: %v", err)
+	}
+	if view.Worker.LastRollupCount != defaultDNSMaxHeartbeatRollups {
+		t.Fatalf("expected rollup metadata to reflect limited batch, got %+v", view.Worker)
+	}
+	var count int64
+	if err := model.DB.Model(&model.DNSQueryRollup{}).Where("worker_id = ?", authenticated.WorkerID).Count(&count).Error; err != nil {
+		t.Fatalf("count rollups: %v", err)
+	}
+	if count != defaultDNSMaxHeartbeatRollups {
+		t.Fatalf("expected heartbeat to persist limited rollup batch, got %d", count)
+	}
+	var newest model.DNSQueryRollup
+	if err := model.DB.Where("worker_id = ?", authenticated.WorkerID).Order("q_name desc").First(&newest).Error; err != nil {
+		t.Fatalf("load newest rollup: %v", err)
+	}
+	if newest.QName != "www-4999.example.com" {
+		t.Fatalf("expected rollups beyond limit to be truncated, got last qname %q", newest.QName)
 	}
 }
 

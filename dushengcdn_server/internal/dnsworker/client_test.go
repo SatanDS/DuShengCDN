@@ -3,6 +3,7 @@ package dnsworker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,6 +42,28 @@ func TestAPIClientFetchSnapshotVerifiesSignature(t *testing.T) {
 	}
 	if got.SnapshotVersion != "snap-1" {
 		t.Fatalf("unexpected snapshot version %q", got.SnapshotVersion)
+	}
+}
+
+func TestAPIClientFetchSnapshotSinceUsesConditionalHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(SnapshotSignatureHeader) != SnapshotSignatureVersion {
+			t.Fatalf("expected signed snapshot request header, got %q", r.Header.Get(SnapshotSignatureHeader))
+		}
+		if got := r.Header.Get("If-None-Match"); got != `"snap-1"` {
+			t.Fatalf("expected If-None-Match header, got %q", got)
+		}
+		if got := r.Header.Get("X-DNS-Snapshot-Version"); got != "snap-1" {
+			t.Fatalf("expected snapshot version header, got %q", got)
+		}
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer server.Close()
+
+	client := NewAPIClient(server.URL, "worker-token", time.Second)
+	_, err := client.FetchSnapshotSince(context.Background(), "snap-1")
+	if !errors.Is(err, ErrSnapshotNotModified) {
+		t.Fatalf("expected ErrSnapshotNotModified, got %v", err)
 	}
 }
 

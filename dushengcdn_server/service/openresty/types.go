@@ -3,6 +3,7 @@ package openresty
 import (
 	"context"
 	"net"
+	"time"
 )
 
 const (
@@ -134,88 +135,30 @@ type Route struct {
 }
 
 type RouteRule struct {
-	ID                         uint
-	MatchType                  string
-	Path                       string
-	Priority                   int
-	Enabled                    bool
-	OriginURL                  string
-	OriginHost                 string
-	OriginHostHeader           string
-	OriginSNI                  string
-	OriginTLSVerify            *bool
-	OriginCABundle             string
-	OriginResolveMode          string
-	Upstreams                  []string
-	Limit                      RouteRuleLimit
-	LimitConnPerServer         *int
-	LimitConnPerIP             *int
-	LimitRate                  string
-	ProxyBuffering             RouteRuleProxyBuffering
-	ProxyBufferingMode         string
-	Cache                      RouteRuleCache
-	CacheEnabled               *bool
-	CachePolicy                string
-	CacheRules                 []string
-	CustomHeaders              []CustomHeader
-	PoW                        RouteRulePoW
-	PoWEnabled                 *bool
-	WAF                        RouteRuleWAF
-	WAFEnabled                 *bool
-	WAFMode                    string
-	CC                         RouteRuleCC
-	CCEnabled                  *bool
-	CCMode                     string
-	BasicAuth                  RouteRuleBasicAuth
-	BasicAuthEnabled           *bool
-	BasicAuthUsername          string
-	BasicAuthPasswordHash      string
-	Region                     RouteRuleRegion
-	RegionRestrictionEnabled   *bool
-	RegionRestrictionMode      string
-	RegionRestrictionCountries []string
-}
-
-type RouteRuleLimit struct {
-	LimitConnPerServer int
-	LimitConnPerIP     int
-	LimitRate          string
-}
-
-type RouteRuleProxyBuffering struct {
-	Mode string
-}
-
-type RouteRuleCache struct {
-	Enabled *bool
-	Policy  string
-	Rules   []string
-}
-
-type RouteRuleBasicAuth struct {
-	Enabled      *bool
-	Username     string
-	PasswordHash string
-}
-
-type RouteRuleWAF struct {
-	Enabled *bool
-	Mode    string
-}
-
-type RouteRuleCC struct {
-	Enabled *bool
-	Mode    string
-}
-
-type RouteRulePoW struct {
-	Enabled *bool
-}
-
-type RouteRuleRegion struct {
-	Enabled   *bool
-	Mode      string
-	Countries []string
+	ID                    uint
+	MatchType             string
+	Path                  string
+	Priority              int
+	Enabled               bool
+	OriginURL             string
+	OriginHost            string
+	OriginHostHeader      string
+	OriginSNI             string
+	OriginTLSVerify       *bool
+	OriginCABundle        string
+	OriginResolveMode     string
+	Upstreams             []string
+	LimitConnPerServer    *int
+	LimitConnPerIP        *int
+	LimitRate             string
+	ProxyBufferingMode    string
+	CacheEnabled          *bool
+	CachePolicy           string
+	CacheRules            []string
+	CustomHeaders         []CustomHeader
+	BasicAuthEnabled      *bool
+	BasicAuthUsername     string
+	BasicAuthPasswordHash string
 }
 
 type AccessRoute struct {
@@ -236,7 +179,9 @@ type AccessRoute struct {
 }
 
 type RenderOptions struct {
-	LookupIPAddr func(context.Context, string) ([]net.IPAddr, error)
+	LookupIPAddr      func(context.Context, string) ([]net.IPAddr, error)
+	LookupIPTimeout   time.Duration
+	ResolvedUpstreams map[string][]string
 }
 
 type routeCacheConfig struct {

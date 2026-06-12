@@ -1,8 +1,11 @@
 package state
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"dushengcdn-agent/internal/protocol"
 )
@@ -85,6 +88,114 @@ func TestObservabilityBufferStoreMergesAccessLogsWithinWindow(t *testing.T) {
 	}
 	if len(records) != 1 || len(records[0].AccessLogs) != 2 {
 		t.Fatalf("expected merged access logs, got %+v", records)
+	}
+}
+
+func TestObservabilityBufferStoreUpsertAndReplayableUsesCompactJSONAndClones(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "observability-buffer.json")
+	store := NewObservabilityBufferStore(path)
+
+	records, err := store.UpsertAndReplayable(ObservabilityBufferRecord{
+		WindowStartedAtUnix: 1710403200,
+		Snapshot:            &protocol.NodeMetricSnapshot{CapturedAtUnix: 1710403205, CPUUsagePercent: 25},
+		TrafficReport: &protocol.NodeTrafficReport{
+			WindowStartedAtUnix: 1710403200,
+			WindowEndedAtUnix:   1710403260,
+			RequestCount:        5,
+			StatusCodes:         map[string]int64{"200": 5},
+		},
+		QueuedAtUnix: 1710403205,
+	}, 1710403260, 1710403000)
+	if err != nil {
+		t.Fatalf("UpsertAndReplayable failed: %v", err)
+	}
+	if len(records) != 1 || records[0].TrafficReport == nil || records[0].TrafficReport.RequestCount != 5 {
+		t.Fatalf("expected previous window to be replayable, got %+v", records)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if strings.Contains(string(data), "\n") || strings.Contains(string(data), "  ") {
+		t.Fatalf("expected compact JSON, got %q", string(data))
+	}
+
+	records[0].TrafficReport.RequestCount = 99
+	records[0].TrafficReport.StatusCodes["200"] = 99
+	reloaded, err := store.Replayable(1710403260, 1710403000)
+	if err != nil {
+		t.Fatalf("Replayable failed: %v", err)
+	}
+	if len(reloaded) != 1 || reloaded[0].TrafficReport == nil || reloaded[0].TrafficReport.RequestCount != 5 || reloaded[0].TrafficReport.StatusCodes["200"] != 5 {
+		t.Fatalf("expected replayable records to be cloned from cache, got %+v", reloaded)
+	}
+}
+
+func TestObservabilityBufferStoreReplayableSkipsUnchangedRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "observability-buffer.json")
+	store := NewObservabilityBufferStore(path)
+	if err := store.Upsert(ObservabilityBufferRecord{
+		WindowStartedAtUnix: 1710403200,
+		Snapshot:            &protocol.NodeMetricSnapshot{CapturedAtUnix: 1710403205},
+		QueuedAtUnix:        1710403205,
+	}, 1710403000); err != nil {
+		t.Fatalf("Upsert failed: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	if _, err = store.Replayable(1710403260, 1710403000); err != nil {
+		t.Fatalf("Replayable failed: %v", err)
+	}
+	infoAfter, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("second Stat failed: %v", err)
+	}
+	if !info.ModTime().Equal(infoAfter.ModTime()) {
+		t.Fatal("expected replay without pruning changes to skip rewriting buffer file")
+	}
+}
+
+func TestObservabilityBufferStoreUpsertSkipsRewriteWhenConcurrentStoreAlreadyPersistedRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "observability-buffer.json")
+	firstStore := NewObservabilityBufferStore(path)
+	firstRecord := ObservabilityBufferRecord{
+		WindowStartedAtUnix: 1710403200,
+		Snapshot:            &protocol.NodeMetricSnapshot{CapturedAtUnix: 1710403205},
+		QueuedAtUnix:        1710403205,
+	}
+	if err := firstStore.Upsert(firstRecord, 1710403000); err != nil {
+		t.Fatalf("first Upsert failed: %v", err)
+	}
+	staleStore := NewObservabilityBufferStore(path)
+	if _, err := staleStore.Replayable(0, 1710403000); err != nil {
+		t.Fatalf("stale Replayable failed: %v", err)
+	}
+
+	secondRecord := ObservabilityBufferRecord{
+		WindowStartedAtUnix: 1710403260,
+		TrafficReport:       &protocol.NodeTrafficReport{WindowStartedAtUnix: 1710403260, WindowEndedAtUnix: 1710403320, RequestCount: 3},
+		QueuedAtUnix:        1710403265,
+	}
+	if err := firstStore.Upsert(secondRecord, 1710403000); err != nil {
+		t.Fatalf("second Upsert failed: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	if err = staleStore.Upsert(secondRecord, 1710403000); err != nil {
+		t.Fatalf("stale Upsert failed: %v", err)
+	}
+	infoAfter, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("second Stat failed: %v", err)
+	}
+	if !info.ModTime().Equal(infoAfter.ModTime()) {
+		t.Fatal("expected already-persisted buffer records to skip rewriting buffer file")
 	}
 }
 

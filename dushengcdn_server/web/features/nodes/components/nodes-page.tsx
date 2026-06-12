@@ -10,7 +10,10 @@ import { EmptyState } from '@/components/feedback/empty-state';
 import { ErrorState } from '@/components/feedback/error-state';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
-import { useToastFeedback } from '@/components/feedback/toast-provider';
+import {
+  type FeedbackState,
+  useToastFeedback,
+} from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { AppModal } from '@/components/ui/app-modal';
@@ -44,6 +47,7 @@ import {
   isMeaningfulTime,
   isWSConnectedLastSeen,
 } from '@/features/nodes/utils';
+import { getErrorMessage } from '@/lib/utils/errors';
 
 const nodesQueryKey = ['nodes'];
 const supportedRiskFilters = [
@@ -54,11 +58,6 @@ const supportedRiskFilters = [
 ] as const;
 
 type NodeRiskFilter = (typeof supportedRiskFilters)[number];
-
-type FeedbackState = {
-  tone: 'info' | 'success' | 'danger';
-  message: string;
-};
 
 type NodePoolSummary = {
   name: string;
@@ -77,10 +76,6 @@ type NodePoolSummary = {
   targetConfigPools: string[];
   hasUnavailableTargetConfig: boolean;
 };
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
 
 function normalizePoolName(value: string | null | undefined) {
   const normalized = value?.trim().toLowerCase();

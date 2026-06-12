@@ -7,13 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
 	Value string `json:"value"`
 }
+
+var refreshGeoIPProvider = geoip.InitGeoIP
 
 func AllOption() ([]*Option, error) {
 	var options []*Option
@@ -126,7 +128,7 @@ func InitOptionMap() {
 	common.OptionMapRWMutex.Unlock()
 	options, _ := AllOption()
 	for _, option := range options {
-		updateOptionMap(option.Key, option.Value)
+		applyOptionMapValue(option.Key, option.Value, false)
 	}
 }
 
@@ -141,22 +143,12 @@ func UpdateOptions(options []Option) error {
 	if len(options) == 0 {
 		return nil
 	}
+	options = compactOptionsByLastKey(options)
 
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		for _, item := range options {
-			option := Option{
-				Key: item.Key,
-			}
-			if err := tx.FirstOrCreate(&option, Option{Key: item.Key}).Error; err != nil {
-				return err
-			}
-			option.Value = item.Value
-			if err := tx.Save(&option).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+	if err := DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&options).Error; err != nil {
 		return err
 	}
 
@@ -166,7 +158,28 @@ func UpdateOptions(options []Option) error {
 	return nil
 }
 
+func compactOptionsByLastKey(options []Option) []Option {
+	if len(options) <= 1 {
+		return options
+	}
+	indexByKey := make(map[string]int, len(options))
+	result := make([]Option, 0, len(options))
+	for _, option := range options {
+		if index, ok := indexByKey[option.Key]; ok {
+			result[index] = option
+			continue
+		}
+		indexByKey[option.Key] = len(result)
+		result = append(result, option)
+	}
+	return result
+}
+
 func updateOptionMap(key string, value string) {
+	applyOptionMapValue(key, value, true)
+}
+
+func applyOptionMapValue(key string, value string, refreshRuntimeResources bool) {
 	shouldRefreshGeoIP := false
 	common.OptionMapRWMutex.Lock()
 	if common.OptionMap == nil {
@@ -260,8 +273,8 @@ func updateOptionMap(key string, value string) {
 		}
 	case "GeoIPProvider":
 		if geoip.IsValidProvider(value) {
+			shouldRefreshGeoIP = refreshRuntimeResources && normalizeGeoIPProviderOption(common.GeoIPProvider) != normalizeGeoIPProviderOption(value)
 			common.GeoIPProvider = value
-			shouldRefreshGeoIP = true
 		}
 	case "DatabaseAutoCleanupEnabled":
 		common.DatabaseAutoCleanupEnabled = value == "true"
@@ -492,6 +505,14 @@ func updateOptionMap(key string, value string) {
 	}
 	common.OptionMapRWMutex.Unlock()
 	if shouldRefreshGeoIP {
-		geoip.InitGeoIP()
+		refreshGeoIPProvider()
 	}
+}
+
+func normalizeGeoIPProviderOption(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return geoip.ProviderDisabled
+	}
+	return normalized
 }

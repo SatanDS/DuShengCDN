@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"sort"
@@ -35,15 +36,18 @@ type NodeAccessLogRegionCount struct {
 }
 
 type NodeAccessLogQuery struct {
-	NodeID     string
-	RemoteAddr string
-	Host       string
-	Path       string
-	Since      time.Time
-	Page       int
-	PageSize   int
-	SortBy     string
-	SortOrder  string
+	NodeID         string
+	RemoteAddr     string
+	Host           string
+	Path           string
+	Since          time.Time
+	Page           int
+	PageSize       int
+	Lookahead      int
+	SortBy         string
+	SortOrder      string
+	CursorLoggedAt time.Time
+	CursorID       uint
 }
 
 type NodeAccessLogBucketQuery struct {
@@ -54,6 +58,7 @@ type NodeAccessLogBucketQuery struct {
 	Since       time.Time
 	Page        int
 	PageSize    int
+	Lookahead   int
 	SortBy      string
 	SortOrder   string
 	FoldMinutes int
@@ -76,6 +81,7 @@ type NodeAccessLogIPSummaryQuery struct {
 	Since      time.Time
 	Page       int
 	PageSize   int
+	Lookahead  int
 	SortBy     string
 	SortOrder  string
 }
@@ -159,6 +165,11 @@ type nodeAccessLogTimeRange struct {
 	max time.Time
 }
 
+type nodeAccessLogPathFilter struct {
+	exact  string
+	prefix string
+}
+
 func (log *NodeAccessLog) BeforeCreate(tx *gorm.DB) error {
 	return assignObservabilityID(&log.ID)
 }
@@ -168,10 +179,17 @@ func ListNodeAccessLogs(query NodeAccessLogQuery) (logs []*NodeAccessLog, err er
 }
 
 func CountNodeAccessLogs(query NodeAccessLogQuery) (totalRecords int64, totalIPs int64, err error) {
+	if totalRecords, totalIPs, ok, err := countNodeAccessLogsFromRollups(query); ok || err != nil {
+		return totalRecords, totalIPs, err
+	}
 	totalRecords, totalIPs, err = countNodeAccessLogsSQL(query)
 	if err == nil {
 		return totalRecords, totalIPs, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return 0, 0, err
+	}
+	logNodeAccessLogSQLFallback("count access logs", err)
 	return countNodeAccessLogsInMemory(query)
 }
 
@@ -180,27 +198,27 @@ func countNodeAccessLogsSQL(query NodeAccessLogQuery) (totalRecords int64, total
 	if db == nil {
 		return 0, 0, fmt.Errorf("database handle is nil")
 	}
-	branches := make([]string, 0, observabilityShardCount)
-	args := make([]any, 0, observabilityShardCount*5)
-	for _, table := range observabilityShardTables("node_access_logs") {
-		branch := "SELECT remote_addr FROM " + quoteIdentifier(table)
-		whereClause, whereArgs := buildNodeAccessLogRawWhereClause(query)
-		if whereClause != "" {
-			branch += " WHERE " + whereClause
-			args = append(args, whereArgs...)
-		}
-		branches = append(branches, branch)
-	}
+	countBranches, countArgs := buildNodeAccessLogUnionBranches(query, "COUNT(*) AS total_records")
+	ipBranches, ipArgs := buildNodeAccessLogUnionBranchesWithSuffix(
+		query,
+		"remote_addr AS remote_addr",
+		"GROUP BY remote_addr",
+		"remote_addr <> ''",
+	)
 
 	var row struct {
 		TotalRecords int64
 		TotalIPs     int64
 	}
-	sql := "WITH access_log_rows AS (" +
-		strings.Join(branches, " UNION ALL ") +
-		") SELECT COUNT(*) AS total_records, " +
-		"COUNT(DISTINCT CASE WHEN TRIM(COALESCE(remote_addr, '')) <> '' THEN TRIM(remote_addr) ELSE NULL END) AS total_ips " +
-		"FROM access_log_rows"
+	sql := "WITH access_log_counts AS (" +
+		strings.Join(countBranches, " UNION ALL ") +
+		"), access_log_ips AS (" +
+		strings.Join(ipBranches, " UNION ALL ") +
+		"), grouped_access_log_ips AS (" +
+		"SELECT remote_addr FROM access_log_ips GROUP BY remote_addr" +
+		") SELECT COALESCE((SELECT SUM(total_records) FROM access_log_counts), 0) AS total_records, " +
+		"(SELECT COUNT(*) FROM grouped_access_log_ips) AS total_ips"
+	args := append(countArgs, ipArgs...)
 	if err := db.Raw(sql, args...).Scan(&row).Error; err != nil {
 		return 0, 0, fmt.Errorf("count access logs across shards failed: %w", err)
 	}
@@ -211,23 +229,19 @@ func countNodeAccessLogsInMemory(query NodeAccessLogQuery) (totalRecords int64, 
 	db := normalizeShardedDB(DB)
 	ips := make(map[string]struct{})
 	for _, table := range observabilityShardTables("node_access_logs") {
-		var shardCount int64
-		if err := applyNodeAccessLogFilters(db.Table(table), query).Count(&shardCount).Error; err != nil {
-			return 0, 0, err
+		var rows []struct {
+			RemoteAddr   string
+			RequestCount int64
 		}
-		totalRecords += shardCount
-	}
-
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var shardIPs []string
 		if err := applyNodeAccessLogFilters(db.Table(table), query).
-			Where("remote_addr <> ''").
-			Distinct("remote_addr").
-			Pluck("remote_addr", &shardIPs).Error; err != nil {
+			Select("remote_addr, COUNT(*) AS request_count").
+			Group("remote_addr").
+			Scan(&rows).Error; err != nil {
 			return 0, 0, err
 		}
-		for _, ip := range shardIPs {
-			if trimmed := strings.TrimSpace(ip); trimmed != "" {
+		for _, row := range rows {
+			totalRecords += row.RequestCount
+			if trimmed := strings.TrimSpace(row.RemoteAddr); trimmed != "" {
 				ips[trimmed] = struct{}{}
 			}
 		}
@@ -235,11 +249,17 @@ func countNodeAccessLogsInMemory(query NodeAccessLogQuery) (totalRecords int64, 
 	return totalRecords, int64(len(ips)), nil
 }
 
+const nodeAccessLogListColumns = "id, node_id, logged_at, remote_addr, region, operator, host, path, status_code, reason, cache_status, request_bytes, response_bytes, upstream_bytes, created_at"
+
 func ListNodeAccessLogRegionCounts(nodeID string, since time.Time, limit int) (items []*NodeAccessLogRegionCount, err error) {
 	items, err = listNodeAccessLogRegionCountsSQL(nodeID, since, limit)
 	if err == nil {
 		return items, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return nil, err
+	}
+	logNodeAccessLogSQLFallback("list access log region counts", err)
 	return listNodeAccessLogRegionCountsInMemory(nodeID, since, limit)
 }
 
@@ -317,16 +337,23 @@ func listNodeAccessLogRegionCountsInMemory(nodeID string, since time.Time, limit
 }
 
 func ListNodeAccessLogBuckets(query NodeAccessLogBucketQuery) (items []*NodeAccessLogBucketRow, err error) {
+	if items, ok, err := listNodeAccessLogBucketsFromRollups(query); ok || err != nil {
+		return items, err
+	}
 	items, err = listNodeAccessLogBucketsSQL(query)
 	if err == nil {
 		return items, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return nil, err
+	}
+	logNodeAccessLogSQLFallback("list access log buckets", err)
 
 	rows, err := buildNodeAccessLogBucketRows(query)
 	if err != nil {
 		return nil, err
 	}
-	start, end := paginateBounds(len(rows), query.Page, query.PageSize)
+	start, end := paginateBoundsWithLookahead(len(rows), query.Page, query.PageSize, query.Lookahead)
 	if start >= len(rows) {
 		return []*NodeAccessLogBucketRow{}, nil
 	}
@@ -334,16 +361,19 @@ func ListNodeAccessLogBuckets(query NodeAccessLogBucketQuery) (items []*NodeAcce
 }
 
 func CountNodeAccessLogBuckets(query NodeAccessLogBucketQuery) (total int64, err error) {
+	if total, ok, err := countNodeAccessLogBucketsFromRollups(query); ok || err != nil {
+		return total, err
+	}
 	total, err = countNodeAccessLogBucketsSQL(query)
 	if err == nil {
 		return total, nil
 	}
-
-	rows, err := buildNodeAccessLogBucketRows(query)
-	if err != nil {
+	if !shouldFallbackNodeAccessLogSQL(err) {
 		return 0, err
 	}
-	return int64(len(rows)), nil
+	logNodeAccessLogSQLFallback("count access log buckets", err)
+
+	return countNodeAccessLogBucketsInMemory(query)
 }
 
 func listNodeAccessLogBucketsSQL(query NodeAccessLogBucketQuery) ([]*NodeAccessLogBucketRow, error) {
@@ -352,30 +382,72 @@ func listNodeAccessLogBucketsSQL(query NodeAccessLogBucketQuery) ([]*NodeAccessL
 		return nil, fmt.Errorf("database handle is nil")
 	}
 
-	branches, args := buildNodeAccessLogBucketUnionBranches(query, "logged_at, remote_addr, host, status_code")
 	bucketExpr := accessLogBucketEpochExpr(query.FoldMinutes)
-	sql := "WITH access_log_rows AS (" +
-		strings.Join(branches, " UNION ALL ") +
-		"), bucket_rows AS (" +
-		"SELECT " + bucketExpr + " AS bucket_epoch, remote_addr, host, status_code FROM access_log_rows" +
-		"), grouped_bucket_rows AS (" +
+	countBranches, countArgs := buildNodeAccessLogBucketUnionBranchesWithSuffix(
+		query,
+		bucketExpr+" AS bucket_epoch, "+
+			"COUNT(*) AS request_count, "+
+			"SUM(CASE WHEN status_code < 400 THEN 1 ELSE 0 END) AS success_count, "+
+			"SUM(CASE WHEN status_code >= 400 AND status_code < 500 THEN 1 ELSE 0 END) AS client_error_count, "+
+			"SUM(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) AS server_error_count",
+		"GROUP BY "+bucketExpr,
+	)
+	ipBranches, ipArgs := buildNodeAccessLogBucketUnionBranchesWithSuffix(
+		query,
+		bucketExpr+" AS bucket_epoch, remote_addr",
+		"GROUP BY "+bucketExpr+", remote_addr",
+		"remote_addr <> ''",
+	)
+	hostBranches, hostArgs := buildNodeAccessLogBucketUnionBranchesWithSuffix(
+		query,
+		bucketExpr+" AS bucket_epoch, host",
+		"GROUP BY "+bucketExpr+", host",
+		"host <> ''",
+	)
+	sql := "WITH bucket_count_rows AS (" +
+		strings.Join(countBranches, " UNION ALL ") +
+		"), grouped_bucket_counts AS (" +
 		"SELECT bucket_epoch, " +
-		"COUNT(*) AS request_count, " +
-		"COUNT(DISTINCT CASE WHEN TRIM(COALESCE(remote_addr, '')) <> '' THEN TRIM(remote_addr) ELSE NULL END) AS unique_ip_count, " +
-		"COUNT(DISTINCT CASE WHEN TRIM(COALESCE(host, '')) <> '' THEN TRIM(host) ELSE NULL END) AS unique_host_count, " +
-		"SUM(CASE WHEN status_code < 400 THEN 1 ELSE 0 END) AS success_count, " +
-		"SUM(CASE WHEN status_code >= 400 AND status_code < 500 THEN 1 ELSE 0 END) AS client_error_count, " +
-		"SUM(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) AS server_error_count " +
-		"FROM bucket_rows GROUP BY bucket_epoch" +
+		"SUM(request_count) AS request_count, " +
+		"SUM(success_count) AS success_count, " +
+		"SUM(client_error_count) AS client_error_count, " +
+		"SUM(server_error_count) AS server_error_count " +
+		"FROM bucket_count_rows GROUP BY bucket_epoch" +
+		"), bucket_ip_rows AS (" +
+		strings.Join(ipBranches, " UNION ALL ") +
+		"), grouped_bucket_ip_rows AS (" +
+		"SELECT bucket_epoch, remote_addr FROM bucket_ip_rows GROUP BY bucket_epoch, remote_addr" +
+		"), bucket_host_rows AS (" +
+		strings.Join(hostBranches, " UNION ALL ") +
+		"), grouped_bucket_host_rows AS (" +
+		"SELECT bucket_epoch, host FROM bucket_host_rows GROUP BY bucket_epoch, host" +
+		"), bucket_ip_counts AS (" +
+		"SELECT bucket_epoch, COUNT(*) AS unique_ip_count FROM grouped_bucket_ip_rows GROUP BY bucket_epoch" +
+		"), bucket_host_counts AS (" +
+		"SELECT bucket_epoch, COUNT(*) AS unique_host_count FROM grouped_bucket_host_rows GROUP BY bucket_epoch" +
+		"), grouped_bucket_rows AS (" +
+		"SELECT grouped_bucket_counts.bucket_epoch, " +
+		"grouped_bucket_counts.request_count, " +
+		"COALESCE(bucket_ip_counts.unique_ip_count, 0) AS unique_ip_count, " +
+		"COALESCE(bucket_host_counts.unique_host_count, 0) AS unique_host_count, " +
+		"grouped_bucket_counts.success_count, " +
+		"grouped_bucket_counts.client_error_count, " +
+		"grouped_bucket_counts.server_error_count " +
+		"FROM grouped_bucket_counts " +
+		"LEFT JOIN bucket_ip_counts ON bucket_ip_counts.bucket_epoch = grouped_bucket_counts.bucket_epoch " +
+		"LEFT JOIN bucket_host_counts ON bucket_host_counts.bucket_epoch = grouped_bucket_counts.bucket_epoch" +
 		") SELECT bucket_epoch, request_count, unique_ip_count, unique_host_count, success_count, client_error_count, server_error_count " +
 		"FROM grouped_bucket_rows ORDER BY " + buildNodeAccessLogBucketSortClause(query.SortBy, query.SortOrder)
+	args := append(countArgs, ipArgs...)
+	args = append(args, hostArgs...)
 	if query.PageSize > 0 {
 		page := query.Page
 		if page < 0 {
 			page = 0
 		}
+		limit := query.PageSize + max(query.Lookahead, 0)
 		sql += " LIMIT ? OFFSET ?"
-		args = append(args, query.PageSize, page*query.PageSize)
+		args = append(args, limit, page*query.PageSize)
 	}
 
 	var rows []*NodeAccessLogBucketRow
@@ -391,23 +463,27 @@ func countNodeAccessLogBucketsSQL(query NodeAccessLogBucketQuery) (int64, error)
 		return 0, fmt.Errorf("database handle is nil")
 	}
 
-	branches, args := buildNodeAccessLogBucketUnionBranches(query, "logged_at")
 	bucketExpr := accessLogBucketEpochExpr(query.FoldMinutes)
+	branches, args := buildNodeAccessLogBucketUnionBranchesWithSuffix(
+		query,
+		bucketExpr+" AS bucket_epoch",
+		"GROUP BY "+bucketExpr,
+	)
 	var row struct {
 		Total int64
 	}
-	sql := "WITH access_log_rows AS (" +
+	sql := "WITH bucket_rows AS (" +
 		strings.Join(branches, " UNION ALL ") +
-		"), bucket_rows AS (" +
-		"SELECT " + bucketExpr + " AS bucket_epoch FROM access_log_rows" +
-		") SELECT COUNT(DISTINCT bucket_epoch) AS total FROM bucket_rows"
+		"), grouped_bucket_rows AS (" +
+		"SELECT bucket_epoch FROM bucket_rows GROUP BY bucket_epoch" +
+		") SELECT COUNT(*) AS total FROM grouped_bucket_rows"
 	if err := db.Raw(sql, args...).Scan(&row).Error; err != nil {
 		return 0, fmt.Errorf("count access log buckets across shards failed: %w", err)
 	}
 	return row.Total, nil
 }
 
-func buildNodeAccessLogBucketUnionBranches(query NodeAccessLogBucketQuery, columns string) ([]string, []any) {
+func countNodeAccessLogBucketsInMemory(query NodeAccessLogBucketQuery) (int64, error) {
 	modelQuery := NodeAccessLogQuery{
 		NodeID:     query.NodeID,
 		RemoteAddr: query.RemoteAddr,
@@ -415,10 +491,56 @@ func buildNodeAccessLogBucketUnionBranches(query NodeAccessLogBucketQuery, colum
 		Path:       query.Path,
 		Since:      query.Since,
 	}
-	return buildNodeAccessLogUnionBranches(modelQuery, columns)
+	db := normalizeShardedDB(DB)
+	bucketExpr := accessLogBucketEpochExpr(query.FoldMinutes)
+	buckets := make(map[int64]struct{})
+	for _, table := range observabilityShardTables("node_access_logs") {
+		var rows []struct {
+			BucketEpoch int64
+		}
+		if err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
+			Select(bucketExpr + " AS bucket_epoch").
+			Group("bucket_epoch").
+			Scan(&rows).Error; err != nil {
+			return 0, err
+		}
+		for _, row := range rows {
+			buckets[row.BucketEpoch] = struct{}{}
+		}
+	}
+	return int64(len(buckets)), nil
+}
+
+func buildNodeAccessLogBucketUnionBranches(query NodeAccessLogBucketQuery, columns string) ([]string, []any) {
+	return buildNodeAccessLogBucketUnionBranchesWithSuffix(query, columns, "")
+}
+
+func buildNodeAccessLogBucketUnionBranchesWithSuffix(
+	query NodeAccessLogBucketQuery,
+	columns string,
+	branchSuffix string,
+	extraWhereClauses ...string,
+) ([]string, []any) {
+	modelQuery := NodeAccessLogQuery{
+		NodeID:     query.NodeID,
+		RemoteAddr: query.RemoteAddr,
+		Host:       query.Host,
+		Path:       query.Path,
+		Since:      query.Since,
+	}
+	return buildNodeAccessLogUnionBranchesWithSuffix(modelQuery, columns, branchSuffix, extraWhereClauses...)
 }
 
 func buildNodeAccessLogUnionBranches(query NodeAccessLogQuery, columns string, extraWhereClauses ...string) ([]string, []any) {
+	return buildNodeAccessLogUnionBranchesWithSuffix(query, columns, "", extraWhereClauses...)
+}
+
+func buildNodeAccessLogUnionBranchesWithSuffix(
+	query NodeAccessLogQuery,
+	columns string,
+	branchSuffix string,
+	extraWhereClauses ...string,
+) ([]string, []any) {
 	branches := make([]string, 0, observabilityShardCount)
 	args := make([]any, 0, observabilityShardCount*5)
 	for _, table := range observabilityShardTables("node_access_logs") {
@@ -437,22 +559,35 @@ func buildNodeAccessLogUnionBranches(query NodeAccessLogQuery, columns string, e
 		if len(clauses) > 0 {
 			branch += " WHERE " + strings.Join(clauses, " AND ")
 		}
+		if trimmedSuffix := strings.TrimSpace(branchSuffix); trimmedSuffix != "" {
+			branch += " " + trimmedSuffix
+		}
 		branches = append(branches, branch)
 	}
 	return branches, args
 }
 
 func ListNodeAccessLogIPSummaries(query NodeAccessLogIPSummaryQuery, recentSince time.Time) (items []*NodeAccessLogIPSummaryRow, err error) {
+	if items, ok, err := listNodeAccessLogIPSummariesFromRollups(query, recentSince); ok || err != nil {
+		return items, err
+	}
 	items, err = listNodeAccessLogIPSummariesSQL(query, recentSince)
 	if err == nil {
+		if err := enrichNodeAccessLogIPSummaryRows(query, items); err != nil {
+			return nil, err
+		}
 		return items, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return nil, err
+	}
+	logNodeAccessLogSQLFallback("list access log ip summaries", err)
 
 	rows, err := buildNodeAccessLogIPSummaryRows(query, recentSince)
 	if err != nil {
 		return nil, err
 	}
-	start, end := paginateBounds(len(rows), query.Page, query.PageSize)
+	start, end := paginateBoundsWithLookahead(len(rows), query.Page, query.PageSize, query.Lookahead)
 	if start >= len(rows) {
 		return []*NodeAccessLogIPSummaryRow{}, nil
 	}
@@ -464,29 +599,21 @@ func ListNodeAccessLogIPSummaries(query NodeAccessLogIPSummaryQuery, recentSince
 }
 
 func CountNodeAccessLogIPSummaries(query NodeAccessLogIPSummaryQuery) (total int64, err error) {
+	if total, ok, err := countNodeAccessLogIPSummariesFromRollups(query); ok || err != nil {
+		return total, err
+	}
 	total, err = countNodeAccessLogIPSummariesSQL(query)
 	if err == nil {
 		return total, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return 0, err
+	}
+	logNodeAccessLogSQLFallback("count access log ip summaries", err)
 
 	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
-	db := normalizeShardedDB(DB)
-	ips := make(map[string]struct{})
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var shardIPs []string
-		if err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Where("remote_addr <> ''").
-			Distinct("remote_addr").
-			Pluck("remote_addr", &shardIPs).Error; err != nil {
-			return 0, err
-		}
-		for _, ip := range shardIPs {
-			if trimmed := strings.TrimSpace(ip); trimmed != "" {
-				ips[trimmed] = struct{}{}
-			}
-		}
-	}
-	return int64(len(ips)), nil
+	_, totalIPs, err := countNodeAccessLogsInMemory(modelQuery)
+	return totalIPs, err
 }
 
 func listNodeAccessLogIPSummariesSQL(query NodeAccessLogIPSummaryQuery, recentSince time.Time) ([]*NodeAccessLogIPSummaryRow, error) {
@@ -497,47 +624,48 @@ func listNodeAccessLogIPSummariesSQL(query NodeAccessLogIPSummaryQuery, recentSi
 	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
 	branches := make([]string, 0, observabilityShardCount)
 	args := make([]any, 0, observabilityShardCount*4+3)
+	recentRequestsExpr := "0"
+	if !recentSince.IsZero() {
+		recentRequestsExpr = "SUM(CASE WHEN logged_at >= ? THEN 1 ELSE 0 END)"
+	}
+	lastSeenExpr := accessLogEpochExpr("MAX(logged_at)")
 	for _, table := range observabilityShardTables("node_access_logs") {
-		branch := "SELECT remote_addr, region, operator, logged_at, id FROM " + quoteIdentifier(table)
+		branch := "SELECT remote_addr, " +
+			"COUNT(*) AS total_requests, " +
+			recentRequestsExpr + " AS recent_requests, " +
+			lastSeenExpr + " AS last_seen_epoch " +
+			"FROM " + quoteIdentifier(table)
 		whereClause, whereArgs := buildNodeAccessLogRawWhereClause(modelQuery)
 		if whereClause != "" {
 			branch += " WHERE " + whereClause + " AND remote_addr <> ''"
 		} else {
 			branch += " WHERE remote_addr <> ''"
 		}
+		branch += " GROUP BY remote_addr"
+		if !recentSince.IsZero() {
+			args = append(args, recentSince)
+		}
 		args = append(args, whereArgs...)
 		branches = append(branches, branch)
 	}
-
-	recentRequestsExpr := "0"
-	if !recentSince.IsZero() {
-		recentRequestsExpr = "SUM(CASE WHEN logged_at >= ? THEN 1 ELSE 0 END)"
-		args = append(args, recentSince)
-	}
-	lastSeenExpr := accessLogEpochExpr("MAX(logged_at)")
 	sql := "WITH access_log_ip_rows AS (" +
 		strings.Join(branches, " UNION ALL ") +
-		"), ranked_ip_rows AS (" +
-		"SELECT remote_addr, region, operator, logged_at, id, " +
-		"ROW_NUMBER() OVER (PARTITION BY TRIM(remote_addr) ORDER BY logged_at DESC, id DESC) AS row_rank " +
-		"FROM access_log_ip_rows WHERE TRIM(COALESCE(remote_addr, '')) <> ''" +
 		"), grouped_ip_rows AS (" +
-		"SELECT TRIM(remote_addr) AS remote_addr, " +
-		"MAX(CASE WHEN row_rank = 1 THEN TRIM(COALESCE(region, '')) ELSE '' END) AS region, " +
-		"MAX(CASE WHEN row_rank = 1 THEN TRIM(COALESCE(operator, '')) ELSE '' END) AS operator, " +
-		"COUNT(*) AS total_requests, " +
-		recentRequestsExpr + " AS recent_requests, " +
-		lastSeenExpr + " AS last_seen_epoch " +
-		"FROM ranked_ip_rows GROUP BY TRIM(remote_addr)" +
-		") SELECT remote_addr, region, operator, total_requests, recent_requests, last_seen_epoch FROM grouped_ip_rows ORDER BY " +
+		"SELECT remote_addr AS remote_addr, " +
+		"SUM(total_requests) AS total_requests, " +
+		"SUM(recent_requests) AS recent_requests, " +
+		"MAX(last_seen_epoch) AS last_seen_epoch " +
+		"FROM access_log_ip_rows WHERE remote_addr <> '' GROUP BY remote_addr" +
+		") SELECT remote_addr, '' AS region, '' AS operator, total_requests, recent_requests, last_seen_epoch FROM grouped_ip_rows ORDER BY " +
 		buildNodeAccessLogIPSummarySortClause(query.SortBy, query.SortOrder)
 	if query.PageSize > 0 {
 		page := query.Page
 		if page < 0 {
 			page = 0
 		}
+		limit := query.PageSize + max(query.Lookahead, 0)
 		sql += " LIMIT ? OFFSET ?"
-		args = append(args, query.PageSize, page*query.PageSize)
+		args = append(args, limit, page*query.PageSize)
 	}
 
 	var rows []*NodeAccessLogIPSummaryRow
@@ -553,27 +681,21 @@ func countNodeAccessLogIPSummariesSQL(query NodeAccessLogIPSummaryQuery) (int64,
 		return 0, fmt.Errorf("database handle is nil")
 	}
 	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
-	branches := make([]string, 0, observabilityShardCount)
-	args := make([]any, 0, observabilityShardCount*4)
-	for _, table := range observabilityShardTables("node_access_logs") {
-		branch := "SELECT remote_addr FROM " + quoteIdentifier(table)
-		whereClause, whereArgs := buildNodeAccessLogRawWhereClause(modelQuery)
-		if whereClause != "" {
-			branch += " WHERE " + whereClause + " AND remote_addr <> ''"
-		} else {
-			branch += " WHERE remote_addr <> ''"
-		}
-		args = append(args, whereArgs...)
-		branches = append(branches, branch)
-	}
+	branches, args := buildNodeAccessLogUnionBranchesWithSuffix(
+		modelQuery,
+		"remote_addr",
+		"GROUP BY remote_addr",
+		"remote_addr <> ''",
+	)
 
 	var row struct {
 		Total int64
 	}
 	sql := "WITH access_log_ip_rows AS (" +
 		strings.Join(branches, " UNION ALL ") +
-		") SELECT COUNT(DISTINCT TRIM(remote_addr)) AS total " +
-		"FROM access_log_ip_rows WHERE TRIM(COALESCE(remote_addr, '')) <> ''"
+		"), grouped_access_log_ips AS (" +
+		"SELECT remote_addr FROM access_log_ip_rows WHERE remote_addr <> '' GROUP BY remote_addr" +
+		") SELECT COUNT(*) AS total FROM grouped_access_log_ips"
 	if err := db.Raw(sql, args...).Scan(&row).Error; err != nil {
 		return 0, fmt.Errorf("count access log ip summaries across shards failed: %w", err)
 	}
@@ -581,11 +703,42 @@ func countNodeAccessLogIPSummariesSQL(query NodeAccessLogIPSummaryQuery) (int64,
 }
 
 func ListNodeAccessLogIPTrend(query NodeAccessLogIPTrendQuery) (items []*NodeAccessLogTrendPointRow, err error) {
+	if items, ok, err := listNodeAccessLogIPTrendFromRollups(query); ok || err != nil {
+		return items, err
+	}
 	items, err = listNodeAccessLogIPTrendSQL(query)
 	if err == nil {
 		return items, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return nil, err
+	}
+	logNodeAccessLogSQLFallback("list access log ip trend", err)
 	return listNodeAccessLogIPTrendInMemory(query)
+}
+
+func shouldFallbackNodeAccessLogSQL(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, pattern := range []string{
+		"syntax error",
+		"near \"(\"",
+		"window function",
+		"no such function",
+		"does not support",
+		"unsupported",
+	} {
+		if strings.Contains(message, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func logNodeAccessLogSQLFallback(operation string, err error) {
+	slog.Warn("access log sql query fallback", "operation", operation, "error", err)
 }
 
 func listNodeAccessLogIPTrendSQL(query NodeAccessLogIPTrendQuery) ([]*NodeAccessLogTrendPointRow, error) {
@@ -677,34 +830,59 @@ func listNodeAccessLogIPTrendInMemory(query NodeAccessLogIPTrendQuery) (items []
 }
 
 func ListNodeAccessLogHostDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	if rows, ok, err := listNodeAccessLogDistributionRowsFromRollups(query, "host"); ok || err != nil {
+		return rows, err
+	}
 	return buildNodeAccessLogDistributionRows(query, "host", "host <> ''")
 }
 
 func ListNodeAccessLogPathDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	if rows, ok, err := listNodeAccessLogDistributionRowsFromRollups(query, "path"); ok || err != nil {
+		return rows, err
+	}
 	return buildNodeAccessLogDistributionRows(query, "path", "path <> ''")
 }
 
 func ListNodeAccessLogURLDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	if rows, ok, err := listNodeAccessLogDistributionRowsFromRollups(query, "url_key"); ok || err != nil {
+		return rows, err
+	}
 	return buildNodeAccessLogDistributionRows(query, accessLogURLKeyExpr(), "(host <> '' OR path <> '')")
 }
 
 func ListNodeAccessLogIPDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	if rows, ok, err := listNodeAccessLogDistributionRowsFromRollups(query, "remote_addr"); ok || err != nil {
+		return rows, err
+	}
 	return buildNodeAccessLogDistributionRows(query, "remote_addr", "remote_addr <> ''")
 }
 
 func ListNodeAccessLogRegionDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	if rows, ok, err := listNodeAccessLogDistributionRowsFromRollups(query, "region"); ok || err != nil {
+		return rows, err
+	}
 	return buildNodeAccessLogDistributionRows(query, "region", "region <> ''")
 }
 
 func ListNodeAccessLogStatusDistributions(query NodeAccessLogDistributionQuery) ([]*NodeAccessLogDistributionRow, error) {
+	if rows, ok, err := listNodeAccessLogDistributionRowsFromRollups(query, "status_code"); ok || err != nil {
+		return rows, err
+	}
 	return buildNodeAccessLogDistributionRows(query, accessLogStatusCodeKeyExpr(), "status_code > 0")
 }
 
 func GetNodeAccessLogMeteringSummary(since time.Time) (*NodeAccessLogMeteringSummary, error) {
+	if summary, ok, err := getNodeAccessLogMeteringSummaryFromRollups(since); ok || err != nil {
+		return summary, err
+	}
 	summary, err := getNodeAccessLogMeteringSummarySQL(since)
 	if err == nil {
 		return summary, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return nil, err
+	}
+	logNodeAccessLogSQLFallback("get access log metering summary", err)
 	return getNodeAccessLogMeteringSummaryInMemory(since)
 }
 
@@ -778,21 +956,35 @@ func getNodeAccessLogMeteringSummaryInMemory(since time.Time) (*NodeAccessLogMet
 }
 
 func ListNodeAccessLogMeteringTrafficByHost(since time.Time, limit int) ([]*NodeAccessLogMeteringTrafficRow, error) {
+	if rows, ok, err := listNodeAccessLogMeteringTrafficRowsFromRollups(since, "host", limit); ok || err != nil {
+		return rows, err
+	}
 	return buildNodeAccessLogMeteringTrafficRows(NodeAccessLogQuery{Since: since}, "host", "host <> ''", limit)
 }
 
 func ListNodeAccessLogMeteringTrafficByNode(since time.Time, limit int) ([]*NodeAccessLogMeteringTrafficRow, error) {
+	if rows, ok, err := listNodeAccessLogMeteringTrafficRowsFromRollups(since, "node_id", limit); ok || err != nil {
+		return rows, err
+	}
 	return buildNodeAccessLogMeteringTrafficRows(NodeAccessLogQuery{Since: since}, "node_id", "node_id <> ''", limit)
 }
 
 func DeleteNodeAccessLogsBefore(before time.Time) (deleted int64, err error) {
-	return deleteAcrossShards(DB, "node_access_logs", &NodeAccessLog{}, func(tx *gorm.DB) *gorm.DB {
+	deleted, err = deleteAcrossShards(DB, "node_access_logs", &NodeAccessLog{}, func(tx *gorm.DB) *gorm.DB {
 		return tx.Where("logged_at < ?", before)
 	})
+	if err == nil && deleted > 0 {
+		err = RebuildNodeAccessLogRollups(DB)
+	}
+	return deleted, err
 }
 
 func DeleteAllNodeAccessLogs(db *gorm.DB) (deleted int64, err error) {
-	return deleteAcrossShards(db, "node_access_logs", &NodeAccessLog{}, nil)
+	deleted, err = deleteAcrossShards(db, "node_access_logs", &NodeAccessLog{}, nil)
+	if err == nil {
+		err = DeleteAllNodeAccessLogRollups(db)
+	}
+	return deleted, err
 }
 
 func NodeAccessLogExists(db *gorm.DB, record *NodeAccessLog) (bool, error) {
@@ -859,6 +1051,7 @@ func InsertNewNodeAccessLogs(db *gorm.DB, records []*NodeAccessLog) (inserted in
 		return 0, fmt.Errorf("database handle is nil")
 	}
 	grouped := make(map[string][]*NodeAccessLog, observabilityShardCount)
+	insertedRecords := make([]*NodeAccessLog, 0, len(uniqueRecords))
 	for _, record := range uniqueRecords {
 		if _, exists := existingKeys[nodeAccessLogDedupKeyFor(record)]; exists {
 			continue
@@ -874,10 +1067,14 @@ func InsertNewNodeAccessLogs(db *gorm.DB, records []*NodeAccessLog) (inserted in
 		if len(batch) == 0 {
 			continue
 		}
-		if err := rawDB.Table(table).CreateInBatches(batch, 500).Error; err != nil {
+		if err := rawDB.Session(&gorm.Session{SkipHooks: true}).Table(table).CreateInBatches(batch, 500).Error; err != nil {
 			return inserted, fmt.Errorf("insert access logs into %s failed: %w", table, err)
 		}
 		inserted += int64(len(batch))
+		insertedRecords = append(insertedRecords, batch...)
+	}
+	if err := upsertNodeAccessLogRollups(rawDB, insertedRecords); err != nil {
+		return inserted, err
 	}
 	return inserted, nil
 }
@@ -1008,9 +1205,13 @@ func combinedNodeTimeRange(rangesByNode map[string]nodeAccessLogTimeRange) nodeA
 }
 
 func DeleteNodeAccessLogsByNodeBefore(db *gorm.DB, nodeID string, before time.Time) (deleted int64, err error) {
-	return deleteAcrossShards(db, "node_access_logs", &NodeAccessLog{}, func(tx *gorm.DB) *gorm.DB {
+	deleted, err = deleteAcrossShards(db, "node_access_logs", &NodeAccessLog{}, func(tx *gorm.DB) *gorm.DB {
 		return tx.Where("node_id = ? AND logged_at < ?", nodeID, before)
 	})
+	if err == nil && deleted > 0 {
+		err = RebuildNodeAccessLogRollups(db)
+	}
+	return deleted, err
 }
 
 func buildNodeAccessLogQuery(db *gorm.DB, query NodeAccessLogQuery) *gorm.DB {
@@ -1025,19 +1226,23 @@ func buildNodeAccessLogQuery(db *gorm.DB, query NodeAccessLogQuery) *gorm.DB {
 
 func applyNodeAccessLogFilters(db *gorm.DB, query NodeAccessLogQuery) *gorm.DB {
 	if trimmed := strings.TrimSpace(query.NodeID); trimmed != "" {
-		db = db.Where("node_id LIKE ?", "%"+trimmed+"%")
+		db = db.Where("node_id = ?", trimmed)
 	}
 	if trimmed := strings.TrimSpace(query.RemoteAddr); trimmed != "" {
-		db = db.Where("remote_addr LIKE ?", "%"+trimmed+"%")
+		db = db.Where("remote_addr LIKE ?", trimmed+"%")
 	}
 	if patterns := nodeAccessLogHostFilterPatterns(query.Host); len(patterns) > 0 {
 		db = db.Where(nodeAccessLogHostWhereClause(), patterns...)
 	}
-	if trimmed := strings.TrimSpace(query.Path); trimmed != "" {
-		db = db.Where("path LIKE ?", "%"+trimmed+"%")
+	if filter := nodeAccessLogPathFilterFromRaw(query.Path); !filter.empty() {
+		clause, args := filter.whereClause()
+		db = db.Where(clause, args...)
 	}
 	if !query.Since.IsZero() {
 		db = db.Where("logged_at >= ?", query.Since)
+	}
+	if clause, args := nodeAccessLogCursorWhereClause(query); clause != "" {
+		db = db.Where(clause, args...)
 	}
 	return db
 }
@@ -1047,6 +1252,10 @@ func listNodeAccessLogsAcrossShards(query NodeAccessLogQuery) ([]*NodeAccessLog,
 	if err == nil {
 		return rows, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return nil, err
+	}
+	logNodeAccessLogSQLFallback("list access logs", err)
 	return listNodeAccessLogsAcrossShardsInMemory(query)
 }
 
@@ -1058,26 +1267,41 @@ func listNodeAccessLogsAcrossShardsSQL(query NodeAccessLogQuery) ([]*NodeAccessL
 
 	branches := make([]string, 0, observabilityShardCount)
 	args := make([]any, 0, observabilityShardCount*5+2)
-	for _, table := range observabilityShardTables("node_access_logs") {
-		branch := "SELECT * FROM " + quoteIdentifier(table)
+	sortClause := buildNodeAccessLogSortClause(query.SortBy, query.SortOrder)
+	pageSize := query.PageSize
+	page := query.Page
+	if page < 0 {
+		page = 0
+	}
+	offset := 0
+	outerLimit := 0
+	shardLimit := 0
+	if pageSize > 0 {
+		offset = page * pageSize
+		outerLimit = pageSize + max(query.Lookahead, 0)
+		shardLimit = offset + outerLimit
+	}
+	for index, table := range observabilityShardTables("node_access_logs") {
+		branch := "SELECT " + nodeAccessLogListColumns + " FROM " + quoteIdentifier(table)
 		whereClause, whereArgs := buildNodeAccessLogRawWhereClause(query)
 		if whereClause != "" {
 			branch += " WHERE " + whereClause
 			args = append(args, whereArgs...)
+		}
+		if shardLimit > 0 {
+			branch += " ORDER BY " + sortClause + " LIMIT ?"
+			args = append(args, shardLimit)
+			branch = "SELECT " + nodeAccessLogListColumns + " FROM (" + branch + ") AS access_log_shard_" + fmt.Sprint(index)
 		}
 		branches = append(branches, branch)
 	}
 
 	sql := "WITH access_log_rows AS (" +
 		strings.Join(branches, " UNION ALL ") +
-		") SELECT * FROM access_log_rows ORDER BY " + buildNodeAccessLogSortClause(query.SortBy, query.SortOrder)
-	if query.PageSize > 0 {
-		page := query.Page
-		if page < 0 {
-			page = 0
-		}
+		") SELECT " + nodeAccessLogListColumns + " FROM access_log_rows ORDER BY " + sortClause
+	if outerLimit > 0 {
 		sql += " LIMIT ? OFFSET ?"
-		args = append(args, query.PageSize, page*query.PageSize)
+		args = append(args, outerLimit, offset)
 	}
 
 	var rows []*NodeAccessLog
@@ -1091,30 +1315,52 @@ func buildNodeAccessLogRawWhereClause(query NodeAccessLogQuery) (string, []any) 
 	whereClauses := make([]string, 0, 5)
 	args := make([]any, 0, 5)
 	if trimmed := strings.TrimSpace(query.NodeID); trimmed != "" {
-		whereClauses = append(whereClauses, "node_id LIKE ?")
-		args = append(args, "%"+trimmed+"%")
+		whereClauses = append(whereClauses, "node_id = ?")
+		args = append(args, trimmed)
 	}
 	if trimmed := strings.TrimSpace(query.RemoteAddr); trimmed != "" {
 		whereClauses = append(whereClauses, "remote_addr LIKE ?")
-		args = append(args, "%"+trimmed+"%")
+		args = append(args, trimmed+"%")
 	}
 	if patterns := nodeAccessLogHostFilterPatterns(query.Host); len(patterns) > 0 {
 		whereClauses = append(whereClauses, nodeAccessLogHostWhereClause())
 		args = append(args, patterns...)
 	}
-	if trimmed := strings.TrimSpace(query.Path); trimmed != "" {
-		whereClauses = append(whereClauses, "path LIKE ?")
-		args = append(args, "%"+trimmed+"%")
+	if filter := nodeAccessLogPathFilterFromRaw(query.Path); !filter.empty() {
+		clause, clauseArgs := filter.whereClause()
+		whereClauses = append(whereClauses, clause)
+		args = append(args, clauseArgs...)
 	}
 	if !query.Since.IsZero() {
 		whereClauses = append(whereClauses, "logged_at >= ?")
 		args = append(args, query.Since)
 	}
+	if clause, clauseArgs := nodeAccessLogCursorWhereClause(query); clause != "" {
+		whereClauses = append(whereClauses, clause)
+		args = append(args, clauseArgs...)
+	}
 	return strings.Join(whereClauses, " AND "), args
 }
 
+func nodeAccessLogCursorWhereClause(query NodeAccessLogQuery) (string, []any) {
+	if !nodeAccessLogQueryUsesTimeCursor(query) {
+		return "", nil
+	}
+	if normalizeSortOrder(query.SortOrder) == "asc" {
+		return "(logged_at > ? OR (logged_at = ? AND id > ?))", []any{query.CursorLoggedAt, query.CursorLoggedAt, query.CursorID}
+	}
+	return "(logged_at < ? OR (logged_at = ? AND id < ?))", []any{query.CursorLoggedAt, query.CursorLoggedAt, query.CursorID}
+}
+
+func nodeAccessLogQueryUsesTimeCursor(query NodeAccessLogQuery) bool {
+	if query.CursorLoggedAt.IsZero() || query.CursorID == 0 {
+		return false
+	}
+	return strings.TrimSpace(query.SortBy) == "" || strings.TrimSpace(query.SortBy) == "logged_at"
+}
+
 func nodeAccessLogHostWhereClause() string {
-	return "(LOWER(TRIM(host)) = ? OR LOWER(TRIM(host)) LIKE ? OR LOWER(TRIM(host)) LIKE ?)"
+	return "(host = ? OR host LIKE ?)"
 }
 
 func nodeAccessLogHostFilterPatterns(raw string) []any {
@@ -1122,7 +1368,73 @@ func nodeAccessLogHostFilterPatterns(raw string) []any {
 	if host == "" {
 		return nil
 	}
-	return []any{host, "%." + host, "%" + host + "%"}
+	return []any{host, "%." + host}
+}
+
+func (filter nodeAccessLogPathFilter) empty() bool {
+	return filter.exact == "" && filter.prefix == ""
+}
+
+func (filter nodeAccessLogPathFilter) whereClause() (string, []any) {
+	switch {
+	case filter.exact != "" && filter.prefix != "":
+		return "(path = ? OR path LIKE ? ESCAPE '\\')", []any{filter.exact, escapeSQLLikePattern(filter.prefix) + "%"}
+	case filter.exact != "":
+		return "path = ?", []any{filter.exact}
+	case filter.prefix != "":
+		return "path LIKE ? ESCAPE '\\'", []any{escapeSQLLikePattern(filter.prefix) + "%"}
+	default:
+		return "", nil
+	}
+}
+
+func nodeAccessLogPathFilterFromRaw(raw string) nodeAccessLogPathFilter {
+	path := normalizeNodeAccessLogPathFilter(raw)
+	if path == "" {
+		return nodeAccessLogPathFilter{}
+	}
+	if path == "/" {
+		return nodeAccessLogPathFilter{exact: path}
+	}
+	return nodeAccessLogPathFilter{
+		exact:  path,
+		prefix: strings.TrimRight(path, "/") + "/",
+	}
+}
+
+func normalizeNodeAccessLogPathFilter(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(value); err == nil {
+		switch {
+		case parsed.Scheme != "" && parsed.Host != "":
+			parsed.RawQuery = ""
+			parsed.Fragment = ""
+			return strings.TrimSpace(parsed.String())
+		case parsed.Path != "":
+			value = parsed.Path
+		}
+	} else if strings.Contains(value, "://") {
+		return ""
+	}
+	if index := strings.IndexAny(value, "?#"); index >= 0 {
+		value = value[:index]
+	}
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsAny(value, " \t\r\n") {
+		return ""
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	return value
+}
+
+func escapeSQLLikePattern(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
 }
 
 func normalizeNodeAccessLogHostFilter(raw string) string {
@@ -1156,12 +1468,17 @@ func normalizeNodeAccessLogHostFilter(raw string) string {
 
 func listNodeAccessLogsAcrossShardsInMemory(query NodeAccessLogQuery) ([]*NodeAccessLog, error) {
 	pageSize := query.PageSize
-	if pageSize <= 0 {
-		pageSize = 0
-	}
-	shardLimit := (query.Page + 1) * pageSize
-	if shardLimit <= 0 {
-		shardLimit = pageSize
+	limit := 0
+	offset := 0
+	shardLimit := 0
+	if pageSize > 0 {
+		page := query.Page
+		if page < 0 {
+			page = 0
+		}
+		limit = pageSize + max(query.Lookahead, 0)
+		offset = page * pageSize
+		shardLimit = offset + limit
 	}
 	items, err := queryAcrossShards("node_access_logs", func(tx *gorm.DB) ([]*NodeAccessLog, error) {
 		var shardRows []*NodeAccessLog
@@ -1178,7 +1495,17 @@ func listNodeAccessLogsAcrossShardsInMemory(query NodeAccessLogQuery) ([]*NodeAc
 		return nil, err
 	}
 	sortNodeAccessLogs(items, query.SortBy, query.SortOrder)
-	start, end := paginateBounds(len(items), query.Page, query.PageSize)
+	if pageSize <= 0 {
+		return items, nil
+	}
+	start := offset
+	if start > len(items) {
+		start = len(items)
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
 	if start >= len(items) {
 		return []*NodeAccessLog{}, nil
 	}
@@ -1358,6 +1685,10 @@ func buildNodeAccessLogIPSummarySelectClause(recentSince time.Time, lastSeenExpr
 }
 
 func enrichNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, rows []*NodeAccessLogIPSummaryRow) error {
+	latestByRemoteAddr, err := latestNodeAccessLogsByRemoteAddr(query, rows)
+	if err != nil {
+		return err
+	}
 	for _, row := range rows {
 		if row == nil || row.LastSeenEpoch <= 0 {
 			continue
@@ -1366,10 +1697,7 @@ func enrichNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, rows []
 		if remoteAddr == "" {
 			continue
 		}
-		latest, err := latestNodeAccessLogByRemoteAddr(query, remoteAddr, row.LastSeenEpoch)
-		if err != nil {
-			return err
-		}
+		latest := latestByRemoteAddr[remoteAddr]
 		if latest == nil {
 			continue
 		}
@@ -1383,30 +1711,60 @@ func enrichNodeAccessLogIPSummaryRows(query NodeAccessLogIPSummaryQuery, rows []
 	return nil
 }
 
-func latestNodeAccessLogByRemoteAddr(query NodeAccessLogIPSummaryQuery, remoteAddr string, lastSeenEpoch int64) (*NodeAccessLog, error) {
-	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
-	db := normalizeShardedDB(DB)
-	var latest *NodeAccessLog
-	for _, table := range observabilityShardTables("node_access_logs") {
-		var item NodeAccessLog
-		err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
-			Where("remote_addr = ?", remoteAddr).
-			Where(accessLogEpochExpr("logged_at")+" = ?", lastSeenEpoch).
-			Order("logged_at desc, id desc").
-			Limit(1).
-			First(&item).Error
-		if err != nil {
-			if err == gorm.ErrRecordNotFound {
-				continue
-			}
-			return nil, err
+func latestNodeAccessLogsByRemoteAddr(query NodeAccessLogIPSummaryQuery, rows []*NodeAccessLogIPSummaryRow) (map[string]*NodeAccessLog, error) {
+	latestByRemoteAddr := make(map[string]*NodeAccessLog)
+	lastSeenEpochByRemoteAddr := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		if row == nil || row.LastSeenEpoch <= 0 {
+			continue
 		}
-		if latest == nil || item.LoggedAt.After(latest.LoggedAt) || (item.LoggedAt.Equal(latest.LoggedAt) && item.ID > latest.ID) {
-			copy := item
-			latest = &copy
+		remoteAddr := strings.TrimSpace(row.RemoteAddr)
+		if remoteAddr == "" {
+			continue
+		}
+		if row.LastSeenEpoch > lastSeenEpochByRemoteAddr[remoteAddr] {
+			lastSeenEpochByRemoteAddr[remoteAddr] = row.LastSeenEpoch
 		}
 	}
-	return latest, nil
+	if len(lastSeenEpochByRemoteAddr) == 0 {
+		return latestByRemoteAddr, nil
+	}
+	remoteAddrs := make([]string, 0, len(lastSeenEpochByRemoteAddr))
+	for remoteAddr := range lastSeenEpochByRemoteAddr {
+		remoteAddrs = append(remoteAddrs, remoteAddr)
+	}
+	sort.Strings(remoteAddrs)
+	modelQuery := nodeAccessLogQueryFromIPSummaryQuery(query)
+	db := normalizeShardedDB(DB)
+	for _, table := range observabilityShardTables("node_access_logs") {
+		var items []*NodeAccessLog
+		err := applyNodeAccessLogFilters(db.Table(table), modelQuery).
+			Where("remote_addr IN ?", remoteAddrs).
+			Order("logged_at desc, id desc").
+			Find(&items).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if item == nil {
+				continue
+			}
+			remoteAddr := strings.TrimSpace(item.RemoteAddr)
+			if remoteAddr == "" {
+				continue
+			}
+			lastSeenEpoch := lastSeenEpochByRemoteAddr[remoteAddr]
+			if lastSeenEpoch <= 0 || item.LoggedAt.Unix() > lastSeenEpoch {
+				continue
+			}
+			latest := latestByRemoteAddr[remoteAddr]
+			if latest == nil || item.LoggedAt.After(latest.LoggedAt) || (item.LoggedAt.Equal(latest.LoggedAt) && item.ID > latest.ID) {
+				copy := *item
+				latestByRemoteAddr[remoteAddr] = &copy
+			}
+		}
+	}
+	return latestByRemoteAddr, nil
 }
 
 func nodeAccessLogQueryFromIPSummaryQuery(query NodeAccessLogIPSummaryQuery) NodeAccessLogQuery {
@@ -1427,6 +1785,10 @@ func buildNodeAccessLogDistributionRows(
 	if err == nil {
 		return rows, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return nil, err
+	}
+	logNodeAccessLogSQLFallback("build access log distribution rows", err)
 	return buildNodeAccessLogDistributionRowsInMemory(query, keyExpr, nonEmptyClause)
 }
 
@@ -1527,6 +1889,10 @@ func buildNodeAccessLogMeteringTrafficRows(
 	if err == nil {
 		return rows, nil
 	}
+	if !shouldFallbackNodeAccessLogSQL(err) {
+		return nil, err
+	}
+	logNodeAccessLogSQLFallback("build access log metering traffic rows", err)
 	return buildNodeAccessLogMeteringTrafficRowsInMemory(query, keyExpr, nonEmptyClause, limit)
 }
 
@@ -1721,6 +2087,10 @@ func sortNodeAccessLogIPSummaryRows(items []*NodeAccessLogIPSummaryRow, sortBy s
 }
 
 func paginateBounds(total int, page int, pageSize int) (int, int) {
+	return paginateBoundsWithLookahead(total, page, pageSize, 0)
+}
+
+func paginateBoundsWithLookahead(total int, page int, pageSize int, lookahead int) (int, int) {
 	if page < 0 {
 		page = 0
 	}
@@ -1731,7 +2101,7 @@ func paginateBounds(total int, page int, pageSize int) (int, int) {
 	if start > total {
 		start = total
 	}
-	end := start + pageSize
+	end := start + pageSize + max(lookahead, 0)
 	if end > total {
 		end = total
 	}
@@ -1826,16 +2196,7 @@ func buildNodeAccessLogBucketSortClause(sortBy string, sortOrder string) string 
 }
 
 func accessLogBucketEpochExpr(bucketMinutes int) string {
-	bucketSeconds := bucketMinutes * 60
-	if bucketSeconds <= 0 {
-		bucketSeconds = 180
-	}
-	switch databaseDialectorName(DB) {
-	case "postgres":
-		return fmt.Sprintf("CAST(floor(extract(epoch from logged_at) / %d) * %d AS BIGINT)", bucketSeconds, bucketSeconds)
-	default:
-		return fmt.Sprintf("CAST((strftime('%%s', logged_at) / %d) * %d AS INTEGER)", bucketSeconds, bucketSeconds)
-	}
+	return accessLogBucketEpochExprForColumn("logged_at", bucketMinutes)
 }
 
 func accessLogEpochExpr(expression string) string {

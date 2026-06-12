@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,8 @@ type APIClient struct {
 	token   string
 	client  *http.Client
 }
+
+var ErrSnapshotNotModified = errors.New("snapshot not modified")
 
 type apiResponse[T any] struct {
 	Success bool   `json:"success"`
@@ -110,8 +113,13 @@ func NewAPIClient(baseURL string, token string, timeout time.Duration) *APIClien
 }
 
 func (c *APIClient) FetchSnapshot(ctx context.Context) (*Snapshot, error) {
+	return c.FetchSnapshotSince(ctx, "")
+}
+
+func (c *APIClient) FetchSnapshotSince(ctx context.Context, lastSnapshotVersion string) (*Snapshot, error) {
 	var response apiResponse[SignedSnapshot]
-	if err := c.doJSON(ctx, http.MethodGet, "/api/dns-snapshot", nil, &response); err != nil {
+	headers := snapshotConditionalHeaders(lastSnapshotVersion)
+	if err := c.doJSONWithHeaders(ctx, http.MethodGet, "/api/dns-snapshot", nil, &response, headers); err != nil {
 		return nil, err
 	}
 	if !response.Success {
@@ -135,6 +143,10 @@ func (c *APIClient) SendHeartbeat(ctx context.Context, input HeartbeatInput) (*H
 }
 
 func (c *APIClient) doJSON(ctx context.Context, method string, path string, body any, out any) error {
+	return c.doJSONWithHeaders(ctx, method, path, body, out, nil)
+}
+
+func (c *APIClient) doJSONWithHeaders(ctx context.Context, method string, path string, body any, out any, extraHeaders map[string]string) error {
 	if c == nil {
 		return fmt.Errorf("api client is nil")
 	}
@@ -158,6 +170,12 @@ func (c *APIClient) doJSON(ctx context.Context, method string, path string, body
 	if method == http.MethodGet && path == "/api/dns-snapshot" {
 		req.Header.Set(SnapshotSignatureHeader, SnapshotSignatureVersion)
 	}
+	for key, value := range extraHeaders {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			continue
+		}
+		req.Header.Set(key, value)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -174,6 +192,9 @@ func (c *APIClient) doJSON(ctx context.Context, method string, path string, body
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode == http.StatusNotModified {
+		return ErrSnapshotNotModified
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return c.formatHTTPError(path, resp.StatusCode, resp.Status, raw)
@@ -222,4 +243,15 @@ func extractAPIErrorMessage(raw []byte) string {
 		return strings.TrimSpace(string(raw))
 	}
 	return strings.TrimSpace(response.Message)
+}
+
+func snapshotConditionalHeaders(lastSnapshotVersion string) map[string]string {
+	version := strings.Trim(strings.TrimSpace(lastSnapshotVersion), `"`)
+	if version == "" {
+		return nil
+	}
+	return map[string]string{
+		"If-None-Match":          `"` + version + `"`,
+		"X-DNS-Snapshot-Version": version,
+	}
 }

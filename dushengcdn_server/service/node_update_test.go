@@ -75,13 +75,10 @@ func withFakeGeoIPProvider(t *testing.T, info *geoip.GeoInfo) {
 
 func withFakeAccessLogGeoProvider(t *testing.T, info *geoip.GeoInfo) {
 	t.Helper()
-	previous := accessLogGeoProviderFactory
-	accessLogGeoProviderFactory = func() (geoip.GeoIPService, error) {
+	restore := setAccessLogGeoProviderFactoryForTest(func() (geoip.GeoIPService, error) {
 		return &fakeAccessLogGeoProvider{info: info}, nil
-	}
-	t.Cleanup(func() {
-		accessLogGeoProviderFactory = previous
 	})
+	t.Cleanup(restore)
 }
 
 func geoipFloat(value float64) *float64 {
@@ -1096,7 +1093,7 @@ func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	}
 }
 
-func TestHeartbeatNodeKeepsMetricsWhenAccessLogPersistenceFails(t *testing.T) {
+func TestHeartbeatNodeReturnsErrorAndKeepsMetricsWhenAccessLogPersistenceFails(t *testing.T) {
 	setupServiceTestDB(t)
 
 	node := &model.Node{
@@ -1147,8 +1144,8 @@ func TestHeartbeatNodeKeepsMetricsWhenAccessLogPersistenceFails(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("expected heartbeat to succeed despite access log failure: %v", err)
+	if err == nil {
+		t.Fatal("expected heartbeat to return access log persistence error")
 	}
 
 	snapshots, err := model.ListNodeMetricSnapshots(node.NodeID, time.Time{}, 10)
@@ -1383,6 +1380,148 @@ func TestHeartbeatNodePersistsBufferedObservabilityPayload(t *testing.T) {
 	}
 	if len(accessLogs) != 1 {
 		t.Fatalf("expected replay dedupe to keep access log count stable, got %+v", accessLogs)
+	}
+}
+
+func TestCollectNodeAccessLogBatchesCombinesBufferedRecords(t *testing.T) {
+	reportedAt := time.Now().UTC()
+	current := []AgentNodeAccessLog{
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "203.0.113.10",
+			Host:         "current.example.com",
+			Path:         "/current",
+			StatusCode:   200,
+		},
+	}
+	buffered := []AgentBufferedObservabilityRecord{
+		{
+			AccessLogs: []AgentNodeAccessLog{
+				{
+					LoggedAtUnix: reportedAt.Add(-2 * time.Minute).Unix(),
+					RemoteAddr:   "203.0.113.11",
+					Host:         "buffered.example.com",
+					Path:         "/buffered-a",
+					StatusCode:   200,
+				},
+				{
+					LoggedAtUnix: reportedAt.Add(-time.Minute).Unix(),
+					RemoteAddr:   "203.0.113.12",
+					Host:         "buffered.example.com",
+					Path:         "/buffered-b",
+					StatusCode:   502,
+				},
+			},
+		},
+		{},
+		{
+			AccessLogs: []AgentNodeAccessLog{
+				{
+					LoggedAtUnix: reportedAt.Add(-30 * time.Second).Unix(),
+					RemoteAddr:   "203.0.113.13",
+					Host:         "buffered.example.com",
+					Path:         "/buffered-c",
+					StatusCode:   404,
+				},
+			},
+		},
+	}
+
+	batches := collectNodeAccessLogBatches(current, buffered)
+	if len(batches) != 3 {
+		t.Fatalf("expected current plus two non-empty buffered batches, got %+v", batches)
+	}
+	if batches[0].kind != nodeAccessLogBatchKindCurrent || batches[1].kind != nodeAccessLogBatchKindBuffered || batches[2].kind != nodeAccessLogBatchKindBuffered {
+		t.Fatalf("unexpected batch kinds: %+v", batches)
+	}
+	combined := flattenNodeAccessLogBatches(batches)
+	if len(combined) != 4 {
+		t.Fatalf("expected four combined access logs, got %+v", combined)
+	}
+	if combined[0].Path != "/current" || combined[1].Path != "/buffered-a" || combined[2].Path != "/buffered-b" || combined[3].Path != "/buffered-c" {
+		t.Fatalf("unexpected combined access log order: %+v", combined)
+	}
+
+	if empty := collectNodeAccessLogBatches(nil, []AgentBufferedObservabilityRecord{{}}); len(empty) != 0 {
+		t.Fatalf("expected empty access log batches, got %+v", empty)
+	}
+}
+
+func TestPersistAccessLogsBestEffortReturnsCombinedBatchError(t *testing.T) {
+	setupServiceTestDB(t)
+
+	forcedErr := fmt.Errorf("forced access log create failure")
+	failedOnce := false
+	const callbackName = "dushengcdn:test_access_log_combined_batch_failure"
+	createCallback := model.DB.Callback().Create()
+	if err := createCallback.Before("gorm:create").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil || failedOnce {
+			return
+		}
+		schemaTable := ""
+		if db.Statement.Schema != nil {
+			schemaTable = db.Statement.Schema.Table
+		}
+		if strings.HasPrefix(db.Statement.Table, "node_access_logs") || schemaTable == "node_access_logs" {
+			failedOnce = true
+			db.AddError(forcedErr)
+		}
+	}); err != nil {
+		t.Fatalf("register create callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = createCallback.Remove(callbackName)
+	})
+
+	reportedAt := time.Now().UTC()
+	current := []AgentNodeAccessLog{
+		{
+			LoggedAtUnix: reportedAt.Unix(),
+			RemoteAddr:   "203.0.113.31",
+			Host:         "batch-error.example.com",
+			Path:         "/current",
+			StatusCode:   200,
+		},
+	}
+	buffered := []AgentBufferedObservabilityRecord{
+		{
+			AccessLogs: []AgentNodeAccessLog{
+				{
+					LoggedAtUnix: reportedAt.Add(-time.Minute).Unix(),
+					RemoteAddr:   "203.0.113.32",
+					Host:         "batch-error.example.com",
+					Path:         "/buffered-a",
+					StatusCode:   200,
+				},
+			},
+		},
+		{
+			AccessLogs: []AgentNodeAccessLog{
+				{
+					LoggedAtUnix: reportedAt.Add(-2 * time.Minute).Unix(),
+					RemoteAddr:   "203.0.113.33",
+					Host:         "batch-error.example.com",
+					Path:         "/buffered-b",
+					StatusCode:   502,
+				},
+			},
+		},
+	}
+
+	err := persistAccessLogsBestEffort("node-access-log-batch-error", current, buffered, reportedAt)
+	if err == nil {
+		t.Fatal("expected combined access log persistence error")
+	}
+	if !strings.Contains(err.Error(), forcedErr.Error()) {
+		t.Fatalf("expected forced persistence error, got %v", err)
+	}
+
+	totalRecords, _, countErr := model.CountNodeAccessLogs(model.NodeAccessLogQuery{NodeID: "node-access-log-batch-error"})
+	if countErr != nil {
+		t.Fatalf("CountNodeAccessLogs failed: %v", countErr)
+	}
+	if totalRecords != 0 {
+		t.Fatalf("expected combined batch failure to leave access logs unpersisted, got %d", totalRecords)
 	}
 }
 

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"dushengcdn/common"
 	"dushengcdn/utils/security"
 	"errors"
@@ -20,9 +21,12 @@ import (
 var DB *gorm.DB
 
 type dbModel struct {
-	value     any
-	tableName string
-	hasIDPK   bool
+	value             any
+	tableName         string
+	columns           []string
+	primaryColumnName string
+	primaryFieldName  string
+	hasIDPK           bool
 }
 
 func registeredModels() []any {
@@ -62,6 +66,7 @@ func registeredModels() []any {
 		&NodeMetricSnapshot{},
 		&NodeRequestReport{},
 		&NodeAccessLog{},
+		&NodeAccessLogRollup{},
 		&NodeHealthEvent{},
 		&OriginHealthStatus{},
 		&TLSCertificate{},
@@ -91,10 +96,25 @@ func buildDBModels() ([]dbModel, error) {
 			return nil, err
 		}
 		hasIDPK := len(parsed.PrimaryFields) == 1 && parsed.PrimaryFields[0].DBName == "id"
+		primaryColumnName := ""
+		primaryFieldName := ""
+		if len(parsed.PrimaryFields) == 1 {
+			primaryColumnName = parsed.PrimaryFields[0].DBName
+			primaryFieldName = parsed.PrimaryFields[0].Name
+		}
+		columns := make([]string, 0, len(parsed.DBNames))
+		for _, column := range parsed.DBNames {
+			if strings.TrimSpace(column) != "" {
+				columns = append(columns, column)
+			}
+		}
 		result = append(result, dbModel{
-			value:     item,
-			tableName: parsed.Table,
-			hasIDPK:   hasIDPK,
+			value:             item,
+			tableName:         parsed.Table,
+			columns:           columns,
+			primaryColumnName: primaryColumnName,
+			primaryFieldName:  primaryFieldName,
+			hasIDPK:           hasIDPK,
 		})
 	}
 	return result, nil
@@ -131,14 +151,26 @@ func createRootAccountIfNeed() error {
 	if password == "" {
 		return fmt.Errorf("generate initial root password failed")
 	}
+	if generated {
+		if err := writeInitialRootPasswordFile(passwordFilePath, password); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("write initial root password file failed: %w", err)
+			}
+			filePassword, ok, readErr := readInitialRootPasswordFile(passwordFilePath)
+			if readErr != nil {
+				return fmt.Errorf("read existing initial root password file failed: %w", readErr)
+			}
+			if !ok {
+				return fmt.Errorf("initial root password file already exists but could not be read")
+			}
+			password = filePassword
+			generated = false
+			passwordFromFile = true
+		}
+	}
 	hashedPassword, err := security.Password2Hash(password)
 	if err != nil {
 		return err
-	}
-	if generated {
-		if err := writeInitialRootPasswordFile(passwordFilePath, password); err != nil {
-			return fmt.Errorf("write initial root password file failed: %w", err)
-		}
 	}
 	rootUser := User{
 		Username:    "root",
@@ -148,6 +180,10 @@ func createRootAccountIfNeed() error {
 		DisplayName: "Root User",
 	}
 	if err := DB.Create(&rootUser).Error; err != nil {
+		if isModelUniqueConstraintError(err) {
+			slog.Info("root user already exists; skipping bootstrap root creation", "username", "root")
+			return nil
+		}
 		if generated && passwordFilePath != "" {
 			_ = os.Remove(passwordFilePath)
 		}
@@ -272,6 +308,7 @@ func migrationSession(db *gorm.DB) *gorm.DB {
 
 func autoMigrateAll(db *gorm.DB) error {
 	db = migrationSession(db)
+	defer resetProxyRouteRuntimeSchemaCache(db)
 	models, err := buildDBModels()
 	if err != nil {
 		return err
@@ -292,34 +329,55 @@ func isDatabaseEmpty(db *gorm.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	tables, err := db.Migrator().GetTables()
+	if err != nil {
+		return false, err
+	}
+	tableSet := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		tableSet[strings.ToLower(strings.TrimSpace(table))] = struct{}{}
+	}
 	for _, item := range models {
 		if isShardedObservabilityTable(item.tableName) {
 			for _, table := range observabilityShardTables(item.tableName) {
-				if !db.Migrator().HasTable(table) {
+				if !tableExistsInSet(tableSet, table) {
 					continue
 				}
-				var count int64
-				if err := db.Table(table).Limit(1).Count(&count).Error; err != nil {
+				hasRows, err := tableHasRows(db, table)
+				if err != nil {
 					return false, err
 				}
-				if count > 0 {
+				if hasRows {
 					return false, nil
 				}
 			}
 			continue
 		}
-		if !db.Migrator().HasTable(item.value) {
+		if !tableExistsInSet(tableSet, item.tableName) {
 			continue
 		}
-		var count int64
-		if err := db.Model(item.value).Limit(1).Count(&count).Error; err != nil {
+		hasRows, err := tableHasRows(db, item.tableName)
+		if err != nil {
 			return false, err
 		}
-		if count > 0 {
+		if hasRows {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+func tableExistsInSet(tableSet map[string]struct{}, table string) bool {
+	_, ok := tableSet[strings.ToLower(strings.TrimSpace(table))]
+	return ok
+}
+
+func tableHasRows(db *gorm.DB, table string) (bool, error) {
+	var value int
+	if err := db.Table(table).Select("1").Limit(1).Scan(&value).Error; err != nil {
+		return false, err
+	}
+	return value == 1, nil
 }
 
 func sqliteSourceExists() bool {
@@ -369,12 +427,15 @@ func migrateSQLiteDataIfNeeded(target *gorm.DB, backend string) error {
 	slog.Info("starting sqlite to postgres database migration", "sqlite_path", common.SQLitePath)
 	err = target.Transaction(func(tx *gorm.DB) error {
 		for _, item := range models {
-			if err := migrateTableData(source, tx, item); err != nil {
+			migratedTables, err := migrateTableData(source, tx, item)
+			if err != nil {
 				return err
 			}
 			if item.hasIDPK {
-				if err := resetPostgresSequence(tx, item.tableName); err != nil {
-					return err
+				for _, table := range migratedTables {
+					if err := resetPostgresSequence(tx, table); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -387,62 +448,219 @@ func migrateSQLiteDataIfNeeded(target *gorm.DB, backend string) error {
 	return nil
 }
 
-func migrateTableData(source *gorm.DB, target *gorm.DB, item dbModel) error {
+func migrateTableData(source *gorm.DB, target *gorm.DB, item dbModel) ([]string, error) {
+	if isShardedObservabilityTable(item.tableName) {
+		if sourceHasObservabilityShardTables(source, item.tableName) || !source.Migrator().HasTable(item.value) {
+			return migrateShardedTableData(source, target, item)
+		}
+		migratedTableSet := make(map[string]struct{}, observabilityShardCount)
+		migrated, err := migrateTableDataFromSource(source.Model(item.value), target, item, item.tableName, item.tableName, func(rows reflect.Value) error {
+			for index := 0; index < rows.Len(); index++ {
+				row := rows.Index(index)
+				id, err := primaryIDValue(row)
+				if err != nil {
+					return err
+				}
+				migratedTableSet[observabilityShardTableForID(item.tableName, id)] = struct{}{}
+				if err := target.Create(row.Addr().Interface()).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if migrated {
+			return migratedShardTables(item.tableName, migratedTableSet), nil
+		}
+		return nil, nil
+	}
 	if !source.Migrator().HasTable(item.value) {
 		slog.Info("database migration progress", "table", item.tableName, "migrated", 0, "total", 0, "status", "skipped_missing_source_table")
+		return nil, nil
+	}
+	if _, err := migrateTableDataFromSource(source.Model(item.value), target.Table(item.tableName), item, item.tableName, item.tableName, nil); err != nil {
+		return nil, err
+	}
+	return []string{item.tableName}, nil
+}
+
+func sourceHasObservabilityShardTables(source *gorm.DB, baseTable string) bool {
+	if source == nil {
+		return false
+	}
+	for _, table := range observabilityShardTables(baseTable) {
+		if source.Migrator().HasTable(table) {
+			return true
+		}
+	}
+	return false
+}
+
+func migrateShardedTableData(source *gorm.DB, target *gorm.DB, item dbModel) ([]string, error) {
+	target = sessionIgnoringSharding(target)
+	migratedTables := make([]string, 0)
+	for _, table := range observabilityShardTables(item.tableName) {
+		if !source.Migrator().HasTable(table) {
+			slog.Info("database migration progress", "table", table, "migrated", 0, "total", 0, "status", "skipped_missing_source_table")
+			continue
+		}
+		migrated, err := migrateTableDataFromSource(source.Table(table), target.Table(table), item, table, table, nil)
+		if err != nil {
+			return nil, err
+		}
+		if migrated {
+			migratedTables = append(migratedTables, table)
+		}
+	}
+	if len(migratedTables) == 0 {
+		slog.Info("database migration progress", "table", item.tableName, "migrated", 0, "total", 0, "status", "skipped_missing_source_table")
+	}
+	return migratedTables, nil
+}
+
+func migratedShardTables(baseTable string, tableSet map[string]struct{}) []string {
+	if len(tableSet) == 0 {
 		return nil
 	}
+	tables := make([]string, 0, len(tableSet))
+	for _, table := range observabilityShardTables(baseTable) {
+		if _, ok := tableSet[table]; ok {
+			tables = append(tables, table)
+		}
+	}
+	return tables
+}
+
+func migrateTableDataFromSource(sourceQuery *gorm.DB, targetQuery *gorm.DB, item dbModel, sourceTable string, targetTable string, writeRows func(rows reflect.Value) error) (bool, error) {
 	var total int64
-	if err := source.Model(item.value).Count(&total).Error; err != nil {
-		return fmt.Errorf("count sqlite table %s failed: %w", item.tableName, err)
+	if err := sourceQuery.Count(&total).Error; err != nil {
+		return false, fmt.Errorf("count sqlite table %s failed: %w", sourceTable, err)
 	}
-	slog.Info("database migration progress", "table", item.tableName, "migrated", 0, "total", total, "status", "starting")
+	slog.Info("database migration progress", "table", sourceTable, "target_table", targetTable, "migrated", 0, "total", total, "status", "starting")
 	if total == 0 {
-		slog.Info("database migration progress", "table", item.tableName, "migrated", 0, "total", total, "status", "completed")
-		return nil
+		slog.Info("database migration progress", "table", sourceTable, "target_table", targetTable, "migrated", 0, "total", total, "status", "completed")
+		return false, nil
 	}
 
 	modelType := reflect.TypeOf(item.value).Elem()
 	sliceType := reflect.SliceOf(modelType)
 	migrated := int64(0)
-	offset := 0
+	var lastPrimaryKey any
+	hasLastPrimaryKey := false
 	const batchSize = 200
 
 	for {
 		batchPtr := reflect.New(sliceType)
-		query := source.Model(item.value).Limit(batchSize).Offset(offset)
-		if item.hasIDPK {
-			query = query.Order("id ASC")
+		query := sourceQuery.Limit(batchSize)
+		if item.primaryColumnName != "" && item.primaryFieldName != "" {
+			quotedPrimaryColumn := quoteIdentifier(item.primaryColumnName)
+			query = query.Order(quotedPrimaryColumn + " ASC")
+			if hasLastPrimaryKey {
+				query = query.Where(quotedPrimaryColumn+" > ?", lastPrimaryKey)
+			}
+		} else {
+			// This fallback is only for legacy tables without a single-column
+			// primary key. All registered runtime tables currently have one.
+			query = query.Offset(int(migrated))
 		}
 		if err := query.Find(batchPtr.Interface()).Error; err != nil {
-			return fmt.Errorf("read sqlite table %s failed: %w", item.tableName, err)
+			return false, fmt.Errorf("read sqlite table %s failed: %w", sourceTable, err)
 		}
 		batchLen := batchPtr.Elem().Len()
 		if batchLen == 0 {
 			break
 		}
-		if isShardedObservabilityTable(item.tableName) {
-			for index := 0; index < batchLen; index++ {
-				record := batchPtr.Elem().Index(index)
-				if err := target.Create(record.Addr().Interface()).Error; err != nil {
-					return fmt.Errorf("write target sharded table %s failed: %w", item.tableName, err)
-				}
+		batchRows := batchPtr.Elem()
+		if item.primaryColumnName != "" && item.primaryFieldName != "" {
+			value, err := primaryKeyCursorValue(batchRows.Index(batchLen-1), item.primaryFieldName)
+			if err != nil {
+				return false, fmt.Errorf("read primary key for sqlite table %s failed: %w", sourceTable, err)
+			}
+			lastPrimaryKey = value
+			hasLastPrimaryKey = true
+		}
+		if writeRows != nil {
+			if err := writeRows(batchRows); err != nil {
+				return false, fmt.Errorf("write target table %s failed: %w", targetTable, err)
 			}
 		} else {
-			if err := target.Create(batchPtr.Interface()).Error; err != nil {
-				return fmt.Errorf("write target table %s failed: %w", item.tableName, err)
+			if err := targetQuery.Create(batchPtr.Interface()).Error; err != nil {
+				return false, fmt.Errorf("write target table %s failed: %w", targetTable, err)
 			}
 		}
 		migrated += int64(batchLen)
-		offset += batchLen
-		slog.Info("database migration progress", "table", item.tableName, "migrated", migrated, "total", total, "status", "running")
+		slog.Info("database migration progress", "table", sourceTable, "target_table", targetTable, "migrated", migrated, "total", total, "status", "running")
 	}
 
-	slog.Info("database migration progress", "table", item.tableName, "migrated", migrated, "total", total, "status", "completed")
-	return nil
+	slog.Info("database migration progress", "table", sourceTable, "target_table", targetTable, "migrated", migrated, "total", total, "status", "completed")
+	return migrated > 0, nil
+}
+
+func primaryKeyCursorValue(record reflect.Value, fieldName string) (any, error) {
+	if record.Kind() == reflect.Pointer {
+		record = record.Elem()
+	}
+	if record.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("expected struct record, got %s", record.Kind())
+	}
+	field := record.FieldByName(fieldName)
+	if !field.IsValid() {
+		return nil, fmt.Errorf("primary key field %s is missing", fieldName)
+	}
+	if field.Kind() == reflect.Pointer {
+		if field.IsNil() {
+			return nil, fmt.Errorf("primary key field %s is nil", fieldName)
+		}
+		field = field.Elem()
+	}
+	if !field.CanInterface() {
+		return nil, fmt.Errorf("primary key field %s is not accessible", fieldName)
+	}
+	return field.Interface(), nil
+}
+
+func primaryIDValue(record reflect.Value) (uint, error) {
+	if record.Kind() == reflect.Pointer {
+		record = record.Elem()
+	}
+	if record.Kind() != reflect.Struct {
+		return 0, fmt.Errorf("expected struct record, got %s", record.Kind())
+	}
+	field := record.FieldByName("ID")
+	if !field.IsValid() {
+		field = record.FieldByName("Id")
+	}
+	if !field.IsValid() {
+		return 0, fmt.Errorf("id field is missing")
+	}
+	switch field.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		value := field.Int()
+		if value < 0 {
+			return 0, fmt.Errorf("id field is negative")
+		}
+		return uint(value), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return uint(field.Uint()), nil
+	default:
+		return 0, fmt.Errorf("id field has unsupported kind %s", field.Kind())
+	}
 }
 
 func resetPostgresSequence(db *gorm.DB, tableName string) error {
+	dialector := baseDialector(db)
+	if dialector == nil || dialector.Name() != "postgres" {
+		return nil
+	}
+	var sequence sql.NullString
+	if err := db.Raw(`SELECT pg_get_serial_sequence(?, 'id')`, tableName).Scan(&sequence).Error; err != nil {
+		return fmt.Errorf("lookup postgres sequence for %s failed: %w", tableName, err)
+	}
+	if !sequence.Valid || strings.TrimSpace(sequence.String) == "" {
+		return nil
+	}
 	sql := fmt.Sprintf(
 		"SELECT setval(pg_get_serial_sequence('%s', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM \"%s\"",
 		tableName,

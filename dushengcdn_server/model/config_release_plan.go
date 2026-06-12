@@ -89,6 +89,16 @@ func GetActiveConfigReleaseTargetForNodeID(nodeID string) (*ConfigReleasePlan, *
 	return plan, target, nil
 }
 
+func CountActiveConfigReleasePlans(excludeID uint) (int64, error) {
+	var count int64
+	query := DB.Model(&ConfigReleasePlan{}).Where("status IN ?", []string{"running", "observing"})
+	if excludeID != 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	err := query.Count(&count).Error
+	return count, err
+}
+
 func GetConfigReleaseBlockedChecksum(checksum string) (*ConfigReleaseBlockedChecksum, error) {
 	blocked := &ConfigReleaseBlockedChecksum{}
 	err := DB.Where("checksum = ?", strings.TrimSpace(checksum)).First(blocked).Error

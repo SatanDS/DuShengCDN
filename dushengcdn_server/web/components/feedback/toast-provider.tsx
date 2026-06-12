@@ -21,6 +21,11 @@ import { cn } from '@/lib/utils/cn';
 
 export type ToastTone = 'info' | 'success' | 'danger';
 
+export type FeedbackState = {
+  tone: ToastTone;
+  message: string;
+};
+
 export interface ToastInput {
   tone?: ToastTone;
   message: string;

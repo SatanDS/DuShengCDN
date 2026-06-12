@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,9 +16,12 @@ import (
 )
 
 type Scheduler struct {
-	mu     sync.Mutex
-	states map[string]debounceState
-	now    func() time.Time
+	mu                  sync.Mutex
+	states              map[string]debounceState
+	now                 func() time.Time
+	policyMu            sync.RWMutex
+	policyCacheSnapshot *Snapshot
+	policyCache         map[*SnapshotRoute]GSLBPolicy
 }
 
 type debounceState struct {
@@ -55,6 +59,17 @@ type sourceSpread struct {
 var ErrDNSProbeThresholdNotSatisfied = errors.New("Agent DNS Worker probe threshold is not satisfied")
 var ErrNoAvailableTarget = errors.New("no online public node IP is available")
 var ErrNoTargetSelected = errors.New("no target selected")
+
+var schedulerCIDRListCache sync.Map
+
+type cachedCIDRList struct {
+	items []cachedCIDR
+}
+
+type cachedCIDR struct {
+	text   string
+	prefix netip.Prefix
+}
 
 func NewScheduler() *Scheduler {
 	return &Scheduler{
@@ -170,6 +185,10 @@ func (s *Scheduler) LoadSnapshotStates(snapshot *Snapshot) {
 }
 
 func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType string, source SourceContext, fresh bool) ([]string, int, string, error) {
+	return s.SelectWithIndex(snapshot, snapshotIndex{}, route, recordType, source, fresh)
+}
+
+func (s *Scheduler) SelectWithIndex(snapshot *Snapshot, index snapshotIndex, route *SnapshotRoute, recordType string, source SourceContext, fresh bool) ([]string, int, string, error) {
 	if route == nil {
 		return nil, DefaultAuthoritativeTTL, "global", errors.New("route is nil")
 	}
@@ -180,7 +199,7 @@ func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType 
 	if !fresh {
 		return nil, normalizeAuthoritativeTTL(route.TTL), sourceScopeKey(source), errors.New("snapshot is stale")
 	}
-	policy := normalizePolicy(route.GSLBPolicy, *route)
+	var policy GSLBPolicy
 	if !route.GSLBEnabled {
 		targets := normalizeIPList(route.CurrentTargets, recordType)
 		if len(targets) > 0 {
@@ -195,6 +214,8 @@ func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType 
 			},
 			Debounce: normalizeDebounce(GSLBDebounce{}),
 		}
+	} else {
+		policy = s.routePolicy(snapshot, index, route)
 	}
 	baseScopeKey := sourceScopeKeyForPolicy(policy, source)
 	spread := sourceSpreadForPolicy(policy, route.ID, recordType, source, baseScopeKey)
@@ -216,6 +237,42 @@ func (s *Scheduler) Select(snapshot *Snapshot, route *SnapshotRoute, recordType 
 	}
 	selected := s.applyDebounce(route.ID, recordType, scopeKey, desired, candidates, policy)
 	return selected, normalizeAuthoritativeTTL(policy.TTL), scopeKey, nil
+}
+
+func (s *Scheduler) routePolicy(snapshot *Snapshot, index snapshotIndex, route *SnapshotRoute) GSLBPolicy {
+	if route == nil {
+		return GSLBPolicy{}
+	}
+	if route.ID != 0 && index.policiesByRouteID != nil {
+		if policy, ok := index.policiesByRouteID[route.ID]; ok {
+			return policy
+		}
+	}
+	if s == nil {
+		return normalizePolicy(route.GSLBPolicy, *route)
+	}
+	s.policyMu.RLock()
+	if s.policyCacheSnapshot == snapshot && s.policyCache != nil {
+		if policy, ok := s.policyCache[route]; ok {
+			s.policyMu.RUnlock()
+			return policy
+		}
+	}
+	s.policyMu.RUnlock()
+
+	policy := normalizePolicy(route.GSLBPolicy, *route)
+
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	if s.policyCacheSnapshot != snapshot {
+		s.policyCacheSnapshot = snapshot
+		s.policyCache = map[*SnapshotRoute]GSLBPolicy{}
+	}
+	if cached, ok := s.policyCache[route]; ok {
+		return cached
+	}
+	s.policyCache[route] = policy
+	return policy
 }
 
 func (s *Scheduler) applyDebounce(routeID uint, recordType string, scopeKey string, desired []string, candidates []targetCandidate, policy GSLBPolicy) []string {
@@ -485,7 +542,7 @@ func matchPriorityPoolsForSource(pools []GSLBPoolPolicy, source SourceContext) m
 			continue
 		}
 		all[name] = pool
-		if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+		if _, ok := sourceIPMatchesPoolCIDRList(source.IP, pool, false); ok {
 			cidrMatched[name] = pool
 			continue
 		}
@@ -541,7 +598,7 @@ func poolHasSourceConditions(pool GSLBPoolPolicy) bool {
 }
 
 func poolMatchesSource(pool GSLBPoolPolicy, source SourceContext) bool {
-	if _, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+	if _, ok := sourceIPMatchesPoolCIDRList(source.IP, pool, false); ok {
 		return true
 	}
 	if source.ASN > 0 {
@@ -571,7 +628,7 @@ func poolMatchesSource(pool GSLBPoolPolicy, source SourceContext) bool {
 }
 
 func poolExcludesSource(pool GSLBPoolPolicy, source SourceContext) bool {
-	if _, ok := sourceIPMatchesCIDRList(source.IP, pool.ExcludeSourceCIDRs); ok {
+	if _, ok := sourceIPMatchesPoolCIDRList(source.IP, pool, true); ok {
 		return true
 	}
 	if source.ASN > 0 {
@@ -605,7 +662,7 @@ func sourceScopeKeyForPolicy(policy GSLBPolicy, source SourceContext) string {
 		if !pool.Enabled || poolExcludesSource(pool, source) {
 			continue
 		}
-		if cidr, ok := sourceIPMatchesCIDRList(source.IP, pool.SourceCIDRs); ok {
+		if cidr, ok := sourceIPMatchesPoolCIDRList(source.IP, pool, false); ok {
 			return "cidr:" + cidr
 		}
 	}
@@ -669,27 +726,122 @@ func usesSourceWeightedSpread(policy GSLBPolicy) bool {
 }
 
 func sourceIPMatchesCIDRList(sourceIP string, cidrs []string) (string, bool) {
-	ip := net.ParseIP(strings.TrimSpace(sourceIP))
-	if ip == nil {
+	return sourceIPMatchesCompiledCIDRList(sourceIP, cachedSchedulerCIDRList(cidrs))
+}
+
+func sourceIPMatchesPoolCIDRList(sourceIP string, pool GSLBPoolPolicy, exclude bool) (string, bool) {
+	cidrs := pool.SourceCIDRs
+	compiled := pool.compiledSourceCIDRs
+	if exclude {
+		cidrs = pool.ExcludeSourceCIDRs
+		compiled = pool.compiledExcludeSourceCIDRs
+	}
+	if len(compiled.items) == 0 && len(cidrs) > 0 {
+		compiled = cachedSchedulerCIDRList(cidrs)
+	}
+	return sourceIPMatchesCompiledCIDRList(sourceIP, compiled)
+}
+
+func sourceIPMatchesCompiledCIDRList(sourceIP string, compiled cachedCIDRList) (string, bool) {
+	addr, ok := parseSchedulerSourceAddr(sourceIP)
+	if !ok {
 		return "", false
 	}
-	if ipv4 := ip.To4(); ipv4 != nil {
-		ip = ipv4
-	}
-	for _, value := range cidrs {
-		cidr, ok := normalizeCIDR(value)
-		if !ok {
-			continue
-		}
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		if network.Contains(ip) {
-			return cidr, true
+	for _, item := range compiled.items {
+		if item.prefix.IsValid() && item.prefix.Contains(addr) {
+			return item.text, true
 		}
 	}
 	return "", false
+}
+
+func cachedSchedulerCIDRList(cidrs []string) cachedCIDRList {
+	key := schedulerCIDRListKey(cidrs)
+	if key == "" {
+		return cachedCIDRList{}
+	}
+	if cached, ok := schedulerCIDRListCache.Load(key); ok {
+		if parsed, ok := cached.(cachedCIDRList); ok {
+			return parsed
+		}
+	}
+	parsed := compileSchedulerCIDRList(cidrs)
+	if len(parsed.items) == 0 {
+		return cachedCIDRList{}
+	}
+	actual, _ := schedulerCIDRListCache.LoadOrStore(key, parsed)
+	if cached, ok := actual.(cachedCIDRList); ok {
+		return cached
+	}
+	return parsed
+}
+
+func compileSchedulerCIDRList(cidrs []string) cachedCIDRList {
+	parsed := cachedCIDRList{items: make([]cachedCIDR, 0, len(cidrs))}
+	seen := map[string]struct{}{}
+	for _, value := range cidrs {
+		text, prefix, ok := parseSchedulerCIDR(value)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[text]; exists {
+			continue
+		}
+		seen[text] = struct{}{}
+		parsed.items = append(parsed.items, cachedCIDR{text: text, prefix: prefix})
+	}
+	return parsed
+}
+
+func schedulerCIDRListKey(cidrs []string) string {
+	if len(cidrs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		text := strings.TrimSpace(cidr)
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n")
+}
+
+func parseSchedulerSourceAddr(value string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(value))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
+func parseSchedulerCIDR(value string) (string, netip.Prefix, bool) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return "", netip.Prefix{}, false
+	}
+	if strings.Contains(text, "/") {
+		prefix, err := netip.ParsePrefix(text)
+		if err != nil {
+			return "", netip.Prefix{}, false
+		}
+		prefix = prefix.Masked()
+		return prefix.String(), prefix, true
+	}
+	addr, err := netip.ParseAddr(text)
+	if err != nil {
+		return "", netip.Prefix{}, false
+	}
+	addr = addr.Unmap()
+	bits := 128
+	if addr.Is4() {
+		bits = 32
+	}
+	prefix := netip.PrefixFrom(addr, bits)
+	return prefix.String(), prefix, true
 }
 
 func isNodeSchedulable(node SnapshotNode) bool {

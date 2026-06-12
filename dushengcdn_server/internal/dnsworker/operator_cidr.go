@@ -2,9 +2,10 @@ package dnsworker
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
-	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,8 +17,8 @@ type OperatorCIDRMatcher struct {
 }
 
 type operatorCIDRRange struct {
-	start    *big.Int
-	end      *big.Int
+	start    netip.Addr
+	end      netip.Addr
 	bits     int
 	operator string
 }
@@ -96,10 +97,10 @@ func LoadOperatorCIDRMatcher(path string) (*OperatorCIDRMatcher, error) {
 		if ranges[i].bits != ranges[j].bits {
 			return ranges[i].bits < ranges[j].bits
 		}
-		if cmp := ranges[i].start.Cmp(ranges[j].start); cmp != 0 {
+		if cmp := compareOperatorCIDRAddr(ranges[i].start, ranges[j].start); cmp != 0 {
 			return cmp < 0
 		}
-		if cmp := ranges[i].end.Cmp(ranges[j].end); cmp != 0 {
+		if cmp := compareOperatorCIDRAddr(ranges[i].end, ranges[j].end); cmp != 0 {
 			return cmp < 0
 		}
 		return ranges[i].operator < ranges[j].operator
@@ -166,22 +167,29 @@ func parseOperatorCIDR(value string, operator string) (operatorCIDRRange, error)
 			text = ip.String() + "/128"
 		}
 	}
-	ip, network, err := net.ParseCIDR(text)
-	if err != nil || network == nil {
+	var prefix netip.Prefix
+	var err error
+	if strings.Contains(text, "/") {
+		prefix, err = netip.ParsePrefix(text)
+	} else {
+		var addr netip.Addr
+		addr, err = netip.ParseAddr(text)
+		if err == nil {
+			addr = addr.Unmap()
+			bits := 128
+			if addr.Is4() {
+				bits = 32
+			}
+			prefix = netip.PrefixFrom(addr, bits)
+		}
+	}
+	if err != nil || !prefix.IsValid() {
 		return operatorCIDRRange{}, fmt.Errorf("invalid CIDR %q", value)
 	}
-	startIP := ip.Mask(network.Mask)
-	start, bits := ipToSortableInt(startIP)
-	if start == nil {
+	start, end, bits, ok := operatorCIDRPrefixRange(prefix)
+	if !ok {
 		return operatorCIDRRange{}, fmt.Errorf("invalid CIDR IP %q", value)
 	}
-	ones, maskBits := network.Mask.Size()
-	if ones < 0 || maskBits != bits {
-		return operatorCIDRRange{}, fmt.Errorf("invalid CIDR mask %q", value)
-	}
-	size := new(big.Int).Lsh(big.NewInt(1), uint(bits-ones))
-	end := new(big.Int).Add(start, size)
-	end.Sub(end, big.NewInt(1))
 	return operatorCIDRRange{
 		start:    start,
 		end:      end,
@@ -201,8 +209,8 @@ func (m *OperatorCIDRMatcher) Lookup(ip net.IP) string {
 	if m == nil || len(m.ranges) == 0 || ip == nil {
 		return ""
 	}
-	value, bits := ipToSortableInt(ip)
-	if value == nil {
+	value, bits, ok := operatorCIDRAddrFromIP(ip)
+	if !ok {
 		return ""
 	}
 	first := sort.Search(len(m.ranges), func(i int) bool {
@@ -215,14 +223,14 @@ func (m *OperatorCIDRMatcher) Lookup(ip net.IP) string {
 		return m.ranges[i].bits > bits
 	})
 	index := first + sort.Search(last-first, func(i int) bool {
-		return m.ranges[first+i].start.Cmp(value) > 0
+		return compareOperatorCIDRAddr(m.ranges[first+i].start, value) > 0
 	}) - 1
 	for index >= first {
 		item := m.ranges[index]
-		if item.start.Cmp(value) <= 0 && item.end.Cmp(value) >= 0 {
+		if compareOperatorCIDRAddr(item.start, value) <= 0 && compareOperatorCIDRAddr(item.end, value) >= 0 {
 			return item.operator
 		}
-		if item.end.Cmp(value) < 0 {
+		if compareOperatorCIDRAddr(item.end, value) < 0 {
 			break
 		}
 		index--
@@ -246,16 +254,73 @@ func operatorFromCIDRFilename(name string) string {
 	return ""
 }
 
-func ipToSortableInt(ip net.IP) (*big.Int, int) {
+func operatorCIDRAddrFromIP(ip net.IP) (netip.Addr, int, bool) {
 	if ip == nil {
-		return nil, 0
+		return netip.Addr{}, 0, false
 	}
 	if ipv4 := ip.To4(); ipv4 != nil {
-		return new(big.Int).SetBytes(ipv4), 32
+		var bytes [4]byte
+		copy(bytes[:], ipv4)
+		return netip.AddrFrom4(bytes), 32, true
 	}
 	ipv6 := ip.To16()
 	if ipv6 == nil {
-		return nil, 0
+		return netip.Addr{}, 0, false
 	}
-	return new(big.Int).SetBytes(ipv6), 128
+	var bytes [16]byte
+	copy(bytes[:], ipv6)
+	return netip.AddrFrom16(bytes), 128, true
+}
+
+func operatorCIDRPrefixRange(prefix netip.Prefix) (netip.Addr, netip.Addr, int, bool) {
+	if !prefix.IsValid() {
+		return netip.Addr{}, netip.Addr{}, 0, false
+	}
+	prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()).Masked()
+	if !prefix.IsValid() {
+		return netip.Addr{}, netip.Addr{}, 0, false
+	}
+	addr := prefix.Addr()
+	if addr.Is4() {
+		startBytes := addr.As4()
+		startValue := binary.BigEndian.Uint32(startBytes[:])
+		hostBits := 32 - prefix.Bits()
+		endValue := startValue
+		if hostBits >= 32 {
+			endValue = ^uint32(0)
+		} else if hostBits > 0 {
+			endValue |= uint32(1<<hostBits) - 1
+		}
+		var endBytes [4]byte
+		binary.BigEndian.PutUint32(endBytes[:], endValue)
+		return addr, netip.AddrFrom4(endBytes), 32, true
+	}
+	if !addr.Is6() {
+		return netip.Addr{}, netip.Addr{}, 0, false
+	}
+	endBytes := addr.As16()
+	ones := prefix.Bits()
+	if ones < 0 || ones > 128 {
+		return netip.Addr{}, netip.Addr{}, 0, false
+	}
+	fullBytes := ones / 8
+	remainingBits := ones % 8
+	if remainingBits > 0 && fullBytes < len(endBytes) {
+		endBytes[fullBytes] |= byte(0xff >> remainingBits)
+		fullBytes++
+	}
+	for i := fullBytes; i < len(endBytes); i++ {
+		endBytes[i] = 0xff
+	}
+	return addr, netip.AddrFrom16(endBytes), 128, true
+}
+
+func compareOperatorCIDRAddr(a netip.Addr, b netip.Addr) int {
+	if a == b {
+		return 0
+	}
+	if a.Less(b) {
+		return -1
+	}
+	return 1
 }

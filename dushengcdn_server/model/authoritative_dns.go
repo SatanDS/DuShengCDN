@@ -351,6 +351,61 @@ func (worker *DNSWorker) UpdateProbeResult() error {
 	return DB.Model(worker).Select("last_probe_at", "last_probe_query", "last_probe_result").Updates(worker).Error
 }
 
+func (worker *DNSWorker) UpdateHeartbeatWithDB(db *gorm.DB, includeUpdateState bool) error {
+	if db == nil {
+		db = DB
+	}
+	columns := []string{
+		"status",
+		"version",
+		"last_snapshot_version",
+		"last_snapshot_at",
+		"last_seen_at",
+		"last_heartbeat_at",
+		"last_remote_ip",
+		"last_rollup_at",
+		"last_rollup_count",
+		"last_error",
+		"geo_ip_enabled",
+		"geo_ip_database_path",
+		"asn_database_path",
+		"geo_ip_last_error",
+		"asn_last_error",
+		"geo_ip_database_type",
+		"asn_database_type",
+		"geo_ip_country_enabled",
+		"geo_ip_asn_enabled",
+		"geo_ip_operator_enabled",
+		"operator_cidr_database_path",
+		"operator_cidr_last_error",
+		"update_supported",
+		"last_update_supported_at",
+		"uninstall_supported",
+		"last_uninstall_supported_at",
+	}
+	if includeUpdateState {
+		columns = append(columns,
+			"update_requested",
+			"update_tag",
+			"update_dispatch_mode",
+			"update_dispatch_message",
+			"update_dispatched_at",
+		)
+	}
+	return db.Model(worker).Select(columns).Updates(worker).Error
+}
+
+func (worker *DNSWorker) UpdateSnapshotPullWithDB(db *gorm.DB) error {
+	if db == nil {
+		db = DB
+	}
+	return db.Model(worker).Select("status", "last_seen_at", "last_snapshot_at", "last_snapshot_version").Updates(worker).Error
+}
+
+func (worker *DNSWorker) UpdateSnapshotPull() error {
+	return worker.UpdateSnapshotPullWithDB(DB)
+}
+
 func (worker *DNSWorker) Delete() error {
 	return DB.Delete(worker).Error
 }

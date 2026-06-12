@@ -22,15 +22,12 @@ import {
   isWSConnectedLastSeen,
 } from '@/features/nodes/utils';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
+import { getErrorMessage } from '@/lib/utils/errors';
 import {
   formatBytes,
   formatBytesPerSecond,
   formatPercent,
 } from '@/lib/utils/metrics';
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
 
 function formatTrendHour(value: string) {
   const date = new Date(value);

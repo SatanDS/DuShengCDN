@@ -1855,7 +1855,7 @@ func TestPhase2CustomHeadersPreviewAndDiffLifecycle(t *testing.T) {
 		"origin_host": "preview-origin.internal",
 		"enabled":     true,
 		"custom_headers": []map[string]any{
-			{"key": "X-Trace-Id", "value": "$request_id"},
+			{"key": "X-Trace-Id", "value": "preview-request-id"},
 			{"key": "Authorization", "value": "Bearer preview-secret"},
 		},
 	})
@@ -1879,7 +1879,7 @@ func TestPhase2CustomHeadersPreviewAndDiffLifecycle(t *testing.T) {
 		"origin_host": "preview-upstream.internal",
 		"enabled":     true,
 		"custom_headers": []map[string]any{
-			{"key": "X-Trace-Id", "value": "$request_id"},
+			{"key": "X-Trace-Id", "value": "preview-request-id"},
 			{"key": "X-Release", "value": "candidate"},
 			{"key": "Authorization", "value": "[redacted sensitive header; preserved on save]"},
 		},
@@ -2175,6 +2175,53 @@ func TestDNSSnapshotRequiresSignedRequest(t *testing.T) {
 	decodeResponseData(t, resp, &envelope)
 	if envelope.SignatureVersion != dnsworker.SnapshotSignatureVersion || envelope.Signature == "" {
 		t.Fatalf("expected signed snapshot envelope, got %+v", envelope)
+	}
+}
+
+func TestDNSSnapshotHonorsLastSnapshotVersionShortCircuit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	worker, err := service.CreateAuthoritativeDNSWorker(service.DNSWorkerInput{Name: "ns-short-circuit"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSWorker: %v", err)
+	}
+	authenticated, err := service.AuthenticateDNSWorkerToken(worker.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateDNSWorkerToken: %v", err)
+	}
+	zone, err := service.CreateAuthoritativeDNSZone(service.DNSZoneInput{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("CreateAuthoritativeDNSZone: %v", err)
+	}
+	if _, err := service.UpdateAuthoritativeDNSZoneWorkerAssignments(zone.ID, service.DNSZoneWorkerAssignmentInput{WorkerIDs: []uint{worker.ID}}); err != nil {
+		t.Fatalf("UpdateAuthoritativeDNSZoneWorkerAssignments: %v", err)
+	}
+
+	signed, err := service.GetSignedAuthoritativeDNSSnapshot(authenticated, worker.Token)
+	if err != nil {
+		t.Fatalf("GetSignedAuthoritativeDNSSnapshot: %v", err)
+	}
+
+	engine := gin.New()
+	router.SetApiRouter(engine)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dns-snapshot", nil)
+	req.Header.Set("X-DNS-Worker-Token", worker.Token)
+	req.Header.Set(dnsworker.SnapshotSignatureHeader, dnsworker.SnapshotSignatureVersion)
+	req.Header.Set("If-None-Match", `"`+signed.Snapshot.SnapshotVersion+`"`)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNotModified {
+		t.Fatalf("expected conditional snapshot request to return 304, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("ETag"); got != `"`+signed.Snapshot.SnapshotVersion+`"` {
+		t.Fatalf("expected etag to echo snapshot version, got %q", got)
+	}
+	if got := recorder.Header().Get("X-DNS-Snapshot-Version"); got != signed.Snapshot.SnapshotVersion {
+		t.Fatalf("expected version header to echo snapshot version, got %q", got)
 	}
 }
 

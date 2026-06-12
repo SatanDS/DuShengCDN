@@ -24,6 +24,8 @@ const (
 	ProviderIPAPI    = "ip-api"
 	ProviderGeoJS    = "geojs"
 	ProviderIPInfo   = "ipinfo"
+
+	providerCacheNearMax = 4096
 )
 
 type GeoInfo struct {
@@ -53,8 +55,10 @@ type cachedGeoInfo struct {
 }
 
 type providerCache struct {
-	items    *ristretto.Cache[string, cachedGeoInfo]
-	duration time.Duration
+	items     *ristretto.Cache[string, cachedGeoInfo]
+	duration  time.Duration
+	nearMu    sync.RWMutex
+	nearItems map[string]cachedGeoInfo
 }
 
 func newProviderCache(duration time.Duration) *providerCache {
@@ -70,8 +74,9 @@ func newProviderCache(duration time.Duration) *providerCache {
 		}
 	}
 	return &providerCache{
-		items:    items,
-		duration: duration,
+		items:     items,
+		duration:  duration,
+		nearItems: make(map[string]cachedGeoInfo),
 	}
 }
 
@@ -79,14 +84,19 @@ func (c *providerCache) Get(key string) (*GeoInfo, bool) {
 	if c == nil || c.items == nil {
 		return nil, false
 	}
+	if entry, ok := c.getNear(key); ok {
+		return entry.info, true
+	}
 	entry, ok := c.items.Get(key)
 	if !ok {
 		return nil, false
 	}
 	if time.Now().After(entry.expiresAt) {
 		c.items.Del(key)
+		c.deleteNear(key)
 		return nil, false
 	}
+	c.setNear(key, entry)
 	return entry.info, true
 }
 
@@ -94,18 +104,57 @@ func (c *providerCache) Set(key string, info *GeoInfo) {
 	if c == nil || c.items == nil {
 		return
 	}
-	c.items.Set(key, cachedGeoInfo{
+	entry := cachedGeoInfo{
 		info:      info,
 		expiresAt: time.Now().Add(c.duration),
-	}, 1)
-	c.items.Wait()
+	}
+	c.setNear(key, entry)
+	c.items.Set(key, entry, 1)
 }
 
 func (c *providerCache) Flush() {
 	if c == nil || c.items == nil {
 		return
 	}
+	c.nearMu.Lock()
+	c.nearItems = make(map[string]cachedGeoInfo)
+	c.nearMu.Unlock()
 	c.items.Clear()
+}
+
+func (c *providerCache) getNear(key string) (cachedGeoInfo, bool) {
+	c.nearMu.RLock()
+	entry, ok := c.nearItems[key]
+	c.nearMu.RUnlock()
+	if !ok {
+		return cachedGeoInfo{}, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		c.deleteNear(key)
+		return cachedGeoInfo{}, false
+	}
+	return entry, true
+}
+
+func (c *providerCache) setNear(key string, entry cachedGeoInfo) {
+	c.nearMu.Lock()
+	if c.nearItems == nil {
+		c.nearItems = make(map[string]cachedGeoInfo)
+	}
+	if _, exists := c.nearItems[key]; !exists && len(c.nearItems) >= providerCacheNearMax {
+		for oldKey := range c.nearItems {
+			delete(c.nearItems, oldKey)
+			break
+		}
+	}
+	c.nearItems[key] = entry
+	c.nearMu.Unlock()
+}
+
+func (c *providerCache) deleteNear(key string) {
+	c.nearMu.Lock()
+	delete(c.nearItems, key)
+	c.nearMu.Unlock()
 }
 
 func GetRegionUnicodeEmoji(isoCode string) string {

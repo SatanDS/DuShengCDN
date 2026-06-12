@@ -246,6 +246,7 @@ func handleAgentWSStatus(c *gin.Context, node *model.Node, message service.Agent
 		slog.Debug("agent ws status handling failed", "node_id", node.NodeID, "error", err)
 		return
 	}
+	statusAckSent := service.SendAgentWSStatusAck(node.NodeID, payload)
 	settingsSent := service.SendAgentWSSettings(node.NodeID, response.AgentSettings)
 	activeConfigSent := false
 	if response.ActiveConfig != nil {
@@ -262,6 +263,7 @@ func handleAgentWSStatus(c *gin.Context, node *model.Node, message service.Agent
 		"node_id", node.NodeID,
 		"current_version", payload.CurrentVersion,
 		"openresty_status", payload.OpenrestyStatus,
+		"status_ack_sent", statusAckSent,
 		"settings_sent", settingsSent,
 		"active_config_sent", activeConfigSent,
 		"dns_worker_update_sent", dnsWorkerUpdateSent,
@@ -289,6 +291,28 @@ func GetNodes(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, nodes)
+}
+
+// GetNode godoc
+// @Summary Get node
+// @Tags Nodes
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Node ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/nodes/{id} [get]
+func GetNode(c *gin.Context) {
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
+		return
+	}
+	node, err := service.GetNodeView(id)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, node)
 }
 
 // GetApplyLogs godoc

@@ -258,6 +258,52 @@ func TestManagerApplyAndChecksumIncludeMainConfig(t *testing.T) {
 	}
 }
 
+func TestManagerCurrentChecksumCachesUntilApply(t *testing.T) {
+	tempDir := t.TempDir()
+	mainPath := filepath.Join(tempDir, "nginx.conf")
+	routePath := filepath.Join(tempDir, "conf.d", "dushengcdn_routes.conf")
+	manager := &Manager{
+		MainConfigPath:  mainPath,
+		RouteConfigPath: routePath,
+		Executor:        &fakeExecutor{},
+	}
+
+	firstOutcome := manager.Apply(context.Background(), "main-v1", "route-v1", nil)
+	if firstOutcome.Status != ApplyStatusSuccess {
+		t.Fatalf("Apply v1 failed: %#v", firstOutcome)
+	}
+	firstChecksum, err := manager.CurrentChecksum()
+	if err != nil {
+		t.Fatalf("CurrentChecksum v1 failed: %v", err)
+	}
+	if err := os.WriteFile(routePath, []byte("route-mutated-outside-manager"), 0o644); err != nil {
+		t.Fatalf("mutate route config: %v", err)
+	}
+	cachedChecksum, err := manager.CurrentChecksum()
+	if err != nil {
+		t.Fatalf("CurrentChecksum cached failed: %v", err)
+	}
+	if cachedChecksum != firstChecksum {
+		t.Fatalf("expected cached checksum %s, got %s", firstChecksum, cachedChecksum)
+	}
+
+	secondOutcome := manager.Apply(context.Background(), "main-v2", "route-v2", nil)
+	if secondOutcome.Status != ApplyStatusSuccess {
+		t.Fatalf("Apply v2 failed: %#v", secondOutcome)
+	}
+	secondChecksum, err := manager.CurrentChecksum()
+	if err != nil {
+		t.Fatalf("CurrentChecksum v2 failed: %v", err)
+	}
+	expectedSecond := bundleChecksum("main-v2", "route-v2", nil)
+	if secondChecksum != expectedSecond {
+		t.Fatalf("expected checksum after apply invalidation %s, got %s", expectedSecond, secondChecksum)
+	}
+	if secondChecksum == firstChecksum {
+		t.Fatal("expected checksum to change after apply invalidated cache")
+	}
+}
+
 func TestManagerApplyCreatesProxyCachePath(t *testing.T) {
 	tempDir := t.TempDir()
 	cachePath := filepath.Join(tempDir, "var", "cache", "openresty", "dushengcdn")

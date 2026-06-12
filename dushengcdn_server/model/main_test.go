@@ -144,6 +144,24 @@ func (legacyNodeAccessLogV16) TableName() string {
 	return "node_access_logs"
 }
 
+type schemaCacheTestModel struct {
+	ID   uint `gorm:"primaryKey"`
+	Name string
+}
+
+func (schemaCacheTestModel) TableName() string {
+	return "schema_cache_test_models"
+}
+
+type keysetMigrationTestModel struct {
+	Key   string `gorm:"primaryKey"`
+	Value string
+}
+
+func (keysetMigrationTestModel) TableName() string {
+	return "keyset_migration_test_models"
+}
+
 func openBareTestSQLiteDB(t *testing.T, name string) *gorm.DB {
 	t.Helper()
 
@@ -169,6 +187,62 @@ func openTestSQLiteDB(t *testing.T, name string) *gorm.DB {
 		t.Fatalf("auto migrate db: %v", err)
 	}
 	return db
+}
+
+func TestSchemaIntrospectionCacheReusesLookups(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "schema-introspection-cache.db")
+	cache := newSchemaIntrospectionCache(db)
+	if cache.HasTable(&schemaCacheTestModel{}, "schema_cache_test_models") {
+		t.Fatal("expected initial schema_cache_test_models lookup to be false")
+	}
+	if err := db.Exec("CREATE TABLE schema_cache_test_models (id integer primary key)").Error; err != nil {
+		t.Fatalf("create schema cache test table: %v", err)
+	}
+	if cache.HasTable(&schemaCacheTestModel{}, "schema_cache_test_models") {
+		t.Fatal("expected cached missing table lookup to remain false")
+	}
+
+	cache = newSchemaIntrospectionCache(db)
+	if !cache.HasTable(&schemaCacheTestModel{}, "schema_cache_test_models") {
+		t.Fatal("expected fresh cache to see schema_cache_test_models")
+	}
+	if cache.HasColumn(&schemaCacheTestModel{}, "schema_cache_test_models", "name") {
+		t.Fatal("expected initial schema_cache_test_models.name lookup to be false")
+	}
+	if err := db.Exec("ALTER TABLE schema_cache_test_models ADD COLUMN name text").Error; err != nil {
+		t.Fatalf("add schema cache test name column: %v", err)
+	}
+	if cache.HasColumn(&schemaCacheTestModel{}, "schema_cache_test_models", "name") {
+		t.Fatal("expected cached missing column lookup to remain false")
+	}
+	if !newSchemaIntrospectionCache(db).HasColumn(&schemaCacheTestModel{}, "schema_cache_test_models", "name") {
+		t.Fatal("expected fresh cache to see schema_cache_test_models.name")
+	}
+}
+
+func TestUpdateOptionsCompactsDuplicateKeys(t *testing.T) {
+	db := openTestSQLiteDB(t, "update-options-duplicate-keys.db")
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	if err := UpdateOptions([]Option{
+		{Key: "DuplicateOptionKey", Value: "first"},
+		{Key: "OtherOptionKey", Value: "other"},
+		{Key: "DuplicateOptionKey", Value: "last"},
+	}); err != nil {
+		t.Fatalf("UpdateOptions failed: %v", err)
+	}
+
+	var option Option
+	if err := DB.First(&option, "key = ?", "DuplicateOptionKey").Error; err != nil {
+		t.Fatalf("load duplicate option: %v", err)
+	}
+	if option.Value != "last" {
+		t.Fatalf("expected last duplicate value to win, got %q", option.Value)
+	}
 }
 
 func TestListProxyRoutesByIDsReturnsMatchingRoutes(t *testing.T) {
@@ -380,6 +454,61 @@ func TestListProxyRouteIdentityCandidatesReturnsRelevantRoutes(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("expected empty result for empty identity filters, got %+v", empty)
+	}
+}
+
+func TestListProxyRouteIdentityCandidatesUsesNormalizedDomains(t *testing.T) {
+	db := openTestSQLiteDB(t, "proxy-route-identity-normalized-candidates.db")
+	previousDB := DB
+	DB = db
+	resetProxyRouteRuntimeSchemaCache(db)
+	t.Cleanup(func() {
+		DB = previousDB
+		resetProxyRouteRuntimeSchemaCache(db)
+	})
+
+	routes := []*ProxyRoute{
+		{
+			SiteName:  "edge-a",
+			Domain:    "a.example.com",
+			Domains:   `["a.example.com"]`,
+			OriginURL: "https://origin-a.internal",
+			Upstreams: `["https://origin-a.internal"]`,
+			Enabled:   true,
+		},
+		{
+			SiteName:  "edge-b",
+			Domain:    "b.example.com",
+			Domains:   `["b.example.com","not-www.example.com"]`,
+			OriginURL: "https://origin-b.internal",
+			Upstreams: `["https://origin-b.internal"]`,
+			Enabled:   true,
+		},
+	}
+	for _, route := range routes {
+		if err := route.Insert(); err != nil {
+			t.Fatalf("insert proxy route: %v", err)
+		}
+	}
+	var site ProxySite
+	if err := db.Where("proxy_route_id = ?", routes[0].ID).First(&site).Error; err != nil {
+		t.Fatalf("query proxy site: %v", err)
+	}
+	if err := db.Create(&ProxySiteDomain{
+		ProxySiteID:  site.ID,
+		ProxyRouteID: routes[0].ID,
+		Domain:       "www.example.com",
+		SortOrder:    10,
+	}).Error; err != nil {
+		t.Fatalf("create normalized alias domain: %v", err)
+	}
+
+	matched, err := ListProxyRouteIdentityCandidates("", []string{"WWW.EXAMPLE.COM"})
+	if err != nil {
+		t.Fatalf("ListProxyRouteIdentityCandidates failed: %v", err)
+	}
+	if len(matched) != 1 || matched[0].ID != routes[0].ID {
+		t.Fatalf("expected normalized domain table alias to match only route A, got %+v", matched)
 	}
 }
 
@@ -770,6 +899,7 @@ func TestRegisteredModelTableNamesAreStable(t *testing.T) {
 		"files",
 		"gslb_scheduling_states",
 		"managed_domains",
+		"node_access_log_rollups",
 		"node_access_logs",
 		"node_health_events",
 		"node_metric_snapshots",
@@ -1049,6 +1179,27 @@ func TestNodeAccessLogAggregationsAcrossShards(t *testing.T) {
 	if filteredRecords != 2 || filteredIPs != 1 {
 		t.Fatalf("unexpected filtered access log counts: records=%d ips=%d", filteredRecords, filteredIPs)
 	}
+	ipPrefixRecords, ipPrefixCount, err := CountNodeAccessLogs(NodeAccessLogQuery{RemoteAddr: "203.0.113."})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs remote addr prefix failed: %v", err)
+	}
+	if ipPrefixRecords != 3 || ipPrefixCount != 2 {
+		t.Fatalf("expected remote addr prefix to match all fixture IPs, records=%d ips=%d", ipPrefixRecords, ipPrefixCount)
+	}
+	nodeExactRecords, _, err := CountNodeAccessLogs(NodeAccessLogQuery{NodeID: "node"})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs node exact failed: %v", err)
+	}
+	if nodeExactRecords != 0 {
+		t.Fatalf("expected node_id filter to require exact match, got %d", nodeExactRecords)
+	}
+	noisyHostRecords, _, err := CountNodeAccessLogs(NodeAccessLogQuery{Host: "example.co"})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs host noise failed: %v", err)
+	}
+	if noisyHostRecords != 0 {
+		t.Fatalf("expected host filter to avoid substring matches, got %d", noisyHostRecords)
+	}
 	regions, err := ListNodeAccessLogRegionCounts("", baseTime.Add(-time.Hour), 1)
 	if err != nil {
 		t.Fatalf("ListNodeAccessLogRegionCounts failed: %v", err)
@@ -1231,6 +1382,331 @@ func TestNodeAccessLogAggregationsAcrossShards(t *testing.T) {
 		nodeTraffic[1].RequestCount != 2 ||
 		nodeTraffic[1].ResponseBytes != 1500 {
 		t.Fatalf("unexpected node metering traffic: %+v", nodeTraffic)
+	}
+}
+
+func TestNodeAccessLogRollupsServeAggregationsWithoutRawShards(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "access-log-rollups.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	baseTime := time.Date(2026, 6, 4, 8, 12, 0, 0, time.UTC)
+	fixtures := []*NodeAccessLog{
+		{
+			NodeID:        "node-a",
+			LoggedAt:      baseTime.Add(-4 * time.Minute),
+			RemoteAddr:    "203.0.113.1",
+			Region:        "HK",
+			Operator:      "EdgeNet",
+			Host:          "app.example.com",
+			Path:          "/index",
+			StatusCode:    200,
+			CacheStatus:   "HIT",
+			RequestBytes:  100,
+			ResponseBytes: 1000,
+			UpstreamBytes: 0,
+		},
+		{
+			NodeID:        "node-b",
+			LoggedAt:      baseTime.Add(-3 * time.Minute),
+			RemoteAddr:    "203.0.113.1",
+			Region:        "HK",
+			Operator:      "EdgeNet",
+			Host:          "app.example.com",
+			Path:          "/asset.js",
+			StatusCode:    502,
+			CacheStatus:   "MISS",
+			RequestBytes:  200,
+			ResponseBytes: 2000,
+			UpstreamBytes: 1500,
+		},
+		{
+			NodeID:        "node-a",
+			LoggedAt:      baseTime.Add(-2 * time.Minute),
+			RemoteAddr:    "203.0.113.2",
+			Region:        "SG",
+			Operator:      "SeaNet",
+			Host:          "api.example.com",
+			Path:          "/v1",
+			StatusCode:    404,
+			CacheStatus:   "BYPASS",
+			RequestBytes:  300,
+			ResponseBytes: 500,
+			UpstreamBytes: 500,
+		},
+	}
+	inserted, err := InsertNewNodeAccessLogs(db, fixtures)
+	if err != nil {
+		t.Fatalf("InsertNewNodeAccessLogs failed: %v", err)
+	}
+	if inserted != int64(len(fixtures)) {
+		t.Fatalf("expected %d inserted logs, got %d", len(fixtures), inserted)
+	}
+
+	rawDB := sessionIgnoringSharding(db)
+	var rollupCount int64
+	if err := rawDB.Model(&NodeAccessLogRollup{}).Count(&rollupCount).Error; err != nil {
+		t.Fatalf("count rollups: %v", err)
+	}
+	if rollupCount == 0 {
+		t.Fatal("expected access log rollups to be maintained during bulk insert")
+	}
+	for _, table := range observabilityShardTables("node_access_logs") {
+		if err := rawDB.Exec("DROP TABLE IF EXISTS " + quoteIdentifier(table)).Error; err != nil {
+			t.Fatalf("drop raw shard %s: %v", table, err)
+		}
+	}
+
+	totalRecords, totalIPs, err := CountNodeAccessLogs(NodeAccessLogQuery{})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs from rollups failed: %v", err)
+	}
+	if totalRecords != 3 || totalIPs != 2 {
+		t.Fatalf("unexpected rollup counts: records=%d ips=%d", totalRecords, totalIPs)
+	}
+	pathRecords, pathIPs, err := CountNodeAccessLogs(NodeAccessLogQuery{Path: "index?utm=ignored"})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs path filter from rollups failed: %v", err)
+	}
+	if pathRecords != 1 || pathIPs != 1 {
+		t.Fatalf("unexpected rollup path counts: records=%d ips=%d", pathRecords, pathIPs)
+	}
+
+	buckets, err := ListNodeAccessLogBuckets(NodeAccessLogBucketQuery{
+		Since:       baseTime.Add(-time.Hour),
+		FoldMinutes: 5,
+		PageSize:    10,
+		SortBy:      "request_count",
+		SortOrder:   "desc",
+	})
+	if err != nil {
+		t.Fatalf("ListNodeAccessLogBuckets from rollups failed: %v", err)
+	}
+	if len(buckets) != 2 || buckets[0].RequestCount != 2 || buckets[0].UniqueIPCount != 1 {
+		t.Fatalf("unexpected rollup buckets: %+v", buckets)
+	}
+
+	ipSummaries, err := ListNodeAccessLogIPSummaries(NodeAccessLogIPSummaryQuery{
+		PageSize:  10,
+		SortBy:    "total_requests",
+		SortOrder: "desc",
+	}, baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ListNodeAccessLogIPSummaries from rollups failed: %v", err)
+	}
+	if len(ipSummaries) != 2 ||
+		ipSummaries[0].RemoteAddr != "203.0.113.1" ||
+		ipSummaries[0].TotalRequests != 2 ||
+		ipSummaries[0].RecentRequests != 2 ||
+		ipSummaries[0].Region != "HK" ||
+		ipSummaries[0].Operator != "EdgeNet" {
+		t.Fatalf("unexpected rollup ip summaries: first=%+v second=%+v", ipSummaries[0], ipSummaries[1])
+	}
+	ipSummaryTotal, err := CountNodeAccessLogIPSummaries(NodeAccessLogIPSummaryQuery{})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogIPSummaries from rollups failed: %v", err)
+	}
+	if ipSummaryTotal != 2 {
+		t.Fatalf("expected two rollup ip summaries, got %d", ipSummaryTotal)
+	}
+
+	trend, err := ListNodeAccessLogIPTrend(NodeAccessLogIPTrendQuery{
+		RemoteAddr:    "203.0.113.1",
+		Since:         baseTime.Add(-time.Hour),
+		BucketMinutes: 5,
+	})
+	if err != nil {
+		t.Fatalf("ListNodeAccessLogIPTrend from rollups failed: %v", err)
+	}
+	if len(trend) != 1 || trend[0].RequestCount != 2 {
+		t.Fatalf("unexpected rollup ip trend: %+v", trend)
+	}
+
+	domains, err := ListNodeAccessLogHostDistributions(NodeAccessLogDistributionQuery{Limit: 2})
+	if err != nil {
+		t.Fatalf("ListNodeAccessLogHostDistributions from rollups failed: %v", err)
+	}
+	if len(domains) == 0 || domains[0].Key != "app.example.com" || domains[0].Value != 2 {
+		t.Fatalf("unexpected rollup domain distributions: %+v", domains)
+	}
+	summary, err := GetNodeAccessLogMeteringSummary(baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("GetNodeAccessLogMeteringSummary from rollups failed: %v", err)
+	}
+	if summary.RequestCount != 3 ||
+		summary.RequestBytes != 600 ||
+		summary.ResponseBytes != 3500 ||
+		summary.UpstreamBytes != 2000 ||
+		summary.UpstreamBytesHitCount != 2 ||
+		summary.CacheClassifiedCount != 3 {
+		t.Fatalf("unexpected rollup metering summary: %+v", summary)
+	}
+	siteTraffic, err := ListNodeAccessLogMeteringTrafficByHost(baseTime.Add(-time.Hour), 2)
+	if err != nil {
+		t.Fatalf("ListNodeAccessLogMeteringTrafficByHost from rollups failed: %v", err)
+	}
+	if len(siteTraffic) == 0 ||
+		siteTraffic[0].Key != "app.example.com" ||
+		siteTraffic[0].RequestCount != 2 ||
+		siteTraffic[0].ResponseBytes != 3000 {
+		t.Fatalf("unexpected rollup site traffic: %+v", siteTraffic)
+	}
+}
+
+func TestDeleteNodeAccessLogsRefreshesRollups(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "access-log-rollup-delete.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	baseTime := time.Date(2026, 6, 4, 8, 12, 0, 0, time.UTC)
+	inserted, err := InsertNewNodeAccessLogs(db, []*NodeAccessLog{
+		{
+			NodeID:        "node-a",
+			LoggedAt:      baseTime.Add(-2 * time.Minute),
+			RemoteAddr:    "203.0.113.1",
+			Host:          "app.example.com",
+			Path:          "/index",
+			StatusCode:    200,
+			CacheStatus:   "HIT",
+			ResponseBytes: 1000,
+		},
+		{
+			NodeID:        "node-b",
+			LoggedAt:      baseTime.Add(-time.Minute),
+			RemoteAddr:    "203.0.113.2",
+			Host:          "api.example.com",
+			Path:          "/v1",
+			StatusCode:    200,
+			CacheStatus:   "MISS",
+			ResponseBytes: 500,
+		},
+	})
+	if err != nil {
+		t.Fatalf("InsertNewNodeAccessLogs failed: %v", err)
+	}
+	if inserted != 2 {
+		t.Fatalf("expected two inserted logs, got %d", inserted)
+	}
+	deleted, err := DeleteNodeAccessLogsByNodeBefore(db, "node-a", baseTime)
+	if err != nil {
+		t.Fatalf("DeleteNodeAccessLogsByNodeBefore failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected one deleted node-a log, got %d", deleted)
+	}
+
+	rawDB := sessionIgnoringSharding(db)
+	var nodeARollups int64
+	if err := rawDB.Model(&NodeAccessLogRollup{}).Where("node_id = ?", "node-a").Count(&nodeARollups).Error; err != nil {
+		t.Fatalf("count node-a rollups: %v", err)
+	}
+	if nodeARollups != 0 {
+		t.Fatalf("expected node-a rollups to be rebuilt away, got %d", nodeARollups)
+	}
+	totalRecords, totalIPs, err := CountNodeAccessLogs(NodeAccessLogQuery{})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs after delete failed: %v", err)
+	}
+	if totalRecords != 1 || totalIPs != 1 {
+		t.Fatalf("unexpected counts after rollup rebuild: records=%d ips=%d", totalRecords, totalIPs)
+	}
+}
+
+func TestNodeAccessLogPathFilterUsesNormalizedExactOrPrefix(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "access-log-path-filter.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	rawDB := sessionIgnoringSharding(db)
+	baseTime := time.Date(2026, 6, 4, 8, 12, 0, 0, time.UTC)
+	fixtures := []NodeAccessLog{
+		{
+			ID:         120,
+			NodeID:     "node-path",
+			LoggedAt:   baseTime,
+			RemoteAddr: "203.0.113.10",
+			Host:       "app.example.com",
+			Path:       "/api/v1/users",
+			StatusCode: 200,
+		},
+		{
+			ID:         121,
+			NodeID:     "node-path",
+			LoggedAt:   baseTime.Add(time.Second),
+			RemoteAddr: "203.0.113.11",
+			Host:       "app.example.com",
+			Path:       "/static/api-logo.png",
+			StatusCode: 200,
+		},
+		{
+			ID:         122,
+			NodeID:     "node-path",
+			LoggedAt:   baseTime.Add(2 * time.Second),
+			RemoteAddr: "203.0.113.12",
+			Host:       "url.example.com",
+			Path:       "https://url.example.com/api/v1",
+			StatusCode: 200,
+		},
+	}
+	for _, item := range fixtures {
+		table := observabilityShardTableForID("node_access_logs", item.ID)
+		if err := rawDB.Table(table).Create(&item).Error; err != nil {
+			t.Fatalf("seed access log %d into %s: %v", item.ID, table, err)
+		}
+	}
+
+	pathPrefixRecords, pathPrefixIPs, err := CountNodeAccessLogs(NodeAccessLogQuery{Path: "/api"})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs path prefix failed: %v", err)
+	}
+	if pathPrefixRecords != 1 || pathPrefixIPs != 1 {
+		t.Fatalf("expected path filter to match exact path segment prefix only, records=%d ips=%d", pathPrefixRecords, pathPrefixIPs)
+	}
+
+	pathWithQueryRecords, _, err := CountNodeAccessLogs(NodeAccessLogQuery{Path: "api/v1?token=secret"})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs normalized relative path failed: %v", err)
+	}
+	if pathWithQueryRecords != 1 {
+		t.Fatalf("expected relative path query filter to normalize to /api/v1 prefix, got %d", pathWithQueryRecords)
+	}
+
+	fullURLRecords, _, err := CountNodeAccessLogs(NodeAccessLogQuery{Path: "https://url.example.com/api/v1?token=secret#fragment"})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs normalized url path failed: %v", err)
+	}
+	if fullURLRecords != 1 {
+		t.Fatalf("expected full URL path filter to drop query/fragment and match stored URL, got %d", fullURLRecords)
 	}
 }
 
@@ -1459,7 +1935,7 @@ func TestInsertNewNodeAccessLogsDeduplicatesBatchAndExistingRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CountNodeAccessLogs failed: %v", err)
 	}
-	if totalRecords != 3 || totalIPs != 3 {
+	if totalRecords != 2 || totalIPs != 2 {
 		t.Fatalf("unexpected totals after bulk insert: records=%d ips=%d", totalRecords, totalIPs)
 	}
 }
@@ -2243,6 +2719,36 @@ func TestCreateRootAccountWritesGeneratedInitialPasswordFile(t *testing.T) {
 	}
 }
 
+func TestCreateRootAccountUsesExistingGeneratedPasswordFile(t *testing.T) {
+	db := openTestSQLiteDB(t, "existing-initial-root-password.db")
+	previousDB := DB
+	DB = db
+	previousInitialPassword := common.InitialRootPassword
+	previousInitialRootPasswordFile := common.InitialRootPasswordFile
+	passwordFile := filepath.Join(t.TempDir(), "bootstrap", "initial-root-password.txt")
+	common.InitialRootPassword = ""
+	common.InitialRootPasswordFile = passwordFile
+	t.Cleanup(func() {
+		DB = previousDB
+		common.InitialRootPassword = previousInitialPassword
+		common.InitialRootPasswordFile = previousInitialRootPasswordFile
+	})
+
+	const existingPassword = "existing-generated-password"
+	if err := writeInitialRootPasswordFile(passwordFile, existingPassword); err != nil {
+		t.Fatalf("write existing password file: %v", err)
+	}
+
+	if err := createRootAccountIfNeed(); err != nil {
+		t.Fatalf("create root account: %v", err)
+	}
+
+	user := &User{Username: "root", Password: existingPassword}
+	if err := user.ValidateAndFill(); err != nil {
+		t.Fatalf("expected existing generated password to validate: %v", err)
+	}
+}
+
 func TestMigrateTableDataCopiesRows(t *testing.T) {
 	source := openTestSQLiteDB(t, "source.db")
 	target := openTestSQLiteDB(t, "target.db")
@@ -2267,10 +2773,10 @@ func TestMigrateTableDataCopiesRows(t *testing.T) {
 		t.Fatalf("seed source option: %v", err)
 	}
 
-	if err := migrateTableData(source, target, findDBModelByTableName(t, "users")); err != nil {
+	if _, err := migrateTableData(source, target, findDBModelByTableName(t, "users")); err != nil {
 		t.Fatalf("migrate users: %v", err)
 	}
-	if err := migrateTableData(source, target, findDBModelByTableName(t, "options")); err != nil {
+	if _, err := migrateTableData(source, target, findDBModelByTableName(t, "options")); err != nil {
 		t.Fatalf("migrate options: %v", err)
 	}
 
@@ -2288,6 +2794,213 @@ func TestMigrateTableDataCopiesRows(t *testing.T) {
 	}
 	if gotOption.Value != option.Value {
 		t.Fatalf("unexpected migrated option value: %s", gotOption.Value)
+	}
+}
+
+func TestRegisteredModelsExposeSingleColumnPrimaryKeyForMigration(t *testing.T) {
+	models, err := buildDBModels()
+	if err != nil {
+		t.Fatalf("buildDBModels: %v", err)
+	}
+	for _, item := range models {
+		if item.primaryColumnName == "" || item.primaryFieldName == "" {
+			t.Fatalf("registered model %s must expose a single-column primary key for keyset migration", item.tableName)
+		}
+	}
+}
+
+func TestMigrateTableDataUsesKeysetForNonIDPrimaryKey(t *testing.T) {
+	source := openBareTestSQLiteDB(t, "source-keyset.db")
+	target := openBareTestSQLiteDB(t, "target-keyset.db")
+	if err := source.AutoMigrate(&keysetMigrationTestModel{}); err != nil {
+		t.Fatalf("auto migrate source: %v", err)
+	}
+	if err := target.AutoMigrate(&keysetMigrationTestModel{}); err != nil {
+		t.Fatalf("auto migrate target: %v", err)
+	}
+	for index := 0; index < 205; index++ {
+		row := &keysetMigrationTestModel{
+			Key:   fmt.Sprintf("key-%03d", index),
+			Value: fmt.Sprintf("value-%03d", index),
+		}
+		if err := source.Create(row).Error; err != nil {
+			t.Fatalf("seed source row %s: %v", row.Key, err)
+		}
+	}
+
+	item := dbModel{
+		value:             &keysetMigrationTestModel{},
+		tableName:         "keyset_migration_test_models",
+		primaryColumnName: "key",
+		primaryFieldName:  "Key",
+	}
+	writeCalls := 0
+	_, err := migrateTableDataFromSource(
+		source.Model(&keysetMigrationTestModel{}),
+		target.Table("keyset_migration_test_models"),
+		item,
+		"keyset_migration_test_models",
+		"keyset_migration_test_models",
+		func(rows reflect.Value) error {
+			writeCalls++
+			batch := make([]keysetMigrationTestModel, 0, rows.Len())
+			for index := 0; index < rows.Len(); index++ {
+				batch = append(batch, rows.Index(index).Interface().(keysetMigrationTestModel))
+			}
+			if err := target.Create(&batch).Error; err != nil {
+				return err
+			}
+			if writeCalls == 1 {
+				return source.Delete(&keysetMigrationTestModel{}, "key = ?", "key-050").Error
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("migrate keyset table: %v", err)
+	}
+
+	var count int64
+	if err := target.Model(&keysetMigrationTestModel{}).Count(&count).Error; err != nil {
+		t.Fatalf("count migrated rows: %v", err)
+	}
+	if count != 205 {
+		t.Fatalf("expected keyset migration to copy all 205 original rows, got %d", count)
+	}
+	var got keysetMigrationTestModel
+	if err := target.First(&got, "key = ?", "key-200").Error; err != nil {
+		t.Fatalf("expected row after first batch cursor to be migrated: %v", err)
+	}
+}
+
+func TestMigrateTableDataCopiesExistingObservabilityShardTables(t *testing.T) {
+	source := openBareTestSQLiteDB(t, "source-shards.db")
+	target := openBareTestSQLiteDB(t, "target-shards.db")
+	if err := autoMigrateObservabilityShardTables(source); err != nil {
+		t.Fatalf("auto migrate source shards: %v", err)
+	}
+	if err := autoMigrateObservabilityShardTables(target); err != nil {
+		t.Fatalf("auto migrate target shards: %v", err)
+	}
+	if source.Migrator().HasTable(&NodeAccessLog{}) {
+		t.Fatal("test source should not have the node_access_logs base table")
+	}
+
+	now := time.Now().UTC()
+	fixtures := []NodeAccessLog{
+		{ID: 20, NodeID: "node-a", LoggedAt: now, RemoteAddr: "203.0.113.20", Host: "a.example.com", Path: "/", StatusCode: 200},
+		{ID: 31, NodeID: "node-b", LoggedAt: now, RemoteAddr: "203.0.113.31", Host: "b.example.com", Path: "/b", StatusCode: 502},
+	}
+	for _, fixture := range fixtures {
+		table := observabilityShardTableForID("node_access_logs", fixture.ID)
+		if err := source.Table(table).Create(&fixture).Error; err != nil {
+			t.Fatalf("seed source shard %s: %v", table, err)
+		}
+	}
+
+	migratedTables, err := migrateTableData(source, target, findDBModelByTableName(t, "node_access_logs"))
+	if err != nil {
+		t.Fatalf("migrate sharded access logs: %v", err)
+	}
+	if len(migratedTables) != 2 {
+		t.Fatalf("expected two migrated physical shard tables, got %v", migratedTables)
+	}
+	for _, fixture := range fixtures {
+		table := observabilityShardTableForID("node_access_logs", fixture.ID)
+		var got NodeAccessLog
+		if err := target.Table(table).First(&got, "id = ?", fixture.ID).Error; err != nil {
+			t.Fatalf("query migrated row %d from %s: %v", fixture.ID, table, err)
+		}
+		if got.NodeID != fixture.NodeID || got.Host != fixture.Host {
+			t.Fatalf("unexpected migrated row: %+v", got)
+		}
+	}
+}
+
+func TestMigrateTableDataCopiesLegacyBaseObservabilityTableIntoTargetShards(t *testing.T) {
+	source := openBareTestSQLiteDB(t, "source-base-access-logs.db")
+	target := openBareTestSQLiteDB(t, "target-base-access-logs.db")
+	if err := source.AutoMigrate(&NodeAccessLog{}); err != nil {
+		t.Fatalf("auto migrate source base table: %v", err)
+	}
+	if err := registerSharding(target, "sqlite"); err != nil {
+		t.Fatalf("register target sharding: %v", err)
+	}
+	if err := autoMigrateObservabilityShardTables(target); err != nil {
+		t.Fatalf("auto migrate target shards: %v", err)
+	}
+
+	now := time.Now().UTC()
+	fixtures := []NodeAccessLog{
+		{ID: 22, NodeID: "node-base-a", LoggedAt: now, RemoteAddr: "203.0.113.22", Host: "base-a.example.com", Path: "/", StatusCode: 200},
+		{ID: 35, NodeID: "node-base-b", LoggedAt: now, RemoteAddr: "203.0.113.35", Host: "base-b.example.com", Path: "/b", StatusCode: 404},
+	}
+	for _, fixture := range fixtures {
+		if err := source.Create(&fixture).Error; err != nil {
+			t.Fatalf("seed source base row %d: %v", fixture.ID, err)
+		}
+	}
+
+	migratedTables, err := migrateTableData(source, target, findDBModelByTableName(t, "node_access_logs"))
+	if err != nil {
+		t.Fatalf("migrate base access logs into target shards: %v", err)
+	}
+	expectedTables := []string{
+		observabilityShardTableForID("node_access_logs", fixtures[0].ID),
+		observabilityShardTableForID("node_access_logs", fixtures[1].ID),
+	}
+	if !reflect.DeepEqual(migratedTables, expectedTables) {
+		t.Fatalf("expected touched target shards %v, got %v", expectedTables, migratedTables)
+	}
+	for _, fixture := range fixtures {
+		table := observabilityShardTableForID("node_access_logs", fixture.ID)
+		var got NodeAccessLog
+		if err := sessionIgnoringSharding(target).Table(table).First(&got, "id = ?", fixture.ID).Error; err != nil {
+			t.Fatalf("query migrated base row %d from %s: %v", fixture.ID, table, err)
+		}
+		if got.NodeID != fixture.NodeID || got.Host != fixture.Host {
+			t.Fatalf("unexpected migrated row: %+v", got)
+		}
+	}
+}
+
+func TestMigrateTableDataPrefersExistingObservabilityShardTables(t *testing.T) {
+	source := openBareTestSQLiteDB(t, "source-shards-with-base.db")
+	target := openBareTestSQLiteDB(t, "target-shards-with-base.db")
+	if err := source.AutoMigrate(&NodeAccessLog{}); err != nil {
+		t.Fatalf("auto migrate source base table: %v", err)
+	}
+	if err := autoMigrateObservabilityShardTables(source); err != nil {
+		t.Fatalf("auto migrate source shards: %v", err)
+	}
+	if err := autoMigrateObservabilityShardTables(target); err != nil {
+		t.Fatalf("auto migrate target shards: %v", err)
+	}
+
+	now := time.Now().UTC()
+	baseOnly := NodeAccessLog{ID: 19, NodeID: "node-base", LoggedAt: now, Host: "base.example.com", Path: "/", StatusCode: 204}
+	if err := source.Table("node_access_logs").Create(&baseOnly).Error; err != nil {
+		t.Fatalf("seed source base table: %v", err)
+	}
+	sharded := NodeAccessLog{ID: 20, NodeID: "node-shard", LoggedAt: now, Host: "shard.example.com", Path: "/shard", StatusCode: 200}
+	shardedTable := observabilityShardTableForID("node_access_logs", sharded.ID)
+	if err := source.Table(shardedTable).Create(&sharded).Error; err != nil {
+		t.Fatalf("seed source shard %s: %v", shardedTable, err)
+	}
+
+	migratedTables, err := migrateTableData(source, target, findDBModelByTableName(t, "node_access_logs"))
+	if err != nil {
+		t.Fatalf("migrate sharded access logs: %v", err)
+	}
+	if len(migratedTables) != 1 || migratedTables[0] != shardedTable {
+		t.Fatalf("expected physical shard migration to report %s, got %v", shardedTable, migratedTables)
+	}
+	var got NodeAccessLog
+	if err := target.Table(shardedTable).First(&got, "id = ?", sharded.ID).Error; err != nil {
+		t.Fatalf("query migrated physical shard row: %v", err)
+	}
+	if got.NodeID != sharded.NodeID || got.Host != sharded.Host {
+		t.Fatalf("unexpected migrated shard row: %+v", got)
 	}
 }
 
@@ -2323,10 +3036,16 @@ func TestApplyCurrentSchemaCreatesObservabilityShardQueryIndexes(t *testing.T) {
 		t.Fatalf("applyCurrentSchema: %v", err)
 	}
 
+	expectSQLiteIndexWithColumns(t, db, "node_access_logs_00", []string{"node_id", "logged_at"})
 	expectSQLiteIndexWithColumns(t, db, "node_access_logs_00", []string{"remote_addr", "logged_at"})
 	expectSQLiteIndexWithColumns(t, db, "node_access_logs_00", []string{"host", "logged_at"})
+	expectSQLiteIndexWithColumns(t, db, "node_access_logs_00", []string{"node_id", "remote_addr", "logged_at"})
+	expectSQLiteIndexWithColumns(t, db, "node_access_logs_00", []string{"node_id", "host", "logged_at"})
+	expectSQLiteIndexWithColumns(t, db, "node_access_logs_09", []string{"node_id", "logged_at"})
 	expectSQLiteIndexWithColumns(t, db, "node_access_logs_09", []string{"remote_addr", "logged_at"})
 	expectSQLiteIndexWithColumns(t, db, "node_access_logs_09", []string{"host", "logged_at"})
+	expectSQLiteIndexWithColumns(t, db, "node_access_logs_09", []string{"node_id", "remote_addr", "logged_at"})
+	expectSQLiteIndexWithColumns(t, db, "node_access_logs_09", []string{"node_id", "host", "logged_at"})
 	expectSQLiteIndexWithColumns(t, db, "node_metric_snapshots_00", []string{"node_id", "captured_at"})
 	expectSQLiteIndexWithColumns(t, db, "node_request_reports_00", []string{"node_id", "window_ended_at"})
 }
@@ -3043,6 +3762,259 @@ func TestEnsureDatabaseSchemaUpToDateRepairsCurrentAccessLogShardColumns(t *test
 	}
 	if !exists || version != currentDatabaseSchemaVersion {
 		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
+func TestEnsureDatabaseSchemaUpToDateCurrentVersionSkipsFullAutoMigrate(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "current-schema-lightweight.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+	if !db.Migrator().HasTable(&CommercialLicenseActivation{}) {
+		t.Fatal("expected commercial_license_activations table before drop")
+	}
+	if err := db.Migrator().DropTable(&CommercialLicenseActivation{}); err != nil {
+		t.Fatalf("drop commercial_license_activations: %v", err)
+	}
+
+	err := ensureDatabaseSchemaUpToDate(db, "sqlite")
+	if err == nil {
+		t.Fatal("expected current-version lightweight validation to report missing table")
+	}
+	if !strings.Contains(err.Error(), "commercial_license_activations") {
+		t.Fatalf("expected missing table error, got %v", err)
+	}
+
+	if db.Migrator().HasTable(&CommercialLicenseActivation{}) {
+		t.Fatal("expected current-version maintenance to skip full AutoMigrate")
+	}
+}
+
+func TestApplyCurrentSchemaDedupesOnlyWithinMigrationState(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "current-schema-apply-dedupe.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+
+	migrationDB := withCurrentSchemaApplicationState(db)
+	if err := applyCurrentSchema(migrationDB, "sqlite"); err != nil {
+		t.Fatalf("first applyCurrentSchema: %v", err)
+	}
+	if !db.Migrator().HasTable(&CommercialLicenseActivation{}) {
+		t.Fatal("expected commercial_license_activations table after first apply")
+	}
+	if err := db.Migrator().DropTable(&CommercialLicenseActivation{}); err != nil {
+		t.Fatalf("drop commercial_license_activations: %v", err)
+	}
+
+	if err := applyCurrentSchema(migrationDB, "sqlite"); err != nil {
+		t.Fatalf("deduped applyCurrentSchema: %v", err)
+	}
+	if db.Migrator().HasTable(&CommercialLicenseActivation{}) {
+		t.Fatal("expected migration-state applyCurrentSchema to skip repeated full AutoMigrate")
+	}
+
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("direct applyCurrentSchema: %v", err)
+	}
+	if !db.Migrator().HasTable(&CommercialLicenseActivation{}) {
+		t.Fatal("expected direct applyCurrentSchema to keep full schema repair behavior")
+	}
+}
+
+func TestDatabaseSchemaMigrationsMarkCurrentSchemaOnlySteps(t *testing.T) {
+	want := []int{
+		1,
+		10, 11, 12, 13, 14, 15, 16, 17,
+		19, 20,
+		22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
+		43,
+	}
+	got := make([]int, 0, len(want))
+	for _, migration := range databaseSchemaMigrations() {
+		if !migration.currentSchemaOnly {
+			continue
+		}
+		got = append(got, migration.fromVersion)
+		if !migration.appliesCurrentSchema {
+			t.Fatalf("schema-only migration v%d->v%d must mark appliesCurrentSchema", migration.fromVersion, migration.toVersion)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected schema-only migrations: got %v want %v", got, want)
+	}
+}
+
+func TestUpgradeDatabaseSchemaAppliesCurrentSchemaOnceAcrossSchemaOnlyChain(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "schema-only-chain-apply-once.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 10); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	migrationDB := withCurrentSchemaApplicationState(db)
+	state := currentSchemaApplicationStateFromDB(migrationDB)
+	if state == nil {
+		t.Fatal("expected migration state")
+	}
+	if err := upgradeDatabaseSchema(migrationDB, "sqlite", 10); err != nil {
+		t.Fatalf("upgradeDatabaseSchema: %v", err)
+	}
+
+	if state.fullApplyCount != 1 {
+		t.Fatalf("expected one full current schema apply across schema-only chain, got %d", state.fullApplyCount)
+	}
+	if state.skippedCurrentSchemaOnlyCount != 22 {
+		t.Fatalf("expected 22 schema-only migrations to be skipped after current schema apply, got %d", state.skippedCurrentSchemaOnlyCount)
+	}
+	version, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || version != currentDatabaseSchemaVersion {
+		t.Fatalf("unexpected schema version: exists=%v version=%d", exists, version)
+	}
+}
+
+func TestSkipAppliedCurrentSchemaOnlyMigrationsPersistsCompressedVersion(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "schema-only-skip-version.db")
+	if err := autoMigrateSchemaMetadata(db); err != nil {
+		t.Fatalf("auto migrate schema metadata: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, 11); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	migrationDB := withCurrentSchemaApplicationState(db)
+	state := currentSchemaApplicationStateFromDB(migrationDB)
+	if state == nil {
+		t.Fatal("expected migration state")
+	}
+	state.applied = true
+
+	version, err := skipAppliedCurrentSchemaOnlyMigrations(migrationDB, databaseSchemaMigrationMap(), 11, true)
+	if err != nil {
+		t.Fatalf("skipAppliedCurrentSchemaOnlyMigrations: %v", err)
+	}
+	if version != 18 {
+		t.Fatalf("expected compressed version 18, got %d", version)
+	}
+	if state.skippedCurrentSchemaOnlyCount != 7 {
+		t.Fatalf("expected 7 skipped schema-only migrations, got %d", state.skippedCurrentSchemaOnlyCount)
+	}
+	persisted, exists, err := loadDatabaseSchemaVersion(db)
+	if err != nil {
+		t.Fatalf("loadDatabaseSchemaVersion: %v", err)
+	}
+	if !exists || persisted != 18 {
+		t.Fatalf("unexpected persisted schema version: exists=%v version=%d", exists, persisted)
+	}
+}
+
+func TestEnsureDatabaseSchemaUpToDateCurrentVersionReportsMissingModelColumn(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "current-schema-missing-column.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+	if err := db.Migrator().DropColumn(&DNSWorker{}, "remark"); err != nil {
+		t.Fatalf("drop dns_workers.remark: %v", err)
+	}
+
+	err := ensureDatabaseSchemaUpToDate(db, "sqlite")
+	if err == nil {
+		t.Fatal("expected current-version lightweight validation to report missing model column")
+	}
+	if !strings.Contains(err.Error(), "dns_workers.remark") {
+		t.Fatalf("expected missing dns_workers.remark error, got %v", err)
+	}
+	if db.Migrator().HasColumn(&DNSWorker{}, "remark") {
+		t.Fatal("expected current-version maintenance to skip full AutoMigrate column repair")
+	}
+}
+
+func TestValidateCompletedDatabaseSchemaUpgradeUsesLightweightValidationAfterCurrentSchemaMigration(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "current-schema-migration-validation.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := db.Table("proxy_routes").Create(map[string]any{
+		"site_name":           "legacy-route",
+		"domain":              "legacy.example.com",
+		"domains":             `["legacy.example.com"]`,
+		"origin_url":          "https://origin.internal",
+		"upstreams":           `["https://origin.internal"]`,
+		"origin_resolve_mode": "publish_resolve",
+		"created_at":          now,
+		"updated_at":          now,
+	}).Error; err != nil {
+		t.Fatalf("seed proxy route without normalized backfill: %v", err)
+	}
+
+	if err := validateCompletedDatabaseSchemaUpgrade(db, "sqlite", true); err != nil {
+		t.Fatalf("expected lightweight validation to skip repeated data validation, got %v", err)
+	}
+	fullErr := validateCompletedDatabaseSchemaUpgrade(db, "sqlite", false)
+	if fullErr == nil || !strings.Contains(fullErr.Error(), "proxy route normalized table backfill incomplete") {
+		t.Fatalf("expected full validation to repeat normalized backfill check, got %v", fullErr)
+	}
+}
+
+func TestEnsureDatabaseSchemaUpToDateCurrentVersionSkipsNormalizedBackfill(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "current-schema-no-normalized-backfill.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := db.Table("proxy_routes").Create(map[string]any{
+		"site_name":           "current-route",
+		"domain":              "current.example.com",
+		"domains":             `["current.example.com"]`,
+		"origin_url":          "https://origin.current.internal",
+		"upstreams":           `["https://origin.current.internal"]`,
+		"origin_resolve_mode": "publish_resolve",
+		"created_at":          now,
+		"updated_at":          now,
+	}).Error; err != nil {
+		t.Fatalf("seed proxy route without normalized backfill: %v", err)
+	}
+	if err := saveDatabaseSchemaVersion(db, currentDatabaseSchemaVersion); err != nil {
+		t.Fatalf("save schema version: %v", err)
+	}
+
+	if err := ensureDatabaseSchemaUpToDate(db, "sqlite"); err != nil {
+		t.Fatalf("ensureDatabaseSchemaUpToDate: %v", err)
+	}
+
+	var siteCount int64
+	if err := db.Model(&ProxySite{}).Count(&siteCount).Error; err != nil {
+		t.Fatalf("count proxy sites: %v", err)
+	}
+	if siteCount != 0 {
+		t.Fatalf("expected current-version startup not to run normalized backfill, got %d proxy sites", siteCount)
 	}
 }
 

@@ -6,11 +6,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
 
-const invalidParamsMessage = "鏃犳晥鐨勫弬鏁?"
+const invalidParamsMessage = "无效的参数"
 
 func respondSuccess(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, gin.H{
@@ -61,6 +62,19 @@ func respondUnauthorized(c *gin.Context, message string) {
 		"success": false,
 		"message": sanitizeResponseMessage(message),
 	})
+}
+
+func parseUintParam(c *gin.Context, key string) (uint, bool) {
+	return parseUintParamWithMessage(c, key, "invalid parameter")
+}
+
+func parseUintParamWithMessage(c *gin.Context, key string, message string) (uint, bool) {
+	id, err := strconv.ParseUint(c.Param(key), 10, 64)
+	if err != nil || id == 0 {
+		respondBadRequest(c, message)
+		return 0, false
+	}
+	return uint(id), true
 }
 
 func sanitizeResponseMessage(message string) string {

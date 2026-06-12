@@ -12,10 +12,7 @@ import {
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 import { formatDateTime } from '@/lib/utils/date';
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
+import { getErrorMessage } from '@/lib/utils/errors';
 
 export function ConfigVersionSnapshotModal({
   version,

@@ -1,12 +1,11 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMemo, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 
 import { AppModal } from '@/components/ui/app-modal';
-import worldGeoJson from '@/features/dashboard/data/world-geo.json';
 import type { NodeItem, NodeMutationPayload } from '@/features/nodes/types';
 import {
   PrimaryButton,
@@ -17,18 +16,9 @@ import {
   SecondaryButton,
   ToggleField,
 } from '@/features/shared/components/resource-primitives';
+import { loadWorldGeoJson, type WorldGeoJsonFeature } from '@/lib/geo/world';
 
-type GeoJsonGeometry = {
-  type: string;
-  coordinates: unknown;
-};
-
-type GeoJsonFeature = {
-  geometry?: GeoJsonGeometry;
-  properties?: {
-    name?: string;
-  };
-};
+type GeoJsonFeature = WorldGeoJsonFeature;
 
 type RegionOption = {
   label: string;
@@ -166,9 +156,7 @@ function getRegionCenter(feature: GeoJsonFeature) {
   };
 }
 
-function buildRegionOptions() {
-  const features = ((worldGeoJson as { features?: GeoJsonFeature[] }).features ??
-    []) as GeoJsonFeature[];
+function buildRegionOptions(features: GeoJsonFeature[]) {
   const options = new Map<string, RegionOption>();
 
   for (const feature of features) {
@@ -290,7 +278,8 @@ export function NodeEditorModal({
     control: form.control,
     name: 'geo_manual_override',
   });
-  const regionOptions = useMemo(() => buildRegionOptions(), []);
+  const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
+  const [regionOptionsFailed, setRegionOptionsFailed] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -298,6 +287,33 @@ export function NodeEditorModal({
     }
     form.reset(buildFormValues(node));
   }, [form, isOpen, node]);
+
+  useEffect(() => {
+    if (!isOpen || !watchedGeoManualOverride || regionOptions.length > 0) {
+      return;
+    }
+
+    let cancelled = false;
+    loadWorldGeoJson()
+      .then((geoJson) => {
+        if (cancelled) {
+          return;
+        }
+        setRegionOptions(buildRegionOptions(geoJson.features ?? []));
+        setRegionOptionsFailed(false);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        console.error('Failed to load world region options', error);
+        setRegionOptionsFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, regionOptions.length, watchedGeoManualOverride]);
 
   const handleSubmit = form.handleSubmit((values) => {
     onSubmit(toPayload(values));
@@ -455,7 +471,11 @@ export function NodeEditorModal({
         {watchedGeoManualOverride ? (
           <ResourceField
             label="地区选择"
-            hint="选择后会自动填充位置名与地图坐标，你也可以继续微调。"
+            hint={
+              regionOptionsFailed
+                ? '地区列表加载失败，你仍可以手动填写位置名与坐标。'
+                : '选择后会自动填充位置名与地图坐标，你也可以继续微调。'
+            }
           >
             <ResourceSelect
               value={form.watch('geo_region')}

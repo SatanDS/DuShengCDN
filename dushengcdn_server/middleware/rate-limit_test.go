@@ -21,7 +21,9 @@ func TestRedisRateLimiterFallsBackToMemoryWhenClientUnavailable(t *testing.T) {
 		inMemoryRateLimiter = inMemoryRateLimiterZeroValue()
 	})
 
-	handler := rateLimitFactory(1, 60, "test")
+	handler := rateLimitFactory(func() (int, int64) {
+		return 1, 60
+	}, "test")
 	router := gin.New()
 	router.GET("/limited", handler, func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
@@ -52,7 +54,9 @@ func TestRateLimiterRejectsInvalidConfig(t *testing.T) {
 		inMemoryRateLimiter = inMemoryRateLimiterZeroValue()
 	})
 
-	handler := rateLimitFactory(0, 60, "test")
+	handler := rateLimitFactory(func() (int, int64) {
+		return 0, 60
+	}, "test")
 	router := gin.New()
 	router.GET("/limited", handler, func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
@@ -67,6 +71,41 @@ func TestRateLimiterRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+func TestRateLimiterUsesUpdatedConfigProvider(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	inMemoryRateLimiter = inMemoryRateLimiterZeroValue()
+	t.Cleanup(func() {
+		inMemoryRateLimiter = inMemoryRateLimiterZeroValue()
+	})
+
+	maxRequestNum := 2
+	handler := rateLimitFactory(func() (int, int64) {
+		return maxRequestNum, 60
+	}, "test")
+	router := gin.New()
+	router.GET("/limited", handler, func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	first := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/limited", nil)
+	req.RemoteAddr = "192.0.2.3:12345"
+	router.ServeHTTP(first, req)
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("expected first request to pass, got %d", first.Code)
+	}
+
+	maxRequestNum = 1
+	second := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/limited", nil)
+	req.RemoteAddr = "192.0.2.3:12346"
+	router.ServeHTTP(second, req)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected updated limit to reject second request, got %d", second.Code)
+	}
+}
+
 func TestRateLimiterIgnoresSpoofedForwardedForWhenProxyHeadersDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	common.RedisEnabled = false
@@ -75,7 +114,9 @@ func TestRateLimiterIgnoresSpoofedForwardedForWhenProxyHeadersDisabled(t *testin
 		inMemoryRateLimiter = inMemoryRateLimiterZeroValue()
 	})
 
-	handler := rateLimitFactory(1, 60, "test")
+	handler := rateLimitFactory(func() (int, int64) {
+		return 1, 60
+	}, "test")
 	router := gin.New()
 	router.ForwardedByClientIP = false
 	router.GET("/limited", handler, func(c *gin.Context) {

@@ -2,6 +2,7 @@ package openresty
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -35,5 +36,10 @@ func DedupeSupportFiles(files []SupportFile) []SupportFile {
 	for _, file := range unique {
 		result = append(result, file)
 	}
+	// Map iteration order is random; sort so persisted artifacts are
+	// byte-for-byte deterministic across builds.
+	sort.Slice(result, func(left, right int) bool {
+		return result[left].Path < result[right].Path
+	})
 	return result
 }

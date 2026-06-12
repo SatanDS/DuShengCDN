@@ -21,8 +21,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"dushengcdn-agent/internal/fileutil"
 	"dushengcdn-agent/internal/protocol"
 	"dushengcdn-agent/internal/security"
 )
@@ -46,6 +48,18 @@ const (
 	maxWarmCacheRedirects   = 5
 	managedDirMarkerName    = ".dushengcdn-managed"
 )
+
+type runtimeConfigSpec struct {
+	Path string
+	Name string
+}
+
+var runtimeConfigSpecs = []runtimeConfigSpec{
+	{Path: "pow_config.json", Name: "pow"},
+	{Path: "region_config.json", Name: "region"},
+	{Path: "waf_config.json", Name: "waf"},
+	{Path: "cc_config.json", Name: "cc"},
+}
 
 var blockedWarmIPPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
@@ -182,6 +196,11 @@ type Manager struct {
 	OpenrestyObservabilityPort   int
 	OpenrestyResolverDirective   string
 	Executor                     Executor
+
+	currentChecksumMu         sync.Mutex
+	currentChecksumCache      string
+	currentChecksumCacheValid bool
+	currentChecksumGeneration uint64
 }
 
 type ApplyStatus string
@@ -235,6 +254,8 @@ type ApplyOutcome struct {
 
 func (m *Manager) Apply(ctx context.Context, mainConfig string, routeConfig string, supportFiles []protocol.SupportFile) ApplyOutcome {
 	slog.Info("openresty apply started", "main_config", m.MainConfigPath, "route_config", m.RouteConfigPath, "cert_files", len(supportFiles))
+	m.invalidateCurrentChecksum()
+	defer m.invalidateCurrentChecksum()
 	backup, err := m.backup()
 	if err != nil {
 		return fatalApplyOutcome(fmt.Errorf("backup openresty config failed: %w", err))
@@ -256,16 +277,7 @@ func (m *Manager) writeTargetFiles(mainConfig string, routeConfig string, suppor
 	if err := m.writeCertFiles(supportFiles); err != nil {
 		return err
 	}
-	if err := m.writePowConfig(supportFiles); err != nil {
-		return err
-	}
-	if err := m.writeRegionConfig(supportFiles); err != nil {
-		return err
-	}
-	if err := m.writeWAFConfig(supportFiles); err != nil {
-		return err
-	}
-	if err := m.writeCCConfig(supportFiles); err != nil {
+	if err := m.writeRuntimeConfigFiles(supportFiles); err != nil {
 		return err
 	}
 	if err := m.ensureMimeTypes(); err != nil {
@@ -278,11 +290,11 @@ func (m *Manager) writeTargetFiles(mainConfig string, routeConfig string, suppor
 	if err := ensureProxyCacheDirectories(renderedMainConfig); err != nil {
 		return err
 	}
-	if err := os.WriteFile(m.MainConfigPath, []byte(renderedMainConfig), 0o644); err != nil {
+	if err := fileutil.WriteFileAtomicIfChanged(m.MainConfigPath, []byte(renderedMainConfig), 0o644); err != nil {
 		return err
 	}
 	renderedRouteConfig := m.renderRouteConfig(routeConfig)
-	if err := os.WriteFile(m.RouteConfigPath, []byte(renderedRouteConfig), 0o644); err != nil {
+	if err := fileutil.WriteFileAtomicIfChanged(m.RouteConfigPath, []byte(renderedRouteConfig), 0o644); err != nil {
 		return err
 	}
 	return nil
@@ -390,6 +402,8 @@ func (m *Manager) EnsureSafeFallbackRuntime(ctx context.Context, reason string) 
 	if m.Executor == nil {
 		return errors.New("executor 未配置")
 	}
+	m.invalidateCurrentChecksum()
+	defer m.invalidateCurrentChecksum()
 	trimmedReason := strings.TrimSpace(reason)
 	if trimmedReason == "" {
 		trimmedReason = "no valid local openresty config is available"
@@ -1040,6 +1054,52 @@ func isSafeWarmIP(ip net.IP) bool {
 }
 
 func (m *Manager) CurrentChecksum() (string, error) {
+	if value, ok := m.cachedCurrentChecksum(); ok {
+		return value, nil
+	}
+	generation := m.currentChecksumCacheGeneration()
+	value, err := m.calculateCurrentChecksum()
+	if err != nil {
+		return "", err
+	}
+	m.storeCurrentChecksum(generation, value)
+	return value, nil
+}
+
+func (m *Manager) cachedCurrentChecksum() (string, bool) {
+	m.currentChecksumMu.Lock()
+	defer m.currentChecksumMu.Unlock()
+	if !m.currentChecksumCacheValid {
+		return "", false
+	}
+	return m.currentChecksumCache, true
+}
+
+func (m *Manager) currentChecksumCacheGeneration() uint64 {
+	m.currentChecksumMu.Lock()
+	defer m.currentChecksumMu.Unlock()
+	return m.currentChecksumGeneration
+}
+
+func (m *Manager) storeCurrentChecksum(generation uint64, value string) {
+	m.currentChecksumMu.Lock()
+	defer m.currentChecksumMu.Unlock()
+	if generation != m.currentChecksumGeneration {
+		return
+	}
+	m.currentChecksumCache = value
+	m.currentChecksumCacheValid = true
+}
+
+func (m *Manager) invalidateCurrentChecksum() {
+	m.currentChecksumMu.Lock()
+	defer m.currentChecksumMu.Unlock()
+	m.currentChecksumGeneration++
+	m.currentChecksumCache = ""
+	m.currentChecksumCacheValid = false
+}
+
+func (m *Manager) calculateCurrentChecksum() (string, error) {
 	if m.RouteConfigPath == "" {
 		return "", errors.New("route config path 不能为空")
 	}
@@ -1190,10 +1250,7 @@ type backupState struct {
 	RouteExisted bool
 	RouteData    []byte
 	Files        []protocol.SupportFile
-	PowConfig    *protocol.SupportFile
-	RegionConfig *protocol.SupportFile
-	WAFConfig    *protocol.SupportFile
-	CCConfig     *protocol.SupportFile
+	RuntimeFiles map[string]*protocol.SupportFile
 }
 
 type managedFile struct {
@@ -1250,26 +1307,11 @@ func (m *Manager) backup() (*backupState, error) {
 		return nil, err
 	}
 	state.Files = files
-	powConfig, err := m.readPowConfigFile()
+	runtimeFiles, err := m.readRuntimeConfigFiles()
 	if err != nil {
 		return nil, err
 	}
-	state.PowConfig = powConfig
-	regionConfig, err := m.readRegionConfigFile()
-	if err != nil {
-		return nil, err
-	}
-	state.RegionConfig = regionConfig
-	wafConfig, err := m.readWAFConfigFile()
-	if err != nil {
-		return nil, err
-	}
-	state.WAFConfig = wafConfig
-	ccConfig, err := m.readCCConfigFile()
-	if err != nil {
-		return nil, err
-	}
-	state.CCConfig = ccConfig
+	state.RuntimeFiles = runtimeFiles
 	slog.Debug("backup captured", "main_exists", state.MainExisted, "route_exists", state.RouteExisted, "cert_files", len(state.Files))
 	return state, nil
 }
@@ -1280,14 +1322,14 @@ func (m *Manager) restore(state *backupState) error {
 	}
 	slog.Warn("restoring nginx backup", "main_existed", state.MainExisted, "route_existed", state.RouteExisted, "cert_files", len(state.Files))
 	if state.MainExisted {
-		if err := os.WriteFile(m.MainConfigPath, state.MainData, 0o644); err != nil {
+		if err := fileutil.WriteFileAtomicIfChanged(m.MainConfigPath, state.MainData, 0o644); err != nil {
 			return err
 		}
 	} else if err := os.Remove(m.MainConfigPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if state.RouteExisted {
-		if err := os.WriteFile(m.RouteConfigPath, state.RouteData, 0o644); err != nil {
+		if err := fileutil.WriteFileAtomicIfChanged(m.RouteConfigPath, state.RouteData, 0o644); err != nil {
 			return err
 		}
 	} else if err := os.Remove(m.RouteConfigPath); err != nil && !os.IsNotExist(err) {
@@ -1298,16 +1340,7 @@ func (m *Manager) restore(state *backupState) error {
 			return err
 		}
 	}
-	if err := m.restorePowConfig(state); err != nil {
-		return err
-	}
-	if err := m.restoreRegionConfig(state); err != nil {
-		return err
-	}
-	if err := m.restoreWAFConfig(state); err != nil {
-		return err
-	}
-	return m.restoreCCConfig(state)
+	return m.restoreRuntimeConfigFiles(state)
 }
 
 func (m *Manager) writeCertFiles(certFiles []protocol.SupportFile) error {
@@ -1317,88 +1350,40 @@ func (m *Manager) writeCertFiles(certFiles []protocol.SupportFile) error {
 	return m.writeManagedCertFiles(certFiles)
 }
 
-func (m *Manager) writePowConfig(supportFiles []protocol.SupportFile) error {
+func (m *Manager) writeRuntimeConfigFiles(supportFiles []protocol.SupportFile) error {
 	if m.RuntimeConfigDir == "" {
 		return nil
 	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "pow_config.json")
-	for _, file := range supportFiles {
-		if file.Path == "pow_config.json" {
-			if err := os.WriteFile(configPath, []byte(file.Content), 0o644); err != nil {
-				return fmt.Errorf("write pow_config.json: %w", err)
-			}
-			slog.Info("wrote pow config", "path", configPath, "size", len(file.Content))
-			return nil
+	for _, spec := range runtimeConfigSpecs {
+		if err := m.writeRuntimeConfigFile(supportFiles, spec); err != nil {
+			return err
 		}
-	}
-	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove pow_config.json: %w", err)
-	}
-	if err := removeLegacyPowConfig(filepath.Join(m.LuaDir, "pow_config.json")); err != nil {
-		return err
-	}
-	if err := removeLegacyPowConfig(filepath.Join(m.CertDir, "pow_config.json")); err != nil {
-		return err
 	}
 	return nil
 }
 
-func (m *Manager) writeRegionConfig(supportFiles []protocol.SupportFile) error {
-	if m.RuntimeConfigDir == "" {
+func (m *Manager) writeRuntimeConfigFile(supportFiles []protocol.SupportFile, spec runtimeConfigSpec) error {
+	configPath := filepath.Join(m.RuntimeConfigDir, spec.Path)
+	for _, file := range supportFiles {
+		if file.Path != spec.Path {
+			continue
+		}
+		if err := fileutil.WriteFileAtomicIfChanged(configPath, []byte(file.Content), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", spec.Path, err)
+		}
+		slog.Info("wrote runtime config", "name", spec.Name, "path", configPath, "size", len(file.Content))
 		return nil
 	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "region_config.json")
-	for _, file := range supportFiles {
-		if file.Path == "region_config.json" {
-			if err := os.WriteFile(configPath, []byte(file.Content), 0o644); err != nil {
-				return fmt.Errorf("write region_config.json: %w", err)
-			}
-			slog.Info("wrote region config", "path", configPath, "size", len(file.Content))
-			return nil
-		}
-	}
 	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove region_config.json: %w", err)
+		return fmt.Errorf("remove %s: %w", spec.Path, err)
 	}
-	return nil
-}
-
-func (m *Manager) writeWAFConfig(supportFiles []protocol.SupportFile) error {
-	if m.RuntimeConfigDir == "" {
-		return nil
-	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "waf_config.json")
-	for _, file := range supportFiles {
-		if file.Path == "waf_config.json" {
-			if err := os.WriteFile(configPath, []byte(file.Content), 0o644); err != nil {
-				return fmt.Errorf("write waf_config.json: %w", err)
-			}
-			slog.Info("wrote waf config", "path", configPath, "size", len(file.Content))
-			return nil
+	if spec.Path == "pow_config.json" {
+		if err := removeLegacyPowConfig(filepath.Join(m.LuaDir, spec.Path)); err != nil {
+			return err
 		}
-	}
-	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove waf_config.json: %w", err)
-	}
-	return nil
-}
-
-func (m *Manager) writeCCConfig(supportFiles []protocol.SupportFile) error {
-	if m.RuntimeConfigDir == "" {
-		return nil
-	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "cc_config.json")
-	for _, file := range supportFiles {
-		if file.Path == "cc_config.json" {
-			if err := os.WriteFile(configPath, []byte(file.Content), 0o644); err != nil {
-				return fmt.Errorf("write cc_config.json: %w", err)
-			}
-			slog.Info("wrote cc config", "path", configPath, "size", len(file.Content))
-			return nil
+		if err := removeLegacyPowConfig(filepath.Join(m.CertDir, spec.Path)); err != nil {
+			return err
 		}
-	}
-	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove cc_config.json: %w", err)
 	}
 	return nil
 }
@@ -1482,29 +1467,25 @@ func (m *Manager) readCertFiles() ([]protocol.SupportFile, error) {
 	return files, nil
 }
 
-func (m *Manager) readPowConfigFile() (*protocol.SupportFile, error) {
+func (m *Manager) readRuntimeConfigFiles() (map[string]*protocol.SupportFile, error) {
 	if m.RuntimeConfigDir == "" {
 		return nil, nil
 	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "pow_config.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	files := make(map[string]*protocol.SupportFile, len(runtimeConfigSpecs))
+	for _, spec := range runtimeConfigSpecs {
+		file, err := m.readRuntimeConfigFile(spec)
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
+		if file != nil {
+			files[spec.Path] = file
+		}
 	}
-	return &protocol.SupportFile{
-		Path:    "pow_config.json",
-		Content: string(data),
-	}, nil
+	return files, nil
 }
 
-func (m *Manager) readRegionConfigFile() (*protocol.SupportFile, error) {
-	if m.RuntimeConfigDir == "" {
-		return nil, nil
-	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "region_config.json")
+func (m *Manager) readRuntimeConfigFile(spec runtimeConfigSpec) (*protocol.SupportFile, error) {
+	configPath := filepath.Join(m.RuntimeConfigDir, spec.Path)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1513,43 +1494,7 @@ func (m *Manager) readRegionConfigFile() (*protocol.SupportFile, error) {
 		return nil, err
 	}
 	return &protocol.SupportFile{
-		Path:    "region_config.json",
-		Content: string(data),
-	}, nil
-}
-
-func (m *Manager) readWAFConfigFile() (*protocol.SupportFile, error) {
-	if m.RuntimeConfigDir == "" {
-		return nil, nil
-	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "waf_config.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &protocol.SupportFile{
-		Path:    "waf_config.json",
-		Content: string(data),
-	}, nil
-}
-
-func (m *Manager) readCCConfigFile() (*protocol.SupportFile, error) {
-	if m.RuntimeConfigDir == "" {
-		return nil, nil
-	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "cc_config.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &protocol.SupportFile{
-		Path:    "cc_config.json",
+		Path:    spec.Path,
 		Content: string(data),
 	}, nil
 }
@@ -1559,91 +1504,39 @@ func (m *Manager) readManagedSupportFiles() ([]protocol.SupportFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	powConfig, err := m.readPowConfigFile()
+	runtimeFiles, err := m.readRuntimeConfigFiles()
 	if err != nil {
 		return nil, err
 	}
-	if powConfig != nil {
-		files = append(files, *powConfig)
-	}
-	regionConfig, err := m.readRegionConfigFile()
-	if err != nil {
-		return nil, err
-	}
-	if regionConfig != nil {
-		files = append(files, *regionConfig)
-	}
-	wafConfig, err := m.readWAFConfigFile()
-	if err != nil {
-		return nil, err
-	}
-	if wafConfig != nil {
-		files = append(files, *wafConfig)
-	}
-	ccConfig, err := m.readCCConfigFile()
-	if err != nil {
-		return nil, err
-	}
-	if ccConfig != nil {
-		files = append(files, *ccConfig)
+	for _, spec := range runtimeConfigSpecs {
+		if file := runtimeFiles[spec.Path]; file != nil {
+			files = append(files, *file)
+		}
 	}
 	return files, nil
 }
 
-func (m *Manager) restorePowConfig(state *backupState) error {
+func (m *Manager) restoreRuntimeConfigFiles(state *backupState) error {
 	if state == nil || m.RuntimeConfigDir == "" {
 		return nil
 	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "pow_config.json")
-	if state.PowConfig == nil {
-		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+	for _, spec := range runtimeConfigSpecs {
+		if err := m.restoreRuntimeConfigFile(state.RuntimeFiles[spec.Path], spec); err != nil {
 			return err
 		}
-		return nil
 	}
-	return os.WriteFile(configPath, []byte(state.PowConfig.Content), 0o644)
+	return nil
 }
 
-func (m *Manager) restoreRegionConfig(state *backupState) error {
-	if state == nil || m.RuntimeConfigDir == "" {
-		return nil
-	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "region_config.json")
-	if state.RegionConfig == nil {
+func (m *Manager) restoreRuntimeConfigFile(file *protocol.SupportFile, spec runtimeConfigSpec) error {
+	configPath := filepath.Join(m.RuntimeConfigDir, spec.Path)
+	if file == nil {
 		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return nil
 	}
-	return os.WriteFile(configPath, []byte(state.RegionConfig.Content), 0o644)
-}
-
-func (m *Manager) restoreWAFConfig(state *backupState) error {
-	if state == nil || m.RuntimeConfigDir == "" {
-		return nil
-	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "waf_config.json")
-	if state.WAFConfig == nil {
-		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	return os.WriteFile(configPath, []byte(state.WAFConfig.Content), 0o644)
-}
-
-func (m *Manager) restoreCCConfig(state *backupState) error {
-	if state == nil || m.RuntimeConfigDir == "" {
-		return nil
-	}
-	configPath := filepath.Join(m.RuntimeConfigDir, "cc_config.json")
-	if state.CCConfig == nil {
-		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	return os.WriteFile(configPath, []byte(state.CCConfig.Content), 0o644)
+	return fileutil.WriteFileAtomicIfChanged(configPath, []byte(file.Content), 0o644)
 }
 
 func (m *Manager) writeSafeDefaultFallbackFiles() error {
@@ -1659,10 +1552,10 @@ func (m *Manager) writeSafeDefaultFallbackFiles() error {
 	if err := os.MkdirAll(filepath.Dir(m.RouteConfigPath), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(m.RouteConfigPath, nil, 0o644); err != nil {
+	if err := fileutil.WriteFileAtomicIfChanged(m.RouteConfigPath, nil, 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(m.MainConfigPath, []byte(m.safeDefaultFallbackMainConfig()), 0o644); err != nil {
+	if err := fileutil.WriteFileAtomicIfChanged(m.MainConfigPath, []byte(m.safeDefaultFallbackMainConfig()), 0o644); err != nil {
 		return err
 	}
 	return nil
@@ -1836,7 +1729,7 @@ func syncManagedFiles(baseDir string, files []managedFile) error {
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(targetPath, file.Content, file.Mode); err != nil {
+		if err := fileutil.WriteFileAtomicIfChanged(targetPath, file.Content, file.Mode); err != nil {
 			return err
 		}
 	}
@@ -1920,7 +1813,7 @@ func isKnownLegacyManagedFile(path string) bool {
 
 func writeManagedDirMarker(baseDir string) error {
 	markerPath := filepath.Join(baseDir, managedDirMarkerName)
-	return os.WriteFile(markerPath, []byte("DuShengCDN managed directory\n"), 0o644)
+	return fileutil.WriteFileAtomicIfChanged(markerPath, []byte("DuShengCDN managed directory\n"), 0o644)
 }
 
 func cleanManagedFilePath(raw string) (string, error) {
@@ -1985,7 +1878,7 @@ func (m *Manager) ensureMimeTypes() error {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(mimeTypesPath, []byte(DefaultMimeTypes), 0o644)
+	return fileutil.WriteFileAtomicIfChanged(mimeTypesPath, []byte(DefaultMimeTypes), 0o644)
 }
 
 func (m *Manager) renderRouteConfig(content string) string {

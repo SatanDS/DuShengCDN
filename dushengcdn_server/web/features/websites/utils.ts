@@ -15,9 +15,7 @@ import type {
 } from '@/features/websites/schemas';
 import { formatDateTime } from '@/lib/utils/date';
 
-export function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
+export { getErrorMessage } from '@/lib/utils/errors';
 
 export function getMatchTypeMeta(domain: string) {
   return domain.startsWith('*.')

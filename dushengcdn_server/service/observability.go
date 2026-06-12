@@ -2,6 +2,7 @@ package service
 
 import (
 	"dushengcdn/model"
+	"dushengcdn/utils/geoip"
 	"dushengcdn/utils/security"
 	"encoding/json"
 	"errors"
@@ -127,9 +128,9 @@ type AgentDNSProbeResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
-func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, reportedAt time.Time, dnsProbeTargets ...[]AgentDNSProbeTarget) {
+func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, reportedAt time.Time, dnsProbeTargets ...[]AgentDNSProbeTarget) error {
 	if strings.TrimSpace(nodeID) == "" {
-		return
+		return nil
 	}
 	if payload.Profile == nil &&
 		payload.Snapshot == nil &&
@@ -139,7 +140,7 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 		payload.HealthEvents == nil &&
 		len(payload.OriginHealthReports) == 0 &&
 		len(payload.DNSProbeResults) == 0 {
-		return
+		return nil
 	}
 
 	accessLogs := append([]AgentNodeAccessLog(nil), payload.AccessLogs...)
@@ -149,13 +150,7 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 		if err := persistNodeSystemProfile(tx, nodeID, payload.Profile, reportedAt); err != nil {
 			return err
 		}
-		if err := persistBufferedObservability(tx, nodeID, bufferedRecords, reportedAt); err != nil {
-			return err
-		}
-		if err := persistNodeMetricSnapshot(tx, nodeID, payload.Snapshot, reportedAt); err != nil {
-			return err
-		}
-		if err := persistNodeTrafficReport(tx, nodeID, payload.TrafficReport, reportedAt); err != nil {
+		if err := persistNodeMetricsAndTrafficReports(tx, nodeID, payload.Snapshot, payload.TrafficReport, bufferedRecords, reportedAt); err != nil {
 			return err
 		}
 		if payload.HealthEvents != nil {
@@ -172,14 +167,18 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 		return nil
 	}); err != nil {
 		slog.Error("persist heartbeat observability failed", "node_id", nodeID, "error", err)
+		return err
 	}
-	persistAccessLogsBestEffort(nodeID, accessLogs, bufferedRecords, reportedAt)
+	if err := persistAccessLogsBestEffort(nodeID, accessLogs, bufferedRecords, reportedAt); err != nil {
+		return err
+	}
+	return nil
 }
 
 func ReportAgentOriginHealth(nodeID string, reports []AgentOriginHealthReport, reportedAt time.Time) error {
 	nodeID = strings.TrimSpace(nodeID)
 	if nodeID == "" {
-		return errors.New("node_id 涓嶈兘涓虹┖")
+		return errors.New("node_id 不能为空")
 	}
 	if reportedAt.IsZero() {
 		reportedAt = time.Now().UTC()
@@ -415,9 +414,9 @@ func summarizeAgentDNSProbeResults(results []AgentDNSProbeResult) (bool, float64
 	return healthy, averageRTT, maxRTT, failureSamples, lastError
 }
 
-func persistBufferedObservability(tx *gorm.DB, nodeID string, records []AgentBufferedObservabilityRecord, reportedAt time.Time) error {
-	snapshots := make([]*model.NodeMetricSnapshot, 0, len(records))
-	reports := make([]*model.NodeRequestReport, 0, len(records))
+func persistNodeMetricsAndTrafficReports(tx *gorm.DB, nodeID string, snapshot *AgentNodeMetricSnapshot, trafficReport *AgentNodeTrafficReport, records []AgentBufferedObservabilityRecord, reportedAt time.Time) error {
+	snapshots := make([]*model.NodeMetricSnapshot, 0, len(records)+1)
+	reports := make([]*model.NodeRequestReport, 0, len(records)+1)
 	for _, record := range records {
 		if snapshot := buildNodeMetricSnapshotRecord(nodeID, record.Snapshot, reportedAt); snapshot != nil {
 			snapshots = append(snapshots, snapshot)
@@ -430,6 +429,16 @@ func persistBufferedObservability(tx *gorm.DB, nodeID string, records []AgentBuf
 			reports = append(reports, report)
 		}
 	}
+	if snapshot := buildNodeMetricSnapshotRecord(nodeID, snapshot, reportedAt); snapshot != nil {
+		snapshots = append(snapshots, snapshot)
+	}
+	report, err := buildNodeRequestReportRecord(nodeID, trafficReport, reportedAt)
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		reports = append(reports, report)
+	}
 	if _, err := model.InsertNewNodeMetricSnapshots(tx, snapshots); err != nil {
 		return err
 	}
@@ -439,23 +448,68 @@ func persistBufferedObservability(tx *gorm.DB, nodeID string, records []AgentBuf
 	return nil
 }
 
-func persistAccessLogsBestEffort(nodeID string, logs []AgentNodeAccessLog, bufferedRecords []AgentBufferedObservabilityRecord, reportedAt time.Time) {
-	if len(logs) == 0 && len(bufferedRecords) == 0 {
-		return
+func persistAccessLogsBestEffort(nodeID string, logs []AgentNodeAccessLog, bufferedRecords []AgentBufferedObservabilityRecord, reportedAt time.Time) error {
+	batches := collectNodeAccessLogBatches(logs, bufferedRecords)
+	if len(batches) == 0 {
+		return nil
 	}
+
+	combinedLogs := flattenNodeAccessLogBatches(batches)
+	if len(combinedLogs) == 0 {
+		return nil
+	}
+	if err := persistNodeAccessLogsWithTransaction(nodeID, combinedLogs, reportedAt); err != nil {
+		slog.Warn("persist access logs batch failed", "node_id", nodeID, "count", len(combinedLogs), "batch_count", len(batches), "error", err)
+		return err
+	}
+	return nil
+}
+
+type nodeAccessLogBatchKind string
+
+const (
+	nodeAccessLogBatchKindCurrent  nodeAccessLogBatchKind = "current"
+	nodeAccessLogBatchKindBuffered nodeAccessLogBatchKind = "buffered"
+)
+
+type nodeAccessLogBatch struct {
+	kind nodeAccessLogBatchKind
+	logs []AgentNodeAccessLog
+}
+
+func collectNodeAccessLogBatches(logs []AgentNodeAccessLog, bufferedRecords []AgentBufferedObservabilityRecord) []nodeAccessLogBatch {
+	batches := make([]nodeAccessLogBatch, 0, len(bufferedRecords)+1)
 	if len(logs) > 0 {
-		if err := persistNodeAccessLogsWithTransaction(nodeID, logs, reportedAt); err != nil {
-			slog.Warn("persist access logs failed", "node_id", nodeID, "count", len(logs), "error", err)
-		}
+		batches = append(batches, nodeAccessLogBatch{
+			kind: nodeAccessLogBatchKindCurrent,
+			logs: logs,
+		})
 	}
 	for _, record := range bufferedRecords {
 		if len(record.AccessLogs) == 0 {
 			continue
 		}
-		if err := persistNodeAccessLogsWithTransaction(nodeID, record.AccessLogs, reportedAt); err != nil {
-			slog.Warn("persist buffered access logs failed", "node_id", nodeID, "count", len(record.AccessLogs), "error", err)
-		}
+		batches = append(batches, nodeAccessLogBatch{
+			kind: nodeAccessLogBatchKindBuffered,
+			logs: record.AccessLogs,
+		})
 	}
+	return batches
+}
+
+func flattenNodeAccessLogBatches(batches []nodeAccessLogBatch) []AgentNodeAccessLog {
+	total := 0
+	for _, batch := range batches {
+		total += len(batch.logs)
+	}
+	if total == 0 {
+		return nil
+	}
+	logs := make([]AgentNodeAccessLog, 0, total)
+	for _, batch := range batches {
+		logs = append(logs, batch.logs...)
+	}
+	return logs
 }
 
 func persistNodeAccessLogsWithTransaction(nodeID string, logs []AgentNodeAccessLog, reportedAt time.Time) error {
@@ -485,15 +539,6 @@ func persistNodeSystemProfile(tx *gorm.DB, nodeID string, profile *AgentNodeSyst
 	return tx.Model(&model.NodeSystemProfile{}).Where("node_id = ?", nodeID).Assign(record).FirstOrCreate(record).Error
 }
 
-func persistNodeMetricSnapshot(tx *gorm.DB, nodeID string, snapshot *AgentNodeMetricSnapshot, reportedAt time.Time) error {
-	record := buildNodeMetricSnapshotRecord(nodeID, snapshot, reportedAt)
-	if record == nil {
-		return nil
-	}
-	_, err := model.InsertNewNodeMetricSnapshots(tx, []*model.NodeMetricSnapshot{record})
-	return err
-}
-
 func buildNodeMetricSnapshotRecord(nodeID string, snapshot *AgentNodeMetricSnapshot, reportedAt time.Time) *model.NodeMetricSnapshot {
 	if snapshot == nil {
 		return nil
@@ -518,18 +563,6 @@ func buildNodeMetricSnapshotRecord(nodeID string, snapshot *AgentNodeMetricSnaps
 		OpenrestyTxBytes:     snapshot.OpenrestyTxBytes,
 		OpenrestyConnections: snapshot.OpenrestyConnections,
 	}
-}
-
-func persistNodeTrafficReport(tx *gorm.DB, nodeID string, report *AgentNodeTrafficReport, reportedAt time.Time) error {
-	record, err := buildNodeRequestReportRecord(nodeID, report, reportedAt)
-	if err != nil {
-		return err
-	}
-	if record == nil {
-		return nil
-	}
-	_, err = model.InsertNewNodeRequestReports(tx, []*model.NodeRequestReport{record})
-	return err
 }
 
 func buildNodeRequestReportRecord(nodeID string, report *AgentNodeTrafficReport, reportedAt time.Time) (*model.NodeRequestReport, error) {
@@ -563,13 +596,9 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 	if len(logs) == 0 {
 		return nil
 	}
-	resolver, err := newAccessLogRegionResolver()
-	if err != nil {
-		slog.Warn("initialize access log geo resolver failed", "node_id", nodeID, "error", err)
-	}
-	if resolver != nil {
-		defer resolver.Close()
-	}
+	var provider geoip.GeoIPService
+	providerLoaded := false
+	geoResultsByIP := make(map[string]accessLogGeoResult)
 	records := make([]*model.NodeAccessLog, 0, len(logs))
 	for _, item := range logs {
 		record := &model.NodeAccessLog{
@@ -578,7 +607,7 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 			RemoteAddr:    strings.TrimSpace(item.RemoteAddr),
 			Region:        "",
 			Operator:      "",
-			Host:          strings.TrimSpace(item.Host),
+			Host:          normalizePersistedAccessLogHost(item.Host),
 			Path:          truncateForDatabase(normalizePersistedAccessLogPath(item.Path), nodeAccessLogPathMaxLength),
 			StatusCode:    item.StatusCode,
 			Reason:        truncateForDatabase(security.RedactSensitiveText(strings.TrimSpace(item.Reason)), 512),
@@ -587,8 +616,16 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 			ResponseBytes: nonNegativeInt64(item.ResponseBytes),
 			UpstreamBytes: nonNegativeInt64(item.UpstreamBytes),
 		}
-		if resolver != nil {
-			geoResult := resolver.ResolveInfo(record.RemoteAddr)
+		if normalizedIP := normalizeAccessLogIP(record.RemoteAddr); normalizedIP != "" {
+			geoResult, ok := geoResultsByIP[normalizedIP]
+			if !ok {
+				if !providerLoaded {
+					provider = currentAccessLogRegionProvider()
+					providerLoaded = true
+				}
+				geoResult = resolveAccessLogGeoInfo(provider, normalizedIP)
+				geoResultsByIP[normalizedIP] = geoResult
+			}
 			record.Region = geoResult.region
 			record.Operator = truncateForDatabase(geoResult.operator, 255)
 		}
@@ -597,8 +634,7 @@ func persistNodeAccessLogs(tx *gorm.DB, nodeID string, logs []AgentNodeAccessLog
 	if _, err := model.InsertNewNodeAccessLogs(tx, records); err != nil {
 		return err
 	}
-	_, err = model.DeleteNodeAccessLogsByNodeBefore(tx, nodeID, reportedAt.Add(-nodeAccessLogRetentionWindow))
-	return err
+	return nil
 }
 
 func normalizePersistedAccessLogPath(value string) string {
@@ -618,6 +654,10 @@ func normalizePersistedAccessLogPath(value string) string {
 		return trimmed[:index]
 	}
 	return trimmed
+}
+
+func normalizePersistedAccessLogHost(value string) string {
+	return strings.TrimSpace(strings.ToLower(value))
 }
 
 func reconcileNodeHealthEvents(tx *gorm.DB, nodeID string, events []AgentNodeHealthEvent, reportedAt time.Time) error {

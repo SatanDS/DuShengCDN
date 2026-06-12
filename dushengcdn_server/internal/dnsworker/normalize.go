@@ -167,6 +167,7 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 		if len(policy.Pools[i].SourceCIDRs) > 0 {
 			policy.Pools[i].SourceCIDRs = normalizeCIDRList(policy.Pools[i].SourceCIDRs)
 		}
+		policy.Pools[i].compiledSourceCIDRs = compileSchedulerCIDRList(policy.Pools[i].SourceCIDRs)
 		if len(policy.Pools[i].Operators) > 0 {
 			policy.Pools[i].Operators = normalizeOperatorList(policy.Pools[i].Operators)
 		}
@@ -182,6 +183,7 @@ func normalizePolicy(input GSLBPolicy, route SnapshotRoute) GSLBPolicy {
 		if len(policy.Pools[i].ExcludeSourceCIDRs) > 0 {
 			policy.Pools[i].ExcludeSourceCIDRs = normalizeCIDRList(policy.Pools[i].ExcludeSourceCIDRs)
 		}
+		policy.Pools[i].compiledExcludeSourceCIDRs = compileSchedulerCIDRList(policy.Pools[i].ExcludeSourceCIDRs)
 		if len(policy.Pools[i].ExcludeOperators) > 0 {
 			policy.Pools[i].ExcludeOperators = normalizeOperatorList(policy.Pools[i].ExcludeOperators)
 		}

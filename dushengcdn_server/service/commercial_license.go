@@ -1279,10 +1279,6 @@ func commercialLicenseAllowUnsigned() bool {
 	}
 }
 
-func commercialLicenseUsageCounts() (int64, int64, error) {
-	return commercialLicenseUsageCountsWithDB(model.DB)
-}
-
 func commercialLicenseUsageCountsWithDB(db *gorm.DB) (int64, int64, error) {
 	if db == nil {
 		db = model.DB

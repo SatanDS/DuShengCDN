@@ -117,15 +117,16 @@ func ListProxyRouteIdentityCandidates(siteName string, domains []string) (routes
 	conditions := make([]string, 0, len(domains)+3)
 	args := make([]any, 0, len(domains)+3)
 	siteName = strings.TrimSpace(siteName)
+	hasNormalizedDomains := proxyRouteRuntimeTableAvailable(DB, &ProxySiteDomain{})
 	if siteName != "" {
-		conditions = append(conditions, "site_name = ?", "domain = ?")
+		conditions = append(conditions, "proxy_routes.site_name = ?", "proxy_routes.domain = ?")
 		args = append(args, siteName, siteName)
 	}
 
 	domainValues := make([]string, 0, len(domains))
 	seenDomains := make(map[string]struct{}, len(domains))
 	for _, domain := range domains {
-		domain = strings.TrimSpace(domain)
+		domain = normalizeProxyRouteDomainForMigration(domain)
 		if domain == "" {
 			continue
 		}
@@ -136,18 +137,28 @@ func ListProxyRouteIdentityCandidates(siteName string, domains []string) (routes
 		domainValues = append(domainValues, domain)
 	}
 	if len(domainValues) > 0 {
-		conditions = append(conditions, "domain IN ?")
+		conditions = append(conditions, "proxy_routes.domain IN ?")
 		args = append(args, domainValues)
-		for _, domain := range domainValues {
-			conditions = append(conditions, "domains LIKE ?")
-			args = append(args, "%\""+domain+"\"%")
+		if hasNormalizedDomains {
+			conditions = append(conditions, "proxy_site_domains.domain IN ?")
+			args = append(args, domainValues)
+		} else {
+			for _, domain := range domainValues {
+				conditions = append(conditions, "domains LIKE ?")
+				args = append(args, "%\""+domain+"\"%")
+			}
 		}
 	}
 	if len(conditions) == 0 {
 		return []*ProxyRoute{}, nil
 	}
 
-	err = DB.Where(strings.Join(conditions, " OR "), args...).Order("id asc").Find(&routes).Error
+	query := DB.Model(&ProxyRoute{})
+	if len(domainValues) > 0 && hasNormalizedDomains {
+		query = query.Distinct("proxy_routes.*").
+			Joins("LEFT JOIN proxy_site_domains ON proxy_site_domains.proxy_route_id = proxy_routes.id")
+	}
+	err = query.Where(strings.Join(conditions, " OR "), args...).Order("proxy_routes.id asc").Find(&routes).Error
 	return routes, err
 }
 

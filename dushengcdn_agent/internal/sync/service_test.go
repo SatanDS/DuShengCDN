@@ -25,16 +25,17 @@ type fakeClient struct {
 }
 
 type fakeManager struct {
-	applyOutcome       nginx.ApplyOutcome
-	currentChecksum    string
-	currentChecksumErr error
-	ensureErr          error
-	fallbackErr        error
-	ensureCalls        []bool
-	fallbackReasons    []string
-	applyMainContents  []string
-	applyRouteContents []string
-	applyFiles         [][]protocol.SupportFile
+	applyOutcome         nginx.ApplyOutcome
+	currentChecksum      string
+	currentChecksumErr   error
+	currentChecksumCalls int
+	ensureErr            error
+	fallbackErr          error
+	ensureCalls          []bool
+	fallbackReasons      []string
+	applyMainContents    []string
+	applyRouteContents   []string
+	applyFiles           [][]protocol.SupportFile
 }
 
 func (f *fakeExecutor) Test(ctx context.Context) error {
@@ -88,6 +89,7 @@ func (m *fakeManager) EnsureSafeFallbackRuntime(ctx context.Context, reason stri
 }
 
 func (m *fakeManager) CurrentChecksum() (string, error) {
+	m.currentChecksumCalls++
 	return m.currentChecksum, m.currentChecksumErr
 }
 
@@ -803,8 +805,39 @@ func TestSyncOnceSkipsFetchWhenHeartbeatChecksumMatches(t *testing.T) {
 	if client.fetchCalls != 0 {
 		t.Fatalf("expected no active config fetch when heartbeat checksum matches, got %d", client.fetchCalls)
 	}
+	if manager.currentChecksumCalls != 0 {
+		t.Fatalf("expected state checksum match to skip local checksum scan, got %d calls", manager.currentChecksumCalls)
+	}
 	if len(client.reports) != 0 {
 		t.Fatal("expected no apply log when no config change is needed")
+	}
+}
+
+func TestSyncOnceNoActiveConfigSkipsLocalChecksumScan(t *testing.T) {
+	client := &fakeClient{}
+	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	nodeID, err := stateStore.EnsureNodeID()
+	if err != nil {
+		t.Fatalf("EnsureNodeID failed: %v", err)
+	}
+	if err = stateStore.Save(&state.Snapshot{
+		NodeID:          nodeID,
+		CurrentVersion:  "20260309-005",
+		CurrentChecksum: "checksum-5",
+	}); err != nil {
+		t.Fatalf("failed to seed state: %v", err)
+	}
+
+	manager := &fakeManager{}
+	service := New(client, manager, stateStore)
+	if err = service.SyncOnce(context.Background(), nil); err != nil {
+		t.Fatalf("SyncOnce failed: %v", err)
+	}
+	if manager.currentChecksumCalls != 0 {
+		t.Fatalf("expected missing heartbeat target to skip local checksum scan, got %d calls", manager.currentChecksumCalls)
+	}
+	if client.fetchCalls != 0 {
+		t.Fatalf("expected periodic missing heartbeat target to skip fetch, got %d", client.fetchCalls)
 	}
 }
 

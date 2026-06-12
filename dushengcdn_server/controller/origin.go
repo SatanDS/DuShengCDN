@@ -2,9 +2,6 @@ package controller
 
 import (
 	"dushengcdn/service"
-	"encoding/json"
-	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -12,117 +9,65 @@ import (
 func GetOrigins(c *gin.Context) {
 	origins, err := service.ListOrigins()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    origins,
-	})
+	respondSuccess(c, origins)
 }
 
 func GetOrigin(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+	id, ok := parseUintParamWithMessage(c, "id", "无效的参数")
+	if !ok {
 		return
 	}
-	origin, err := service.GetOriginDetail(uint(id))
+	origin, err := service.GetOriginDetail(id)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    origin,
-	})
+	respondSuccess(c, origin)
 }
 
 func CreateOrigin(c *gin.Context) {
 	var input service.OriginInput
-	if err := json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "无效的参数")
 		return
 	}
 	origin, err := service.CreateOrigin(input)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    origin,
-	})
+	respondSuccess(c, origin)
 }
 
 func UpdateOrigin(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+	id, ok := parseUintParamWithMessage(c, "id", "无效的参数")
+	if !ok {
 		return
 	}
 	var input service.OriginInput
-	if err = json.NewDecoder(c.Request.Body).Decode(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
+		respondBadRequest(c, "无效的参数")
 		return
 	}
-	origin, err := service.UpdateOrigin(uint(id), input)
+	origin, err := service.UpdateOrigin(id, input)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    origin,
-	})
+	respondSuccess(c, origin)
 }
 
 func DeleteOrigin(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+	id, ok := parseUintParamWithMessage(c, "id", "无效的参数")
+	if !ok {
 		return
 	}
-	if err = service.DeleteOrigin(uint(id)); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+	if err := service.DeleteOrigin(id); err != nil {
+		respondFailure(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
+	respondSuccessMessage(c, "")
 }

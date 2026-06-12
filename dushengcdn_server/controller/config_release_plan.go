@@ -2,7 +2,6 @@ package controller
 
 import (
 	"dushengcdn/service"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -33,7 +32,7 @@ func ListConfigReleasePlans(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/config-release-plans/{id} [get]
 func GetConfigReleasePlan(c *gin.Context) {
-	id, ok := parseConfigReleasePlanID(c)
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
 	if !ok {
 		return
 	}
@@ -77,7 +76,7 @@ func CreateConfigReleasePlan(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/config-release-plans/{id}/start [post]
 func StartConfigReleasePlan(c *gin.Context) {
-	id, ok := parseConfigReleasePlanID(c)
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
 	if !ok {
 		return
 	}
@@ -99,7 +98,7 @@ func StartConfigReleasePlan(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/config-release-plans/{id}/evaluate [post]
 func EvaluateConfigReleasePlan(c *gin.Context) {
-	id, ok := parseConfigReleasePlanID(c)
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
 	if !ok {
 		return
 	}
@@ -121,7 +120,7 @@ func EvaluateConfigReleasePlan(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/config-release-plans/{id}/advance [post]
 func AdvanceConfigReleasePlan(c *gin.Context) {
-	id, ok := parseConfigReleasePlanID(c)
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
 	if !ok {
 		return
 	}
@@ -143,7 +142,7 @@ func AdvanceConfigReleasePlan(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/config-release-plans/{id}/complete [post]
 func CompleteConfigReleasePlan(c *gin.Context) {
-	id, ok := parseConfigReleasePlanID(c)
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
 	if !ok {
 		return
 	}
@@ -165,7 +164,7 @@ func CompleteConfigReleasePlan(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/config-release-plans/{id}/fail [post]
 func FailConfigReleasePlan(c *gin.Context) {
-	id, ok := parseConfigReleasePlanID(c)
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
 	if !ok {
 		return
 	}
@@ -183,13 +182,4 @@ func FailConfigReleasePlan(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, plan)
-}
-
-func parseConfigReleasePlanID(c *gin.Context) (uint, bool) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "invalid id")
-		return 0, false
-	}
-	return uint(id), true
 }

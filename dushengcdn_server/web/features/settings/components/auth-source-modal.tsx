@@ -26,6 +26,7 @@ import {
   ResourceSelect,
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
+import { getErrorMessage } from '@/lib/utils/errors';
 
 const emptyForm: AuthSourcePayload = {
   name: '',
@@ -38,10 +39,6 @@ const emptyForm: AuthSourcePayload = {
   scopes: 'user:email',
   icon_url: '',
 };
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
 
 function sourceToForm(source: AuthSource): AuthSourcePayload {
   return {

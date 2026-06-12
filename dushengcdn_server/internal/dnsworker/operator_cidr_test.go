@@ -38,6 +38,44 @@ func TestOperatorCIDRMatcherLoadsGaoyifanStyleDirectory(t *testing.T) {
 	}
 }
 
+func TestOperatorCIDRMatcherMatchesNetipRangesAtBoundaries(t *testing.T) {
+	ranges := []operatorCIDRRange{}
+	for _, item := range []struct {
+		value    string
+		operator string
+	}{
+		{value: "198.51.100.42", operator: "cn-unicom"},
+		{value: "203.0.113.0/24", operator: "cn-telecom"},
+		{value: "2001:db8:8::/125", operator: "cn-mobile"},
+	} {
+		parsed, err := parseOperatorCIDR(item.value, item.operator)
+		if err != nil {
+			t.Fatalf("parse %s: %v", item.value, err)
+		}
+		ranges = append(ranges, parsed)
+	}
+	matcher := &OperatorCIDRMatcher{ranges: ranges}
+
+	tests := []struct {
+		ip   string
+		want string
+	}{
+		{ip: "203.0.113.0", want: "cn-telecom"},
+		{ip: "203.0.113.255", want: "cn-telecom"},
+		{ip: "203.0.114.0", want: ""},
+		{ip: "198.51.100.42", want: "cn-unicom"},
+		{ip: "198.51.100.43", want: ""},
+		{ip: "2001:db8:8::", want: "cn-mobile"},
+		{ip: "2001:db8:8::7", want: "cn-mobile"},
+		{ip: "2001:db8:8::8", want: ""},
+	}
+	for _, tt := range tests {
+		if got := matcher.Lookup(parseTestIP(t, tt.ip)); got != tt.want {
+			t.Fatalf("Lookup(%s) = %q, want %q", tt.ip, got, tt.want)
+		}
+	}
+}
+
 func parseTestIP(t *testing.T, value string) net.IP {
 	t.Helper()
 	ip := net.ParseIP(value)

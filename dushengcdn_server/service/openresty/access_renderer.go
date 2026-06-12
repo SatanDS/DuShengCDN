@@ -1,17 +1,15 @@
 package openresty
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"dushengcdn/utils/security"
 	"encoding/json"
 	"fmt"
 	"strings"
 )
 
 const (
-	basicAuthCredentialHashMaterial = "dushengcdn basic auth v1\n"
-	anubisStaticPrefix              = "/.within.website/x/cmd/anubis/static/"
-	anubisAPIPrefix                 = "/.within.website/x/cmd/anubis/api/"
+	anubisStaticPrefix = "/.within.website/x/cmd/anubis/static/"
+	anubisAPIPrefix    = "/.within.website/x/cmd/anubis/api/"
 )
 
 func renderRouteAccessBlock(powEnabled bool, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
@@ -51,16 +49,11 @@ func renderBasicAuthBlock(enabled bool, username, passwordHash string) string {
                 return ngx.exit(401)
             end
         }
-`, expectedHash, luaStringLiteral(basicAuthCredentialHashMaterial))
+`, expectedHash, luaStringLiteral(security.BasicAuthCredentialHashMaterial))
 }
 
 func BasicAuthCredentialHash(username, password string) string {
-	credentials := strings.TrimSpace(username) + ":" + strings.TrimSpace(password)
-	if credentials == ":" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(basicAuthCredentialHashMaterial + credentials))
-	return hex.EncodeToString(sum[:])
+	return security.BasicAuthCredentialHash(username, password)
 }
 
 func renderRegionRestrictionBlock(config routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {

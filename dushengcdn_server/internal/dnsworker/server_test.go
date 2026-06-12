@@ -30,6 +30,47 @@ func TestResolveStaticRecordsAndGeneratedSOA(t *testing.T) {
 	}
 }
 
+func TestResolveUsesIndexedNormalizedGSLBPolicy(t *testing.T) {
+	snapshot := baseSnapshot()
+	snapshot.Routes = []SnapshotRoute{
+		{
+			ID:           101,
+			Domains:      []string{"edge.example.com"},
+			ZoneID:       1,
+			NodePool:     "wrong",
+			RecordType:   "A",
+			TargetCount:  1,
+			ScheduleMode: "weighted",
+			TTL:          120,
+			GSLBEnabled:  true,
+			GSLBPolicy: GSLBPolicy{
+				Strategy:    "weighted",
+				TargetCount: 1,
+				TTL:         120,
+				Pools: []GSLBPoolPolicy{
+					{Name: "edge", Weight: 100},
+				},
+			},
+		},
+	}
+	snapshot.Nodes = []SnapshotNode{testNode("node-edge", "edge", "8.8.4.4", 100, 0)}
+	store := NewSnapshotStore("", time.Minute)
+	if err := store.Set(snapshot); err != nil {
+		t.Fatalf("store.Set: %v", err)
+	}
+	current, _, _, _ := store.Current()
+	current.Routes[0].GSLBPolicy = GSLBPolicy{}
+	server := NewDNSServer(store, NewScheduler(), NewRollupAggregator(time.Minute), nil, ":0")
+
+	response := server.Resolve(testQuery("edge.example.com", dns.TypeA, ""), nil)
+	if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 {
+		t.Fatalf("expected indexed policy answer, rcode=%s answer=%v", dns.RcodeToString[response.Rcode], response.Answer)
+	}
+	if got := response.Answer[0].(*dns.A).A.String(); got != "8.8.4.4" {
+		t.Fatalf("unexpected indexed policy target: %s", got)
+	}
+}
+
 func TestResolveAdvancedStaticRecords(t *testing.T) {
 	snapshot := baseSnapshot()
 	snapshot.Zones[0].Records = append(snapshot.Zones[0].Records,

@@ -195,6 +195,10 @@ func scheduleServerUpgradeFromRelease(channel string) (*LatestServerRelease, err
 		return nil, fmt.Errorf("服务升级正在执行中，请稍后再试")
 	}
 
+	// Claim the in-progress flag before releasing the lock, so concurrent
+	// schedule requests cannot both pass the check while the (slow) release
+	// preparation below is still downloading metadata.
+	serverUpgradeState.inProgress = true
 	resetServerUpgradeLogsLocked()
 	serverUpgradeState.status = "running"
 	appendServerUpgradeLogLocked("info", fmt.Sprintf("Server upgrade scheduled for channel: %s.", normalizedChannel.String()))
@@ -204,17 +208,13 @@ func scheduleServerUpgradeFromRelease(channel string) (*LatestServerRelease, err
 	prepared, err := prepareServerUpgrade(context.Background(), normalizedChannel)
 	if err != nil {
 		serverUpgradeState.Lock()
+		serverUpgradeState.inProgress = false
 		serverUpgradeState.status = "failed"
 		appendServerUpgradeLogLocked("error", err.Error())
 		serverUpgradeState.Unlock()
 		broadcastServerUpgradeSnapshot()
 		return nil, err
 	}
-
-	serverUpgradeState.Lock()
-	serverUpgradeState.inProgress = true
-	serverUpgradeState.Unlock()
-	broadcastServerUpgradeSnapshot()
 
 	prepared.release.InProgress = true
 
@@ -812,12 +812,10 @@ func executeServerUpgrade(task *preparedServerUpgrade) error {
 		_ = os.Remove(tempPath)
 		return err
 	}
+	// The release signature over (tag, asset, checksum) was already verified
+	// above, and the downloaded binary is bound to that checksum by the
+	// SHA256 comparison here, so no second signature pass is needed.
 	recordServerUpgradeLog("info", "Binary checksum verified.")
-	if err = verifyServerReleaseSignature(task.release.TagName, task.assetName, expectedChecksum, signature); err != nil {
-		_ = os.Remove(tempPath)
-		return err
-	}
-	recordServerUpgradeLog("info", "Binary signature verified.")
 	recordServerUpgradeLog("info", "Validating binary version.")
 	candidate, err := buildDownloadedServerBinaryCandidate(ctx, task.execPath, task.release.TagName, task.assetName, tempPath)
 	if err != nil {
@@ -1436,20 +1434,6 @@ func detectUploadedServerBinaryVersion(ctx context.Context, filePath string) (st
 		}
 	}
 	return "", fmt.Errorf("上传二进制未返回有效版本号")
-}
-
-func persistDownloadedServerBinary(ctx context.Context, execPath string, releaseTag string, reader io.Reader) (*manualServerBinaryCandidate, error) {
-	fileName := serverAssetName(runtime.GOOS, runtime.GOARCH)
-	tempPath, err := persistUploadedServerBinary(filepath.Dir(execPath), fileName, reader)
-	if err != nil {
-		return nil, err
-	}
-	candidate, err := buildDownloadedServerBinaryCandidate(ctx, execPath, releaseTag, fileName, tempPath)
-	if err != nil {
-		_ = os.Remove(tempPath)
-		return nil, err
-	}
-	return candidate, nil
 }
 
 func buildDownloadedServerBinaryCandidate(ctx context.Context, execPath string, releaseTag string, fileName string, tempPath string) (*manualServerBinaryCandidate, error) {

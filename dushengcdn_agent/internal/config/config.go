@@ -1,6 +1,7 @@
 package config
 
 import (
+	"dushengcdn-agent/internal/fileutil"
 	"dushengcdn-agent/internal/security"
 	"dushengcdn/utils/geoip/iputil"
 	"encoding/json"
@@ -550,7 +551,7 @@ func (cfg *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfg.configPath, data, 0o600); err != nil {
+	if err := fileutil.WriteFileAtomicIfChanged(cfg.configPath, data, 0o600); err != nil {
 		return err
 	}
 	return tightenConfigFilePermissions(cfg.configPath)

@@ -34,6 +34,8 @@ type accessLogRecord struct {
 
 var combinedAccessLogPattern = regexp.MustCompile(`^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(?:\S+)\s+(\S+)(?:\s+[^"]*)?"\s+(\d{3})\s+\S+`)
 
+const maxAccessLogDeltaBytes = 1 << 20
+
 type trafficAggregate struct {
 	windowStartedAt    time.Time
 	windowEndedAt      time.Time
@@ -111,6 +113,18 @@ func readAccessLogDelta(cfg *config.Config, stateStore *state.Store) *trafficAgg
 	if offset < 0 || offset > info.Size() {
 		offset = 0
 	}
+	if !snapshot.AccessLogOffsetReady && snapshot.AccessLogOffset > 0 {
+		snapshot.AccessLogOffsetReady = true
+	}
+	if !snapshot.AccessLogOffsetReady {
+		snapshot.AccessLogOffset = info.Size()
+		snapshot.AccessLogOffsetReady = true
+		_ = stateStore.Save(snapshot)
+		return nil
+	}
+	if info.Size()-offset > maxAccessLogDeltaBytes {
+		offset = info.Size() - maxAccessLogDeltaBytes
+	}
 	if _, err = file.Seek(offset, io.SeekStart); err != nil {
 		return nil
 	}
@@ -134,6 +148,7 @@ func readAccessLogDelta(cfg *config.Config, stateStore *state.Store) *trafficAgg
 	}
 
 	snapshot.AccessLogOffset = currentOffset
+	snapshot.AccessLogOffsetReady = true
 	_ = stateStore.Save(snapshot)
 
 	return aggregate

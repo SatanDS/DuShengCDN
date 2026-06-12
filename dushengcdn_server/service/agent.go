@@ -227,8 +227,11 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 		return nil, err
 	}
 	refreshAgentTokenCache(node)
-	dnsProbeTargets := buildAgentDNSProbeTargets()
-	persistHeartbeatObservability(node.NodeID, payload, node.LastSeenAt, dnsProbeTargets)
+	dnsWorkerContext := newAgentHeartbeatDNSWorkerContext()
+	dnsProbeTargets := dnsWorkerContext.buildProbeTargets()
+	if err := persistHeartbeatObservability(node.NodeID, payload, node.LastSeenAt, dnsProbeTargets); err != nil {
+		return nil, err
+	}
 	activeConfig, err := GetActiveConfigMetaForAgentNode(node)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -238,7 +241,7 @@ func HeartbeatNode(node *model.Node, payload AgentNodePayload) (*HeartbeatRespon
 		Node:             node,
 		AgentSettings:    buildAgentSettingsWithDNSProbeTargets(node, updateNow, updateChannel.String(), updateTag, restartOpenrestyNow, dnsProbeTargets),
 		ActiveConfig:     activeConfig,
-		DNSWorkerUpdates: pendingAgentDNSWorkerUpdatesForNode(node),
+		DNSWorkerUpdates: dnsWorkerContext.pendingUpdatesForNode(node),
 	}, nil
 }
 
@@ -336,16 +339,29 @@ func buildAgentSettingsWithDNSProbeTargets(node *model.Node, updateNow bool, upd
 }
 
 func buildAgentDNSProbeTargets() []AgentDNSProbeTarget {
+	return newAgentHeartbeatDNSWorkerContext().buildProbeTargets()
+}
+
+type agentHeartbeatDNSWorkerContext struct {
+	workers    []*model.DNSWorker
+	workersErr error
+}
+
+func newAgentHeartbeatDNSWorkerContext() *agentHeartbeatDNSWorkerContext {
 	workers, err := model.ListDNSWorkers()
-	if err != nil || len(workers) == 0 {
+	return &agentHeartbeatDNSWorkerContext{workers: workers, workersErr: err}
+}
+
+func (ctx *agentHeartbeatDNSWorkerContext) buildProbeTargets() []AgentDNSProbeTarget {
+	if ctx == nil || ctx.workersErr != nil || len(ctx.workers) == 0 {
 		return nil
 	}
 	queryName, err := dnsWorkerProbeQueryName(0)
 	if err != nil {
 		return nil
 	}
-	targets := make([]AgentDNSProbeTarget, 0, len(workers))
-	for _, worker := range workers {
+	targets := make([]AgentDNSProbeTarget, 0, len(ctx.workers))
+	for _, worker := range ctx.workers {
 		if worker == nil || normalizeDNSWorkerStatus(worker.Status) != dnsWorkerStatusOnline {
 			continue
 		}
@@ -371,7 +387,7 @@ func buildAgentDNSProbeTargets() []AgentDNSProbeTarget {
 }
 
 func GetActiveConfigMetaForAgent() (*ActiveConfigMeta, error) {
-	version, err := model.GetActiveConfigVersion()
+	version, err := model.GetActiveConfigVersionMeta()
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
@@ -385,14 +401,21 @@ func GetActiveConfigMetaForAgent() (*ActiveConfigMeta, error) {
 }
 
 func GetActiveConfigMetaForAgentNode(node *model.Node) (*ActiveConfigMeta, error) {
-	version, artifact, err := getActiveConfigVersionArtifactForNode(node)
+	version, artifact, err := getActiveConfigVersionArtifactMetaForNode(node)
 	if err != nil {
 		return nil, err
+	}
+	return activeConfigMetaForVersionArtifact(version, artifact), nil
+}
+
+func activeConfigMetaForVersionArtifact(version *model.ConfigVersion, artifact *model.ConfigVersionArtifact) *ActiveConfigMeta {
+	if version == nil || artifact == nil {
+		return nil
 	}
 	return &ActiveConfigMeta{
 		Version:  version.Version,
 		Checksum: artifact.Checksum,
-	}, nil
+	}
 }
 
 func GetActiveConfigForAgent() (*AgentConfigResponse, error) {
@@ -479,6 +502,55 @@ func getActiveConfigVersionArtifactForNode(node *model.Node) (*model.ConfigVersi
 				return nil, nil, ensureErr
 			}
 			artifact, err = model.GetConfigVersionArtifact(version.ID, poolName)
+		}
+	}
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, fmt.Errorf("当前激活版本没有节点池 %s 的配置包，请重新发布配置", poolName)
+		}
+		return nil, nil, err
+	}
+	return version, artifact, nil
+}
+
+func getActiveConfigVersionArtifactMetaForNode(node *model.Node) (*model.ConfigVersion, *model.ConfigVersionArtifact, error) {
+	if node != nil {
+		if _, target, err := model.GetActiveConfigReleaseTargetForNodeID(node.NodeID); err == nil && target != nil {
+			version, versionErr := model.GetConfigVersionMetaByID(target.ConfigVersionID)
+			if versionErr != nil {
+				return nil, nil, versionErr
+			}
+			artifact, artifactErr := model.GetConfigVersionArtifactMeta(version.ID, normalizeNodePoolName(target.PoolName))
+			if artifactErr != nil {
+				return nil, nil, artifactErr
+			}
+			return version, artifact, nil
+		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, err
+		}
+	}
+	version, err := model.GetActiveConfigVersionMeta()
+	if err != nil {
+		return nil, nil, err
+	}
+	poolName := normalizeNodePoolName("default")
+	if node != nil {
+		poolName = normalizeNodePoolName(node.PoolName)
+	}
+	if poolName == "" {
+		poolName = normalizeNodePoolName("default")
+	}
+	artifact, err := model.GetConfigVersionArtifactMeta(version.ID, poolName)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fullVersion, versionErr := model.GetConfigVersionByID(version.ID)
+			if versionErr != nil {
+				return nil, nil, versionErr
+			}
+			if ensureErr := ensureConfigVersionArtifactsForPools(fullVersion, []string{poolName}); ensureErr != nil {
+				return nil, nil, ensureErr
+			}
+			artifact, err = model.GetConfigVersionArtifactMeta(version.ID, poolName)
 		}
 	}
 	if err != nil {
@@ -602,6 +674,28 @@ func ListNodeViews() ([]*NodeView, error) {
 		views = append(views, view)
 	}
 	return views, nil
+}
+
+func GetNodeView(id uint) (*NodeView, error) {
+	node, err := model.GetNodeByID(id)
+	if err != nil {
+		return nil, err
+	}
+	view := buildNodeView(node)
+	latestLogs, err := model.GetLatestApplyLogsByNodeIDs([]string{node.NodeID})
+	if err != nil {
+		return nil, err
+	}
+	if log, ok := latestLogs[node.NodeID]; ok {
+		view.LatestApplyResult = log.Result
+		view.LatestApplyMessage = log.Message
+		view.LatestApplyChecksum = log.Checksum
+		view.LatestMainConfigChecksum = log.MainConfigChecksum
+		view.LatestRouteConfigChecksum = log.RouteConfigChecksum
+		view.LatestSupportFileCount = log.SupportFileCount
+		view.LatestApplyAt = &log.CreatedAt
+	}
+	return view, nil
 }
 
 func truncateForDatabase(value string, max int) string {

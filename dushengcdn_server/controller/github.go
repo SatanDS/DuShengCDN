@@ -223,29 +223,6 @@ func completeGitHubLogin(c *gin.Context, githubUser *GitHubUser) {
 	setupLogin(&user, c)
 }
 
-func GitHubBind(c *gin.Context) {
-	if !common.GitHubOAuthEnabled {
-		legacyGitHubOAuthFailure(c, "管理员未开启通过 GitHub 登录以及注册")
-		return
-	}
-	code := strings.TrimSpace(c.Query("code"))
-	if code == "" {
-		GitHubOAuthAuthorize(c)
-		return
-	}
-	if err := validateLegacyGitHubOAuthState(c); err != nil {
-		legacyGitHubOAuthFailure(c, err.Error())
-		return
-	}
-	githubUser, err := getGitHubUserInfoByCode(code, legacyGitHubOAuthFrontendCallbackURL(c))
-	if err != nil {
-		slog.Warn("legacy github bind profile exchange failed", "error", err)
-		legacyGitHubOAuthFailure(c, "GitHub 授权失败，请返回登录页重试")
-		return
-	}
-	completeGitHubBind(c, githubUser)
-}
-
 func completeGitHubBind(c *gin.Context, githubUser *GitHubUser) {
 	githubID, err := stableGitHubUserID(githubUser)
 	if err != nil {
@@ -295,12 +272,6 @@ func validateLegacyGitHubOAuthState(c *gin.Context) error {
 		return errors.New("授权状态无效，请重新登录")
 	}
 	return nil
-}
-
-func clearLegacyGitHubOAuthState(c *gin.Context) {
-	session := sessions.Default(c)
-	session.Delete(legacyGitHubOAuthStateSessionKey)
-	_ = session.Save()
 }
 
 func legacyGitHubOAuthAuthorizeURL(c *gin.Context, state string) (string, error) {

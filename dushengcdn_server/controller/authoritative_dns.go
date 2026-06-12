@@ -451,12 +451,24 @@ func GetDNSSnapshot(c *gin.Context) {
 		respondBadRequest(c, "signed DNS snapshot is required; upgrade DNS Worker to a version that sends "+dnsworker.SnapshotSignatureHeader)
 		return
 	}
-	snapshot, err := service.GetSignedAuthoritativeDNSSnapshot(worker, token)
+	result, err := service.GetSignedAuthoritativeDNSSnapshotConditional(worker, token, dnsWorkerLastSnapshotVersionFromRequest(c))
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
 	}
-	respondSuccess(c, snapshot)
+	if result != nil && result.SnapshotVersion != "" {
+		c.Header("ETag", `"`+result.SnapshotVersion+`"`)
+		c.Header("X-DNS-Snapshot-Version", result.SnapshotVersion)
+	}
+	if result != nil && result.NotModified {
+		c.Status(http.StatusNotModified)
+		return
+	}
+	if result == nil {
+		respondFailure(c, "DNS snapshot is unavailable")
+		return
+	}
+	respondSuccess(c, result.Snapshot)
 }
 
 func DNSWorkerHeartbeat(c *gin.Context) {
@@ -547,13 +559,20 @@ func dnsWorkerTokenFromRequest(c *gin.Context) string {
 	return ""
 }
 
-func parseUintParam(c *gin.Context, key string) (uint, bool) {
-	id, err := strconv.ParseUint(c.Param(key), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "invalid parameter")
-		return 0, false
+func dnsWorkerLastSnapshotVersionFromRequest(c *gin.Context) string {
+	for _, candidate := range []string{
+		c.GetHeader("X-DNS-Snapshot-Version"),
+		c.GetHeader("If-None-Match"),
+		c.Query("last_snapshot_version"),
+	} {
+		version := strings.TrimSpace(candidate)
+		version = strings.TrimPrefix(version, "W/")
+		version = strings.Trim(version, `"`)
+		if version != "" {
+			return version
+		}
 	}
-	return uint(id), true
+	return ""
 }
 
 func decodeJSONRequest(c *gin.Context, out any) bool {

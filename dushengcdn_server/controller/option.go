@@ -4,7 +4,6 @@ import (
 	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/service"
-	"dushengcdn/utils"
 	"dushengcdn/utils/geoip"
 	"encoding/json"
 	"fmt"
@@ -20,6 +19,7 @@ var (
 	openRestyProxyBuffersPattern  = regexp.MustCompile(`^\d+\s+\d+[kKmMgG]?$`)
 	openRestyCacheLevelsPattern   = regexp.MustCompile(`^\d{1,2}(?::\d{1,2}){0,2}$`)
 	openRestyDurationTokenPattern = regexp.MustCompile(`^\d+[smhdwSMHDW]$`)
+	openRestyResolversPattern     = regexp.MustCompile(`^[a-zA-Z0-9.:\-\s]+$`)
 	githubRepoPattern             = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 )
 
@@ -234,7 +234,7 @@ func validateOpenRestyOption(key string, value string) error {
 		if trimmed == "" {
 			return nil
 		}
-		if !regexp.MustCompile(`^[a-zA-Z0-9.:\-\s]+$`).MatchString(trimmed) {
+		if !openRestyResolversPattern.MatchString(trimmed) {
 			return fmt.Errorf("%s 包含非法字符，请填入有效的 IP 地址或域名，以空格分隔", key)
 		}
 		return nil
@@ -316,15 +316,15 @@ func validateOptionWithState(option model.Option, state map[string]string) error
 	switch option.Key {
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && strings.TrimSpace(state["GitHubClientId"]) == "" {
-			return fmt.Errorf("鏃犳硶鍚敤 GitHub OAuth锛岃鍏堝～鍏?GitHub Client ID 浠ュ強 GitHub Client Secret锛?")
+			return fmt.Errorf("无法启用 GitHub OAuth，请先填入 GitHub Client ID 以及 GitHub Client Secret！")
 		}
 	case "WeChatAuthEnabled":
 		if option.Value == "true" && strings.TrimSpace(state["WeChatServerAddress"]) == "" {
-			return fmt.Errorf("鏃犳硶鍚敤寰俊鐧诲綍锛岃鍏堝～鍏ュ井淇＄櫥褰曠浉鍏抽厤缃俊鎭紒")
+			return fmt.Errorf("无法启用微信登录，请先填入微信登录相关配置信息！")
 		}
 	case "TurnstileCheckEnabled":
 		if option.Value == "true" && strings.TrimSpace(state["TurnstileSiteKey"]) == "" {
-			return fmt.Errorf("鏃犳硶鍚敤 Turnstile 鏍￠獙锛岃鍏堝～鍏?Turnstile 鏍￠獙鐩稿叧閰嶇疆淇℃伅锛?")
+			return fmt.Errorf("无法启用 Turnstile 校验，请先填入 Turnstile 校验相关配置信息！")
 		}
 	}
 
@@ -354,13 +354,13 @@ func validateOptionWithState(option model.Option, state map[string]string) error
 
 func updateOptions(options []model.Option) error {
 	if len(options) == 0 {
-		return fmt.Errorf("鏃犳晥鐨勫弬鏁?")
+		return fmt.Errorf("无效的参数")
 	}
 
 	state := buildOptionValidationState(options)
 	for _, option := range options {
 		if strings.TrimSpace(option.Key) == "" {
-			return fmt.Errorf("鏃犳晥鐨勫弬鏁?")
+			return fmt.Errorf("无效的参数")
 		}
 		if err := validateOptionWithState(option, state); err != nil {
 			return err
@@ -384,7 +384,7 @@ func GetOptions(c *gin.Context) {
 		}
 		options = append(options, &model.Option{
 			Key:   k,
-			Value: utils.Interface2String(v),
+			Value: v,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -421,76 +421,8 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
-	switch option.Key {
-	case "GitHubOAuthEnabled":
-		if option.Value == "true" && common.GitHubClientId == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "无法启用 GitHub OAuth，请先填入 GitHub Client ID 以及 GitHub Client Secret！",
-			})
-			return
-		}
-	case "WeChatAuthEnabled":
-		if option.Value == "true" && common.WeChatServerAddress == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "无法启用微信登录，请先填入微信登录相关配置信息！",
-			})
-			return
-		}
-	case "TurnstileCheckEnabled":
-		if option.Value == "true" && common.TurnstileSiteKey == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "无法启用 Turnstile 校验，请先填入 Turnstile 校验相关配置信息！",
-			})
-			return
-		}
-	}
-	if err = validateRateLimitOption(option.Key, option.Value); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	if err = validateOpenRestyOption(option.Key, option.Value); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	if err = validateGeoIPOption(option.Key, option.Value); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	if err = validateDatabaseCleanupOption(option.Key, option.Value); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	if err = validateAgentOption(option.Key, option.Value); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	if err = validateAuthoritativeDNSOption(option.Key, option.Value); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	err = model.UpdateOption(option.Key, option.Value)
-	if err != nil {
+	// Reuse the batch path so single-key updates share one validation chain.
+	if err = updateOptions([]model.Option{option}); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": err.Error(),
@@ -518,7 +450,7 @@ func UpdateOptionsBatch(c *gin.Context) {
 	if err := json.NewDecoder(c.Request.Body).Decode(&payload); err != nil || len(payload.Options) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "鏃犳晥鐨勫弬鏁?",
+			"message": "无效的参数",
 		})
 		return
 	}

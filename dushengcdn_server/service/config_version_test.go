@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"dushengcdn/model"
+	"encoding/json"
 	"fmt"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -414,6 +417,73 @@ func TestEnsureConfigVersionArtifactsForPoolsBackfillsMissingPools(t *testing.T)
 	}
 }
 
+func TestHasConfigChangesDoesNotBackfillMissingActiveArtifacts(t *testing.T) {
+	setupServiceTestDB(t)
+
+	seedConfigVersionArtifactTestRoute(t, &model.ProxyRoute{
+		SiteName:                   "legacy-read-only",
+		Domain:                     "legacy-read-only.example.com",
+		Domains:                    mustJSON(t, []string{"legacy-read-only.example.com"}),
+		OriginURL:                  "https://origin.internal",
+		Upstreams:                  mustJSON(t, []string{"https://origin.internal"}),
+		NodePool:                   "default",
+		Enabled:                    true,
+		CustomHeaders:              "[]",
+		CacheRules:                 "[]",
+		PoWConfig:                  "{}",
+		WAFMode:                    proxyRouteWAFModeBlock,
+		WAFConfig:                  "{}",
+		CCMode:                     proxyRouteCCModeBlock,
+		CCConfig:                   "{}",
+		RegionRestrictionMode:      proxyRouteRegionModeBlock,
+		RegionRestrictionCountries: "[]",
+		DNSRecordType:              "A",
+		DNSTargetCount:             1,
+		DNSScheduleMode:            "healthy",
+		DNSTTL:                     1,
+		DNSProviderMode:            DNSProviderModeCloudflare,
+		GSLBPolicy:                 "{}",
+		DDOSProtectionMode:         DDOSProtectionModeOff,
+		DDOSProtectionProvider:     DDOSProtectionProviderCloudflare,
+	})
+	bundle, err := buildCurrentConfigBundle(true)
+	if err != nil {
+		t.Fatalf("buildCurrentConfigBundle failed: %v", err)
+	}
+	supportFilesJSON, err := json.Marshal(bundle.SupportFiles)
+	if err != nil {
+		t.Fatalf("marshal support files: %v", err)
+	}
+	version := &model.ConfigVersion{
+		Version:          "20260611-legacy-read-only",
+		SnapshotJSON:     bundle.SnapshotJSON,
+		MainConfig:       bundle.MainConfig,
+		RenderedConfig:   bundle.RouteConfig,
+		SupportFilesJSON: string(supportFilesJSON),
+		Checksum:         bundle.Checksum,
+		IsActive:         true,
+		CreatedBy:        "root",
+	}
+	if err := model.DB.Create(version).Error; err != nil {
+		t.Fatalf("seed legacy active config version: %v", err)
+	}
+
+	changed, err := HasConfigChanges()
+	if err != nil {
+		t.Fatalf("HasConfigChanges failed: %v", err)
+	}
+	if changed {
+		t.Fatal("expected legacy active config without artifacts to compare equal in read-only path")
+	}
+	var artifactCount int64
+	if err := model.DB.Model(&model.ConfigVersionArtifact{}).Where("config_version_id = ?", version.ID).Count(&artifactCount).Error; err != nil {
+		t.Fatalf("count config version artifacts: %v", err)
+	}
+	if artifactCount != 0 {
+		t.Fatalf("expected HasConfigChanges to avoid artifact backfill writes, got %d artifacts", artifactCount)
+	}
+}
+
 func seedConfigVersionArtifactTestRoute(t *testing.T, route *model.ProxyRoute) {
 	t.Helper()
 	if route.DomainCertIDs == "" {
@@ -522,6 +592,56 @@ func TestRenderRouteConfigBatchesSharedCertificateLoading(t *testing.T) {
 	}
 	if _, ok := files[certificateKeyFileName(certificate.ID)]; !ok {
 		t.Fatalf("expected key file %s, got %#v", certificateKeyFileName(certificate.ID), files)
+	}
+}
+
+func TestPreviewConfigVersionMemoizesDNSAcrossBundleRenders(t *testing.T) {
+	setupServiceTestDB(t)
+	previousLookup := routeUpstreamLookupIPAddr
+	lookupCalls := 0
+	routeUpstreamLookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		lookupCalls++
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("expected publish-time lookup context to have a deadline")
+		}
+		return []net.IPAddr{
+			{IP: net.ParseIP("93.184.216.35")},
+			{IP: net.ParseIP("93.184.216.34")},
+		}, nil
+	}
+	t.Cleanup(func() {
+		routeUpstreamLookupIPAddr = previousLookup
+	})
+
+	seedConfigVersionArtifactTestRoute(t, &model.ProxyRoute{
+		SiteName:                   "memoized-dns",
+		Domain:                     "memoized-dns.example.com",
+		Domains:                    mustJSON(t, []string{"memoized-dns.example.com"}),
+		OriginURL:                  "https://origin.example.net:8443",
+		Upstreams:                  mustJSON(t, []string{"https://origin.example.net:8443"}),
+		Enabled:                    true,
+		NodePool:                   "default",
+		CustomHeaders:              "[]",
+		CacheRules:                 "[]",
+		RegionRestrictionMode:      proxyRouteRegionModeBlock,
+		RegionRestrictionCountries: "[]",
+		WAFMode:                    proxyRouteWAFModeBlock,
+		CCMode:                     proxyRouteCCModeBlock,
+	})
+
+	preview, err := PreviewConfigVersion()
+	if err != nil {
+		t.Fatalf("PreviewConfigVersion failed: %v", err)
+	}
+	if lookupCalls != 1 {
+		t.Fatalf("expected one memoized DNS lookup across global and pool renders, got %d", lookupCalls)
+	}
+	firstServer := "server 93.184.216.34:8443 max_fails=3 fail_timeout=10s;"
+	secondServer := "server 93.184.216.35:8443 max_fails=3 fail_timeout=10s;"
+	firstIndex := strings.Index(preview.RouteConfig, firstServer)
+	secondIndex := strings.Index(preview.RouteConfig, secondServer)
+	if firstIndex < 0 || secondIndex < 0 || firstIndex >= secondIndex {
+		t.Fatalf("expected sorted resolved servers in preview route config, got %s", preview.RouteConfig)
 	}
 }
 

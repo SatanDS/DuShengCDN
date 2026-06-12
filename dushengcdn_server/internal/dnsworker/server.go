@@ -88,9 +88,10 @@ func (s *DNSServer) ApplyWorkerPolicy(policy WorkerPolicy) {
 	} else {
 		s.RRLimiter.SetLimit(policy.ResponseRateLimit)
 	}
-	if s.udpServer != nil {
-		s.udpServer.UDPSize = s.UDPSize
-	}
+	// Do not mutate s.udpServer.UDPSize here: miekg/dns reads it concurrently
+	// from the serve goroutine (udpPool.New) and documents that a Server must
+	// not be modified after it is started. Runtime UDP size updates only apply
+	// to the policyMu-protected s.UDPSize, which the truncate path reads.
 	s.policyMu.Unlock()
 }
 
@@ -264,7 +265,7 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 		route := matchRoute(qname, qtype, routesForQName(index, qname))
 		if route != nil {
 			routeID = route.ID
-			selected, ttl, selectedScope, err := s.Scheduler.Select(snapshot, route, qtype, source, fresh)
+			selected, ttl, selectedScope, err := s.Scheduler.SelectWithIndex(snapshot, index, route, qtype, source, fresh)
 			sourceScope = selectedScope
 			if err != nil {
 				response.Rcode = dns.RcodeServerFailure
@@ -305,20 +306,6 @@ func (s *DNSServer) Resolve(request *dns.Msg, remoteAddr net.Addr) *dns.Msg {
 	}
 	signDNSSECResponse(response, request, zone, index)
 	return response
-}
-
-func qnameFromRequest(request *dns.Msg) string {
-	if request == nil || len(request.Question) == 0 {
-		return ""
-	}
-	return normalizeDomain(request.Question[0].Name)
-}
-
-func dnsRcodeLabel(rcode int) string {
-	if label := dns.RcodeToString[rcode]; label != "" {
-		return label
-	}
-	return fmt.Sprintf("RCODE%d", rcode)
 }
 
 func (s *DNSServer) truncateUDPResponse(request *dns.Msg, response *dns.Msg) *dns.Msg {
@@ -402,16 +389,22 @@ func cnameFallback(zone *SnapshotZone, index snapshotIndex, qname string, qtype 
 }
 
 func findBestZone(qname string, zones map[string]*SnapshotZone) *SnapshotZone {
-	qname = normalizeDomain(qname)
-	var best *SnapshotZone
-	for zoneName, zone := range zones {
-		if qname == zoneName || strings.HasSuffix(qname, "."+zoneName) {
-			if best == nil || len(zoneName) > len(best.Name) {
-				best = zone
-			}
-		}
+	if len(zones) == 0 {
+		return nil
 	}
-	return best
+	// Strip the leftmost label until a zone matches; the first hit is the
+	// longest (most specific) enclosing zone, in O(labels) map lookups.
+	for name := normalizeDomain(qname); name != ""; {
+		if zone, ok := zones[name]; ok {
+			return zone
+		}
+		dot := strings.IndexByte(name, '.')
+		if dot < 0 {
+			break
+		}
+		name = name[dot+1:]
+	}
+	return nil
 }
 
 func matchRoute(qname string, qtype string, routes []*SnapshotRoute) *SnapshotRoute {

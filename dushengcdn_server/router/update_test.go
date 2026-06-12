@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"dushengcdn/common"
+	"dushengcdn/middleware"
 	"dushengcdn/router"
 	"dushengcdn/service"
 	"encoding/base64"
@@ -403,6 +404,54 @@ func TestManualUploadRouteRejectsOversizedBody(t *testing.T) {
 	}
 	if !strings.Contains(resp.Message, "超过大小限制") {
 		t.Fatalf("unexpected error message: %s", resp.Message)
+	}
+}
+
+func TestManualUploadRouteUsesUploadRateLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	middleware.ResetRateLimiterForTest()
+
+	oldUploadRateLimitNum := common.UploadRateLimitNum
+	oldUploadRateLimitDuration := common.UploadRateLimitDuration
+	common.UploadRateLimitNum = 1
+	common.UploadRateLimitDuration = 60
+	t.Cleanup(func() {
+		common.UploadRateLimitNum = oldUploadRateLimitNum
+		common.UploadRateLimitDuration = oldUploadRateLimitDuration
+		middleware.ResetRateLimiterForTest()
+	})
+
+	engine, cookies := loginRootAndBuildEngine(t)
+	csrfToken := csrfTokenFromCookies(t, engine, cookies)
+
+	for i, wantStatus := range []int{http.StatusOK, http.StatusTooManyRequests} {
+		body := &bytes.Buffer{}
+		writer := multipart.NewWriter(body)
+		part, err := writer.CreateFormFile("binary", "dushengcdn-server-test")
+		if err != nil {
+			t.Fatalf("failed to create form file: %v", err)
+		}
+		if _, err = part.Write([]byte("echo test\n")); err != nil {
+			t.Fatalf("failed to write upload content: %v", err)
+		}
+		if err = writer.Close(); err != nil {
+			t.Fatalf("failed to close multipart writer: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/api/update/manual-upload", body)
+		req.RemoteAddr = "192.0.2.55:12345"
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("X-CSRF-Token", csrfToken)
+		for _, cookieValue := range cookies {
+			req.AddCookie(cookieValue)
+		}
+
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, req)
+		if recorder.Code != wantStatus {
+			t.Fatalf("request %d expected status %d, got %d body=%s", i+1, wantStatus, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 

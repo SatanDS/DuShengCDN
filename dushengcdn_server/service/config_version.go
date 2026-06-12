@@ -1,27 +1,23 @@
 package service
 
 import (
-	"context"
-	"dushengcdn/common"
-	"dushengcdn/model"
-	"dushengcdn/service/configversion"
-	"dushengcdn/service/openresty"
-	"dushengcdn/utils/security"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"dushengcdn/model"
+	"dushengcdn/service/configversion"
+	"dushengcdn/service/openresty"
+	"dushengcdn/utils/security"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-var routeUpstreamLookupIPAddr = net.DefaultResolver.LookupIPAddr
 
 type ReleaseResult struct {
 	Version *model.ConfigVersion `json:"version"`
@@ -148,46 +144,6 @@ type snapshotRouteRule struct {
 	BasicAuthPasswordConfigured bool                          `json:"basic_auth_password_configured,omitempty"`
 }
 
-type routeCacheConfig struct {
-	Enabled bool
-	Policy  string
-	Rules   []string
-}
-
-type routeLimitConfig struct {
-	LimitConnPerServer int
-	LimitConnPerIP     int
-	LimitRate          string
-}
-
-type routeProxyBufferingConfig struct {
-	Mode string
-}
-
-type routeRegionRestrictionConfig struct {
-	Enabled   bool
-	Mode      string
-	Countries []string
-}
-
-type routeWAFConfig struct {
-	Enabled bool
-	Mode    string
-}
-
-type routeCCConfig struct {
-	Enabled bool
-	Mode    string
-}
-
-type routeUpstreamConfig struct {
-	Name              string
-	Scheme            string
-	ProxyPassURI      string
-	Servers           []string
-	UsesNamedUpstream bool
-}
-
 type openRestyConfigSnapshot struct {
 	WorkerProcesses          string `json:"worker_processes"`
 	WorkerConnections        int    `json:"worker_connections"`
@@ -246,44 +202,10 @@ type configBundle struct {
 type configVersionArtifactBundle = configversion.ArtifactBundle
 
 const (
-	nginxCertDirPlaceholder             = "__DUSHENGCDN_CERT_DIR__"
-	nginxRouteConfigPlaceholder         = "__DUSHENGCDN_ROUTE_CONFIG__"
-	nginxAccessLogPlaceholder           = "__DUSHENGCDN_ACCESS_LOG__"
 	nginxLuaDirPlaceholder              = "__DUSHENGCDN_LUA_DIR__"
 	nginxObservabilityListenPlaceholder = "__DUSHENGCDN_OBSERVABILITY_LISTEN__"
 	nginxObservabilityPortPlaceholder   = "__DUSHENGCDN_OBSERVABILITY_PORT__"
 )
-
-var requiredMainConfigTemplatePlaceholders = []string{
-	"{{OpenRestyWorkerProcesses}}",
-	"{{OpenRestyWorkerConnections}}",
-	"{{OpenRestyWorkerRlimitNofile}}",
-	"{{OpenRestyConnectionUpgradeMap}}",
-	"{{OpenRestyDefaultServerBlock}}",
-	"{{OpenRestyAccessLogPath}}",
-	"{{OpenRestyEventsUseDirective}}",
-	"{{OpenRestyEventsMultiAcceptDirective}}",
-	"{{OpenRestyKeepaliveTimeout}}",
-	"{{OpenRestyKeepaliveRequests}}",
-	"{{OpenRestyClientHeaderTimeout}}",
-	"{{OpenRestyClientBodyTimeout}}",
-	"{{OpenRestyClientMaxBodySize}}",
-	"{{OpenRestyLargeClientHeaderBuffers}}",
-	"{{OpenRestySendTimeout}}",
-	"{{OpenRestyProxyConnectTimeout}}",
-	"{{OpenRestyProxySendTimeout}}",
-	"{{OpenRestyProxyReadTimeout}}",
-	"{{OpenRestyProxyRequestBuffering}}",
-	"{{OpenRestyProxyBuffering}}",
-	"{{OpenRestyProxyBuffers}}",
-	"{{OpenRestyProxyBufferSize}}",
-	"{{OpenRestyProxyBusyBuffersSize}}",
-	"{{OpenRestyGzip}}",
-	"{{OpenRestyGzipMinLength}}",
-	"{{OpenRestyGzipCompLevel}}",
-	"{{OpenRestyCacheBlock}}",
-	"{{OpenRestyRouteConfigInclude}}",
-}
 
 func ListConfigVersions() ([]*ConfigVersionSummary, error) {
 	return model.ListConfigVersionSummaries()
@@ -356,7 +278,7 @@ func redactRenderedConfigForAdmin(renderedConfig string) string {
 		if len(matches) != 5 || !isSensitiveProxyRouteCustomHeader(matches[2]) {
 			return line
 		}
-		return matches[1] + quoteNginxHeaderValue(redactedProxyRouteCustomHeaderValue) + matches[4]
+		return matches[1] + openresty.QuoteNginxHeaderValue(redactedProxyRouteCustomHeaderValue) + matches[4]
 	})
 	return security.RedactSensitiveText(redacted)
 }
@@ -461,9 +383,12 @@ func DiffConfigVersion() (*ConfigDiffResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	result.ActiveWebsiteCount = len(activeSnapshot.Routes)
-	currentSiteMap := flattenSnapshotRoutesBySite(bundle.SnapshotRoutes)
-	activeSiteMap := flattenSnapshotRoutesBySite(activeSnapshot.Routes)
+	currentSnapshotRoutes := normalizeSnapshotRoutesCopy(bundle.SnapshotRoutes)
+	activeSnapshotRoutes := activeSnapshot.Routes
+	result.ActiveWebsiteCount = len(activeSnapshotRoutes)
+	result.CurrentWebsiteCount = len(currentSnapshotRoutes)
+	currentSiteMap := flattenSnapshotRoutesBySite(currentSnapshotRoutes)
+	activeSiteMap := flattenSnapshotRoutesBySite(activeSnapshotRoutes)
 	for siteName, currentRoute := range currentSiteMap {
 		activeRoute, ok := activeSiteMap[siteName]
 		if !ok {
@@ -479,8 +404,8 @@ func DiffConfigVersion() (*ConfigDiffResult, error) {
 			result.RemovedSites = append(result.RemovedSites, siteName)
 		}
 	}
-	currentMap := flattenSnapshotRoutesByDomain(bundle.SnapshotRoutes)
-	activeMap := flattenSnapshotRoutesByDomain(activeSnapshot.Routes)
+	currentMap := flattenSnapshotRoutesByDomain(currentSnapshotRoutes)
+	activeMap := flattenSnapshotRoutesByDomain(activeSnapshotRoutes)
 	for domain, currentRoute := range currentMap {
 		activeRoute, ok := activeMap[domain]
 		if !ok {
@@ -497,14 +422,14 @@ func DiffConfigVersion() (*ConfigDiffResult, error) {
 		}
 	}
 	result.MainConfigChanged = activeVersion.MainConfig != bundle.MainConfig
-	runtimeConfigChanged, err := configBundleRuntimeChanged(activeVersion, bundle)
+	runtimeConfigChanged, err := configBundleRuntimeChangedReadOnly(activeVersion, bundle)
 	if err != nil {
 		return nil, err
 	}
 	result.RuntimeConfigChanged = runtimeConfigChanged
 	result.ChangedOptionDetails = diffOpenRestyOptionDetails(activeSnapshot.OpenRestyConfig, bundle.OpenRestyConfig)
 	result.ChangedOptionKeys = extractOptionDiffKeys(result.ChangedOptionDetails)
-	result.SnapshotChanged = snapshotRoutesStateChanged(activeSnapshot.Routes, bundle.SnapshotRoutes) || len(result.ChangedOptionDetails) > 0
+	result.SnapshotChanged = snapshotRoutesStateChanged(activeSnapshotRoutes, currentSnapshotRoutes) || len(result.ChangedOptionDetails) > 0
 	sort.Strings(result.AddedSites)
 	sort.Strings(result.RemovedSites)
 	sort.Strings(result.ModifiedSites)
@@ -527,7 +452,7 @@ func HasConfigChanges() (bool, error) {
 		}
 		return false, err
 	}
-	return configBundleRuntimeChanged(activeVersion, bundle)
+	return configBundleRuntimeChangedReadOnly(activeVersion, bundle)
 }
 
 func PublishConfigVersion(createdBy string, force bool) (*ReleaseResult, error) {
@@ -602,7 +527,8 @@ func createConfigVersionRecord(createdBy string, force bool, activate bool) (*Re
 	}
 	routeViews, err := buildProxyRouteViews(bundle.Routes)
 	if err != nil {
-		return nil, err
+		slog.Error("build proxy route views after config version commit failed", "config_version_id", record.ID, "version", record.Version, "active", activate, "error", err)
+		routeViews = []*ProxyRouteView{}
 	}
 	return &ReleaseResult{
 		Version: record,
@@ -831,56 +757,6 @@ func buildConfigVersionArtifacts(routes []*model.ProxyRoute, cfg openRestyConfig
 	return result, nil
 }
 
-func renderPoolAccessSupportFiles(routes []*model.ProxyRoute) ([]SupportFile, error) {
-	accessRoutes, err := buildOpenRestyAccessRoutes(routes)
-	if err != nil {
-		return nil, err
-	}
-	return openresty.RenderAccessSupportFiles(accessRoutes)
-}
-
-func buildOpenRestyAccessRoutes(routes []*model.ProxyRoute) ([]openresty.AccessRoute, error) {
-	result := make([]openresty.AccessRoute, 0, len(routes))
-	for _, route := range routes {
-		if route == nil {
-			continue
-		}
-		domains, err := decodeStoredDomains(route.Domains, route.Domain)
-		if err != nil {
-			return nil, err
-		}
-		wafConfig, err := decodeStoredWAFConfig(route.WAFEnabled, route.WAFConfig)
-		if err != nil {
-			return nil, fmt.Errorf("route %s waf_config is invalid", route.Domain)
-		}
-		ccConfig, err := decodeStoredCCConfig(route.CCEnabled, route.CCConfig)
-		if err != nil {
-			return nil, fmt.Errorf("route %s cc_config is invalid", route.Domain)
-		}
-		countries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, openresty.AccessRoute{
-			Domain:                     route.Domain,
-			Domains:                    domains,
-			PoWEnabled:                 route.PoWEnabled,
-			PoWConfigJSON:              route.PoWConfig,
-			DefaultPoWConfig:           defaultPoWConfig(),
-			WAFEnabled:                 route.WAFEnabled,
-			WAFMode:                    normalizeWAFMode(route.WAFMode),
-			WAFConfig:                  wafConfig,
-			CCEnabled:                  route.CCEnabled,
-			CCMode:                     normalizeCCMode(route.CCMode),
-			CCConfig:                   ccConfig,
-			RegionRestrictionEnabled:   route.RegionRestrictionEnabled && len(countries) > 0,
-			RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
-			RegionRestrictionCountries: countries,
-		})
-	}
-	return result, nil
-}
-
 func buildConfigVersionArtifactRouteMap(routes []*model.ProxyRoute) (map[string][]*model.ProxyRoute, error) {
 	poolRoutes := map[string][]*model.ProxyRoute{normalizeNodePoolName("default"): {}}
 	nodes, err := model.ListNodes()
@@ -1001,7 +877,7 @@ func buildSnapshotRoutesWithContext(
 		if err != nil {
 			return nil, fmt.Errorf("路由 %s 地区限制配置无效", route.Domain)
 		}
-		routeRules, err := buildSnapshotRouteRules(route)
+		routeRules, err := buildSnapshotRouteRules(route, context)
 		if err != nil {
 			return nil, fmt.Errorf("route %s route_rules are invalid: %w", route.Domain, err)
 		}
@@ -1084,11 +960,11 @@ func mustDecodeSnapshotDomainCertIDs(
 	return domainCertIDs
 }
 
-func buildSnapshotRouteRules(route *model.ProxyRoute) ([]snapshotRouteRule, error) {
+func buildSnapshotRouteRules(route *model.ProxyRoute, context proxyRouteTLSCertificateLoader) ([]snapshotRouteRule, error) {
 	if route == nil || route.ID == 0 {
 		return nil, nil
 	}
-	configs, err := loadProxyRouteRuleConfigs(route)
+	configs, err := loadProxyRouteRuleConfigsWithContext(context, route)
 	if err != nil {
 		return nil, err
 	}
@@ -1133,16 +1009,24 @@ type proxyRouteRuleConfig struct {
 	SecurityPolicy *model.SecurityPolicy
 }
 
-func loadProxyRouteRuleConfigs(route *model.ProxyRoute) ([]proxyRouteRuleConfig, error) {
-	if route == nil || route.ID == 0 {
-		return nil, nil
+// loadProxyRouteRuleConfigsByRouteIDs loads the rule configurations for all
+// given routes with a fixed number of queries. Every requested route ID gets
+// an entry in the result map, so callers can distinguish "preloaded with no
+// rules" from "not preloaded".
+func loadProxyRouteRuleConfigsByRouteIDs(routeIDs []uint) (map[uint][]proxyRouteRuleConfig, error) {
+	result := make(map[uint][]proxyRouteRuleConfig, len(routeIDs))
+	for _, routeID := range routeIDs {
+		result[routeID] = nil
 	}
-	rules, err := model.ListProxyRouteRulesByRouteID(route.ID)
+	if len(routeIDs) == 0 {
+		return result, nil
+	}
+	rules, err := model.ListProxyRouteRulesByRouteIDs(routeIDs)
 	if err != nil {
 		return nil, err
 	}
 	if len(rules) == 0 {
-		return nil, nil
+		return result, nil
 	}
 	groupIDs := make([]uint, 0, len(rules))
 	cachePolicyIDs := make([]uint, 0, len(rules))
@@ -1189,7 +1073,6 @@ func loadProxyRouteRuleConfigs(route *model.ProxyRoute) ([]proxyRouteRuleConfig,
 			securityPolicies[row.ID] = row
 		}
 	}
-	result := make([]proxyRouteRuleConfig, 0, len(rules))
 	for _, rule := range rules {
 		customHeaders, err := decodeStoredCustomHeaders(rule.CustomHeadersJSON)
 		if err != nil {
@@ -1217,9 +1100,34 @@ func loadProxyRouteRuleConfigs(route *model.ProxyRoute) ([]proxyRouteRuleConfig,
 				item.SecurityPolicy = &policyCopy
 			}
 		}
-		result = append(result, item)
+		result[rule.ProxyRouteID] = append(result[rule.ProxyRouteID], item)
 	}
 	return result, nil
+}
+
+// loadPreloadedProxyRouteRuleConfigs serves rule configs from a preloaded
+// per-route map, falling back to a direct query for routes outside it.
+func loadPreloadedProxyRouteRuleConfigs(preloaded map[uint][]proxyRouteRuleConfig, route *model.ProxyRoute) ([]proxyRouteRuleConfig, error) {
+	if route == nil || route.ID == 0 {
+		return nil, nil
+	}
+	if preloaded != nil {
+		if configs, ok := preloaded[route.ID]; ok {
+			return configs, nil
+		}
+	}
+	return loadProxyRouteRuleConfigs(route)
+}
+
+type proxyRouteRuleConfigLoader interface {
+	loadProxyRouteRuleConfigs(route *model.ProxyRoute) ([]proxyRouteRuleConfig, error)
+}
+
+func loadProxyRouteRuleConfigsWithContext(context proxyRouteTLSCertificateLoader, route *model.ProxyRoute) ([]proxyRouteRuleConfig, error) {
+	if loader, ok := context.(proxyRouteRuleConfigLoader); ok {
+		return loader.loadProxyRouteRuleConfigs(route)
+	}
+	return loadProxyRouteRuleConfigs(route)
 }
 
 func firstString(values []string) string {
@@ -1255,14 +1163,22 @@ func parseSnapshotDocument(snapshotJSON string) (*snapshotDocument, error) {
 		if err := json.Unmarshal([]byte(text), &routes); err != nil {
 			return nil, errors.New("历史版本快照格式不合法")
 		}
-		return &snapshotDocument{Routes: normalizeSnapshotRoutes(routes)}, nil
+		return &snapshotDocument{Routes: normalizeSnapshotRoutesCopy(routes)}, nil
 	}
 	var snapshot snapshotDocument
 	if err := json.Unmarshal([]byte(text), &snapshot); err != nil {
 		return nil, errors.New("历史版本快照格式不合法")
 	}
-	snapshot.Routes = normalizeSnapshotRoutes(snapshot.Routes)
+	snapshot.Routes = normalizeSnapshotRoutesCopy(snapshot.Routes)
 	return &snapshot, nil
+}
+
+func normalizeSnapshotRoutesCopy(routes []snapshotRoute) []snapshotRoute {
+	if len(routes) == 0 {
+		return []snapshotRoute{}
+	}
+	normalized := append([]snapshotRoute(nil), routes...)
+	return normalizeSnapshotRoutes(normalized)
 }
 
 func normalizeSnapshotRoutes(routes []snapshotRoute) []snapshotRoute {
@@ -1390,17 +1306,19 @@ func normalizeSnapshotRoutes(routes []snapshotRoute) []snapshotRoute {
 	return routes
 }
 
+// flattenSnapshotRoutesBySite expects routes that have already been normalized.
 func flattenSnapshotRoutesBySite(routes []snapshotRoute) map[string]snapshotRoute {
 	siteMap := make(map[string]snapshotRoute)
-	for _, route := range normalizeSnapshotRoutes(routes) {
+	for _, route := range routes {
 		siteMap[route.SiteName] = route
 	}
 	return siteMap
 }
 
+// flattenSnapshotRoutesByDomain expects routes that have already been normalized.
 func flattenSnapshotRoutesByDomain(routes []snapshotRoute) map[string]snapshotRoute {
 	domainMap := make(map[string]snapshotRoute)
-	for _, route := range normalizeSnapshotRoutes(routes) {
+	for _, route := range routes {
 		for _, domain := range route.Domains {
 			item := route
 			item.Domain = domain
@@ -1446,6 +1364,9 @@ func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
 			return false
 		}
 	}
+	if !snapshotRouteRulesEqual(left.RouteRules, right.RouteRules) {
+		return false
+	}
 	if left.RegionRestrictionEnabled {
 		if left.RegionRestrictionMode != right.RegionRestrictionMode {
 			return false
@@ -1471,6 +1392,49 @@ func snapshotRouteConfigEqual(left snapshotRoute, right snapshotRoute) bool {
 	return true
 }
 
+func snapshotRouteRulesEqual(left []snapshotRouteRule, right []snapshotRouteRule) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !snapshotRouteRuleEqual(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+// snapshotRouteRuleEqual ignores rule IDs: rule rows are recreated on every
+// route save, so IDs differ between snapshots even when the configuration is
+// unchanged.
+func snapshotRouteRuleEqual(left snapshotRouteRule, right snapshotRouteRule) bool {
+	if left.Name != right.Name || left.MatchType != right.MatchType || left.Path != right.Path ||
+		left.Priority != right.Priority || left.Enabled != right.Enabled ||
+		left.OriginURL != right.OriginURL || left.OriginHostHeader != right.OriginHostHeader ||
+		left.OriginSNI != right.OriginSNI || left.OriginTLSVerify != right.OriginTLSVerify ||
+		left.OriginCABundle != right.OriginCABundle || left.OriginResolveMode != right.OriginResolveMode ||
+		left.LimitConnPerServer != right.LimitConnPerServer || left.LimitConnPerIP != right.LimitConnPerIP ||
+		left.LimitRate != right.LimitRate ||
+		normalizeProxyRouteProxyBufferingMode(left.ProxyBufferingMode) != normalizeProxyRouteProxyBufferingMode(right.ProxyBufferingMode) ||
+		left.CacheEnabled != right.CacheEnabled || left.CachePolicy != right.CachePolicy ||
+		left.BasicAuthEnabled != right.BasicAuthEnabled || left.BasicAuthUsername != right.BasicAuthUsername ||
+		left.BasicAuthPasswordConfigured != right.BasicAuthPasswordConfigured {
+		return false
+	}
+	if !stringSliceEqual(left.Upstreams, right.Upstreams) || !stringSliceEqual(left.CacheRules, right.CacheRules) {
+		return false
+	}
+	if len(left.CustomHeaders) != len(right.CustomHeaders) {
+		return false
+	}
+	for index := range left.CustomHeaders {
+		if left.CustomHeaders[index] != right.CustomHeaders[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func snapshotOriginTLSVerify(route snapshotRoute) bool {
 	if route.OriginTLSVerify == nil {
 		return true
@@ -1486,8 +1450,8 @@ func snapshotRoutesStateChanged(left []snapshotRoute, right []snapshotRoute) boo
 	if len(left) != len(right) {
 		return true
 	}
-	normalizedLeft := normalizeSnapshotRoutes(append([]snapshotRoute{}, left...))
-	normalizedRight := normalizeSnapshotRoutes(append([]snapshotRoute{}, right...))
+	normalizedLeft := append([]snapshotRoute(nil), left...)
+	normalizedRight := append([]snapshotRoute(nil), right...)
 	sort.Slice(normalizedLeft, func(i, j int) bool {
 		return normalizedLeft[i].SiteName < normalizedLeft[j].SiteName
 	})
@@ -1583,671 +1547,6 @@ func stringSliceEqual(left []string, right []string) bool {
 	return true
 }
 
-func buildOpenRestyConfigSnapshot() openRestyConfigSnapshot {
-	return openRestyConfigSnapshot{
-		WorkerProcesses:          common.OpenRestyWorkerProcesses,
-		WorkerConnections:        common.OpenRestyWorkerConnections,
-		WorkerRlimitNofile:       common.OpenRestyWorkerRlimitNofile,
-		EventsUse:                common.OpenRestyEventsUse,
-		EventsMultiAcceptEnabled: common.OpenRestyEventsMultiAcceptEnabled,
-		KeepaliveTimeout:         common.OpenRestyKeepaliveTimeout,
-		KeepaliveRequests:        common.OpenRestyKeepaliveRequests,
-		ClientHeaderTimeout:      common.OpenRestyClientHeaderTimeout,
-		ClientBodyTimeout:        common.OpenRestyClientBodyTimeout,
-		ClientMaxBodySize:        common.OpenRestyClientMaxBodySize,
-		LargeClientHeaderBuffers: common.OpenRestyLargeClientHeaderBuffers,
-		SendTimeout:              common.OpenRestySendTimeout,
-		ProxyConnectTimeout:      common.OpenRestyProxyConnectTimeout,
-		ProxySendTimeout:         common.OpenRestyProxySendTimeout,
-		ProxyReadTimeout:         common.OpenRestyProxyReadTimeout,
-		WebsocketEnabled:         common.OpenRestyWebsocketEnabled,
-		ProxyRequestBuffering:    common.OpenRestyProxyRequestBufferingEnabled,
-		ProxyBufferingEnabled:    common.OpenRestyProxyBufferingEnabled,
-		ProxyBuffers:             common.OpenRestyProxyBuffers,
-		ProxyBufferSize:          common.OpenRestyProxyBufferSize,
-		ProxyBusyBuffersSize:     common.OpenRestyProxyBusyBuffersSize,
-		GzipEnabled:              common.OpenRestyGzipEnabled,
-		GzipMinLength:            common.OpenRestyGzipMinLength,
-		GzipCompLevel:            common.OpenRestyGzipCompLevel,
-		Resolvers:                common.OpenRestyResolvers,
-		CacheEnabled:             common.OpenRestyCacheEnabled,
-		CachePath:                common.OpenRestyCachePath,
-		CacheLevels:              common.OpenRestyCacheLevels,
-		CacheInactive:            common.OpenRestyCacheInactive,
-		CacheMaxSize:             common.OpenRestyCacheMaxSize,
-		CacheKeyTemplate:         common.OpenRestyCacheKeyTemplate,
-		CacheLockEnabled:         common.OpenRestyCacheLockEnabled,
-		CacheLockTimeout:         common.OpenRestyCacheLockTimeout,
-		CacheUseStale:            common.OpenRestyCacheUseStale,
-	}
-}
-
-func diffOpenRestyOptionKeys(left openRestyConfigSnapshot, right openRestyConfigSnapshot) []string {
-	return configversion.ExtractOptionDiffKeys(diffOpenRestyOptionDetails(left, right))
-}
-
-func buildInitialOpenRestyOptionDiffs(current openRestyConfigSnapshot) []ConfigOptionDiffItem {
-	return configversion.BuildInitialOpenRestyOptionDiffs(openresty.ConfigSnapshot(current))
-}
-
-func diffOpenRestyOptionDetails(left openRestyConfigSnapshot, right openRestyConfigSnapshot) []ConfigOptionDiffItem {
-	return configversion.DiffOpenRestyOptionDetails(openresty.ConfigSnapshot(left), openresty.ConfigSnapshot(right))
-}
-
-func extractOptionDiffKeys(details []ConfigOptionDiffItem) []string {
-	return configversion.ExtractOptionDiffKeys(details)
-}
-
-func openRestyOptionKeys() []string {
-	return configversion.OpenRestyOptionKeys()
-}
-
-func renderRouteConfig(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot) (string, []SupportFile, error) {
-	return renderRouteConfigWithQueries(routes, cfg, defaultRouteConfigQueries)
-}
-
-func renderRouteConfigWithContext(
-	routes []*model.ProxyRoute,
-	cfg openRestyConfigSnapshot,
-	context proxyRouteTLSCertificateLoader,
-) (string, []SupportFile, error) {
-	if context == nil {
-		return renderRouteConfig(routes, cfg)
-	}
-	renderRoutes, err := buildOpenRestyRenderRoutes(routes, context)
-	if err != nil {
-		return "", nil, err
-	}
-	return openresty.RenderRouteConfig(renderRoutes, openresty.ConfigSnapshot(cfg), openRestyRenderOptions())
-}
-
-type routeConfigQueries struct {
-	ListTLSCertificatesByIDs func([]uint) ([]*model.TLSCertificate, error)
-}
-
-var defaultRouteConfigQueries = routeConfigQueries{
-	ListTLSCertificatesByIDs: model.ListTLSCertificatesByIDs,
-}
-
-type routeConfigRenderContext struct {
-	certificatesByID map[uint]*model.TLSCertificate
-}
-
-func openRestyRenderOptions() openresty.RenderOptions {
-	return openresty.RenderOptions{LookupIPAddr: routeUpstreamLookupIPAddr}
-}
-
-func buildOpenRestyRenderRoutes(routes []*model.ProxyRoute, context proxyRouteTLSCertificateLoader) ([]openresty.Route, error) {
-	result := make([]openresty.Route, 0, len(routes))
-	for _, route := range routes {
-		if route == nil {
-			continue
-		}
-		domains, err := decodeStoredDomains(route.Domains, route.Domain)
-		if err != nil {
-			return nil, fmt.Errorf("route %s domains are invalid", route.Domain)
-		}
-		customHeaders, err := decodeStoredCustomHeaders(route.CustomHeaders)
-		if err != nil {
-			return nil, fmt.Errorf("璺敱 %s 鑷畾涔夎姹傚ご鏃犳晥", route.Domain)
-		}
-		upstreams, err := decodeStoredUpstreams(route.Upstreams, route.OriginURL)
-		if err != nil {
-			return nil, fmt.Errorf("璺敱 %s 婧愮珯閰嶇疆鏃犳晥", route.Domain)
-		}
-		cacheRules, err := decodeStoredCacheRules(route.CacheRules)
-		if err != nil {
-			return nil, fmt.Errorf("璺敱 %s 缂撳瓨瑙勫垯鏃犳晥", route.Domain)
-		}
-		regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
-		if err != nil {
-			return nil, fmt.Errorf("璺敱 %s 鍦板尯闄愬埗閰嶇疆鏃犳晥", route.Domain)
-		}
-		renderRoute := openresty.Route{
-			ID:                         route.ID,
-			SiteName:                   route.SiteName,
-			Domain:                     route.Domain,
-			Domains:                    domains,
-			OriginURL:                  route.OriginURL,
-			OriginHost:                 normalizeStoredOriginHostHeader(route),
-			OriginHostHeader:           normalizeStoredOriginHostHeader(route),
-			OriginSNI:                  strings.TrimSpace(route.OriginSNI),
-			OriginTLSVerify:            boolPointer(normalizeStoredOriginTLSVerify(route)),
-			OriginCABundle:             strings.TrimSpace(route.OriginCABundle),
-			OriginResolveMode:          normalizeStoredOriginResolveMode(route.OriginResolveMode),
-			Upstreams:                  upstreams,
-			EnableHTTPS:                route.EnableHTTPS,
-			CertID:                     route.CertID,
-			RedirectHTTP:               route.RedirectHTTP,
-			LimitConnPerServer:         route.LimitConnPerServer,
-			LimitConnPerIP:             route.LimitConnPerIP,
-			LimitRate:                  route.LimitRate,
-			ProxyBufferingMode:         normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
-			CacheEnabled:               route.CacheEnabled,
-			CachePolicy:                route.CachePolicy,
-			CacheRules:                 cacheRules,
-			CustomHeaders:              toOpenRestyCustomHeaders(customHeaders),
-			PoWEnabled:                 route.PoWEnabled,
-			WAFEnabled:                 route.WAFEnabled,
-			WAFMode:                    normalizeWAFMode(route.WAFMode),
-			CCEnabled:                  route.CCEnabled,
-			CCMode:                     normalizeCCMode(route.CCMode),
-			BasicAuthEnabled:           route.BasicAuthEnabled,
-			BasicAuthUsername:          route.BasicAuthUsername,
-			BasicAuthPasswordHash:      proxyRouteBasicAuthPasswordHashForView(route),
-			RegionRestrictionEnabled:   route.RegionRestrictionEnabled && len(regionCountries) > 0,
-			RegionRestrictionMode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
-			RegionRestrictionCountries: regionCountries,
-		}
-		routeRules, err := buildOpenRestyRouteRules(route)
-		if err != nil {
-			return nil, fmt.Errorf("route %s route_rules are invalid: %w", route.Domain, err)
-		}
-		renderRoute.Rules = routeRules
-		if route.EnableHTTPS {
-			certIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
-			if err != nil {
-				return nil, fmt.Errorf("route %s cert_ids are invalid: %w", route.Domain, err)
-			}
-			domainCertIDs, err := resolveProxyRouteDomainCertIDsWithContext(route, domains, certIDs, context)
-			if err != nil {
-				return nil, fmt.Errorf("route %s domain_cert_ids are invalid: %w", route.Domain, err)
-			}
-			certificates, err := loadTLSCertificatesWithContext(context, certIDs)
-			if err != nil {
-				return nil, fmt.Errorf("route %s certificate lookup failed: %w", route.Domain, err)
-			}
-			renderRoute.CertIDs = certIDs
-			renderRoute.DomainCertIDs = domainCertIDs
-			renderRoute.Certificates = toOpenRestyTLSCertificates(certificates)
-		}
-		result = append(result, renderRoute)
-	}
-	return result, nil
-}
-
-func toOpenRestyCustomHeaders(headers []ProxyRouteCustomHeaderInput) []openresty.CustomHeader {
-	result := make([]openresty.CustomHeader, 0, len(headers))
-	for _, header := range headers {
-		result = append(result, openresty.CustomHeader{Key: header.Key, Value: header.Value})
-	}
-	return result
-}
-
-func buildOpenRestyRouteRules(route *model.ProxyRoute) ([]openresty.RouteRule, error) {
-	configs, err := loadProxyRouteRuleConfigs(route)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]openresty.RouteRule, 0, len(configs))
-	for _, config := range configs {
-		rule := config.Rule
-		if rule.MatchType == proxyRouteRuleMatchDefault {
-			continue
-		}
-		renderRule := openresty.RouteRule{
-			ID:                rule.ID,
-			MatchType:         rule.MatchType,
-			Path:              rule.Path,
-			Priority:          rule.Priority,
-			Enabled:           rule.Enabled,
-			OriginURL:         firstString(config.Upstreams),
-			OriginHostHeader:  strings.TrimSpace(rule.OriginHostHeader),
-			OriginSNI:         strings.TrimSpace(rule.OriginSNI),
-			OriginTLSVerify:   &rule.OriginTLSVerify,
-			OriginCABundle:    strings.TrimSpace(rule.OriginCABundle),
-			OriginResolveMode: strings.TrimSpace(rule.OriginResolveMode),
-			LimitRate:         strings.TrimSpace(rule.LimitRate),
-			ProxyBufferingMode: normalizeProxyRouteProxyBufferingMode(
-				rule.ProxyBufferingMode,
-			),
-			CustomHeaders: toOpenRestyCustomHeaders(config.CustomHeaders),
-		}
-		if len(config.Upstreams) > 0 {
-			renderRule.Upstreams = config.Upstreams
-		}
-		limitConnPerServer := rule.LimitConnPerServer
-		renderRule.LimitConnPerServer = &limitConnPerServer
-		limitConnPerIP := rule.LimitConnPerIP
-		renderRule.LimitConnPerIP = &limitConnPerIP
-		if config.CachePolicy != nil {
-			cacheEnabled := config.CachePolicy.Enabled
-			renderRule.CacheEnabled = &cacheEnabled
-			renderRule.CachePolicy = config.CachePolicy.Policy
-			renderRule.CacheRules = config.CacheRules
-		}
-		if config.SecurityPolicy != nil {
-			basicAuthEnabled := config.SecurityPolicy.BasicAuthEnabled
-			renderRule.BasicAuthEnabled = &basicAuthEnabled
-			renderRule.BasicAuthUsername = config.SecurityPolicy.BasicAuthUsername
-			renderRule.BasicAuthPasswordHash = config.SecurityPolicy.BasicAuthPasswordHash
-		}
-		result = append(result, renderRule)
-	}
-	return result, nil
-}
-
-func toOpenRestyTLSCertificates(certificates []*model.TLSCertificate) []openresty.TLSCertificate {
-	result := make([]openresty.TLSCertificate, 0, len(certificates))
-	for _, certificate := range certificates {
-		if certificate == nil {
-			continue
-		}
-		result = append(result, openresty.TLSCertificate{
-			ID:      certificate.ID,
-			CertPEM: certificate.CertPEM,
-			KeyPEM:  certificate.KeyPEM,
-		})
-	}
-	return result
-}
-
-func newRouteConfigRenderContext(routes []*model.ProxyRoute, queries routeConfigQueries) (*routeConfigRenderContext, error) {
-	certIDs := make([]uint, 0)
-	seen := make(map[uint]struct{})
-	for _, route := range routes {
-		if route == nil || !route.EnableHTTPS {
-			continue
-		}
-		routeCertIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
-		if err != nil {
-			continue
-		}
-		for _, certID := range routeCertIDs {
-			if certID == 0 {
-				continue
-			}
-			if _, ok := seen[certID]; ok {
-				continue
-			}
-			seen[certID] = struct{}{}
-			certIDs = append(certIDs, certID)
-		}
-	}
-	if len(certIDs) == 0 {
-		return &routeConfigRenderContext{certificatesByID: map[uint]*model.TLSCertificate{}}, nil
-	}
-	listCertificates := queries.ListTLSCertificatesByIDs
-	if listCertificates == nil {
-		listCertificates = model.ListTLSCertificatesByIDs
-	}
-	certificates, err := listCertificates(certIDs)
-	if err != nil {
-		return nil, err
-	}
-	certificatesByID := make(map[uint]*model.TLSCertificate, len(certificates))
-	for _, certificate := range certificates {
-		if certificate == nil {
-			continue
-		}
-		certificatesByID[certificate.ID] = certificate
-	}
-	return &routeConfigRenderContext{certificatesByID: certificatesByID}, nil
-}
-
-func (context *routeConfigRenderContext) loadTLSCertificates(certIDs []uint) ([]*model.TLSCertificate, error) {
-	if context == nil {
-		return loadTLSCertificates(certIDs)
-	}
-	certificates := make([]*model.TLSCertificate, 0, len(certIDs))
-	for _, certID := range certIDs {
-		if certID == 0 {
-			continue
-		}
-		certificate := context.certificatesByID[certID]
-		if certificate == nil {
-			return nil, gorm.ErrRecordNotFound
-		}
-		certificates = append(certificates, certificate)
-	}
-	return certificates, nil
-}
-
-func renderRouteConfigWithQueries(routes []*model.ProxyRoute, cfg openRestyConfigSnapshot, queries routeConfigQueries) (string, []SupportFile, error) {
-	context, err := newRouteConfigRenderContext(routes, queries)
-	if err != nil {
-		return "", nil, err
-	}
-	renderRoutes, err := buildOpenRestyRenderRoutes(routes, context)
-	if err != nil {
-		return "", nil, err
-	}
-	return openresty.RenderRouteConfig(renderRoutes, openresty.ConfigSnapshot(cfg), openRestyRenderOptions())
-}
-
-func renderRouteConfigWithContextAndQueries(
-	routes []*model.ProxyRoute,
-	cfg openRestyConfigSnapshot,
-	context proxyRouteTLSCertificateLoader,
-) (string, []SupportFile, error) {
-	var builder strings.Builder
-	builder.WriteString("# This file is generated by DuShengCDN. Do not edit manually.\n")
-	supportFiles := make([]SupportFile, 0)
-	for _, route := range routes {
-		domains, err := decodeStoredDomains(route.Domains, route.Domain)
-		if err != nil {
-			return "", nil, fmt.Errorf("route %s domains are invalid", route.Domain)
-		}
-		serverNames := renderServerNames(domains)
-		displayName := route.SiteName
-		if strings.TrimSpace(displayName) == "" {
-			displayName = domains[0]
-		}
-		customHeaders, err := decodeStoredCustomHeaders(route.CustomHeaders)
-		if err != nil {
-			return "", nil, fmt.Errorf("路由 %s 自定义请求头无效", route.Domain)
-		}
-		upstreams, err := decodeStoredUpstreams(route.Upstreams, route.OriginURL)
-		if err != nil {
-			return "", nil, fmt.Errorf("路由 %s 源站配置无效", route.Domain)
-		}
-		cacheRules, err := decodeStoredCacheRules(route.CacheRules)
-		if err != nil {
-			return "", nil, fmt.Errorf("路由 %s 缓存规则无效", route.Domain)
-		}
-		cacheConfig := routeCacheConfig{
-			Enabled: route.CacheEnabled,
-			Policy:  route.CachePolicy,
-			Rules:   cacheRules,
-		}
-		limitConfig := routeLimitConfig{
-			LimitConnPerServer: route.LimitConnPerServer,
-			LimitConnPerIP:     route.LimitConnPerIP,
-			LimitRate:          route.LimitRate,
-		}
-		proxyBufferingConfig := routeProxyBufferingConfig{
-			Mode: normalizeProxyRouteProxyBufferingMode(route.ProxyBufferingMode),
-		}
-		regionCountries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
-		if err != nil {
-			return "", nil, fmt.Errorf("路由 %s 地区限制配置无效", route.Domain)
-		}
-		regionConfig := routeRegionRestrictionConfig{
-			Enabled:   route.RegionRestrictionEnabled && len(regionCountries) > 0,
-			Mode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
-			Countries: regionCountries,
-		}
-		wafConfig := routeWAFConfig{
-			Enabled: route.WAFEnabled,
-			Mode:    normalizeWAFMode(route.WAFMode),
-		}
-		ccConfig := routeCCConfig{
-			Enabled: route.CCEnabled,
-			Mode:    normalizeCCMode(route.CCMode),
-		}
-		powRequired := route.PoWEnabled || (ccConfig.Enabled && ccConfig.Mode == proxyRouteCCModePoW)
-		upstreamConfig, err := buildRouteUpstreamConfig(route, upstreams)
-		if err != nil {
-			return "", nil, fmt.Errorf("路由 %s 源站解析不安全: %w", route.Domain, err)
-		}
-		if upstreamConfig.UsesNamedUpstream {
-			builder.WriteString(renderNamedUpstreamBlock(upstreamConfig))
-		}
-		basicAuthPasswordHash := proxyRouteBasicAuthPasswordHashForView(route)
-		if !route.EnableHTTPS {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, basicAuthPasswordHash, cfg))
-			continue
-		}
-		certIDs, err := decodeStoredCertIDs(route.CertIDs, route.CertID)
-		if err != nil {
-			return "", nil, fmt.Errorf("route %s cert_ids are invalid: %w", route.Domain, err)
-		}
-		domainCertIDs, err := resolveProxyRouteDomainCertIDsWithContext(route, domains, certIDs, context)
-		if err != nil {
-			return "", nil, fmt.Errorf("route %s domain_cert_ids are invalid: %w", route.Domain, err)
-		}
-		if route.CertID == nil || *route.CertID == 0 {
-			return "", nil, fmt.Errorf("路由 %s 未配置证书", route.Domain)
-		}
-		if len(certIDs) == 0 {
-			return "", nil, fmt.Errorf("路由 %s 未配置证书", route.Domain)
-		}
-		certificates, err := context.loadTLSCertificates(certIDs)
-		if err != nil {
-			return "", nil, fmt.Errorf("route %s certificate lookup failed: %w", route.Domain, err)
-		}
-		certificateByID := make(map[uint]*model.TLSCertificate, len(certificates))
-		for _, certificate := range certificates {
-			if certificate == nil {
-				continue
-			}
-			certificateByID[certificate.ID] = certificate
-			supportFiles = append(supportFiles,
-				SupportFile{Path: certificateCertFileName(certificate.ID), Content: normalizePEM(certificate.CertPEM)},
-				SupportFile{Path: certificateKeyFileName(certificate.ID), Content: normalizePEM(certificate.KeyPEM)},
-			)
-		}
-
-		httpOnlyDomains := make([]string, 0, len(domains))
-		domainsByCertID := make(map[uint][]string, len(certIDs))
-		for index, domain := range domains {
-			if index >= len(domainCertIDs) || domainCertIDs[index] == 0 {
-				httpOnlyDomains = append(httpOnlyDomains, domain)
-				continue
-			}
-			domainsByCertID[domainCertIDs[index]] = append(
-				domainsByCertID[domainCertIDs[index]],
-				domain,
-			)
-		}
-		for _, certID := range certIDs {
-			assignedDomains := domainsByCertID[certID]
-			if len(assignedDomains) == 0 {
-				continue
-			}
-			certificate := certificateByID[certID]
-			if certificate == nil {
-				return "", nil, fmt.Errorf("route %s certificate %d does not exist", route.Domain, certID)
-			}
-			if err := validateCertificateCoverage(certificate, assignedDomains); err != nil {
-				return "", nil, fmt.Errorf("site %s certificate validation failed: %w", displayName, err)
-			}
-		}
-
-		if route.RedirectHTTP {
-			if len(httpOnlyDomains) > 0 {
-				builder.WriteString(renderHTTPProxyServer(renderServerNames(httpOnlyDomains), route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, basicAuthPasswordHash, cfg))
-			}
-			for _, certID := range certIDs {
-				assignedDomains := domainsByCertID[certID]
-				if len(assignedDomains) == 0 {
-					continue
-				}
-				builder.WriteString(renderHTTPRedirectServer(renderServerNames(assignedDomains), regionConfig, wafConfig, ccConfig))
-			}
-		} else {
-			builder.WriteString(renderHTTPProxyServer(serverNames, route.OriginURL, route.OriginHost, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, basicAuthPasswordHash, cfg))
-		}
-		for _, certID := range certIDs {
-			assignedDomains := domainsByCertID[certID]
-			if len(assignedDomains) == 0 {
-				continue
-			}
-			builder.WriteString(renderHTTPSServer(renderServerNames(assignedDomains), route.OriginURL, route.OriginHost, certID, customHeaders, cacheConfig, limitConfig, proxyBufferingConfig, regionConfig, wafConfig, ccConfig, upstreamConfig, powRequired, route.BasicAuthEnabled, route.BasicAuthUsername, basicAuthPasswordHash, cfg))
-		}
-	}
-	return builder.String(), dedupeSupportFiles(supportFiles), nil
-}
-
-func renderMainConfig(cfg openRestyConfigSnapshot) string {
-	return openresty.RenderMainConfig(openresty.ConfigSnapshot(cfg))
-}
-
-func ValidateOpenRestyMainConfigTemplate(templateText string) error {
-	trimmed := strings.TrimSpace(templateText)
-	if trimmed == "" {
-		return errors.New("OpenRestyMainConfigTemplate 不能为空")
-	}
-	for _, placeholder := range requiredMainConfigTemplatePlaceholders {
-		if !strings.Contains(trimmed, placeholder) {
-			return fmt.Errorf("OpenRestyMainConfigTemplate 必须保留占位符 %s", placeholder)
-		}
-	}
-	return nil
-}
-
-func defaultOpenRestyMainConfigTemplate() string {
-	return openresty.DefaultMainConfigTemplate()
-}
-
-func renderMainConfigTemplate(templateText string, cfg openRestyConfigSnapshot) string {
-	replacer := strings.NewReplacer(
-		"{{OpenRestyWorkerProcesses}}", cfg.WorkerProcesses,
-		"{{OpenRestyWorkerConnections}}", fmt.Sprintf("%d", cfg.WorkerConnections),
-		"{{OpenRestyWorkerRlimitNofile}}", fmt.Sprintf("%d", cfg.WorkerRlimitNofile),
-		"{{OpenRestyConnectionUpgradeMap}}", renderConnectionUpgradeMap(),
-		"{{OpenRestyDefaultServerBlock}}", renderDefaultServerBlock(),
-		"{{OpenRestyAccessLogPath}}", nginxAccessLogPlaceholder,
-		"{{OpenRestyEventsUseDirective}}", renderTemplateDirective(cfg.EventsUse != "", fmt.Sprintf("use %s;", cfg.EventsUse)),
-		"{{OpenRestyEventsMultiAcceptDirective}}", renderTemplateDirective(cfg.EventsMultiAcceptEnabled, "multi_accept on;"),
-		"{{OpenRestyKeepaliveTimeout}}", fmt.Sprintf("%d", cfg.KeepaliveTimeout),
-		"{{OpenRestyKeepaliveRequests}}", fmt.Sprintf("%d", cfg.KeepaliveRequests),
-		"{{OpenRestyClientHeaderTimeout}}", fmt.Sprintf("%d", cfg.ClientHeaderTimeout),
-		"{{OpenRestyClientBodyTimeout}}", fmt.Sprintf("%d", cfg.ClientBodyTimeout),
-		"{{OpenRestyClientMaxBodySize}}", cfg.ClientMaxBodySize,
-		"{{OpenRestyLargeClientHeaderBuffers}}", cfg.LargeClientHeaderBuffers,
-		"{{OpenRestySendTimeout}}", fmt.Sprintf("%d", cfg.SendTimeout),
-		"{{OpenRestyProxyConnectTimeout}}", fmt.Sprintf("%d", cfg.ProxyConnectTimeout),
-		"{{OpenRestyProxySendTimeout}}", fmt.Sprintf("%d", cfg.ProxySendTimeout),
-		"{{OpenRestyProxyReadTimeout}}", fmt.Sprintf("%d", cfg.ProxyReadTimeout),
-		"{{OpenRestyProxyRequestBuffering}}", onOff(cfg.ProxyRequestBuffering),
-		"{{OpenRestyProxyBuffering}}", onOff(cfg.ProxyBufferingEnabled),
-		"{{OpenRestyProxyBuffers}}", cfg.ProxyBuffers,
-		"{{OpenRestyProxyBufferSize}}", cfg.ProxyBufferSize,
-		"{{OpenRestyProxyBusyBuffersSize}}", cfg.ProxyBusyBuffersSize,
-		"{{OpenRestyGzip}}", onOff(cfg.GzipEnabled),
-		"{{OpenRestyGzipMinLength}}", fmt.Sprintf("%d", cfg.GzipMinLength),
-		"{{OpenRestyGzipCompLevel}}", fmt.Sprintf("%d", cfg.GzipCompLevel),
-		"{{OpenRestyResolverDirective}}", renderOpenRestyResolverDirective(cfg.Resolvers),
-		"{{OpenRestyCacheBlock}}", renderOpenRestyCacheTemplateBlock(cfg),
-		"{{OpenRestyRouteConfigInclude}}", nginxRouteConfigPlaceholder,
-	)
-	return replacer.Replace(templateText)
-}
-
-func renderTemplateDirective(enabled bool, statement string) string {
-	if !enabled {
-		return ""
-	}
-	return fmt.Sprintf("    %s\n", statement)
-}
-
-func renderOpenRestyResolverDirective(resolvers string) string {
-	trimmed := strings.TrimSpace(resolvers)
-	if trimmed != "" {
-		return renderTemplateDirective(true, fmt.Sprintf("resolver %s;", trimmed))
-	}
-	return fmt.Sprintf("    %s\n", "__DUSHENGCDN_RESOLVER_DIRECTIVE__")
-}
-
-func renderOpenRestyCacheTemplateBlock(cfg openRestyConfigSnapshot) string {
-	lines := make([]string, 0, 12)
-	lines = append(lines, renderOpenRestyLimitZoneBlock())
-	if !cfg.CacheEnabled {
-		lines = append(lines, renderOpenRestyObservabilityTemplateBlock())
-		return strings.Join(lines, "")
-	}
-	lines = append(lines, strings.Join([]string{
-		fmt.Sprintf("    proxy_cache_path %s levels=%s keys_zone=dushengcdn_cache:10m inactive=%s max_size=%s;", cfg.CachePath, cfg.CacheLevels, cfg.CacheInactive, cfg.CacheMaxSize),
-		fmt.Sprintf("    proxy_cache_key %s;", quoteNginxStringLiteral(cfg.CacheKeyTemplate)),
-		fmt.Sprintf("    proxy_cache_lock %s;", onOff(cfg.CacheLockEnabled)),
-		fmt.Sprintf("    proxy_cache_lock_timeout %s;", cfg.CacheLockTimeout),
-		fmt.Sprintf("    proxy_cache_use_stale %s;", cfg.CacheUseStale),
-		"",
-	}, "\n"))
-	lines = append(lines, renderOpenRestyObservabilityTemplateBlock())
-	return strings.Join(lines, "")
-}
-
-func renderOpenRestyLimitZoneBlock() string {
-	return strings.Join([]string{
-		"    limit_conn_zone $server_name zone=dushengcdn_conn_per_server:10m;",
-		"    limit_conn_zone $binary_remote_addr zone=dushengcdn_conn_per_ip:10m;",
-		"",
-	}, "\n")
-}
-
-func onOff(value bool) string {
-	if value {
-		return "on"
-	}
-	return "off"
-}
-
-const (
-	nginxPowStaticDirPlaceholder    = "__DUSHENGCDN_POW_STATIC_DIR__"
-	basicAuthCredentialHashMaterial = "dushengcdn basic auth v1\n"
-)
-
-func renderPowAccessBlock(powEnabled bool) string {
-	return renderUnifiedAccessBlock(powEnabled)
-}
-
-func renderRouteAccessBlock(powEnabled bool, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
-	return renderUnifiedAccessBlock(powEnabled || wafConfig.Enabled || ccConfig.Enabled || (regionConfig.Enabled && len(regionConfig.Countries) > 0))
-}
-
-func renderUnifiedAccessBlock(enabled bool) string {
-	if !enabled {
-		return ""
-	}
-	return fmt.Sprintf("    access_by_lua_file %s/access.lua;\n", nginxLuaDirPlaceholder)
-}
-
-func renderBasicAuthBlock(enabled bool, username, passwordHash string) string {
-	expectedHash := strings.TrimSpace(passwordHash)
-	if !enabled || username == "" || expectedHash == "" {
-		return ""
-	}
-	return fmt.Sprintf(`        rewrite_by_lua_block {
-            local expected_hash = "%s"
-            local auth = ngx.var.http_authorization or ""
-            local credential = nil
-            if string.sub(auth, 1, 6) == "Basic " then
-                credential = ngx.decode_base64(string.sub(auth, 7))
-            end
-            local ok = false
-            if credential then
-                local sha256 = require "resty.sha256"
-                local str = require "resty.string"
-                local hasher = sha256:new()
-                hasher:update(%s)
-                hasher:update(credential)
-                ok = str.to_hex(hasher:final()) == expected_hash
-            end
-            if not ok then
-                ngx.header["WWW-Authenticate"] = 'Basic realm="Restricted"'
-                return ngx.exit(401)
-            end
-        }
-`, expectedHash, luaStringLiteral(basicAuthCredentialHashMaterial))
-}
-
-func basicAuthCredentialHash(username, password string) string {
-	return openresty.BasicAuthCredentialHash(username, password)
-}
-
-func renderRegionRestrictionBlock(config routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
-	return renderUnifiedAccessBlock(wafConfig.Enabled || ccConfig.Enabled || (config.Enabled && len(config.Countries) > 0))
-}
-
-func renderPowLocationBlocks(powEnabled bool) string {
-	if !powEnabled {
-		return ""
-	}
-	return fmt.Sprintf("\n    location = %spass-challenge {\n        content_by_lua_file %s/pow/verify.lua;\n    }\n\n    location = %smake-challenge {\n        content_by_lua_file %s/pow/challenge.lua;\n    }\n\n", anubisAPIPrefix, nginxLuaDirPlaceholder, anubisAPIPrefix, nginxLuaDirPlaceholder)
-}
-
-func renderPowStaticLocationBlock(powEnabled bool) string {
-	if !powEnabled {
-		return ""
-	}
-	return fmt.Sprintf("    location %s {\n        alias %s/;\n        types {\n            text/css css;\n            application/javascript js mjs;\n            application/json json;\n            image/webp webp;\n            font/woff2 woff2;\n        }\n    }\n\n", anubisStaticPrefix, nginxPowStaticDirPlaceholder)
-}
-
-const anubisStaticPrefix = "/.within.website/x/cmd/anubis/static/"
-const anubisAPIPrefix = "/.within.website/x/cmd/anubis/api/"
-
 func normalizeSnapshotCertificateIDs(primaryCertID *uint, certIDs []uint) ([]uint, *uint, error) {
 	candidates := make([]uint, 0, len(certIDs)+1)
 	if primaryCertID != nil && *primaryCertID != 0 {
@@ -2334,13 +1633,21 @@ func checksumBundle(mainConfig string, routeConfig string, supportFiles []Suppor
 }
 
 func configBundleRuntimeChanged(activeVersion *model.ConfigVersion, bundle *configBundle) (bool, error) {
+	return configBundleRuntimeChangedWithArtifactBackfill(activeVersion, bundle, true)
+}
+
+func configBundleRuntimeChangedReadOnly(activeVersion *model.ConfigVersion, bundle *configBundle) (bool, error) {
+	return configBundleRuntimeChangedWithArtifactBackfill(activeVersion, bundle, false)
+}
+
+func configBundleRuntimeChangedWithArtifactBackfill(activeVersion *model.ConfigVersion, bundle *configBundle, backfillArtifacts bool) (bool, error) {
 	if activeVersion == nil || bundle == nil {
 		return true, nil
 	}
 	if activeVersion.Checksum != bundle.Checksum {
 		return true, nil
 	}
-	activeManifest, err := activeConfigVersionArtifactManifestChecksum(activeVersion)
+	activeManifest, err := activeConfigVersionArtifactManifestChecksum(activeVersion, backfillArtifacts)
 	if err != nil {
 		return false, err
 	}
@@ -2348,28 +1655,71 @@ func configBundleRuntimeChanged(activeVersion *model.ConfigVersion, bundle *conf
 	return activeManifest != currentManifest, nil
 }
 
-func activeConfigVersionArtifactManifestChecksum(version *model.ConfigVersion) (string, error) {
+func activeConfigVersionArtifactManifestChecksum(version *model.ConfigVersion, persistMissing bool) (string, error) {
 	if version == nil {
 		return "", nil
 	}
-	if err := ensureConfigVersionArtifactsForPools(version, nil); err != nil {
-		return "", err
+	if persistMissing {
+		if err := ensureConfigVersionArtifactsForPools(version, nil); err != nil {
+			return "", err
+		}
 	}
 	artifacts, err := model.ListConfigVersionArtifacts(version.ID)
 	if err != nil {
 		return "", err
 	}
 	items := make([]configVersionArtifactManifestItem, 0, len(artifacts))
+	existingPools := make(map[string]struct{}, len(artifacts))
 	for _, artifact := range artifacts {
+		poolName := normalizeNodePoolName(artifact.PoolName)
+		existingPools[poolName] = struct{}{}
 		items = append(items, configVersionArtifactManifestItem{
-			PoolName:            normalizeNodePoolName(artifact.PoolName),
+			PoolName:            poolName,
 			Checksum:            strings.TrimSpace(artifact.Checksum),
 			MainConfigChecksum:  strings.TrimSpace(artifact.MainConfigChecksum),
 			RouteConfigChecksum: strings.TrimSpace(artifact.RouteConfigChecksum),
 			RouteCount:          artifact.RouteCount,
 		})
 	}
+	if !persistMissing {
+		compatibilityItems, err := missingCompatibilityArtifactManifestItems(version, existingPools)
+		if err != nil {
+			return "", err
+		}
+		items = append(items, compatibilityItems...)
+	}
 	return checksumConfigVersionArtifactManifest(items), nil
+}
+
+func missingCompatibilityArtifactManifestItems(version *model.ConfigVersion, existingPools map[string]struct{}) ([]configVersionArtifactManifestItem, error) {
+	if version == nil {
+		return nil, nil
+	}
+	pools, err := compatibilityArtifactPools(nil)
+	if err != nil {
+		return nil, err
+	}
+	mainConfigChecksum := checksum(version.MainConfig)
+	routeConfigChecksum := checksum(version.RenderedConfig)
+	routeCount := len(versionRoutesFromSnapshot(version.SnapshotJSON))
+	items := make([]configVersionArtifactManifestItem, 0, len(pools))
+	for _, poolName := range pools {
+		poolName = normalizeNodePoolName(poolName)
+		if poolName == "" {
+			continue
+		}
+		if _, ok := existingPools[poolName]; ok {
+			continue
+		}
+		items = append(items, configVersionArtifactManifestItem{
+			PoolName:            poolName,
+			Checksum:            strings.TrimSpace(version.Checksum),
+			MainConfigChecksum:  mainConfigChecksum,
+			RouteConfigChecksum: routeConfigChecksum,
+			RouteCount:          routeCount,
+		})
+	}
+	return items, nil
 }
 
 func configVersionArtifactBundleManifestChecksum(bundles []configVersionArtifactBundle) string {
@@ -2384,668 +1734,4 @@ func checksumConfigVersionArtifactManifest(items []configVersionArtifactManifest
 
 func nextVersionNumber(now time.Time) (string, error) {
 	return configversion.NextVersionNumber(now)
-}
-
-func renderHTTPProxyServer(serverNames string, originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg openRestyConfigSnapshot) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
-}
-
-func renderHTTPRedirectServer(serverNames string, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig) string {
-	return fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n    set $dushengcdn_request_reason \"\";\n%s\n    return 301 https://$host$request_uri;\n}\n\n", serverNames, renderRegionRestrictionBlock(regionConfig, wafConfig, ccConfig))
-}
-
-func renderHTTPSServer(serverNames string, originURL string, originHost string, certificateID uint, customHeaders []ProxyRouteCustomHeaderInput, cacheConfig routeCacheConfig, limitConfig routeLimitConfig, proxyBufferingConfig routeProxyBufferingConfig, regionConfig routeRegionRestrictionConfig, wafConfig routeWAFConfig, ccConfig routeCCConfig, upstreamConfig routeUpstreamConfig, powEnabled bool, basicAuthEnabled bool, basicAuthUsername string, basicAuthPasswordHash string, cfg openRestyConfigSnapshot) string {
-	certPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateCertFileName(certificateID))
-	keyPath := fmt.Sprintf("%s/%s", nginxCertDirPlaceholder, certificateKeyFileName(certificateID))
-	return fmt.Sprintf("server {\n    listen 443 ssl;\n    http2 on;\n    server_name %s;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    set $dushengcdn_request_reason \"\";\n%s%s    location / {\n%s%s%s%s%s%s    }\n%s}\n\n", serverNames, certPath, keyPath, renderRouteAccessBlock(powEnabled, regionConfig, wafConfig, ccConfig), renderPowLocationBlocks(powEnabled), renderBasicAuthBlock(basicAuthEnabled, basicAuthUsername, basicAuthPasswordHash), renderProxyHeaderBlock(originURL, originHost, customHeaders, upstreamConfig), renderRouteProxyBufferingBlock(proxyBufferingConfig), renderRouteLimitBlock(limitConfig), renderRouteCacheBlock(cacheConfig, cfg), renderProxyPassBlock(originURL, upstreamConfig), renderPowStaticLocationBlock(powEnabled))
-}
-
-func renderServerNames(domains []string) string {
-	return strings.Join(domains, " ")
-}
-
-func validateCertificateCoverage(certificate *model.TLSCertificate, domains []string) error {
-	if certificate == nil {
-		return errors.New("certificate is nil")
-	}
-	leaf, err := parseLeafCertificate(certificate.CertPEM)
-	if err != nil {
-		return err
-	}
-	for _, domain := range domains {
-		if err := leaf.VerifyHostname(domain); err != nil {
-			return fmt.Errorf("certificate does not cover domain %s", domain)
-		}
-	}
-	return nil
-}
-
-func validateCertificateCoverageSet(certificates []*model.TLSCertificate, domains []string) error {
-	if len(certificates) == 0 {
-		return errors.New("certificate set is empty")
-	}
-	leaves := make([]interface{ VerifyHostname(string) error }, 0, len(certificates))
-	for _, certificate := range certificates {
-		if certificate == nil {
-			return errors.New("certificate is nil")
-		}
-		leaf, err := parseLeafCertificate(certificate.CertPEM)
-		if err != nil {
-			return err
-		}
-		leaves = append(leaves, leaf)
-	}
-	for _, domain := range domains {
-		covered := false
-		for _, leaf := range leaves {
-			if leaf.VerifyHostname(domain) == nil {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			return fmt.Errorf("certificate does not cover domain %s", domain)
-		}
-	}
-	return nil
-}
-
-func loadTLSCertificates(certIDs []uint) ([]*model.TLSCertificate, error) {
-	uniqueIDs := make([]uint, 0, len(certIDs))
-	seen := make(map[uint]struct{}, len(certIDs))
-	for _, certID := range certIDs {
-		if certID == 0 {
-			continue
-		}
-		if _, ok := seen[certID]; ok {
-			continue
-		}
-		seen[certID] = struct{}{}
-		uniqueIDs = append(uniqueIDs, certID)
-	}
-	loaded, err := model.ListTLSCertificatesByIDs(uniqueIDs)
-	if err != nil {
-		return nil, err
-	}
-	certificatesByID := make(map[uint]*model.TLSCertificate, len(loaded))
-	for _, certificate := range loaded {
-		if certificate == nil {
-			continue
-		}
-		certificatesByID[certificate.ID] = certificate
-	}
-	certificates := make([]*model.TLSCertificate, 0, len(certIDs))
-	for _, certID := range certIDs {
-		if certID == 0 {
-			continue
-		}
-		certificate := certificatesByID[certID]
-		if certificate == nil {
-			return nil, gorm.ErrRecordNotFound
-		}
-		certificates = append(certificates, certificate)
-	}
-	return certificates, nil
-}
-
-func renderConnectionUpgradeMap() string {
-	return "    map $http_upgrade $connection_upgrade {\n        default upgrade;\n        ''      \"\";\n    }\n\n"
-}
-
-func renderDefaultServerBlock() string {
-	return strings.Join([]string{
-		"    server {",
-		"        listen 80 default_server;",
-		"        server_name _;",
-		"        set $dushengcdn_request_reason \"\";",
-		"",
-		"        return 404;",
-		"    }",
-		"",
-		"    server {",
-		"        listen 443 ssl default_server;",
-		"        server_name _;",
-		"        set $dushengcdn_request_reason \"\";",
-		"",
-		"        ssl_reject_handshake on;",
-		"    }",
-		"",
-	}, "\n")
-}
-
-func renderProxyHeaderBlock(originURL string, originHost string, customHeaders []ProxyRouteCustomHeaderInput, upstreamConfig routeUpstreamConfig) string {
-	var builder strings.Builder
-	if strings.TrimSpace(originHost) != "" {
-		builder.WriteString(fmt.Sprintf("        proxy_set_header Host %s;\n", quoteNginxHeaderValue(originHost)))
-	} else {
-		builder.WriteString("        proxy_set_header Host $host;\n")
-	}
-	if upstreamServerName := resolveUpstreamServerName(originURL, originHost); upstreamServerName != "" {
-		builder.WriteString("        proxy_ssl_server_name on;\n")
-		builder.WriteString(fmt.Sprintf("        proxy_ssl_name %s;\n", quoteNginxHeaderValue(upstreamServerName)))
-		builder.WriteString("        proxy_ssl_verify on;\n")
-		builder.WriteString("        proxy_ssl_verify_depth 3;\n")
-		builder.WriteString("        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;\n")
-	}
-	builder.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
-	builder.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
-	builder.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
-	builder.WriteString("        proxy_next_upstream error timeout invalid_header http_500 http_502 http_503 http_504;\n")
-	builder.WriteString("        proxy_next_upstream_tries 3;\n")
-	builder.WriteString("        proxy_next_upstream_timeout 10s;\n")
-	if common.OpenRestyWebsocketEnabled {
-		builder.WriteString("        proxy_http_version 1.1;\n")
-		builder.WriteString("        proxy_set_header Connection $connection_upgrade;\n")
-		builder.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
-	} else if upstreamConfig.UsesNamedUpstream {
-		builder.WriteString("        proxy_http_version 1.1;\n")
-		builder.WriteString("        proxy_set_header Connection \"\";\n")
-	}
-	for _, header := range customHeaders {
-		builder.WriteString(fmt.Sprintf("        proxy_set_header %s %s;\n", header.Key, quoteNginxHeaderValue(header.Value)))
-	}
-	return builder.String()
-}
-
-func renderRouteCacheBlock(cacheConfig routeCacheConfig, cfg openRestyConfigSnapshot) string {
-	if !cfg.CacheEnabled || !cacheConfig.Enabled {
-		return ""
-	}
-	var builder strings.Builder
-	builder.WriteString("        set $dushengcdn_skip_cache 0;\n")
-	builder.WriteString("        if ($request_method != GET) {\n            set $dushengcdn_skip_cache 1;\n        }\n")
-	builder.WriteString("        if ($http_authorization != \"\") {\n            set $dushengcdn_skip_cache 1;\n        }\n")
-	builder.WriteString("        if ($http_cookie ~* \"(session|sess|token|auth|jwt|logged_in|remember|laravel_session|connect\\\\.sid|_session)\") {\n            set $dushengcdn_skip_cache 1;\n        }\n")
-	builder.WriteString("        if ($http_cache_control ~* \"(no-cache|no-store|private)\") {\n            set $dushengcdn_skip_cache 1;\n        }\n")
-	builder.WriteString("        if ($http_range != \"\") {\n            set $dushengcdn_skip_cache 1;\n        }\n")
-	if policyCondition := renderRouteCachePolicyCondition(cacheConfig); policyCondition != "" {
-		builder.WriteString(policyCondition)
-	}
-	builder.WriteString("        proxy_cache dushengcdn_cache;\n")
-	builder.WriteString("        proxy_cache_methods GET;\n")
-	builder.WriteString("        proxy_cache_valid 200 301 302 10m;\n")
-	builder.WriteString("        add_header X-DuShengCDN-Cache $upstream_cache_status always;\n")
-	builder.WriteString("        proxy_cache_bypass $dushengcdn_skip_cache;\n")
-	builder.WriteString("        proxy_no_cache $dushengcdn_skip_cache;\n")
-	return builder.String()
-}
-
-func renderRouteProxyBufferingBlock(config routeProxyBufferingConfig) string {
-	if normalizeProxyRouteProxyBufferingMode(config.Mode) != proxyRouteProxyBufferingModeOff {
-		return ""
-	}
-	return "        proxy_buffering off;\n        proxy_request_buffering off;\n        proxy_max_temp_file_size 0;\n"
-}
-
-func renderRouteLimitBlock(limitConfig routeLimitConfig) string {
-	if limitConfig.LimitConnPerServer <= 0 && limitConfig.LimitConnPerIP <= 0 && strings.TrimSpace(limitConfig.LimitRate) == "" {
-		return ""
-	}
-	var builder strings.Builder
-	if limitConfig.LimitConnPerServer > 0 {
-		builder.WriteString(fmt.Sprintf("        limit_conn dushengcdn_conn_per_server %d;\n", limitConfig.LimitConnPerServer))
-	}
-	if limitConfig.LimitConnPerIP > 0 {
-		builder.WriteString(fmt.Sprintf("        limit_conn dushengcdn_conn_per_ip %d;\n", limitConfig.LimitConnPerIP))
-	}
-	if strings.TrimSpace(limitConfig.LimitRate) != "" {
-		builder.WriteString(fmt.Sprintf("        limit_rate %s;\n", limitConfig.LimitRate))
-	}
-	return builder.String()
-}
-
-func renderRouteCachePolicyCondition(cacheConfig routeCacheConfig) string {
-	switch cacheConfig.Policy {
-	case proxyRouteCachePolicySuffix:
-		return fmt.Sprintf("        if ($uri !~* %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildSuffixMatchPattern(cacheConfig.Rules)))
-	case proxyRouteCachePolicyPathPrefix:
-		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathPrefixMatchPattern(cacheConfig.Rules)))
-	case proxyRouteCachePolicyPathContains:
-		return fmt.Sprintf("        if ($uri !~* %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathContainsMatchPattern(cacheConfig.Rules)))
-	case proxyRouteCachePolicyPathContainsAll:
-		return renderPathContainsAllCachePolicyCondition(cacheConfig.Rules)
-	case proxyRouteCachePolicyPathExact:
-		return fmt.Sprintf("        if ($uri !~ %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(buildPathExactMatchPattern(cacheConfig.Rules)))
-	default:
-		return ""
-	}
-}
-
-func renderPathContainsAllCachePolicyCondition(rules []string) string {
-	var builder strings.Builder
-	for _, rule := range rules {
-		builder.WriteString(fmt.Sprintf("        if ($uri !~* %s) {\n            set $dushengcdn_skip_cache 1;\n        }\n", quoteNginxStringLiteral(regexp.QuoteMeta(rule))))
-	}
-	return builder.String()
-}
-
-func buildSuffixMatchPattern(rules []string) string {
-	parts := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		parts = append(parts, regexp.QuoteMeta(rule))
-	}
-	return fmt.Sprintf("\\.(?:%s)$", strings.Join(parts, "|"))
-}
-
-func buildPathPrefixMatchPattern(rules []string) string {
-	parts := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		trimmed := strings.TrimRight(rule, "/")
-		if trimmed == "" {
-			trimmed = "/"
-		}
-		if trimmed == "/" {
-			parts = append(parts, "/")
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s(?:/|$)", regexp.QuoteMeta(trimmed)))
-	}
-	return fmt.Sprintf("^(?:%s)", strings.Join(parts, "|"))
-}
-
-func buildPathContainsMatchPattern(rules []string) string {
-	parts := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		parts = append(parts, regexp.QuoteMeta(rule))
-	}
-	return fmt.Sprintf("(?:%s)", strings.Join(parts, "|"))
-}
-
-func buildPathExactMatchPattern(rules []string) string {
-	parts := make([]string, 0, len(rules))
-	for _, rule := range rules {
-		parts = append(parts, regexp.QuoteMeta(rule))
-	}
-	return fmt.Sprintf("^(?:%s)$", strings.Join(parts, "|"))
-}
-
-func renderProxyPassBlock(originURL string, upstreamConfig routeUpstreamConfig) string {
-	parsed, err := url.Parse(originURL)
-	if err != nil || parsed.Host == "" || parsed.Scheme == "" {
-		return fmt.Sprintf("        proxy_pass %s;\n", originURL)
-	}
-	if upstreamConfig.UsesNamedUpstream {
-		return fmt.Sprintf("        proxy_pass %s://%s%s;\n", upstreamConfig.Scheme, upstreamConfig.Name, upstreamConfig.ProxyPassURI)
-	}
-	return fmt.Sprintf("        proxy_pass %s;\n", originURL)
-}
-
-func buildRouteUpstreamConfig(route *model.ProxyRoute, upstreams []string) (routeUpstreamConfig, error) {
-	if len(upstreams) == 0 {
-		return routeUpstreamConfig{}, nil
-	}
-	if len(upstreams) == 1 {
-		parsed, err := url.Parse(strings.TrimSpace(upstreams[0]))
-		if err != nil || parsed.Host == "" || parsed.Scheme == "" {
-			return routeUpstreamConfig{}, nil
-		}
-		servers, err := resolvePublicUpstreamServers(context.Background(), parsed.Scheme, parsed.Host)
-		if err != nil {
-			return routeUpstreamConfig{}, err
-		}
-		return routeUpstreamConfig{
-			Name:              buildRouteUpstreamName(route),
-			Scheme:            parsed.Scheme,
-			ProxyPassURI:      buildUpstreamProxyPassURI(parsed),
-			Servers:           servers,
-			UsesNamedUpstream: true,
-		}, nil
-	}
-	servers := make([]string, 0, len(upstreams))
-	var scheme string
-	for _, upstream := range upstreams {
-		parsed, err := url.Parse(strings.TrimSpace(upstream))
-		if err != nil || parsed.Host == "" || parsed.Scheme == "" {
-			return routeUpstreamConfig{}, nil
-		}
-		if strings.TrimSpace(parsed.EscapedPath()) != "" && strings.TrimSpace(parsed.EscapedPath()) != "/" {
-			return routeUpstreamConfig{}, nil
-		}
-		if parsed.RawQuery != "" {
-			return routeUpstreamConfig{}, nil
-		}
-		if scheme == "" {
-			scheme = parsed.Scheme
-		} else if scheme != parsed.Scheme {
-			return routeUpstreamConfig{}, nil
-		}
-		resolvedServers, err := resolvePublicUpstreamServers(context.Background(), parsed.Scheme, parsed.Host)
-		if err != nil {
-			return routeUpstreamConfig{}, err
-		}
-		servers = append(servers, resolvedServers...)
-	}
-	return routeUpstreamConfig{
-		Name:              buildRouteUpstreamName(route),
-		Scheme:            scheme,
-		Servers:           servers,
-		UsesNamedUpstream: true,
-	}, nil
-}
-
-func buildUpstreamProxyPassURI(parsed *url.URL) string {
-	if parsed == nil {
-		return ""
-	}
-	path := parsed.EscapedPath()
-	if path == "/" {
-		path = ""
-	}
-	if parsed.RawQuery == "" {
-		return path
-	}
-	return fmt.Sprintf("%s?%s", path, parsed.RawQuery)
-}
-
-func resolvePublicUpstreamServers(ctx context.Context, scheme string, hostPort string) ([]string, error) {
-	host, port := splitUpstreamHostPort(scheme, hostPort)
-	normalizedPort, err := normalizeOriginPort(port)
-	if err != nil {
-		return nil, err
-	}
-	port = normalizedPort
-	if err := security.ValidatePublicHostname(host); err != nil {
-		return nil, err
-	}
-	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
-		if err := security.ValidatePublicIP(ip); err != nil {
-			return nil, err
-		}
-		return []string{formatUpstreamServer(ip.String(), port)}, nil
-	}
-	addresses, err := routeUpstreamLookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	if len(addresses) == 0 {
-		return nil, fmt.Errorf("origin host %s has no addresses", host)
-	}
-	servers := make([]string, 0, len(addresses))
-	seen := make(map[string]struct{}, len(addresses))
-	for _, address := range addresses {
-		if err := security.ValidatePublicIP(address.IP); err != nil {
-			return nil, fmt.Errorf("origin host %s resolved to unsafe ip: %w", host, err)
-		}
-		server := formatUpstreamServer(address.IP.String(), port)
-		if _, ok := seen[server]; ok {
-			continue
-		}
-		seen[server] = struct{}{}
-		servers = append(servers, server)
-	}
-	return servers, nil
-}
-
-func splitUpstreamHostPort(scheme string, hostPort string) (string, string) {
-	host, port, err := net.SplitHostPort(hostPort)
-	if err == nil {
-		return host, port
-	}
-	parsed := &url.URL{Scheme: scheme, Host: hostPort}
-	host = parsed.Hostname()
-	port = parsed.Port()
-	if port == "" {
-		if strings.EqualFold(scheme, "https") {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
-	return host, port
-}
-
-func formatUpstreamServer(host string, port string) string {
-	return net.JoinHostPort(strings.Trim(host, "[]"), port)
-}
-
-func buildRouteUpstreamName(route *model.ProxyRoute) string {
-	identity := strings.TrimSpace(route.SiteName)
-	if identity == "" {
-		identity = route.Domain
-	}
-	sanitized := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z':
-			return r
-		case r >= 'A' && r <= 'Z':
-			return r + ('a' - 'A')
-		case r >= '0' && r <= '9':
-			return r
-		default:
-			return '_'
-		}
-	}, identity)
-	sanitized = strings.Trim(sanitized, "_")
-	if sanitized == "" {
-		sanitized = "backend"
-	}
-	return fmt.Sprintf("backend_%s_%d", sanitized, route.ID)
-}
-
-func renderNamedUpstreamBlock(upstreamConfig routeUpstreamConfig) string {
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("upstream %s {\n", upstreamConfig.Name))
-	for _, server := range upstreamConfig.Servers {
-		builder.WriteString(fmt.Sprintf("    server %s max_fails=3 fail_timeout=10s;\n", server))
-	}
-	builder.WriteString("    keepalive 128;\n}\n\n")
-	return builder.String()
-}
-
-func resolveUpstreamServerName(originURL string, originHost string) string {
-	parsed, err := url.Parse(originURL)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
-		return ""
-	}
-	if strings.TrimSpace(originHost) != "" {
-		parsedHost, err := url.Parse("//" + originHost)
-		if err == nil && parsedHost.Hostname() != "" {
-			return parsedHost.Hostname()
-		}
-		return originHost
-	}
-	return parsed.Hostname()
-}
-
-func quoteNginxHeaderValue(value string) string {
-	return openresty.QuoteNginxHeaderValue(value)
-}
-
-func quoteNginxStringLiteral(value string) string {
-	return openresty.QuoteNginxStringLiteral(value)
-}
-
-func luaStringLiteral(value string) string {
-	escaped := strings.ReplaceAll(value, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
-	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
-	return fmt.Sprintf(`"%s"`, escaped)
-}
-
-func certificateCertFileName(id uint) string {
-	return openresty.CertFileName(id)
-}
-
-func certificateKeyFileName(id uint) string {
-	return openresty.KeyFileName(id)
-}
-
-func normalizePEM(content string) string {
-	return openresty.NormalizePEM(content)
-}
-
-func dedupeSupportFiles(files []SupportFile) []SupportFile {
-	return openresty.DedupeSupportFiles(files)
-}
-
-func renderPowConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, error) {
-	type domainEntry struct {
-		Domains []string               `json:"domains"`
-		Enabled bool                   `json:"enabled"`
-		Config  map[string]interface{} `json:"config"`
-	}
-	entries := make([]domainEntry, 0)
-	hasPow := false
-	for _, route := range routes {
-		ccMode := normalizeCCMode(route.CCMode)
-		ccRequiresPow := route.CCEnabled && ccMode == proxyRouteCCModePoW
-		if !route.PoWEnabled && !ccRequiresPow {
-			continue
-		}
-		hasPow = true
-		domains, err := decodeStoredDomains(route.Domains, route.Domain)
-		if err != nil {
-			return "", nil, err
-		}
-		var cfg map[string]interface{}
-		powConfig := route.PoWConfig
-		if strings.TrimSpace(powConfig) == "" || strings.TrimSpace(powConfig) == "{}" {
-			defaultCfg := defaultPoWConfig()
-			data, err := json.Marshal(defaultCfg)
-			if err != nil {
-				return "", nil, err
-			}
-			powConfig = string(data)
-		}
-		if err := json.Unmarshal([]byte(powConfig), &cfg); err != nil {
-			return "", nil, fmt.Errorf("route %s pow_config is invalid", route.Domain)
-		}
-		if !route.PoWEnabled && ccRequiresPow {
-			cfg["force_only"] = true
-		}
-		entries = append(entries, domainEntry{
-			Domains: domains,
-			Enabled: true,
-			Config:  cfg,
-		})
-	}
-	if !hasPow {
-		return "{}", nil, nil
-	}
-	data, err := json.Marshal(entries)
-	if err != nil {
-		return "", nil, err
-	}
-	return string(data), nil, nil
-}
-
-func renderCCConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, error) {
-	type domainEntry struct {
-		Domains []string            `json:"domains"`
-		Enabled bool                `json:"enabled"`
-		Mode    string              `json:"mode"`
-		Config  *ProxyRouteCCConfig `json:"config"`
-	}
-	entries := make([]domainEntry, 0)
-	hasCC := false
-	for _, route := range routes {
-		if !route.CCEnabled {
-			continue
-		}
-		domains, err := decodeStoredDomains(route.Domains, route.Domain)
-		if err != nil {
-			return "", nil, err
-		}
-		cfg, err := decodeStoredCCConfig(route.CCEnabled, route.CCConfig)
-		if err != nil {
-			return "", nil, fmt.Errorf("route %s cc_config is invalid", route.Domain)
-		}
-		hasCC = true
-		entries = append(entries, domainEntry{
-			Domains: domains,
-			Enabled: true,
-			Mode:    normalizeCCMode(route.CCMode),
-			Config:  cfg,
-		})
-	}
-	if !hasCC {
-		return "{}", nil, nil
-	}
-	data, err := json.Marshal(entries)
-	if err != nil {
-		return "", nil, err
-	}
-	return string(data), nil, nil
-}
-
-func renderRegionConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, error) {
-	type domainEntry struct {
-		Domains   []string `json:"domains"`
-		Enabled   bool     `json:"enabled"`
-		Mode      string   `json:"mode"`
-		Countries []string `json:"countries"`
-	}
-	entries := make([]domainEntry, 0)
-	hasRegionRestriction := false
-	for _, route := range routes {
-		if !route.RegionRestrictionEnabled {
-			continue
-		}
-		countries, err := decodeStoredRegionRestrictionCountries(route.RegionRestrictionCountries)
-		if err != nil {
-			return "", nil, err
-		}
-		if len(countries) == 0 {
-			continue
-		}
-		domains, err := decodeStoredDomains(route.Domains, route.Domain)
-		if err != nil {
-			return "", nil, err
-		}
-		hasRegionRestriction = true
-		entries = append(entries, domainEntry{
-			Domains:   domains,
-			Enabled:   true,
-			Mode:      normalizeProxyRouteRegionRestrictionMode(route.RegionRestrictionMode),
-			Countries: countries,
-		})
-	}
-	if !hasRegionRestriction {
-		return "{}", nil, nil
-	}
-	data, err := json.Marshal(entries)
-	if err != nil {
-		return "", nil, err
-	}
-	return string(data), nil, nil
-}
-
-func renderWAFConfigBundle(routes []*model.ProxyRoute) (string, []SupportFile, error) {
-	type domainEntry struct {
-		Domains []string             `json:"domains"`
-		Enabled bool                 `json:"enabled"`
-		Mode    string               `json:"mode"`
-		Config  *ProxyRouteWAFConfig `json:"config"`
-	}
-	entries := make([]domainEntry, 0)
-	hasWAF := false
-	for _, route := range routes {
-		if !route.WAFEnabled {
-			continue
-		}
-		domains, err := decodeStoredDomains(route.Domains, route.Domain)
-		if err != nil {
-			return "", nil, err
-		}
-		cfg, err := decodeStoredWAFConfig(route.WAFEnabled, route.WAFConfig)
-		if err != nil {
-			return "", nil, fmt.Errorf("route %s waf_config is invalid", route.Domain)
-		}
-		hasWAF = true
-		entries = append(entries, domainEntry{
-			Domains: domains,
-			Enabled: true,
-			Mode:    normalizeWAFMode(route.WAFMode),
-			Config:  cfg,
-		})
-	}
-	if !hasWAF {
-		return "{}", nil, nil
-	}
-	data, err := json.Marshal(entries)
-	if err != nil {
-		return "", nil, err
-	}
-	return string(data), nil, nil
 }

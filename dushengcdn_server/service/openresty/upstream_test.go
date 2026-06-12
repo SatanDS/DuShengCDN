@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderRouteConfigRuntimeDNSUsesVariableProxyPass(t *testing.T) {
@@ -95,6 +96,166 @@ func TestRenderRouteConfigPublishResolveUsesResolvedUpstream(t *testing.T) {
 	}
 }
 
+func TestRenderRouteConfigPublishResolveSortsAndCachesLookups(t *testing.T) {
+	lookupCalls := 0
+	config, _, err := RenderRouteConfig([]Route{{
+		ID:        18,
+		Domain:    "cdn.example.com",
+		OriginURL: "https://origin.example.com",
+		Upstreams: []string{"https://origin.example.com:8443"},
+		Rules: []RouteRule{{
+			MatchType: RouteRuleMatchTypeExact,
+			Path:      "/api",
+			Priority:  1,
+			Enabled:   true,
+			Upstreams: []string{"https://origin.example.com:8443"},
+		}},
+	}}, ConfigSnapshot{}, RenderOptions{
+		LookupIPTimeout: 50 * time.Millisecond,
+		LookupIPAddr: func(ctx context.Context, host string) ([]net.IPAddr, error) {
+			lookupCalls++
+			if _, ok := ctx.Deadline(); !ok {
+				t.Fatal("expected publish-time lookup context to have a deadline")
+			}
+			return []net.IPAddr{
+				{IP: net.ParseIP("93.184.216.35")},
+				{IP: net.ParseIP("93.184.216.34")},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RenderRouteConfig returned error: %v", err)
+	}
+	if lookupCalls != 1 {
+		t.Fatalf("expected one cached lookup, got %d", lookupCalls)
+	}
+	assertInOrder(t, config, []string{
+		"server 93.184.216.34:8443 max_fails=3 fail_timeout=10s;",
+		"server 93.184.216.35:8443 max_fails=3 fail_timeout=10s;",
+	})
+}
+
+func TestRenderRouteConfigPublishResolveCachesLookupWithinRender(t *testing.T) {
+	lookupCalls := 0
+	_, _, err := RenderRouteConfig([]Route{{
+		ID:        9,
+		Domain:    "cdn.example.com",
+		OriginURL: "https://origin.example.com",
+		Upstreams: []string{"https://origin.example.com:8443"},
+		Rules: []RouteRule{{
+			MatchType: RouteRuleMatchTypeExact,
+			Path:      "/api",
+			Priority:  1,
+			Enabled:   true,
+			Upstreams: []string{"https://origin.example.com:8443"},
+		}},
+	}}, ConfigSnapshot{}, RenderOptions{
+		LookupIPTimeout: 50 * time.Millisecond,
+		LookupIPAddr: func(ctx context.Context, host string) ([]net.IPAddr, error) {
+			lookupCalls++
+			if _, ok := ctx.Deadline(); !ok {
+				t.Fatal("expected publish-time lookup context to have a deadline")
+			}
+			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RenderRouteConfig returned error: %v", err)
+	}
+	if lookupCalls != 1 {
+		t.Fatalf("expected one cached lookup, got %d", lookupCalls)
+	}
+}
+
+func TestRenderRouteConfigRejectsVariableExpansionInUserControlledLiterals(t *testing.T) {
+	tests := []struct {
+		name  string
+		route Route
+	}{
+		{
+			name: "custom header value",
+			route: Route{
+				ID:        40,
+				Domain:    "cdn.example.com",
+				OriginURL: "https://origin.example.com",
+				Upstreams: []string{"https://93.184.216.34"},
+				CustomHeaders: []CustomHeader{
+					{Key: "X-Origin-Token", Value: "Bearer $token"},
+				},
+			},
+		},
+		{
+			name: "origin host header",
+			route: Route{
+				ID:               41,
+				Domain:           "cdn.example.com",
+				OriginURL:        "https://origin.example.com",
+				OriginHostHeader: "$http_host",
+				Upstreams:        []string{"https://93.184.216.34"},
+			},
+		},
+		{
+			name: "runtime proxy pass uri",
+			route: Route{
+				ID:                42,
+				Domain:            "cdn.example.com",
+				OriginURL:         "https://origin.example.com/$bucket",
+				OriginResolveMode: OriginResolveModeRuntimeDNS,
+				Upstreams:         []string{"https://origin.example.com/$bucket"},
+			},
+		},
+		{
+			name: "route rule custom header value",
+			route: Route{
+				ID:        43,
+				Domain:    "cdn.example.com",
+				OriginURL: "https://origin.example.com",
+				Upstreams: []string{"https://93.184.216.34"},
+				Rules: []RouteRule{{
+					MatchType: RouteRuleMatchTypeExact,
+					Path:      "/api",
+					Priority:  1,
+					Enabled:   true,
+					CustomHeaders: []CustomHeader{
+						{Key: "X-Origin-Token", Value: "$token"},
+					},
+				}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := RenderRouteConfig([]Route{tt.route}, ConfigSnapshot{}, RenderOptions{
+				LookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+					return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+				},
+			})
+			if err == nil {
+				t.Fatal("expected unsafe variable expansion input to be rejected")
+			}
+			if !strings.Contains(err.Error(), "$") {
+				t.Fatalf("expected error to mention $, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRenderRouteConfigAllowsEscapedDollarInProxyPassURI(t *testing.T) {
+	config, _, err := RenderRouteConfig([]Route{{
+		ID:                44,
+		Domain:            "cdn.example.com",
+		OriginURL:         "https://origin.example.com/%24bucket?token=%24safe",
+		OriginResolveMode: OriginResolveModeRuntimeDNS,
+		Upstreams:         []string{"https://origin.example.com/%24bucket?token=%24safe"},
+	}}, ConfigSnapshot{}, RenderOptions{})
+	if err != nil {
+		t.Fatalf("RenderRouteConfig returned error: %v", err)
+	}
+	if !strings.Contains(config, "proxy_pass $dushengcdn_origin/%24bucket?token=%24safe;") {
+		t.Fatalf("expected escaped dollar proxy_pass URI to render literally, got:\n%s", config)
+	}
+}
+
 func TestRenderRouteConfigRouteRulesLocationOrder(t *testing.T) {
 	config, _, err := RenderRouteConfig([]Route{{
 		ID:        21,
@@ -145,7 +306,7 @@ func TestRenderRouteConfigRouteRulesLocationOrder(t *testing.T) {
 	assertInOrder(t, config, []string{
 		"location = /exact {",
 		"location ^~ /prefix/ {",
-		"location ~ ^/items/[0-9]+$ {",
+		`location ~ "^/items/[0-9]+$" {`,
 		"location / {",
 	})
 	if strings.Contains(config, "/disabled") {
@@ -213,9 +374,9 @@ func TestRenderRouteConfigRouteRuleOriginAndUpstreamOverride(t *testing.T) {
 	for _, want := range []string{
 		"location = /direct {",
 		"proxy_pass https://direct-origin.example.com/app;",
-		"upstream backend_cdn_example_com_rule_102_31 {",
+		"upstream backend_cdn_example_com_rule_6b43b2825f_31 {",
 		"server 93.184.216.34:8443 max_fails=3 fail_timeout=10s;",
-		"proxy_pass https://backend_cdn_example_com_rule_102_31;",
+		"proxy_pass https://backend_cdn_example_com_rule_6b43b2825f_31;",
 		"location / {",
 		"proxy_pass https://site-origin.example.com;",
 	} {

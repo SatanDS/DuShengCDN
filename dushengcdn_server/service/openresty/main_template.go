@@ -49,11 +49,11 @@ func RenderMainConfig(cfg ConfigSnapshot) string {
 func ValidateMainConfigTemplate(templateText string) error {
 	trimmed := strings.TrimSpace(templateText)
 	if trimmed == "" {
-		return errors.New("OpenRestyMainConfigTemplate 涓嶈兘涓虹┖")
+		return errors.New("OpenRestyMainConfigTemplate 不能为空")
 	}
 	for _, placeholder := range RequiredMainConfigTemplatePlaceholders {
 		if !strings.Contains(trimmed, placeholder) {
-			return fmt.Errorf("OpenRestyMainConfigTemplate 蹇呴』淇濈暀鍗犱綅绗?%s", placeholder)
+			return fmt.Errorf("OpenRestyMainConfigTemplate 必须保留占位符 %s", placeholder)
 		}
 	}
 	return nil

@@ -28,6 +28,7 @@ func TestBuildTrafficReportAggregatesManagedAccessLog(t *testing.T) {
 	}
 
 	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	seedAccessLogOffsetReady(t, stateStore)
 	report := BuildTrafficReport(&config.Config{AccessLogPath: logPath}, stateStore, nil)
 	if report == nil {
 		t.Fatal("expected traffic report")
@@ -94,6 +95,7 @@ func TestBuildTrafficObservabilityReturnsAccessLogs(t *testing.T) {
 	}
 
 	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	seedAccessLogOffsetReady(t, stateStore)
 	report, accessLogs, fallbackMetrics := BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
 	if report == nil || report.RequestCount != 2 {
 		t.Fatalf("expected traffic report, got %+v", report)
@@ -127,6 +129,7 @@ func TestBuildTrafficObservabilityDropsAccessLogQuery(t *testing.T) {
 	}
 
 	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	seedAccessLogOffsetReady(t, stateStore)
 	_, accessLogs, _ := BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
 	if len(accessLogs) != 2 {
 		t.Fatalf("expected two access logs, got %+v", accessLogs)
@@ -149,6 +152,7 @@ func TestBuildTrafficObservabilityParsesUpstreamBytes(t *testing.T) {
 	}
 
 	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	seedAccessLogOffsetReady(t, stateStore)
 	_, accessLogs, _ := BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
 	if len(accessLogs) != 1 {
 		t.Fatalf("expected one access log, got %+v", accessLogs)
@@ -171,6 +175,7 @@ func TestBuildTrafficReportAggregatesCacheAndUpstreamFields(t *testing.T) {
 	}
 
 	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	seedAccessLogOffsetReady(t, stateStore)
 	report := BuildTrafficReport(&config.Config{AccessLogPath: logPath}, stateStore, nil)
 	if report == nil {
 		t.Fatal("expected traffic report")
@@ -183,6 +188,7 @@ func TestBuildTrafficReportAggregatesCacheAndUpstreamFields(t *testing.T) {
 		t.Fatalf("expected no duplicate logs after offset advance, got %+v", accessLogs)
 	}
 	stateStore = state.NewStore(filepath.Join(tempDir, "state-readable.json"))
+	seedAccessLogOffsetReady(t, stateStore)
 	_, accessLogs, _ = BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
 	if len(accessLogs) != 3 || accessLogs[0].CacheStatus != "HIT" || accessLogs[1].CacheStatus != "MISS" || accessLogs[2].CacheStatus != "STALE" {
 		t.Fatalf("expected cache status in access logs, got %+v", accessLogs)
@@ -211,6 +217,7 @@ func TestBuildTrafficObservabilityTruncatesLongAccessLogPath(t *testing.T) {
 	}
 
 	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	seedAccessLogOffsetReady(t, stateStore)
 	_, accessLogs, _ := BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
 	if len(accessLogs) != 1 {
 		t.Fatalf("expected one access log, got %+v", accessLogs)
@@ -237,6 +244,7 @@ func TestBuildTrafficReportParsesCombinedAccessLog(t *testing.T) {
 	}
 
 	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	seedAccessLogOffsetReady(t, stateStore)
 	report := BuildTrafficReport(&config.Config{AccessLogPath: logPath}, stateStore, nil)
 	if report == nil {
 		t.Fatal("expected traffic report from combined access log")
@@ -249,6 +257,53 @@ func TestBuildTrafficReportParsesCombinedAccessLog(t *testing.T) {
 	}
 	if len(report.TopDomains) != 0 {
 		t.Fatalf("expected combined access log to omit top domains when host is unavailable, got %+v", report.TopDomains)
+	}
+}
+
+func TestBuildTrafficObservabilityStartsAtEndOfExistingLog(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "dushengcdn_access.log")
+	existing := []byte("{\"ts\":\"2026-03-14T08:00:00Z\",\"host\":\"app.example.com\",\"path\":\"/old\",\"remote_addr\":\"10.0.0.1\",\"status\":200}\n")
+	if err := os.WriteFile(logPath, existing, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
+	report, accessLogs, _ := BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
+	if report != nil || len(accessLogs) != 0 {
+		t.Fatalf("expected first run to skip existing log, got report=%+v logs=%+v", report, accessLogs)
+	}
+	snapshot, err := stateStore.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !snapshot.AccessLogOffsetReady || snapshot.AccessLogOffset != int64(len(existing)) {
+		t.Fatalf("expected offset initialized at end, got %+v", snapshot)
+	}
+
+	appended := []byte("{\"ts\":\"2026-03-14T08:01:00Z\",\"host\":\"app.example.com\",\"path\":\"/new\",\"remote_addr\":\"10.0.0.2\",\"status\":201}\n")
+	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile failed: %v", err)
+	}
+	if _, err = file.Write(appended); err != nil {
+		_ = file.Close()
+		t.Fatalf("Write failed: %v", err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	report, accessLogs, _ = BuildTrafficObservability(&config.Config{AccessLogPath: logPath}, stateStore, nil)
+	if report == nil || report.RequestCount != 1 || len(accessLogs) != 1 || accessLogs[0].Path != "/new" {
+		t.Fatalf("expected only appended log to be reported, got report=%+v logs=%+v", report, accessLogs)
+	}
+}
+
+func seedAccessLogOffsetReady(t *testing.T, store *state.Store) {
+	t.Helper()
+	if err := store.Save(&state.Snapshot{AccessLogOffsetReady: true}); err != nil {
+		t.Fatalf("failed to seed access log offset state: %v", err)
 	}
 }
 

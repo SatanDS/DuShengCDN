@@ -80,6 +80,9 @@ type AgentRegistrationResponse struct {
 
 func CreateNode(input NodeInput) (*NodeView, error) {
 	normalized, err := normalizeNodeInputV2(input, true)
+	if err != nil {
+		return nil, err
+	}
 	if normalized.Name == "" {
 		return nil, errors.New("节点名不能为空")
 	}
@@ -129,6 +132,9 @@ func CreateNode(input NodeInput) (*NodeView, error) {
 
 func UpdateNode(id uint, input NodeInput) (*NodeView, error) {
 	normalized, err := normalizeNodeInputV2(input, true)
+	if err != nil {
+		return nil, err
+	}
 	if normalized.Name == "" {
 		return nil, errors.New("节点名不能为空")
 	}

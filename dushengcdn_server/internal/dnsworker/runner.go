@@ -2,6 +2,7 @@ package dnsworker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -94,9 +95,22 @@ func (r *Runner) syncLoop(ctx context.Context) {
 }
 
 func (r *Runner) pullSnapshot(ctx context.Context) error {
-	snapshot, err := r.Client.FetchSnapshot(ctx)
+	currentVersion := r.Store.Version()
+	snapshot, err := r.Client.FetchSnapshotSince(ctx, currentVersion)
 	if err != nil {
+		if errors.Is(err, ErrSnapshotNotModified) {
+			r.Store.ClearLastError()
+			r.applyCurrentSnapshotPolicy()
+			slog.Debug("dns snapshot unchanged", "version", currentVersion)
+			return nil
+		}
 		return err
+	}
+	if currentVersion != "" && strings.TrimSpace(snapshot.SnapshotVersion) == currentVersion {
+		r.Store.ClearLastError()
+		r.applyWorkerPolicy(snapshot.WorkerPolicy)
+		slog.Debug("dns snapshot unchanged", "version", currentVersion)
+		return nil
 	}
 	if err := r.Store.Set(snapshot); err != nil {
 		return err
@@ -112,6 +126,15 @@ func (r *Runner) pullSnapshot(ctx context.Context) error {
 	}
 	slog.Info("dns snapshot loaded", "version", snapshot.SnapshotVersion, "zones", len(snapshot.Zones), "routes", len(snapshot.Routes), "nodes", len(snapshot.Nodes))
 	return nil
+}
+
+func (r *Runner) applyCurrentSnapshotPolicy() {
+	if r == nil || r.Store == nil {
+		return
+	}
+	if snapshot, _, _, _ := r.Store.Current(); snapshot != nil {
+		r.applyWorkerPolicy(snapshot.WorkerPolicy)
+	}
 }
 
 func (r *Runner) sendHeartbeat(ctx context.Context) error {

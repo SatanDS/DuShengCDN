@@ -121,6 +121,33 @@ func TestCreateProxyRouteRejectsUnsafeOriginPathAndHostHeaders(t *testing.T) {
 			},
 		},
 		{
+			name: "url variable path",
+			input: ProxyRouteInput{
+				Domain:    "variable-path.example.com",
+				OriginURL: "http://8.8.8.8:8080/$bucket",
+				Enabled:   true,
+			},
+		},
+		{
+			name: "url variable query",
+			input: ProxyRouteInput{
+				Domain:    "variable-query.example.com",
+				OriginURL: "http://8.8.8.8:8080/app?token=$token",
+				Enabled:   true,
+			},
+		},
+		{
+			name: "structured variable path",
+			input: ProxyRouteInput{
+				Domain:        "variable-structured.example.com",
+				OriginScheme:  "http",
+				OriginAddress: "8.8.8.8",
+				OriginPort:    "8080",
+				OriginURI:     "/$bucket",
+				Enabled:       true,
+			},
+		},
+		{
 			name: "origin host variable",
 			input: ProxyRouteInput{
 				Domain:     "origin-host-variable.example.com",
@@ -137,6 +164,34 @@ func TestCreateProxyRouteRejectsUnsafeOriginPathAndHostHeaders(t *testing.T) {
 				Enabled:   true,
 				CustomHeaders: []ProxyRouteCustomHeaderInput{
 					{Key: "Host", Value: "attacker.example.com"},
+				},
+			},
+		},
+		{
+			name: "custom header variable value",
+			input: ProxyRouteInput{
+				Domain:    "custom-header-variable.example.com",
+				OriginURL: "https://8.8.8.8:8443",
+				Enabled:   true,
+				CustomHeaders: []ProxyRouteCustomHeaderInput{
+					{Key: "X-Origin-Token", Value: "Bearer $token"},
+				},
+			},
+		},
+		{
+			name: "route rule header variable value",
+			input: ProxyRouteInput{
+				Domain:    "rule-header-variable.example.com",
+				OriginURL: "https://8.8.8.8:8443",
+				Enabled:   true,
+				RouteRules: []ProxyRouteRuleInput{
+					{
+						MatchType: proxyRouteRuleMatchExact,
+						Path:      "/api",
+						CustomHeaders: []ProxyRouteCustomHeaderInput{
+							{Key: "X-Origin-Token", Value: "$token"},
+						},
+					},
 				},
 			},
 		},

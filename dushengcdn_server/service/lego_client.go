@@ -310,59 +310,55 @@ func boolPtr(value bool) *bool {
 
 func ObtainSSL(cert *model.TLSCertificate) error {
 	cert.ApplyStatus = "applying"
-	model.DB.Save(cert)
+	if err := model.DB.Save(cert).Error; err != nil {
+		return fmt.Errorf("persist tls certificate applying status: %w", err)
+	}
 
 	acmeAccount, err := model.GetAcmeAccountByID(cert.AcmeAccountID)
 	if err != nil {
 		// Fallback to default ACME account if the specified one is not found (e.g. ID 0 during testing)
 		acmeAccount, err = model.GetDefaultAcmeAccount()
 		if err != nil {
-			updateCertError(cert, fmt.Sprintf("Failed to get ACME account: %v", err))
-			return err
+			return updateCertErrorAndReturn(cert, fmt.Sprintf("Failed to get ACME account: %v", err), err)
 		}
 		// Self-heal the certificate
 		cert.AcmeAccountID = acmeAccount.ID
-		model.DB.Save(cert)
+		if err := model.DB.Save(cert).Error; err != nil {
+			return fmt.Errorf("persist tls certificate acme account: %w", err)
+		}
 	}
 
 	client, _, err := GetOrCreateLegoClient(acmeAccount, cert.KeyAlgorithm)
 	if err != nil {
-		updateCertError(cert, fmt.Sprintf("Failed to create ACME client: %v", err))
-		return err
+		return updateCertErrorAndReturn(cert, fmt.Sprintf("Failed to create ACME client: %v", err), err)
 	}
 
 	if normalizeTLSCertificateDNSProviderMode(cert.DNSProviderMode) == DNSProviderModeAuthoritative {
 		if cert.DNSZoneIDRef == nil || *cert.DNSZoneIDRef == 0 {
 			err = errors.New("本地自建解析验证需要选择托管域名")
-			updateCertError(cert, err.Error())
-			return err
+			return updateCertErrorAndReturn(cert, err.Error(), err)
 		}
 		err = SetupAuthoritativeDNSProvider(client, *cert.DNSZoneIDRef, cert.DNS1, cert.DNS2, cert.DisableCNAME, cert.SkipDNS)
 		if err != nil {
-			updateCertError(cert, fmt.Sprintf("Failed to setup local DNS challenge: %v", err))
-			return err
+			return updateCertErrorAndReturn(cert, fmt.Sprintf("Failed to setup local DNS challenge: %v", err), err)
 		}
 	} else {
 		dnsAccount, err := model.GetDnsAccountByID(cert.DnsAccountID)
 		if err != nil {
-			updateCertError(cert, fmt.Sprintf("Failed to get DNS account: %v", err))
-			return err
+			return updateCertErrorAndReturn(cert, fmt.Sprintf("Failed to get DNS account: %v", err), err)
 		}
 		err = SetupDNSProvider(client, dnsAccount, cert.DNS1, cert.DNS2, cert.DisableCNAME, cert.SkipDNS)
 		if err != nil {
-			updateCertError(cert, fmt.Sprintf("Failed to setup DNS provider: %v", err))
-			return err
+			return updateCertErrorAndReturn(cert, fmt.Sprintf("Failed to setup DNS provider: %v", err), err)
 		}
 	}
 
-	domains := []string{cert.PrimaryDomain}
-	if cert.OtherDomains != "" {
-		for _, d := range strings.Split(cert.OtherDomains, "\n") {
-			d = strings.TrimSpace(d)
-			if d != "" {
-				domains = append(domains, d)
-			}
-		}
+	// Use the same parser as the input validation path, which accepts
+	// newline/comma/space/semicolon separated values, so multi-domain input
+	// such as "a.com, b.com" is not sent to ACME as a single identifier.
+	domains, err := parseTLSCertificateDomains(cert.PrimaryDomain, cert.OtherDomains)
+	if err != nil {
+		return updateCertErrorAndReturn(cert, fmt.Sprintf("Failed to parse certificate domains: %v", err), err)
 	}
 
 	request := certificate.ObtainRequest{
@@ -372,8 +368,7 @@ func ObtainSSL(cert *model.TLSCertificate) error {
 
 	certificates, err := client.Certificate.Obtain(request)
 	if err != nil {
-		updateCertError(cert, fmt.Sprintf("Failed to obtain certificate: %v", err))
-		return err
+		return updateCertErrorAndReturn(cert, fmt.Sprintf("Failed to obtain certificate: %v", err), err)
 	}
 
 	cert.CertPEM = string(certificates.Certificate)
@@ -395,8 +390,18 @@ func ObtainSSL(cert *model.TLSCertificate) error {
 	return markCertificateReadyAfterManagedDomainSync(cert)
 }
 
-func updateCertError(cert *model.TLSCertificate, message string) {
+func updateCertErrorAndReturn(cert *model.TLSCertificate, message string, cause error) error {
+	if err := updateCertError(cert, message); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
+}
+
+func updateCertError(cert *model.TLSCertificate, message string) error {
 	cert.ApplyStatus = "error"
 	cert.ApplyMessage = message
-	model.DB.Save(cert)
+	if err := model.DB.Save(cert).Error; err != nil {
+		return fmt.Errorf("persist tls certificate error status: %w", err)
+	}
+	return nil
 }

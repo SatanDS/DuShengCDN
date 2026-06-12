@@ -4,6 +4,7 @@ import (
 	"dushengcdn/model"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -72,6 +73,57 @@ func GetConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
 	return &ConfigReleasePlanView{Plan: plan, Targets: targets}, nil
 }
 
+func configReleasePlanActive(plan *model.ConfigReleasePlan) bool {
+	return plan != nil && (plan.Status == ConfigReleaseStatusRunning || plan.Status == ConfigReleaseStatusObserving)
+}
+
+func ensureConfigReleaseChecksumNotBlocked(checksum string) error {
+	blocked, err := model.GetConfigReleaseBlockedChecksum(checksum)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	return fmt.Errorf("config checksum %s is blocked by failed release plan: %s", checksum, strings.TrimSpace(blocked.Reason))
+}
+
+func ensureNoActiveConfigReleasePlan(excludeID uint) error {
+	count, err := model.CountActiveConfigReleasePlans(excludeID)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("another config release plan is already in progress")
+	}
+	return nil
+}
+
+// summarizeConfigReleasePlan reports the stored state of a plan that is not
+// actively releasing (draft, completed or failed) without mutating targets.
+func summarizeConfigReleasePlan(plan *model.ConfigReleasePlan, targets []*model.ConfigReleaseTarget) *ConfigReleasePlanEvaluation {
+	evaluation := &ConfigReleasePlanEvaluation{Plan: plan, Healthy: true, TargetCount: len(targets)}
+	for _, target := range targets {
+		switch target.Status {
+		case ConfigReleaseTargetSucceeded:
+			evaluation.SucceededTargets++
+		case ConfigReleaseTargetFailed, ConfigReleaseTargetRolledBack:
+			evaluation.FailedTargets++
+		}
+	}
+	if plan.Status == ConfigReleaseStatusFailed {
+		evaluation.Healthy = false
+		evaluation.Reason = strings.TrimSpace(plan.FailureReason)
+	}
+	return evaluation
+}
+
+func logConfigReleaseTargetUpdateError(err error, target *model.ConfigReleaseTarget) {
+	if err != nil {
+		slog.Error("update config release target failed", "target_id", target.ID, "node_id", target.NodeID, "error", err)
+	}
+}
+
 func CreateConfigReleasePlan(createdBy string, input ConfigReleasePlanInput) (*ConfigReleasePlanView, error) {
 	nodePool := normalizeNodePoolName(input.NodePool)
 	if nodePool == "" {
@@ -89,13 +141,15 @@ func CreateConfigReleasePlan(createdBy string, input ConfigReleasePlanInput) (*C
 		canaryPercent = 100
 	}
 
+	if err := ensureNoActiveConfigReleasePlan(0); err != nil {
+		return nil, err
+	}
+
 	version, err := releasePlanVersion(createdBy, input)
 	if err != nil {
 		return nil, err
 	}
-	if blocked, err := model.GetConfigReleaseBlockedChecksum(version.Checksum); err == nil && blocked != nil {
-		return nil, fmt.Errorf("config checksum %s is blocked by failed release plan: %s", version.Checksum, strings.TrimSpace(blocked.Reason))
-	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := ensureConfigReleaseChecksumNotBlocked(version.Checksum); err != nil {
 		return nil, err
 	}
 	if err := ensureConfigVersionArtifactsForPools(version, []string{nodePool}); err != nil {
@@ -104,6 +158,13 @@ func CreateConfigReleasePlan(createdBy string, input ConfigReleasePlanInput) (*C
 	artifact, err := model.GetConfigVersionArtifact(version.ID, nodePool)
 	if err != nil {
 		return nil, err
+	}
+	// Failed plans block the pool-level artifact checksum, which only matches
+	// the version checksum when every route lives in that pool.
+	if artifact.Checksum != version.Checksum {
+		if err := ensureConfigReleaseChecksumNotBlocked(artifact.Checksum); err != nil {
+			return nil, err
+		}
 	}
 	activeVersion, err := model.GetActiveConfigVersion()
 	var rollbackVersionID *uint
@@ -170,6 +231,9 @@ func StartConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
 	default:
 		return nil, fmt.Errorf("release plan %d cannot be started from status %s", id, plan.Status)
 	}
+	if err := ensureNoActiveConfigReleasePlan(plan.ID); err != nil {
+		return nil, err
+	}
 	version, err := model.GetConfigVersionByID(plan.ConfigVersionID)
 	if err != nil {
 		return nil, err
@@ -221,39 +285,64 @@ func EvaluateConfigReleasePlan(id uint) (*ConfigReleasePlanEvaluation, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Draft plans have not pushed anything yet and terminal plans must stay
+	// terminal: evaluating them is read-only and never fails the plan or
+	// rolls nodes back.
+	if !configReleasePlanActive(plan) {
+		return summarizeConfigReleasePlan(plan, targets), nil
+	}
+	nodes, err := model.ListNodes()
+	if err != nil {
+		// A transient DB error must not be mistaken for missing nodes.
+		return nil, err
+	}
+	nodesByID := make(map[string]*model.Node, len(nodes))
+	for _, node := range nodes {
+		nodesByID[strings.TrimSpace(node.NodeID)] = node
+	}
 	evaluation := &ConfigReleasePlanEvaluation{Plan: plan, Healthy: true, TargetCount: len(targets)}
 	now := time.Now()
 	for _, target := range targets {
-		node, err := model.GetNodeByNodeID(target.NodeID)
-		if err != nil {
+		switch target.Status {
+		case ConfigReleaseTargetSucceeded:
+			evaluation.SucceededTargets++
+			continue
+		case ConfigReleaseTargetFailed, ConfigReleaseTargetRolledBack:
+			evaluation.Healthy = false
+			evaluation.FailedTargets++
+			if evaluation.Reason == "" {
+				evaluation.Reason = strings.TrimSpace(target.FailureReason)
+			}
+			continue
+		}
+		node, ok := nodesByID[strings.TrimSpace(target.NodeID)]
+		if !ok {
 			evaluation.Healthy = false
 			evaluation.FailedTargets++
 			evaluation.Reason = fmt.Sprintf("node %s is missing", target.NodeID)
-			_ = markConfigReleaseTargetFailed(target, evaluation.Reason)
+			logConfigReleaseTargetUpdateError(markConfigReleaseTargetFailed(target, evaluation.Reason), target)
 			continue
 		}
 		if computeNodeStatus(node) != NodeStatusOnline {
 			evaluation.Healthy = false
 			evaluation.FailedTargets++
 			evaluation.Reason = fmt.Sprintf("node %s is offline", target.NodeID)
-			_ = markConfigReleaseTargetFailed(target, evaluation.Reason)
+			logConfigReleaseTargetUpdateError(markConfigReleaseTargetFailed(target, evaluation.Reason), target)
 			continue
 		}
 		if strings.TrimSpace(node.CurrentChecksum) == strings.TrimSpace(target.Checksum) {
 			evaluation.SucceededTargets++
-			if target.Status != ConfigReleaseTargetSucceeded {
-				_ = model.DB.Model(target).Updates(map[string]any{
-					"status":       ConfigReleaseTargetSucceeded,
-					"completed_at": &now,
-				}).Error
-			}
+			logConfigReleaseTargetUpdateError(model.DB.Model(target).Updates(map[string]any{
+				"status":       ConfigReleaseTargetSucceeded,
+				"completed_at": &now,
+			}).Error, target)
 			continue
 		}
 		if target.StartedAt != nil && time.Since(*target.StartedAt) > time.Duration(plan.ObserveSeconds)*time.Second {
 			evaluation.Healthy = false
 			evaluation.FailedTargets++
 			evaluation.Reason = fmt.Sprintf("node %s did not apply checksum %s within %ds", target.NodeID, target.Checksum, plan.ObserveSeconds)
-			_ = markConfigReleaseTargetFailed(target, evaluation.Reason)
+			logConfigReleaseTargetUpdateError(markConfigReleaseTargetFailed(target, evaluation.Reason), target)
 			continue
 		}
 		if target.Status == ConfigReleaseTargetApplying {
@@ -273,6 +362,17 @@ func EvaluateConfigReleasePlan(id uint) (*ConfigReleasePlanEvaluation, error) {
 }
 
 func AdvanceConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
+	plan, err := model.GetConfigReleasePlanByID(id)
+	if err != nil {
+		return nil, err
+	}
+	switch plan.Status {
+	case ConfigReleaseStatusDraft:
+		return StartConfigReleasePlan(id)
+	case ConfigReleaseStatusRunning, ConfigReleaseStatusObserving:
+	default:
+		return nil, fmt.Errorf("release plan %d cannot be advanced from status %s", id, plan.Status)
+	}
 	evaluation, err := EvaluateConfigReleasePlan(id)
 	if err != nil {
 		return nil, err
@@ -280,10 +380,8 @@ func AdvanceConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
 	if !evaluation.Healthy || evaluation.SucceededTargets < evaluation.TargetCount {
 		return nil, errors.New("release plan is not healthy enough to advance")
 	}
-	plan := evaluation.Plan
+	plan = evaluation.Plan
 	switch plan.CurrentStage {
-	case 0:
-		return StartConfigReleasePlan(id)
 	case 1:
 		return expandConfigReleasePlan(plan, plan.CanaryPercent)
 	default:
@@ -292,6 +390,17 @@ func AdvanceConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
 }
 
 func CompleteConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
+	plan, err := model.GetConfigReleasePlanByID(id)
+	if err != nil {
+		return nil, err
+	}
+	switch plan.Status {
+	case ConfigReleaseStatusCompleted:
+		return GetConfigReleasePlan(id)
+	case ConfigReleaseStatusRunning, ConfigReleaseStatusObserving:
+	default:
+		return nil, fmt.Errorf("release plan %d cannot be completed from status %s", id, plan.Status)
+	}
 	evaluation, err := EvaluateConfigReleasePlan(id)
 	if err != nil {
 		return nil, err
@@ -306,6 +415,12 @@ func FailConfigReleasePlan(id uint, reason string) error {
 	plan, err := model.GetConfigReleasePlanByID(id)
 	if err != nil {
 		return err
+	}
+	switch plan.Status {
+	case ConfigReleaseStatusFailed:
+		return nil
+	case ConfigReleaseStatusCompleted:
+		return fmt.Errorf("release plan %d is already completed", id)
 	}
 	targets, err := model.ListConfigReleaseTargets(plan.ID)
 	if err != nil {
@@ -355,12 +470,28 @@ func forceSyncConfigReleaseRollbackTargets(plan *model.ConfigReleasePlan, target
 	if plan == nil || len(targets) == 0 {
 		return
 	}
+	// All targets in the same pool roll back to the same version artifact;
+	// resolve it once per pool instead of once per node.
+	metaByPool := make(map[string]*ActiveConfigMeta, 1)
 	for _, target := range targets {
 		if target == nil || strings.TrimSpace(target.NodeID) == "" {
 			continue
 		}
-		meta, err := rollbackConfigMetaForReleaseTarget(plan, target)
-		if err != nil || meta == nil {
+		poolName := normalizeNodePoolName(target.PoolName)
+		if poolName == "" {
+			poolName = normalizeNodePoolName("default")
+		}
+		meta, cached := metaByPool[poolName]
+		if !cached {
+			var err error
+			meta, err = rollbackConfigMetaForReleaseTarget(plan, target)
+			if err != nil {
+				slog.Error("resolve rollback config for release plan failed", "plan_id", plan.ID, "pool", poolName, "error", err)
+				meta = nil
+			}
+			metaByPool[poolName] = meta
+		}
+		if meta == nil {
 			continue
 		}
 		SendAgentWSForceSyncConfig(target.NodeID, meta)
@@ -553,8 +684,17 @@ func updateConfigReleaseTargetFromApplyLog(payload ApplyLogPayload) {
 	if err != nil || plan == nil || target == nil {
 		return
 	}
-	if strings.TrimSpace(payload.Checksum) != "" && strings.TrimSpace(payload.Checksum) != strings.TrimSpace(target.Checksum) {
-		return
+	if checksum := strings.TrimSpace(payload.Checksum); checksum != "" {
+		if checksum != strings.TrimSpace(target.Checksum) {
+			return
+		}
+	} else {
+		// Without a checksum the apply log can only be attributed to this
+		// plan via its version; ignore reports about other configs.
+		version, err := model.GetConfigVersionByID(plan.ConfigVersionID)
+		if err != nil || strings.TrimSpace(payload.Version) != strings.TrimSpace(version.Version) {
+			return
+		}
 	}
 	now := time.Now()
 	switch payload.Result {

@@ -346,7 +346,11 @@ func GetAllUsers(c *gin.Context) {
 
 func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
-	users, err := model.SearchUsers(keyword)
+	p, _ := strconv.Atoi(c.Query("p"))
+	if p < 0 {
+		p = 0
+	}
+	users, err := model.SearchUsers(keyword, p*common.ItemsPerPage, common.ItemsPerPage)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -848,43 +852,4 @@ func EmailBindPost(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
-}
-
-func EmailBind(c *gin.Context) {
-	email := c.Query("email")
-	code := c.Query("code")
-	if !security.VerifyCodeWithKey(email, code, security.EmailVerificationPurpose) {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "验证码错误或已过期",
-		})
-		return
-	}
-	id := c.GetInt("id")
-	user := model.User{
-		Id: id,
-	}
-	err := user.FillUserById()
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	user.Email = email
-	// no need to check if this email already taken, because we have used verification code to check it
-	err = user.Update(false)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
-	return
 }

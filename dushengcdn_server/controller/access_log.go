@@ -17,6 +17,7 @@ import (
 // @Param remote_addr query string false "Remote address"
 // @Param host query string false "Host"
 // @Param path query string false "Path"
+// @Param cursor query string false "Cursor returned as next_cursor"
 // @Param p query int false "Page index"
 // @Param page_size query int false "Page size"
 // @Param sort_by query string false "Sort by"
@@ -165,6 +166,7 @@ func readAccessLogQuery(c *gin.Context) service.AccessLogQuery {
 		RemoteAddr: c.Query("remote_addr"),
 		Host:       firstNonEmptyQuery(c, "host", "domain"),
 		Path:       c.Query("path"),
+		Cursor:     c.Query("cursor"),
 		Page:       readQueryInt(c, "p"),
 		PageSize:   readQueryInt(c, "page_size"),
 		SortBy:     c.Query("sort_by"),

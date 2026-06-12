@@ -16,6 +16,10 @@ export function getNodes() {
   return apiRequest<NodeItem[]>('/nodes/');
 }
 
+export function getNode(id: number) {
+  return apiRequest<NodeItem>(`/nodes/${id}`);
+}
+
 export function createNode(payload: NodeMutationPayload) {
   return apiRequest<NodeItem>('/nodes/', {
     method: 'POST',

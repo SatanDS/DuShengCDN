@@ -8,7 +8,10 @@ import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
-import { useToastFeedback } from '@/components/feedback/toast-provider';
+import {
+  type FeedbackState,
+  useToastFeedback,
+} from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppCard } from '@/components/ui/app-card';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -37,17 +40,9 @@ import {
   SecondaryButton,
 } from '@/features/shared/components/resource-primitives';
 import { formatDateTime } from '@/lib/utils/date';
+import { getErrorMessage } from '@/lib/utils/errors';
 
 const versionsQueryKey = ['config-versions'];
-
-type FeedbackState = {
-  tone: 'info' | 'success' | 'danger';
-  message: string;
-};
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
 
 function truncateChecksum(checksum: string) {
   if (!checksum) {

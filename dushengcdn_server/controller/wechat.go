@@ -49,7 +49,7 @@ type wechatBindRequest struct {
 func WeChatOAuthAuthorize(c *gin.Context) {
 	if !common.WeChatAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
-			"message": "绠＄悊鍛樻湭寮€鍚€氳繃寰俊鐧诲綍浠ュ強娉ㄥ唽",
+			"message": "管理员未开启通过微信登录以及注册",
 			"success": false,
 		})
 		return
@@ -247,22 +247,10 @@ func validateWeChatOAuthState(c *gin.Context) error {
 	return nil
 }
 
-func WeChatBind(c *gin.Context) {
-	if !common.WeChatAuthEnabled {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "管理员未开启通过微信登录以及注册",
-			"success": false,
-		})
-		return
-	}
-	code := c.Query("code")
-	bindWeChatAccountWithCode(c, code)
-}
-
 func WeChatBindPost(c *gin.Context) {
 	if !common.WeChatAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
-			"message": "绠＄悊鍛樻湭寮€鍚€氳繃寰俊鐧诲綍浠ュ強娉ㄥ唽",
+			"message": "管理员未开启通过微信登录以及注册",
 			"success": false,
 		})
 		return

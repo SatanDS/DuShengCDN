@@ -57,15 +57,6 @@ type CloudflareDNSRecord struct {
 	Proxied bool   `json:"proxied"`
 }
 
-type CloudflareDNSUpsertInput struct {
-	ZoneID  string
-	Type    string
-	Name    string
-	Content string
-	Proxied bool
-	TTL     int
-}
-
 type CloudflareDNSSyncInput struct {
 	ZoneID           string
 	Type             string
@@ -111,24 +102,6 @@ type cloudflareAPIError struct {
 type cloudflareAPIMessage struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-}
-
-func parseCloudflareCredentials(account *model.DnsAccount) (*CloudflareCredentials, error) {
-	if account == nil {
-		return nil, errors.New("DNS 账号不存在")
-	}
-	if strings.ToLower(strings.TrimSpace(account.Type)) != cloudflareDNSProviderType {
-		return nil, fmt.Errorf("DNS 账号类型 %s 不支持自动 DNS，同步功能目前仅支持 Cloudflare", account.Type)
-	}
-	var credentials CloudflareCredentials
-	if err := json.Unmarshal([]byte(account.Authorization), &credentials); err != nil {
-		return nil, fmt.Errorf("Cloudflare 凭据格式无效：%w", err)
-	}
-	credentials.APIToken = strings.TrimSpace(credentials.APIToken)
-	if credentials.APIToken == "" {
-		return nil, errors.New("Cloudflare DNS 账号缺少 api_token")
-	}
-	return &credentials, nil
 }
 
 func parseCloudflareCredentialsV2(account *model.DnsAccount) (*CloudflareCredentials, error) {
@@ -398,54 +371,6 @@ func (client *cloudflareClient) ListDNSRecords(ctx context.Context, zoneID strin
 		}
 	}
 	return result, nil
-}
-
-func (client *cloudflareClient) UpsertDNSRecord(ctx context.Context, input CloudflareDNSUpsertInput) (*CloudflareDNSRecord, error) {
-	input.ZoneID = strings.TrimSpace(input.ZoneID)
-	input.Type = normalizeDNSRecordType(input.Type)
-	input.Name = normalizeDNSRecordName(input.Name)
-	input.Content = strings.TrimSpace(input.Content)
-	if input.TTL <= 0 {
-		input.TTL = cloudflareDefaultRecordTTL
-	}
-	if input.ZoneID == "" || input.Name == "" || input.Content == "" {
-		return nil, errors.New("Cloudflare DNS 记录参数不完整")
-	}
-	if err := validateDNSRecordContent(input.Type, input.Content); err != nil {
-		return nil, err
-	}
-
-	records, err := client.ListDNSRecords(ctx, input.ZoneID, input.Type, input.Name)
-	if err != nil {
-		return nil, err
-	}
-	payload := map[string]any{
-		"type":    input.Type,
-		"name":    input.Name,
-		"content": input.Content,
-		"ttl":     input.TTL,
-		"proxied": input.Proxied,
-	}
-	if len(records) == 0 {
-		var response cloudflareAPIResponse[CloudflareDNSRecord]
-		if err := client.do(ctx, http.MethodPost, "/zones/"+url.PathEscape(input.ZoneID)+"/dns_records", nil, payload, &response); err != nil {
-			return nil, err
-		}
-		if !response.Success {
-			return nil, errors.New(cloudflareErrorMessage(response.Errors))
-		}
-		return &response.Result, nil
-	}
-
-	record := records[0]
-	var response cloudflareAPIResponse[CloudflareDNSRecord]
-	if err := client.do(ctx, http.MethodPut, "/zones/"+url.PathEscape(input.ZoneID)+"/dns_records/"+url.PathEscape(record.ID), nil, payload, &response); err != nil {
-		return nil, err
-	}
-	if !response.Success {
-		return nil, errors.New(cloudflareErrorMessage(response.Errors))
-	}
-	return &response.Result, nil
 }
 
 func (client *cloudflareClient) SyncDNSRecords(ctx context.Context, input CloudflareDNSSyncInput) ([]CloudflareDNSRecord, error) {

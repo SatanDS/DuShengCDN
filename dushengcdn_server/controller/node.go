@@ -2,7 +2,6 @@ package controller
 
 import (
 	"dushengcdn/service"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -86,19 +85,18 @@ func RotateNodeBootstrapToken(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/update [post]
 func UpdateNode(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
 	var input service.NodeInput
-	if err = decodeJSONBody(c.Request.Body, &input); err != nil {
+	if err := decodeJSONBody(c.Request.Body, &input); err != nil {
 		respondBadRequest(c, "")
 		return
 	}
 
-	node, err := service.UpdateNode(uint(id), input)
+	node, err := service.UpdateNode(id, input)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -116,13 +114,12 @@ func UpdateNode(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/delete [post]
 func DeleteNode(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
-	result, err := service.DeleteNode(uint(id))
+	result, err := service.DeleteNode(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -140,21 +137,20 @@ func DeleteNode(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/agent-update [post]
 func RequestNodeAgentUpdate(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
 	var request nodeAgentUpdateRequest
 	if c.Request.ContentLength > 0 {
-		if err = decodeOptionalJSONBody(c.Request.Body, &request); err != nil {
+		if err := decodeOptionalJSONBody(c.Request.Body, &request); err != nil {
 			respondBadRequest(c, "")
 			return
 		}
 	}
 
-	node, err := service.RequestNodeAgentUpdate(uint(id), service.NodeAgentUpdateInput{
+	node, err := service.RequestNodeAgentUpdate(id, service.NodeAgentUpdateInput{
 		Channel: request.Channel,
 		TagName: request.TagName,
 	})
@@ -175,13 +171,12 @@ func RequestNodeAgentUpdate(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/openresty-restart [post]
 func RequestNodeOpenrestyRestart(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
-	node, err := service.RequestNodeOpenrestyRestart(uint(id))
+	node, err := service.RequestNodeOpenrestyRestart(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -199,13 +194,12 @@ func RequestNodeOpenrestyRestart(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/force-sync [post]
 func RequestNodeForceSync(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
-	node, err := service.RequestNodeForceSync(uint(id))
+	node, err := service.RequestNodeForceSync(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -223,13 +217,12 @@ func RequestNodeForceSync(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/agent-token/rotate [post]
 func RotateNodeAgentToken(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
-	token, err := service.RotateNodeAgentToken(uint(id))
+	token, err := service.RotateNodeAgentToken(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -248,13 +241,12 @@ func RotateNodeAgentToken(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/agent-release [get]
 func GetNodeAgentRelease(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
-	release, err := service.GetNodeAgentRelease(c.Request.Context(), uint(id), c.Query("channel"))
+	release, err := service.GetNodeAgentRelease(c.Request.Context(), id, c.Query("channel"))
 	if err != nil {
 		respondFailure(c, err.Error())
 		return
@@ -274,19 +266,18 @@ func GetNodeAgentRelease(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/observability [get]
 func GetNodeObservability(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
 	var query nodeObservabilityQuery
-	if err = c.ShouldBindQuery(&query); err != nil {
+	if err := c.ShouldBindQuery(&query); err != nil {
 		respondBadRequest(c, "")
 		return
 	}
 
-	view, err := service.GetNodeObservability(uint(id), service.NodeObservabilityQuery{
+	view, err := service.GetNodeObservability(id, service.NodeObservabilityQuery{
 		Hours: query.Hours,
 		Limit: query.Limit,
 	})
@@ -307,13 +298,12 @@ func GetNodeObservability(c *gin.Context) {
 // @Failure 400 {object} map[string]interface{}
 // @Router /api/nodes/{id}/observability/cleanup [post]
 func CleanupNodeHealthEvents(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
-		respondBadRequest(c, "")
+	id, ok := parseUintParamWithMessage(c, "id", "")
+	if !ok {
 		return
 	}
 
-	result, err := service.CleanupNodeHealthEvents(uint(id))
+	result, err := service.CleanupNodeHealthEvents(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return

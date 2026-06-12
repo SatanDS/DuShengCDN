@@ -14,6 +14,10 @@ vi.mock('echarts-for-react', () => ({
   default: () => <div data-testid="echarts-mock" />,
 }));
 
+vi.mock('echarts-for-react/lib/core', () => ({
+  default: () => <div data-testid="echarts-mock" />,
+}));
+
 function stubMatchMedia() {
   vi.stubGlobal(
     'matchMedia',
@@ -1355,9 +1359,7 @@ describe('Authoritative DNS page', () => {
     });
     expect(screen.getByDisplayValue('created-token')).toBeInTheDocument();
     expect(screen.getByText(/install-dns-worker\.sh/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/--worker-id 'dns-worker-8'/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/--worker-id 'dns-worker-8'/)).toBeInTheDocument();
     expect(
       screen.getAllByText(/--token-file "\$token_file"/).length,
     ).toBeGreaterThan(0);

@@ -54,7 +54,7 @@ func TestNormalizeProxyRouteDNSSettingsRequiresCloudflareAccount(t *testing.T) {
 	}
 }
 
-func TestSelectHealthyNodeDNSContent(t *testing.T) {
+func TestSelectHealthyNodeDNSTarget(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldThreshold := common.NodeOfflineThreshold
@@ -90,16 +90,16 @@ func TestSelectHealthyNodeDNSContent(t *testing.T) {
 		t.Fatalf("insert online node: %v", err)
 	}
 
-	content, err := selectHealthyNodeDNSContent("A")
+	targets, err := selectHealthyNodeDNSTargetsWithOptions("A", "default", 1, "healthy", gslbDNSSchedulingOptions{})
 	if err != nil {
 		t.Fatalf("select healthy node: %v", err)
 	}
-	if content != "8.8.8.8" {
-		t.Fatalf("expected online node ip, got %s", content)
+	if len(targets) != 1 || targets[0] != "8.8.8.8" {
+		t.Fatalf("expected online node ip, got %#v", targets)
 	}
 }
 
-func TestSelectHealthyNodeDNSContentSwitchesAwayFromOfflineNode(t *testing.T) {
+func TestSelectHealthyNodeDNSTargetSwitchesAwayFromOfflineNode(t *testing.T) {
 	setupServiceTestDB(t)
 
 	oldThreshold := common.NodeOfflineThreshold
@@ -136,12 +136,12 @@ func TestSelectHealthyNodeDNSContentSwitchesAwayFromOfflineNode(t *testing.T) {
 		t.Fatalf("insert next target node: %v", err)
 	}
 
-	content, err := selectHealthyNodeDNSContent("A")
+	targets, err := selectHealthyNodeDNSTargetsWithOptions("A", "default", 1, "healthy", gslbDNSSchedulingOptions{})
 	if err != nil {
 		t.Fatalf("select healthy node: %v", err)
 	}
-	if content != "1.1.1.1" {
-		t.Fatalf("expected DNS target to switch to online node, got %s", content)
+	if len(targets) != 1 || targets[0] != "1.1.1.1" {
+		t.Fatalf("expected DNS target to switch to online node, got %#v", targets)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestShouldEnableCloudflareProxyForDDOS(t *testing.T) {
 		t.Fatalf("insert request report: %v", err)
 	}
 
-	if !shouldEnableCloudflareProxyForDDOS() {
+	if !shouldEnableDDOSProtection() {
 		t.Fatal("expected request threshold to enable Cloudflare proxy")
 	}
 }
@@ -180,7 +180,7 @@ func TestShouldEnableCloudflareProxyForDDOSErrorRate(t *testing.T) {
 		t.Fatalf("insert request report: %v", err)
 	}
 
-	if !shouldEnableCloudflareProxyForDDOS() {
+	if !shouldEnableDDOSProtection() {
 		t.Fatal("expected error rate threshold to enable Cloudflare proxy")
 	}
 }
@@ -300,6 +300,144 @@ func TestProxyRouteDNSSyncContextCachesDDoSProtectionSummary(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&calls); got != 1 {
 		t.Fatalf("expected one traffic summary load, got %d", got)
+	}
+}
+
+func TestProxyRouteDNSSyncContextPreloadsSchedulingData(t *testing.T) {
+	setupServiceTestDB(t)
+
+	oldThreshold := common.NodeOfflineThreshold
+	common.NodeOfflineThreshold = time.Minute
+	t.Cleanup(func() {
+		common.NodeOfflineThreshold = oldThreshold
+	})
+
+	account := &model.DnsAccount{
+		Name:          "cf",
+		Type:          "cloudflare",
+		Authorization: `{"api_token":"token"}`,
+	}
+	if err := account.Insert(); err != nil {
+		t.Fatalf("insert dns account: %v", err)
+	}
+	now := time.Now()
+	nodes := []*model.Node{
+		{
+			NodeID:            "node-preload-a",
+			Name:              "preload-a",
+			IP:                "8.8.8.8",
+			PoolName:          "edge",
+			PublicIPs:         `["8.8.8.8"]`,
+			Weight:            100,
+			SchedulingEnabled: true,
+			AgentToken:        "token-preload-a",
+			AgentVersion:      "dev",
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now,
+		},
+		{
+			NodeID:            "node-preload-b",
+			Name:              "preload-b",
+			IP:                "1.1.1.1",
+			PoolName:          "edge",
+			PublicIPs:         `["1.1.1.1"]`,
+			Weight:            90,
+			SchedulingEnabled: true,
+			AgentToken:        "token-preload-b",
+			AgentVersion:      "dev",
+			OpenrestyStatus:   OpenrestyStatusHealthy,
+			Status:            NodeStatusOnline,
+			LastSeenAt:        now.Add(-time.Second),
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node: %v", err)
+		}
+	}
+	routes := []*model.ProxyRoute{
+		{
+			ID:                101,
+			DNSAutoSync:       true,
+			DNSProviderMode:   DNSProviderModeCloudflare,
+			DNSAccountID:      &account.ID,
+			DNSRecordType:     "A",
+			DNSAutoTarget:     true,
+			NodePool:          "edge",
+			DNSTargetCount:    1,
+			DNSScheduleMode:   "weighted",
+			DNSTTL:            60,
+			DNSRecordContent:  "8.8.4.4",
+			CloudflareProxied: true,
+		},
+		{
+			ID:                102,
+			DNSAutoSync:       true,
+			DNSProviderMode:   DNSProviderModeCloudflare,
+			DNSAccountID:      &account.ID,
+			DNSRecordType:     "A",
+			GSLBEnabled:       true,
+			GSLBPolicy:        mustJSON(t, defaultGSLBPolicy("edge", 1, "weighted", 60)),
+			DNSRecordContent:  "8.8.4.4",
+			CloudflareProxied: true,
+		},
+	}
+
+	const callbackName = "dushengcdn:test_proxy_route_dns_scheduling_preload_counter"
+	var nodeQueries int64
+	var schedulingStateQueries int64
+	queryCallback := model.DB.Callback().Query()
+	if err := queryCallback.After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		if db == nil || db.Statement == nil {
+			return
+		}
+		table := db.Statement.Table
+		if table == "" && db.Statement.Schema != nil {
+			table = db.Statement.Schema.Table
+		}
+		sql := db.Statement.SQL.String()
+		switch {
+		case table == "nodes" || strings.Contains(sql, "nodes"):
+			atomic.AddInt64(&nodeQueries, 1)
+		case table == "gslb_scheduling_states" || strings.Contains(sql, "gslb_scheduling_states"):
+			atomic.AddInt64(&schedulingStateQueries, 1)
+		}
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queryCallback.Remove(callbackName)
+	})
+
+	context, err := newProxyRouteDNSSyncContext(routes)
+	if err != nil {
+		t.Fatalf("newProxyRouteDNSSyncContext failed: %v", err)
+	}
+	if context.schedulingOptions.Data == nil {
+		t.Fatal("expected scheduling data to be preloaded")
+	}
+	if got := atomic.LoadInt64(&nodeQueries); got != 1 {
+		t.Fatalf("expected one preloaded nodes query, got %d", got)
+	}
+	if got := atomic.LoadInt64(&schedulingStateQueries); got != 1 {
+		t.Fatalf("expected one preloaded scheduling state query, got %d", got)
+	}
+
+	for _, route := range routes {
+		selection, err := selectProxyRouteDNSTargetsWithOptions(route, route.DNSRecordType, context.gslbSchedulingOptions())
+		if err != nil {
+			t.Fatalf("select route %d targets: %v", route.ID, err)
+		}
+		if len(selection.Targets) != 1 || selection.Targets[0] != "8.8.8.8" {
+			t.Fatalf("unexpected route %d targets: %+v", route.ID, selection)
+		}
+	}
+	if got := atomic.LoadInt64(&nodeQueries); got != 1 {
+		t.Fatalf("expected reused scheduling data to avoid extra nodes queries, got %d", got)
+	}
+	if got := atomic.LoadInt64(&schedulingStateQueries); got != 1 {
+		t.Fatalf("expected reused scheduling data to avoid extra scheduling state queries, got %d", got)
 	}
 }
 
@@ -708,7 +846,7 @@ func TestSelectHealthyNodeDNSTargetsByPoolAndWeight(t *testing.T) {
 		}
 	}
 
-	targets, err := selectHealthyNodeDNSTargets("A", "edge", 2, "weighted")
+	targets, err := selectHealthyNodeDNSTargetsWithOptions("A", "edge", 2, "weighted", gslbDNSSchedulingOptions{})
 	if err != nil {
 		t.Fatalf("select targets: %v", err)
 	}

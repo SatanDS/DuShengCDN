@@ -12,7 +12,10 @@ import { ErrorState } from '@/components/feedback/error-state';
 import { InlineMessage } from '@/components/feedback/inline-message';
 import { LoadingState } from '@/components/feedback/loading-state';
 import { useConfirmDialog } from '@/components/feedback/confirm-dialog-provider';
-import { useToastFeedback } from '@/components/feedback/toast-provider';
+import {
+  type FeedbackState,
+  useToastFeedback,
+} from '@/components/feedback/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { AppModal } from '@/components/ui/app-modal';
 import { AppCard } from '@/components/ui/app-card';
@@ -24,9 +27,9 @@ import { getApplyLogs } from '@/features/apply-logs/api/apply-logs';
 import {
   cleanupNodeHealthEvents,
   deleteNode,
+  getNode,
   getNodeAgentRelease,
   getNodeObservability,
-  getNodes,
   rotateNodeAgentToken,
   requestNodeForceSync,
   requestNodeOpenrestyRestart,
@@ -52,6 +55,7 @@ import { getOptions } from '@/features/settings/api/settings';
 import type { OptionItem } from '@/features/settings/types';
 import { copyToClipboard } from '@/lib/utils/clipboard';
 import { formatDateTime, formatRelativeTime } from '@/lib/utils/date';
+import { getErrorMessage } from '@/lib/utils/errors';
 import {
   formatBytes,
   formatBytesPerSecond,
@@ -79,19 +83,15 @@ import {
 } from '@/features/nodes/utils';
 
 const nodesQueryKey = ['nodes'];
+const nodeDetailQueryKey = (nodeId: string) =>
+  ['nodes', 'detail', nodeId] as const;
 const settingsQueryKey = ['settings', 'options'] as const;
-
-type FeedbackState = {
-  tone: 'info' | 'success' | 'danger';
-  message: string;
-};
+const nodeDashboardRefreshIntervalMs = 10000;
+const nodeInfoRefreshIntervalMs = 30000;
+const nodeObservabilityRefreshIntervalMs = 15000;
 
 type HealthEventFilter = 'all' | 'active' | 'resolved';
 type NodeDetailTab = 'dashboard' | 'info';
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
-}
 
 function formatUsageRatio(used?: number | null, total?: number | null) {
   if (!used || !total || total <= 0) {
@@ -311,11 +311,28 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const [isHealthEventCleanupModalOpen, setHealthEventCleanupModalOpen] =
     useState(false);
   const [isManualRefreshPending, setManualRefreshPending] = useState(false);
+  const shouldPollDashboard = activeTab === 'dashboard';
+  const shouldPollInfo = activeTab === 'info';
+  const nodeRefreshInterval = shouldPollDashboard
+    ? nodeDashboardRefreshIntervalMs
+    : shouldPollInfo
+      ? nodeInfoRefreshIntervalMs
+      : false;
+  const parsedNodeId = Number(nodeId);
+  const numericNodeId =
+    Number.isFinite(parsedNodeId) && parsedNodeId > 0 ? parsedNodeId : null;
+  const requireNodeId = () => {
+    if (numericNodeId === null) {
+      throw new Error('Invalid node id');
+    }
+    return numericNodeId;
+  };
 
-  const nodesQuery = useQuery({
-    queryKey: nodesQueryKey,
-    queryFn: getNodes,
-    refetchInterval: 5000,
+  const nodeQuery = useQuery({
+    queryKey: nodeDetailQueryKey(nodeId),
+    queryFn: () => getNode(requireNodeId()),
+    enabled: numericNodeId !== null,
+    refetchInterval: nodeRefreshInterval,
   });
 
   const optionsQuery = useQuery({
@@ -325,21 +342,17 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
   const stableAgentReleaseQuery = useQuery({
     queryKey: ['node-agent-release', nodeId, 'stable'],
-    queryFn: () => getNodeAgentRelease(Number(nodeId), 'stable'),
+    queryFn: () => getNodeAgentRelease(requireNodeId(), 'stable'),
     enabled: false,
   });
 
   const previewAgentReleaseQuery = useQuery({
     queryKey: ['node-agent-release', nodeId, 'preview'],
-    queryFn: () => getNodeAgentRelease(Number(nodeId), 'preview'),
+    queryFn: () => getNodeAgentRelease(requireNodeId(), 'preview'),
     enabled: false,
   });
 
-  const node = useMemo(() => {
-    return (
-      (nodesQuery.data ?? []).find((item) => String(item.id) === nodeId) ?? null
-    );
-  }, [nodeId, nodesQuery.data]);
+  const node = nodeQuery.data ?? null;
   const returnPoolName = normalizePoolName(
     node?.pool_name || searchParams.get('pool'),
   );
@@ -356,22 +369,24 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
         pageNo: 1,
         pageSize: 10,
       }),
-    enabled: Boolean(node?.node_id),
-    refetchInterval: 5000,
+    enabled: shouldPollInfo && Boolean(node?.node_id),
+    refetchInterval: shouldPollInfo ? nodeInfoRefreshIntervalMs : false,
   });
 
   const configVersionsQuery = useQuery({
     queryKey: ['config-versions'],
     queryFn: getConfigVersions,
-    refetchInterval: 5000,
+    refetchInterval: shouldPollInfo ? nodeInfoRefreshIntervalMs : false,
   });
 
   const observabilityQuery = useQuery({
     queryKey: ['node-observability', nodeId],
     queryFn: () =>
-      getNodeObservability(Number(nodeId), { hours: 24, limit: 48 }),
-    enabled: Boolean(nodeId),
-    refetchInterval: 10000,
+      getNodeObservability(requireNodeId(), { hours: 24, limit: 48 }),
+    enabled: shouldPollDashboard && numericNodeId !== null,
+    refetchInterval: shouldPollDashboard
+      ? nodeObservabilityRefreshIntervalMs
+      : false,
   });
 
   useEffect(() => {
@@ -391,13 +406,20 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     }
   }, [isServerUrlOverridden, optionsQuery.data]);
 
+  const invalidateNodeData = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: nodesQueryKey, exact: true }),
+      queryClient.invalidateQueries({ queryKey: nodeDetailQueryKey(nodeId) }),
+    ]);
+  };
+
   const saveMutation = useMutation({
     mutationFn: async (payload: Parameters<typeof updateNode>[1]) =>
-      updateNode(Number(nodeId), payload),
+      updateNode(requireNodeId(), payload),
     onSuccess: async () => {
       setFeedback({ tone: 'success', message: '节点已更新。' });
       setIsEditorOpen(false);
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      await invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -406,7 +428,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
   const updateAgentMutation = useMutation({
     mutationFn: (release: NodeAgentReleaseInfo | null) =>
-      requestNodeAgentUpdate(Number(nodeId), {
+      requestNodeAgentUpdate(requireNodeId(), {
         channel: release?.channel ?? selectedReleaseChannel,
         tag_name:
           release?.channel === 'preview'
@@ -422,7 +444,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
         tone: 'success',
         message: `节点将在下一次心跳后执行${updatedNode.update_channel === 'preview' ? '预览版' : '正式版'} Agent 更新。`,
       });
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      await invalidateNodeData();
     },
     onError: (error) => {
       const message = getErrorMessage(error);
@@ -432,13 +454,13 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   });
 
   const restartOpenrestyMutation = useMutation({
-    mutationFn: () => requestNodeOpenrestyRestart(Number(nodeId)),
+    mutationFn: () => requestNodeOpenrestyRestart(requireNodeId()),
     onSuccess: async (updatedNode) => {
       setFeedback({
         tone: 'success',
         message: `已向节点 ${updatedNode.name} 下发代理服务重启指令。`,
       });
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      await invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -446,13 +468,13 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   });
 
   const forceSyncMutation = useMutation({
-    mutationFn: () => requestNodeForceSync(Number(nodeId)),
+    mutationFn: () => requestNodeForceSync(requireNodeId()),
     onSuccess: async (updatedNode) => {
       setFeedback({
         tone: 'success',
         message: `已向节点 ${updatedNode.name} 下发强制同步指令，无视当前错误拦截。`,
       });
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      await invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -460,14 +482,14 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   });
 
   const rotateAgentTokenMutation = useMutation({
-    mutationFn: () => rotateNodeAgentToken(Number(nodeId)),
+    mutationFn: () => rotateNodeAgentToken(requireNodeId()),
     onSuccess: async (token) => {
       setRevealedAgentToken(token.agent_token ?? '');
       setFeedback({
         tone: 'success',
         message: 'Agent token rotated. Copy the install command before leaving this page.',
       });
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      await invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -475,13 +497,16 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => deleteNode(Number(nodeId)),
+    mutationFn: () => deleteNode(requireNodeId()),
     onSuccess: async (result) => {
       setFeedback({
         tone: result.uninstall_agent_requested ? 'success' : 'info',
         message: result.uninstall_agent_message || '节点已删除。',
       });
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      await queryClient.invalidateQueries({
+        queryKey: nodesQueryKey,
+        exact: true,
+      });
       router.push(nodePoolHref);
     },
     onError: (error) => {
@@ -490,7 +515,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   });
 
   const cleanupHealthEventsMutation = useMutation({
-    mutationFn: () => cleanupNodeHealthEvents(Number(nodeId)),
+    mutationFn: () => cleanupNodeHealthEvents(requireNodeId()),
     onSuccess: async (result) => {
       setFeedback({
         tone: 'success',
@@ -632,15 +657,15 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     [],
   );
 
-  if (nodesQuery.isLoading) {
+  if (nodeQuery.isLoading) {
     return <LoadingState />;
   }
 
-  if (nodesQuery.isError) {
+  if (nodeQuery.isError) {
     return (
       <ErrorState
         title="节点详情加载失败"
-        description={getErrorMessage(nodesQuery.error)}
+        description={getErrorMessage(nodeQuery.error)}
       />
     );
   }
@@ -757,7 +782,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     setManualRefreshPending(true);
     try {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: nodesQueryKey }),
+        invalidateNodeData(),
         queryClient.invalidateQueries({
           queryKey: ['apply-logs', node.node_id],
         }),

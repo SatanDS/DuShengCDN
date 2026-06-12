@@ -5,6 +5,7 @@ import (
 	"dushengcdn/utils/security"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -63,9 +64,40 @@ func GetAllUsers(startIdx int, num int) (users []*User, err error) {
 	return users, err
 }
 
-func SearchUsers(keyword string) (users []*User, err error) {
-	err = DB.Select([]string{"id", "username", "display_name", "role", "status", "email"}).Where("id = ? or username LIKE ? or email LIKE ? or display_name LIKE ?", keyword, keyword+"%", keyword+"%", keyword+"%").Find(&users).Error
+func SearchUsers(keyword string, startIdx int, num int) (users []*User, err error) {
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if num <= 0 || num > common.ItemsPerPage {
+		num = common.ItemsPerPage
+	}
+	likeKeyword := keyword + "%"
+	query := DB.Select([]string{"id", "username", "display_name", "role", "status", "email"})
+	// Binding a non-numeric keyword to "id = ?" errors on PostgreSQL, so only
+	// include the id condition when the keyword is an all-digit id.
+	if id, ok := searchKeywordAsUserId(keyword); ok {
+		query = query.Where("id = ? or username LIKE ? or email LIKE ? or display_name LIKE ?", id, likeKeyword, likeKeyword, likeKeyword)
+	} else {
+		query = query.Where("username LIKE ? or email LIKE ? or display_name LIKE ?", likeKeyword, likeKeyword, likeKeyword)
+	}
+	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&users).Error
 	return users, err
+}
+
+func searchKeywordAsUserId(keyword string) (int, bool) {
+	if keyword == "" {
+		return 0, false
+	}
+	for _, r := range keyword {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	id, err := strconv.Atoi(keyword)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 func GetUserById(id int, selectAll bool) (*User, error) {
@@ -148,6 +180,15 @@ func (user *User) FillUserById() error {
 	return DB.Where(User{Id: user.Id}).First(user).Error
 }
 
+// FillUserAuthInfoById loads only the columns request authentication needs
+// (id, username, password, role, status); all other fields stay zero.
+func (user *User) FillUserAuthInfoById() error {
+	if user.Id == 0 {
+		return errors.New("id 为空！")
+	}
+	return DB.Select([]string{"id", "username", "password", "role", "status"}).Where(User{Id: user.Id}).First(user).Error
+}
+
 func (user *User) FillUserByEmail() error {
 	if user.Email == "" {
 		return errors.New("email 为空！")
@@ -187,10 +228,11 @@ func ValidateUserToken(token string) (user *User) {
 	}
 	user = &User{}
 	tokenHash := security.HashSecretToken(token)
-	if DB.Where("token = ?", tokenHash).First(user).RowsAffected == 1 {
+	query := DB.Select([]string{"id", "username", "role", "status", "token"})
+	if query.Where("token = ?", tokenHash).First(user).RowsAffected == 1 {
 		return user
 	}
-	if DB.Where("token = ?", token).First(user).RowsAffected == 1 {
+	if query.Where("token = ?", token).First(user).RowsAffected == 1 {
 		_ = DB.Model(user).Update("token", tokenHash).Error
 		user.Token = tokenHash
 		return user

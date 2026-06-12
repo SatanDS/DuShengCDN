@@ -159,7 +159,9 @@ func (f *fakeSyncService) ForceSyncOnce(ctx context.Context, target *protocol.Ac
 }
 
 type fakeWebSocketConnection struct {
-	pongCalls int
+	pongCalls      int
+	statusPayloads []protocol.NodePayload
+	statusErr      error
 }
 
 func (f *fakeWebSocketConnection) URL() string {
@@ -167,7 +169,8 @@ func (f *fakeWebSocketConnection) URL() string {
 }
 
 func (f *fakeWebSocketConnection) SendStatus(payload protocol.NodePayload) error {
-	return nil
+	f.statusPayloads = append(f.statusPayloads, payload)
+	return f.statusErr
 }
 
 func (f *fakeWebSocketConnection) SendPong() error {
@@ -355,12 +358,13 @@ func TestRunnerHeartbeatPayloadIncludesObservabilityExtensions(t *testing.T) {
 	tempDir := t.TempDir()
 	stateStore := state.NewStore(filepath.Join(tempDir, "state.json"))
 	if err := stateStore.Save(&state.Snapshot{
-		NodeID:           "node-observe",
-		CurrentVersion:   "20260314-001",
-		CurrentChecksum:  "checksum-observe",
-		LastError:        "sync failed",
-		OpenrestyStatus:  protocol.OpenrestyStatusUnhealthy,
-		OpenrestyMessage: "reload failed",
+		NodeID:               "node-observe",
+		CurrentVersion:       "20260314-001",
+		CurrentChecksum:      "checksum-observe",
+		LastError:            "sync failed",
+		OpenrestyStatus:      protocol.OpenrestyStatusUnhealthy,
+		OpenrestyMessage:     "reload failed",
+		AccessLogOffsetReady: true,
 	}); err != nil {
 		t.Fatalf("failed to seed state: %v", err)
 	}
@@ -424,11 +428,16 @@ func TestRunnerHeartbeatPayloadIncludesObservabilityExtensions(t *testing.T) {
 	}
 }
 
-func TestRunnerRefreshesDNSProbeResultsForEachPayload(t *testing.T) {
+func TestRunnerDNSProbeRunsAsyncAndReportsCachedResultOnce(t *testing.T) {
 	originalProbe := probeDNSTargetsFunc
+	originalInterval := dnsProbeRefreshInterval
 	var probeCalls int
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
 	probeDNSTargetsFunc = func(ctx context.Context, targets []protocol.DNSProbeTarget) []protocol.DNSProbeReport {
 		probeCalls++
+		started <- struct{}{}
+		<-release
 		return []protocol.DNSProbeReport{{
 			WorkerID:      "worker-a",
 			PublicAddress: targets[0].PublicAddress,
@@ -442,8 +451,10 @@ func TestRunnerRefreshesDNSProbeResultsForEachPayload(t *testing.T) {
 			}},
 		}}
 	}
+	dnsProbeRefreshInterval = time.Hour
 	t.Cleanup(func() {
 		probeDNSTargetsFunc = originalProbe
+		dnsProbeRefreshInterval = originalInterval
 	})
 
 	tempDir := t.TempDir()
@@ -467,16 +478,80 @@ func TestRunnerRefreshesDNSProbeResultsForEachPayload(t *testing.T) {
 	}
 
 	firstPayload := runner.nodePayload("node-dnsprobe")
-	secondPayload := runner.nodePayload("node-dnsprobe")
+	if len(firstPayload.DNSProbeResults) != 0 {
+		t.Fatalf("expected in-flight DNS probe not to block heartbeat payload, got %+v", firstPayload.DNSProbeResults)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected DNS probe goroutine to start")
+	}
+	close(release)
 
-	if probeCalls != 2 {
-		t.Fatalf("expected DNS probe to refresh for each payload, got %d calls", probeCalls)
+	var secondPayload protocol.NodePayload
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		secondPayload = runner.nodePayload("node-dnsprobe")
+		if len(secondPayload.DNSProbeResults) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if len(firstPayload.DNSProbeResults) != 1 || firstPayload.DNSProbeResults[0].Results[0].DurationMs != 1 {
-		t.Fatalf("unexpected first DNS probe payload: %+v", firstPayload.DNSProbeResults)
+	if probeCalls != 1 {
+		t.Fatalf("expected DNS probe to run once while refresh interval is cached, got %d calls", probeCalls)
 	}
-	if len(secondPayload.DNSProbeResults) != 1 || secondPayload.DNSProbeResults[0].Results[0].DurationMs != 2 {
-		t.Fatalf("unexpected second DNS probe payload: %+v", secondPayload.DNSProbeResults)
+	if len(secondPayload.DNSProbeResults) != 1 || secondPayload.DNSProbeResults[0].Results[0].DurationMs != 1 {
+		t.Fatalf("unexpected cached DNS probe payload: %+v", secondPayload.DNSProbeResults)
+	}
+	thirdPayload := runner.nodePayload("node-dnsprobe")
+	if len(thirdPayload.DNSProbeResults) != 0 {
+		t.Fatalf("expected DNS probe result to be consumed once, got %+v", thirdPayload.DNSProbeResults)
+	}
+}
+
+func TestRunnerSystemProfileUsesLowFrequencyCache(t *testing.T) {
+	originalBuildProfile := buildProfileFunc
+	originalInterval := systemProfileRefreshInterval
+	profileCalls := 0
+	buildProfileFunc = func(cfg *config.Config, stateStore *state.Store) *protocol.NodeSystemProfile {
+		profileCalls++
+		return &protocol.NodeSystemProfile{
+			Hostname:       "edge-profile",
+			Architecture:   "amd64",
+			ReportedAtUnix: time.Now().Unix(),
+		}
+	}
+	systemProfileRefreshInterval = time.Hour
+	t.Cleanup(func() {
+		buildProfileFunc = originalBuildProfile
+		systemProfileRefreshInterval = originalInterval
+	})
+
+	tempDir := t.TempDir()
+	runner := &Runner{
+		Config: &config.Config{
+			NodeName:          "edge-profile-1",
+			NodeIP:            "10.0.0.54",
+			AgentVersion:      config.AgentVersion,
+			NginxVersion:      "1.27.1.2",
+			DataDir:           tempDir,
+			RouteConfigPath:   filepath.Join(tempDir, "conf.d", "dushengcdn_routes.conf"),
+			HeartbeatInterval: config.MillisecondDuration(10 * time.Millisecond),
+		},
+		StateStore: state.NewStore(filepath.Join(tempDir, "state.json")),
+	}
+
+	firstPayload := runner.nodePayload("node-profile")
+	secondPayload := runner.nodePayload("node-profile")
+
+	if profileCalls != 1 {
+		t.Fatalf("expected system profile to be built once within cache interval, got %d", profileCalls)
+	}
+	if firstPayload.Profile == nil {
+		t.Fatal("expected first payload to include profile")
+	}
+	if secondPayload.Profile != nil {
+		t.Fatal("expected second payload to skip cached profile check")
 	}
 }
 
@@ -555,6 +630,102 @@ func TestRunnerReplaysBufferedObservabilityAfterHeartbeatRecovery(t *testing.T) 
 	}
 	if len(replayable) != 0 {
 		t.Fatalf("expected buffer to be acked after successful heartbeat, got %+v", replayable)
+	}
+}
+
+func TestRunnerDoesNotAckObservabilityBufferAfterWebSocketSendOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	bufferStore := state.NewObservabilityBufferStore(filepath.Join(tempDir, "observability-buffer.json"))
+	nowUnix := time.Now().UTC().Unix()
+	bufferWindow := nowUnix - (nowUnix % 60) - 60
+	if err := bufferStore.Upsert(state.ObservabilityBufferRecord{
+		WindowStartedAtUnix: bufferWindow,
+		Snapshot:            &protocol.NodeMetricSnapshot{CapturedAtUnix: bufferWindow + 5, CPUUsagePercent: 30},
+		TrafficReport:       &protocol.NodeTrafficReport{WindowStartedAtUnix: bufferWindow, WindowEndedAtUnix: bufferWindow + 60, RequestCount: 8},
+		QueuedAtUnix:        bufferWindow + 60,
+	}, 0); err != nil {
+		t.Fatalf("failed to seed observability buffer: %v", err)
+	}
+	runner := &Runner{
+		Config: &config.Config{
+			NodeName:                   "edge-buffer-ws",
+			NodeIP:                     "10.0.0.53",
+			AgentVersion:               config.AgentVersion,
+			NginxVersion:               "1.27.1.2",
+			ObservabilityReplayMinutes: 15,
+		},
+		StateStore:          state.NewStore(filepath.Join(tempDir, "state.json")),
+		ObservabilityBuffer: bufferStore,
+		SyncService:         &fakeSyncService{},
+	}
+	conn := &fakeWebSocketConnection{}
+
+	if err := runner.sendWebSocketStatus(context.Background(), "node-1", conn); err != nil {
+		t.Fatalf("sendWebSocketStatus failed: %v", err)
+	}
+	if len(conn.statusPayloads) != 1 || len(conn.statusPayloads[0].BufferedObservability) != 1 {
+		t.Fatalf("expected websocket status to include buffered observability, got %+v", conn.statusPayloads)
+	}
+	replayable, err := bufferStore.Replayable(0, 0)
+	if err != nil {
+		t.Fatalf("Replayable after websocket status failed: %v", err)
+	}
+	keptBufferedWindow := false
+	for _, record := range replayable {
+		if record.WindowStartedAtUnix == bufferWindow {
+			keptBufferedWindow = true
+			break
+		}
+	}
+	if !keptBufferedWindow {
+		t.Fatalf("expected websocket send without server ack to keep buffer, got %+v", replayable)
+	}
+}
+
+func TestRunnerAcksObservabilityBufferAfterWebSocketStatusAck(t *testing.T) {
+	tempDir := t.TempDir()
+	bufferStore := state.NewObservabilityBufferStore(filepath.Join(tempDir, "observability-buffer.json"))
+	bufferWindow := time.Now().UTC().Add(-time.Minute).Unix()
+	bufferWindow -= bufferWindow % 60
+	if err := bufferStore.Upsert(state.ObservabilityBufferRecord{
+		WindowStartedAtUnix: bufferWindow,
+		Snapshot:            &protocol.NodeMetricSnapshot{CapturedAtUnix: bufferWindow + 5, CPUUsagePercent: 30},
+		TrafficReport:       &protocol.NodeTrafficReport{WindowStartedAtUnix: bufferWindow, WindowEndedAtUnix: bufferWindow + 60, RequestCount: 8},
+		QueuedAtUnix:        bufferWindow + 60,
+	}, 0); err != nil {
+		t.Fatalf("failed to seed observability buffer: %v", err)
+	}
+	runner := &Runner{
+		Config: &config.Config{
+			ObservabilityReplayMinutes: 15,
+		},
+		ObservabilityBuffer: bufferStore,
+	}
+	payload, err := json.Marshal(protocol.ObservabilityAck{
+		WindowStartedAtUnix: []int64{bufferWindow},
+	})
+	if err != nil {
+		t.Fatalf("marshal status ack: %v", err)
+	}
+
+	changed, err := runner.handleWebSocketMessage(context.Background(), protocol.WSMessage{
+		Type:    protocol.WSMessageTypeStatusAck,
+		Payload: payload,
+	}, &fakeWebSocketConnection{})
+	if err != nil {
+		t.Fatalf("handle websocket status ack: %v", err)
+	}
+	if changed {
+		t.Fatal("status ack should not change heartbeat interval")
+	}
+	replayable, err := bufferStore.Replayable(0, 0)
+	if err != nil {
+		t.Fatalf("Replayable after status ack failed: %v", err)
+	}
+	for _, record := range replayable {
+		if record.WindowStartedAtUnix == bufferWindow {
+			t.Fatalf("expected websocket status ack to remove buffered window, got %+v", replayable)
+		}
 	}
 }
 

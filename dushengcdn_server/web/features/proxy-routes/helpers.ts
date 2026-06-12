@@ -5,6 +5,8 @@ import type {
   ProxyRouteMutationPayload,
 } from '@/features/proxy-routes/types';
 
+export { getErrorMessage } from '@/lib/utils/errors';
+
 export const websiteConfigSections = [
   {
     key: 'domains',
@@ -95,10 +97,6 @@ export function buildDefaultGSLBPolicy(
       recovery_threshold: 1,
     },
   };
-}
-
-export function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试。';
 }
 
 export function getWebsiteConfigSection(

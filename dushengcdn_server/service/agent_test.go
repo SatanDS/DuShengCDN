@@ -541,3 +541,39 @@ func TestHeartbeatNodeIgnoresUnassignedDNSProbeReports(t *testing.T) {
 		t.Fatalf("unexpected persisted probe: %+v", probes[0])
 	}
 }
+
+func TestHeartbeatNodeReturnsErrorWhenObservabilityPersistenceFails(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:       "node-observe-error",
+		Name:         "observe-error-edge",
+		IP:           "10.0.0.32",
+		AgentToken:   "token-observe-error",
+		AgentVersion: "v0.6.0",
+		NginxVersion: "1.27.1.2",
+		Status:       NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+
+	_, err := HeartbeatNode(node, AgentNodePayload{
+		NodeID:       node.NodeID,
+		Name:         node.Name,
+		IP:           node.IP,
+		AgentVersion: node.AgentVersion,
+		NginxVersion: node.NginxVersion,
+		TrafficReport: &AgentNodeTrafficReport{
+			WindowStartedAtUnix: time.Now().Unix(),
+			WindowEndedAtUnix:   time.Now().Add(-time.Minute).Unix(),
+			RequestCount:        1,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected heartbeat to fail when observability persistence fails")
+	}
+	if !strings.Contains(err.Error(), "window_started_at_unix") {
+		t.Fatalf("expected observability validation error, got %v", err)
+	}
+}

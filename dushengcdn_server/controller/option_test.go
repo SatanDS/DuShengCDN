@@ -1,6 +1,9 @@
 package controller
 
-import "testing"
+import (
+	"dushengcdn/model"
+	"testing"
+)
 
 func TestValidateOpenRestyOption(t *testing.T) {
 	testCases := []struct {
@@ -76,6 +79,17 @@ func TestValidateAgentOption(t *testing.T) {
 	}
 	if err := validateAgentOption("AgentLegacyGlobalAuthEnabled", "true"); err != nil {
 		t.Fatalf("expected legacy alias option to accept true: %v", err)
+	}
+}
+
+func TestUpdateOptionUsesCloudflareValidation(t *testing.T) {
+	setupControllerTestDB(t)
+
+	if err := updateOptions([]model.Option{{Key: "CloudflareDDoSRequestThreshold", Value: "0"}}); err == nil {
+		t.Fatal("expected single option update path to reject invalid Cloudflare threshold")
+	}
+	if err := updateOptions([]model.Option{{Key: "CloudflareDDoSErrorRateThreshold", Value: "101"}}); err == nil {
+		t.Fatal("expected single option update path to reject invalid Cloudflare error rate")
 	}
 }
 

@@ -1,7 +1,9 @@
 package state
 
 import (
+	"bytes"
 	"crypto/rand"
+	"dushengcdn-agent/internal/fileutil"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -24,11 +26,16 @@ type Snapshot struct {
 	LastCPUStatIdle        uint64 `json:"last_cpu_stat_idle"`
 	LastMetricAtUnix       int64  `json:"last_metric_at_unix"`
 	AccessLogOffset        int64  `json:"access_log_offset"`
+	AccessLogOffsetReady   bool   `json:"access_log_offset_ready"`
 }
 
 type Store struct {
-	path string
-	mu   sync.Mutex
+	path             string
+	mu               sync.Mutex
+	loaded           bool
+	cache            *Snapshot
+	encoded          []byte
+	encodedCanonical bool
 }
 
 func NewStore(path string) *Store {
@@ -69,32 +76,80 @@ func (s *Store) Save(snapshot *Snapshot) error {
 }
 
 func (s *Store) loadUnlocked() (*Snapshot, error) {
+	if s.loaded {
+		return cloneSnapshot(s.cache), nil
+	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &Snapshot{}, nil
+			snapshot := &Snapshot{}
+			s.cache = cloneSnapshot(snapshot)
+			s.encoded = nil
+			s.encodedCanonical = false
+			s.loaded = true
+			return snapshot, nil
 		}
 		return nil, err
 	}
 	snapshot := &Snapshot{}
 	if len(data) == 0 {
+		s.cache = cloneSnapshot(snapshot)
+		s.encoded = append([]byte(nil), data...)
+		s.encodedCanonical = false
+		s.loaded = true
 		return snapshot, nil
 	}
 	if err = json.Unmarshal(data, snapshot); err != nil {
 		return nil, err
 	}
+	s.cache = cloneSnapshot(snapshot)
+	s.encoded = append([]byte(nil), data...)
+	s.encodedCanonical = isCanonicalSnapshotEncoding(snapshot, data)
+	s.loaded = true
 	return snapshot, nil
 }
 
 func (s *Store) saveUnlocked(snapshot *Snapshot) error {
+	normalized := cloneSnapshot(snapshot)
+	if s.loaded && s.cache != nil && *s.cache == *normalized && s.encodedCanonical {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(snapshot, "", "  ")
+	data, err := json.Marshal(normalized)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	if s.loaded && bytes.Equal(s.encoded, data) {
+		s.cache = cloneSnapshot(normalized)
+		s.encodedCanonical = true
+		return nil
+	}
+	if err = fileutil.WriteFileAtomicIfChanged(s.path, data, 0o644); err != nil {
+		return err
+	}
+	s.cache = cloneSnapshot(normalized)
+	s.encoded = append([]byte(nil), data...)
+	s.encodedCanonical = true
+	s.loaded = true
+	return nil
+}
+
+func isCanonicalSnapshotEncoding(snapshot *Snapshot, data []byte) bool {
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(encoded, data)
+}
+
+func cloneSnapshot(snapshot *Snapshot) *Snapshot {
+	if snapshot == nil {
+		return &Snapshot{}
+	}
+	copied := *snapshot
+	return &copied
 }
 
 func newNodeID() (string, error) {

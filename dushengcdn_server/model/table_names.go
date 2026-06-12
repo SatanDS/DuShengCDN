@@ -88,6 +88,10 @@ func (NodeAccessLog) TableName() string {
 	return "node_access_logs"
 }
 
+func (NodeAccessLogRollup) TableName() string {
+	return "node_access_log_rollups"
+}
+
 func (NodeHealthEvent) TableName() string {
 	return "node_health_events"
 }

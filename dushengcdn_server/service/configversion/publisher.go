@@ -2,7 +2,6 @@ package configversion
 
 import (
 	"dushengcdn/model"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,22 +12,26 @@ import (
 
 func NextVersionNumber(now time.Time) (string, error) {
 	prefix := now.Format("20060102")
-	var latest model.ConfigVersion
-	err := model.DB.
+	var versions []string
+	if err := model.DB.Model(&model.ConfigVersion{}).
 		Select("version").
 		Where("version LIKE ?", prefix+"-%").
-		Order("version desc").
-		First(&latest).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return fmt.Sprintf("%s-%03d", prefix, 1), nil
-	}
-	if err != nil {
+		Pluck("version", &versions).Error; err != nil {
 		return "", err
 	}
-	suffix := strings.TrimPrefix(latest.Version, prefix+"-")
-	sequence, err := strconv.Atoi(suffix)
-	if err != nil {
-		return "", fmt.Errorf("invalid config version sequence %q: %w", latest.Version, err)
+	if len(versions) == 0 {
+		return fmt.Sprintf("%s-%03d", prefix, 1), nil
+	}
+	sequence := 0
+	for _, version := range versions {
+		suffix := strings.TrimPrefix(version, prefix+"-")
+		value, err := strconv.Atoi(suffix)
+		if err != nil {
+			return "", fmt.Errorf("invalid config version sequence %q: %w", version, err)
+		}
+		if value > sequence {
+			sequence = value
+		}
 	}
 	return fmt.Sprintf("%s-%03d", prefix, sequence+1), nil
 }

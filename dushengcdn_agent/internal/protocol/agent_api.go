@@ -37,6 +37,7 @@ type AgentSettings struct {
 
 const (
 	WSMessageTypeStatus          = "status"
+	WSMessageTypeStatusAck       = "status_ack"
 	WSMessageTypeSettings        = "settings"
 	WSMessageTypeActiveConfig    = "active_config"
 	WSMessageTypeForceSyncConfig = "force_sync_config"
@@ -55,6 +56,10 @@ type WSMessage struct {
 type WSOutboundMessage struct {
 	Type    string `json:"type"`
 	Payload any    `json:"payload,omitempty"`
+}
+
+type ObservabilityAck struct {
+	WindowStartedAtUnix []int64 `json:"window_started_at_unix,omitempty"`
 }
 
 type WebSocketConnection interface {

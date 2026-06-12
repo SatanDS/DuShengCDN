@@ -51,9 +51,24 @@ func GetConfigVersionByID(id uint) (*ConfigVersion, error) {
 	return version, err
 }
 
+func GetConfigVersionMetaByID(id uint) (*ConfigVersion, error) {
+	version := &ConfigVersion{}
+	err := DB.Select("id", "version", "checksum", "is_active", "created_by", "created_at").First(version, id).Error
+	return version, err
+}
+
 func GetActiveConfigVersion() (*ConfigVersion, error) {
 	version := &ConfigVersion{}
 	err := DB.Where("is_active = ?", true).Order("id desc").First(version).Error
+	return version, err
+}
+
+func GetActiveConfigVersionMeta() (*ConfigVersion, error) {
+	version := &ConfigVersion{}
+	err := DB.Select("id", "version", "checksum", "is_active", "created_by", "created_at").
+		Where("is_active = ?", true).
+		Order("id desc").
+		First(version).Error
 	return version, err
 }
 
@@ -66,4 +81,23 @@ func GetConfigVersionArtifact(versionID uint, poolName string) (*ConfigVersionAr
 	artifact := &ConfigVersionArtifact{}
 	err := DB.Where("config_version_id = ? AND pool_name = ?", versionID, poolName).First(artifact).Error
 	return artifact, err
+}
+
+func GetConfigVersionArtifactMeta(versionID uint, poolName string) (*ConfigVersionArtifact, error) {
+	artifact := &ConfigVersionArtifact{}
+	err := DB.Select("id", "config_version_id", "pool_name", "checksum", "main_config_checksum", "route_config_checksum", "route_count", "created_at").
+		Where("config_version_id = ? AND pool_name = ?", versionID, poolName).
+		First(artifact).Error
+	return artifact, err
+}
+
+func ListConfigVersionArtifactMetas(versionID uint, poolNames []string) (artifacts []*ConfigVersionArtifact, err error) {
+	if len(poolNames) == 0 {
+		return []*ConfigVersionArtifact{}, nil
+	}
+	err = DB.Select("id", "config_version_id", "pool_name", "checksum", "main_config_checksum", "route_config_checksum", "route_count", "created_at").
+		Where("config_version_id = ? AND pool_name IN ?", versionID, poolNames).
+		Order("pool_name asc").
+		Find(&artifacts).Error
+	return artifacts, err
 }

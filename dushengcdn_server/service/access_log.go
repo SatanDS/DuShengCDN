@@ -3,13 +3,20 @@ package service
 import (
 	"dushengcdn/common"
 	"dushengcdn/model"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"net"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -24,11 +31,17 @@ const (
 	nodeAccessLogRetentionDays = 90
 )
 
+const (
+	accessLogCountCacheTTL        = 30 * time.Second
+	accessLogCountCacheMaxEntries = 512
+)
+
 type AccessLogQuery struct {
 	NodeID      string `json:"node_id"`
 	RemoteAddr  string `json:"remote_addr"`
 	Host        string `json:"host"`
 	Path        string `json:"path"`
+	Cursor      string `json:"cursor"`
 	Page        int    `json:"page"`
 	PageSize    int    `json:"page_size"`
 	SortBy      string `json:"sort_by"`
@@ -55,8 +68,53 @@ type AccessLogList struct {
 	Page        int             `json:"page"`
 	PageSize    int             `json:"page_size"`
 	HasMore     bool            `json:"has_more"`
+	NextCursor  string          `json:"next_cursor,omitempty"`
 	TotalRecord int64           `json:"total_record"`
 	TotalIP     int64           `json:"total_ip"`
+}
+
+type accessLogCursor struct {
+	LoggedAt time.Time `json:"logged_at"`
+	ID       uint      `json:"id"`
+}
+
+type accessLogCountCacheEntry struct {
+	totalRecords int64
+	totalIPs     int64
+	expiresAt    time.Time
+}
+
+type accessLogCountLoadResult struct {
+	totalRecords int64
+	totalIPs     int64
+}
+
+type accessLogSingleCountCacheEntry struct {
+	total     int64
+	expiresAt time.Time
+}
+
+type accessLogSingleCountCacheStore struct {
+	sync.Mutex
+	values map[string]accessLogSingleCountCacheEntry
+	group  singleflight.Group
+}
+
+var accessLogCountCache = struct {
+	sync.Mutex
+	values map[string]accessLogCountCacheEntry
+}{
+	values: make(map[string]accessLogCountCacheEntry),
+}
+
+var accessLogCountLoadGroup singleflight.Group
+
+var accessLogBucketCountCache = accessLogSingleCountCacheStore{
+	values: make(map[string]accessLogSingleCountCacheEntry),
+}
+
+var accessLogIPSummaryCountCache = accessLogSingleCountCacheStore{
+	values: make(map[string]accessLogSingleCountCacheEntry),
 }
 
 type FoldedAccessLogView struct {
@@ -182,14 +240,6 @@ type MeteringBandwidthPoint struct {
 	Bps             float64   `json:"bps"`
 }
 
-type meteringOverviewDataSource struct {
-	now       time.Time
-	logs      []*model.NodeAccessLog
-	reports   []*model.NodeRequestReport
-	snapshots []*model.NodeMetricSnapshot
-	nodes     []*model.Node
-}
-
 type meteringOverviewAggregatedDataSource struct {
 	now         time.Time
 	summary     *model.NodeAccessLogMeteringSummary
@@ -228,27 +278,257 @@ func runConcurrentQueries(functions ...func() error) error {
 	return firstErr
 }
 
+func accessLogCountCacheKey(query model.NodeAccessLogQuery) string {
+	return strings.Join([]string{
+		fmt.Sprintf("%p", model.DB),
+		common.SQLDSN,
+		common.SQLitePath,
+		strconv.Itoa(nodeAccessLogRetentionDays),
+		strings.TrimSpace(query.NodeID),
+		normalizeAccessLogRemoteAddrFilter(query.RemoteAddr),
+		normalizeAccessLogHostFilter(query.Host),
+		strings.TrimSpace(query.Path),
+	}, "\x00")
+}
+
+func accessLogBucketCountCacheKey(query model.NodeAccessLogBucketQuery) string {
+	return strings.Join([]string{
+		"bucket",
+		accessLogCountCacheKey(model.NodeAccessLogQuery{
+			NodeID:     query.NodeID,
+			RemoteAddr: query.RemoteAddr,
+			Host:       query.Host,
+			Path:       query.Path,
+		}),
+		strconv.Itoa(query.FoldMinutes),
+	}, "\x00")
+}
+
+func accessLogIPSummaryCountCacheKey(query model.NodeAccessLogIPSummaryQuery) string {
+	return strings.Join([]string{
+		"ip_summary",
+		accessLogCountCacheKey(model.NodeAccessLogQuery{
+			NodeID:     query.NodeID,
+			RemoteAddr: query.RemoteAddr,
+			Host:       query.Host,
+		}),
+	}, "\x00")
+}
+
+func getAccessLogCachedCount(key string, now time.Time) (int64, int64, bool) {
+	accessLogCountCache.Lock()
+	defer accessLogCountCache.Unlock()
+	entry, ok := accessLogCountCache.values[key]
+	if !ok {
+		return 0, 0, false
+	}
+	if !entry.expiresAt.After(now) {
+		delete(accessLogCountCache.values, key)
+		return 0, 0, false
+	}
+	return entry.totalRecords, entry.totalIPs, true
+}
+
+func getAccessLogCachedSingleCount(cache *accessLogSingleCountCacheStore, key string, now time.Time) (int64, bool) {
+	cache.Lock()
+	defer cache.Unlock()
+	entry, ok := cache.values[key]
+	if !ok {
+		return 0, false
+	}
+	if !entry.expiresAt.After(now) {
+		delete(cache.values, key)
+		return 0, false
+	}
+	return entry.total, true
+}
+
+func loadAccessLogCountWithCache(key string, load func() (int64, int64, error)) (int64, int64, error) {
+	if recordCount, ipCount, ok := getAccessLogCachedCount(key, time.Now()); ok {
+		return recordCount, ipCount, nil
+	}
+	value, err, _ := accessLogCountLoadGroup.Do(key, func() (any, error) {
+		if recordCount, ipCount, ok := getAccessLogCachedCount(key, time.Now()); ok {
+			return accessLogCountLoadResult{totalRecords: recordCount, totalIPs: ipCount}, nil
+		}
+		recordCount, ipCount, err := load()
+		if err != nil {
+			return nil, err
+		}
+		setAccessLogCachedCount(key, recordCount, ipCount, time.Now())
+		return accessLogCountLoadResult{totalRecords: recordCount, totalIPs: ipCount}, nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	result, ok := value.(accessLogCountLoadResult)
+	if !ok {
+		return 0, 0, errors.New("invalid access log count result")
+	}
+	return result.totalRecords, result.totalIPs, nil
+}
+
+func loadAccessLogSingleCountWithCache(cache *accessLogSingleCountCacheStore, key string, load func() (int64, error)) (int64, error) {
+	if cache == nil {
+		return load()
+	}
+	if count, ok := getAccessLogCachedSingleCount(cache, key, time.Now()); ok {
+		return count, nil
+	}
+	value, err, _ := cache.group.Do(key, func() (any, error) {
+		if count, ok := getAccessLogCachedSingleCount(cache, key, time.Now()); ok {
+			return count, nil
+		}
+		count, err := load()
+		if err != nil {
+			return nil, err
+		}
+		setAccessLogCachedSingleCount(cache, key, count, time.Now())
+		return count, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	count, ok := value.(int64)
+	if !ok {
+		return 0, errors.New("invalid access log count result")
+	}
+	return count, nil
+}
+
+func setAccessLogCachedCount(key string, totalRecords int64, totalIPs int64, now time.Time) {
+	accessLogCountCache.Lock()
+	defer accessLogCountCache.Unlock()
+	pruneAccessLogCountCacheLocked(now)
+	accessLogCountCache.values[key] = accessLogCountCacheEntry{
+		totalRecords: totalRecords,
+		totalIPs:     totalIPs,
+		expiresAt:    now.Add(accessLogCountCacheTTL),
+	}
+}
+
+func setAccessLogCachedSingleCount(cache *accessLogSingleCountCacheStore, key string, total int64, now time.Time) {
+	cache.Lock()
+	defer cache.Unlock()
+	pruneAccessLogSingleCountCacheLocked(cache, now)
+	cache.values[key] = accessLogSingleCountCacheEntry{
+		total:     total,
+		expiresAt: now.Add(accessLogCountCacheTTL),
+	}
+}
+
+func pruneAccessLogCountCacheLocked(now time.Time) {
+	if len(accessLogCountCache.values) < accessLogCountCacheMaxEntries {
+		return
+	}
+	for cachedKey, entry := range accessLogCountCache.values {
+		if !entry.expiresAt.After(now) {
+			delete(accessLogCountCache.values, cachedKey)
+		}
+	}
+	for len(accessLogCountCache.values) >= accessLogCountCacheMaxEntries {
+		for cachedKey := range accessLogCountCache.values {
+			delete(accessLogCountCache.values, cachedKey)
+			break
+		}
+	}
+}
+
+func pruneAccessLogSingleCountCacheLocked(cache *accessLogSingleCountCacheStore, now time.Time) {
+	if len(cache.values) < accessLogCountCacheMaxEntries {
+		return
+	}
+	for cachedKey, entry := range cache.values {
+		if !entry.expiresAt.After(now) {
+			delete(cache.values, cachedKey)
+		}
+	}
+	for len(cache.values) >= accessLogCountCacheMaxEntries {
+		for cachedKey := range cache.values {
+			delete(cache.values, cachedKey)
+			break
+		}
+	}
+}
+
+func resetAccessLogCountCache() {
+	accessLogCountCache.Lock()
+	accessLogCountCache.values = make(map[string]accessLogCountCacheEntry)
+	accessLogCountCache.Unlock()
+
+	accessLogBucketCountCache.Lock()
+	accessLogBucketCountCache.values = make(map[string]accessLogSingleCountCacheEntry)
+	accessLogBucketCountCache.Unlock()
+
+	accessLogIPSummaryCountCache.Lock()
+	accessLogIPSummaryCountCache.values = make(map[string]accessLogSingleCountCacheEntry)
+	accessLogIPSummaryCountCache.Unlock()
+}
+
+func resetAccessLogCountCacheForTest() {
+	resetAccessLogCountCache()
+}
+
 func ListAccessLogs(input AccessLogQuery) (*AccessLogList, error) {
 	normalized := normalizeAccessLogQuery(input)
 	modelQuery := buildModelAccessLogQuery(normalized)
+	cursorEnabled := accessLogQuerySupportsCursor(normalized)
+	if cursorEnabled && normalized.Cursor != "" {
+		loggedAt, id, err := decodeAccessLogCursor(normalized.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		modelQuery.CursorLoggedAt = loggedAt
+		modelQuery.CursorID = id
+		modelQuery.Page = 0
+		normalized.Page = 0
+	}
+	modelQuery.Lookahead = 1
+	countKey := accessLogCountCacheKey(modelQuery)
 
 	var logs []*model.NodeAccessLog
 	var totalRecords int64
 	var totalIPs int64
-	if err := runConcurrentQueries(
+	countCached := false
+	if recordCount, ipCount, ok := getAccessLogCachedCount(countKey, time.Now()); ok {
+		totalRecords = recordCount
+		totalIPs = ipCount
+		countCached = true
+	}
+	countQuery := modelQuery
+	countQuery.Lookahead = 0
+	countQuery.CursorLoggedAt = time.Time{}
+	countQuery.CursorID = 0
+	queries := []func() error{
 		func() error {
 			rows, err := model.ListNodeAccessLogs(modelQuery)
 			logs = rows
 			return err
 		},
-		func() error {
-			recordCount, ipCount, err := model.CountNodeAccessLogs(modelQuery)
+	}
+	if !countCached {
+		queries = append(queries, func() error {
+			recordCount, ipCount, err := loadAccessLogCountWithCache(countKey, func() (int64, int64, error) {
+				return model.CountNodeAccessLogs(countQuery)
+			})
+			if err != nil {
+				return err
+			}
 			totalRecords = recordCount
 			totalIPs = ipCount
-			return err
-		},
-	); err != nil {
+			return nil
+		})
+	}
+	if err := runConcurrentQueries(queries...); err != nil {
 		return nil, err
+	}
+	hasMore := len(logs) > normalized.PageSize
+	if hasMore {
+		logs = logs[:normalized.PageSize]
+	}
+	nextCursor := ""
+	if cursorEnabled && hasMore && len(logs) > 0 {
+		nextCursor = encodeAccessLogCursor(logs[len(logs)-1])
 	}
 	nodeNames, err := listNodeNameMap(logs)
 	if err != nil {
@@ -277,7 +557,8 @@ func ListAccessLogs(input AccessLogQuery) (*AccessLogList, error) {
 		Items:       views,
 		Page:        normalized.Page,
 		PageSize:    normalized.PageSize,
-		HasMore:     int64((normalized.Page+1)*normalized.PageSize) < totalRecords,
+		HasMore:     hasMore,
+		NextCursor:  nextCursor,
 		TotalRecord: totalRecords,
 		TotalIP:     totalIPs,
 	}, nil
@@ -298,6 +579,7 @@ func ListFoldedAccessLogs(input AccessLogQuery) (*FoldedAccessLogList, error) {
 		Since:       modelQuery.Since,
 		Page:        normalized.Page,
 		PageSize:    normalized.PageSize,
+		Lookahead:   1,
 		SortBy:      normalizeFoldSortBy(normalized.SortBy),
 		SortOrder:   normalized.SortOrder,
 		FoldMinutes: foldMinutes,
@@ -307,25 +589,57 @@ func ListFoldedAccessLogs(input AccessLogQuery) (*FoldedAccessLogList, error) {
 	var totalBuckets int64
 	var totalRecords int64
 	var totalIPs int64
-	if err := runConcurrentQueries(
+	countKey := accessLogCountCacheKey(modelQuery)
+	countCached := false
+	if recordCount, ipCount, ok := getAccessLogCachedCount(countKey, time.Now()); ok {
+		totalRecords = recordCount
+		totalIPs = ipCount
+		countCached = true
+	}
+	bucketCountKey := accessLogBucketCountCacheKey(bucketQuery)
+	bucketCountCached := false
+	if count, ok := getAccessLogCachedSingleCount(&accessLogBucketCountCache, bucketCountKey, time.Now()); ok {
+		totalBuckets = count
+		bucketCountCached = true
+	}
+	queries := []func() error{
 		func() error {
 			rows, err := model.ListNodeAccessLogBuckets(bucketQuery)
 			items = rows
 			return err
 		},
-		func() error {
-			count, err := model.CountNodeAccessLogBuckets(bucketQuery)
+	}
+	if !bucketCountCached {
+		queries = append(queries, func() error {
+			count, err := loadAccessLogSingleCountWithCache(&accessLogBucketCountCache, bucketCountKey, func() (int64, error) {
+				return model.CountNodeAccessLogBuckets(bucketQuery)
+			})
+			if err != nil {
+				return err
+			}
 			totalBuckets = count
-			return err
-		},
-		func() error {
-			recordCount, ipCount, err := model.CountNodeAccessLogs(modelQuery)
+			return nil
+		})
+	}
+	if !countCached {
+		queries = append(queries, func() error {
+			recordCount, ipCount, err := loadAccessLogCountWithCache(countKey, func() (int64, int64, error) {
+				return model.CountNodeAccessLogs(modelQuery)
+			})
+			if err != nil {
+				return err
+			}
 			totalRecords = recordCount
 			totalIPs = ipCount
-			return err
-		},
-	); err != nil {
+			return nil
+		})
+	}
+	if err := runConcurrentQueries(queries...); err != nil {
 		return nil, err
+	}
+	hasMore := len(items) > normalized.PageSize
+	if hasMore {
+		items = items[:normalized.PageSize]
 	}
 	views := make([]FoldedAccessLogView, 0, len(items))
 	for _, item := range items {
@@ -346,7 +660,7 @@ func ListFoldedAccessLogs(input AccessLogQuery) (*FoldedAccessLogList, error) {
 		Items:       views,
 		Page:        normalized.Page,
 		PageSize:    normalized.PageSize,
-		HasMore:     int64((normalized.Page+1)*normalized.PageSize) < totalBuckets,
+		HasMore:     hasMore,
 		TotalBucket: totalBuckets,
 		TotalRecord: totalRecords,
 		TotalIP:     totalIPs,
@@ -365,25 +679,44 @@ func ListAccessLogIPSummaries(input AccessLogIPSummaryQuery) (*AccessLogIPSummar
 		Since:      since,
 		Page:       normalized.Page,
 		PageSize:   normalized.PageSize,
+		Lookahead:  1,
 		SortBy:     normalized.SortBy,
 		SortOrder:  normalized.SortOrder,
 	}
 
 	var items []*model.NodeAccessLogIPSummaryRow
 	var totalIP int64
-	if err := runConcurrentQueries(
+	countKey := accessLogIPSummaryCountCacheKey(query)
+	countCached := false
+	if count, ok := getAccessLogCachedSingleCount(&accessLogIPSummaryCountCache, countKey, time.Now()); ok {
+		totalIP = count
+		countCached = true
+	}
+	queries := []func() error{
 		func() error {
 			rows, err := model.ListNodeAccessLogIPSummaries(query, recentSince)
 			items = rows
 			return err
 		},
-		func() error {
-			count, err := model.CountNodeAccessLogIPSummaries(query)
+	}
+	if !countCached {
+		queries = append(queries, func() error {
+			count, err := loadAccessLogSingleCountWithCache(&accessLogIPSummaryCountCache, countKey, func() (int64, error) {
+				return model.CountNodeAccessLogIPSummaries(query)
+			})
+			if err != nil {
+				return err
+			}
 			totalIP = count
-			return err
-		},
-	); err != nil {
+			return nil
+		})
+	}
+	if err := runConcurrentQueries(queries...); err != nil {
 		return nil, err
+	}
+	hasMore := len(items) > normalized.PageSize
+	if hasMore {
+		items = items[:normalized.PageSize]
 	}
 	views := make([]AccessLogIPSummaryView, 0, len(items))
 	for _, item := range items {
@@ -403,7 +736,7 @@ func ListAccessLogIPSummaries(input AccessLogIPSummaryQuery) (*AccessLogIPSummar
 		Items:     views,
 		Page:      normalized.Page,
 		PageSize:  normalized.PageSize,
-		HasMore:   int64((normalized.Page+1)*normalized.PageSize) < totalIP,
+		HasMore:   hasMore,
 		TotalIP:   totalIP,
 		SortBy:    normalized.SortBy,
 		SortOrder: normalized.SortOrder,
@@ -535,114 +868,6 @@ func GetObservabilityMeteringOverview() (*ObservabilityMeteringOverview, error) 
 	}), nil
 }
 
-func buildObservabilityMeteringOverview(source meteringOverviewDataSource) *ObservabilityMeteringOverview {
-	now := source.now
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	since := now.Add(-24 * time.Hour)
-	const limit = 8
-
-	overview := &ObservabilityMeteringOverview{
-		GeneratedAt:     now,
-		WindowStartedAt: since,
-		WindowEndedAt:   now,
-		TotalNodes:      len(source.nodes),
-		StatusCodes:     []DistributionItem{},
-		TopURLs:         []DistributionItem{},
-		TopIPs:          []DistributionItem{},
-		TopRegions:      []DistributionItem{},
-		SiteTraffic:     []MeteringTrafficItem{},
-		NodeTraffic:     []MeteringTrafficItem{},
-		BandwidthTrend:  buildMeteringBandwidthTrend(now, source.snapshots),
-	}
-
-	siteAccumulators := make(map[string]*meteringTrafficAccumulator)
-	nodeAccumulators := make(map[string]*meteringTrafficAccumulator)
-	topURLCounts := make(distributionAccumulator)
-	topIPCounts := make(distributionAccumulator)
-	topRegionCounts := make(distributionAccumulator)
-	statusCounts := make(distributionAccumulator)
-	nodeNames := buildMeteringNodeNameMap(source.nodes)
-
-	for _, item := range source.logs {
-		if item == nil {
-			continue
-		}
-		overview.RequestCount++
-		overview.RequestBytes += nonNegativeInt64(item.RequestBytes)
-		overview.ResponseBytes += nonNegativeInt64(item.ResponseBytes)
-		overview.UpstreamBytes += nonNegativeInt64(item.UpstreamBytes)
-		if item.UpstreamBytes > 0 {
-			overview.UpstreamBytesSupported = true
-		}
-		siteKey := strings.TrimSpace(item.Host)
-		if siteKey == "" {
-			siteKey = "未识别站点"
-		}
-		accumulateMeteringTraffic(siteAccumulators, siteKey, item)
-		nodeKey := strings.TrimSpace(item.NodeID)
-		if displayName := strings.TrimSpace(nodeNames[nodeKey]); displayName != "" {
-			nodeKey = displayName
-		}
-		if nodeKey == "" {
-			nodeKey = "未识别节点"
-		}
-		accumulateMeteringTraffic(nodeAccumulators, nodeKey, item)
-		if key := buildAccessLogURLKey(item); key != "" {
-			topURLCounts[key]++
-		}
-		if remoteAddr := strings.TrimSpace(item.RemoteAddr); remoteAddr != "" {
-			topIPCounts[remoteAddr]++
-		}
-		if region := strings.TrimSpace(item.Region); region != "" {
-			topRegionCounts[region]++
-		}
-		if item.StatusCode > 0 {
-			statusCounts[formatStatusCode(item.StatusCode)]++
-		}
-	}
-
-	for _, report := range source.reports {
-		if report == nil {
-			continue
-		}
-		overview.CacheHitCount += report.CacheHitCount
-		overview.CacheMissCount += report.CacheMissCount
-		overview.CacheBypassCount += report.CacheBypassCount
-		overview.CacheExpiredCount += report.CacheExpiredCount
-		overview.CacheStaleCount += report.CacheStaleCount
-		overview.CacheClassifiedCount += report.CacheHitCount + report.CacheMissCount + report.CacheBypassCount + report.CacheExpiredCount + report.CacheStaleCount
-		if len(statusCounts) == 0 {
-			mergeJSONCounts(statusCounts, report.StatusCodesJSON)
-		}
-	}
-	if overview.CacheClassifiedCount > 0 {
-		overview.CacheHitRatePercent = float64(overview.CacheHitCount) / float64(overview.CacheClassifiedCount) * 100
-	}
-	overview.BandwidthP95Bps = calculateP95BandwidthBps(overview.BandwidthTrend)
-
-	for _, node := range source.nodes {
-		if node == nil {
-			continue
-		}
-		if meteringNodeOnline(node, now) {
-			overview.OnlineNodes++
-		}
-	}
-	if overview.TotalNodes > 0 {
-		overview.NodeAvailabilityPercent = float64(overview.OnlineNodes) / float64(overview.TotalNodes) * 100
-	}
-
-	overview.SiteTraffic = meteringTrafficItems(siteAccumulators, limit)
-	overview.NodeTraffic = meteringTrafficItems(nodeAccumulators, limit)
-	overview.StatusCodes = toDistributionItems(statusCounts, limit)
-	overview.TopURLs = toDistributionItems(topURLCounts, limit)
-	overview.TopIPs = toDistributionItems(topIPCounts, limit)
-	overview.TopRegions = toDistributionItems(topRegionCounts, limit)
-	return overview
-}
-
 func buildAggregatedObservabilityMeteringOverview(source meteringOverviewAggregatedDataSource) *ObservabilityMeteringOverview {
 	now := source.now
 	if now.IsZero() {
@@ -763,6 +988,7 @@ func CleanupAccessLogs(input AccessLogCleanupInput) (*AccessLogCleanupResult, er
 	if err != nil {
 		return nil, err
 	}
+	resetAccessLogCountCache()
 	return &AccessLogCleanupResult{
 		RetentionDays: input.RetentionDays,
 		DeletedCount:  deleted,
@@ -773,8 +999,8 @@ func CleanupAccessLogs(input AccessLogCleanupInput) (*AccessLogCleanupResult, er
 func buildModelAccessLogQuery(input AccessLogQuery) model.NodeAccessLogQuery {
 	return model.NodeAccessLogQuery{
 		NodeID:     strings.TrimSpace(input.NodeID),
-		RemoteAddr: strings.TrimSpace(input.RemoteAddr),
-		Host:       strings.TrimSpace(input.Host),
+		RemoteAddr: normalizeAccessLogRemoteAddrFilter(input.RemoteAddr),
+		Host:       normalizeAccessLogHostFilter(input.Host),
 		Path:       strings.TrimSpace(input.Path),
 		Since:      time.Now().UTC().Add(-nodeAccessLogRetentionWindow),
 		Page:       input.Page,
@@ -782,72 +1008,6 @@ func buildModelAccessLogQuery(input AccessLogQuery) model.NodeAccessLogQuery {
 		SortBy:     input.SortBy,
 		SortOrder:  input.SortOrder,
 	}
-}
-
-type meteringTrafficAccumulator struct {
-	requestCount  int64
-	requestBytes  int64
-	responseBytes int64
-	upstreamBytes int64
-}
-
-func accumulateMeteringTraffic(target map[string]*meteringTrafficAccumulator, key string, item *model.NodeAccessLog) {
-	if item == nil {
-		return
-	}
-	accumulator := target[key]
-	if accumulator == nil {
-		accumulator = &meteringTrafficAccumulator{}
-		target[key] = accumulator
-	}
-	accumulator.requestCount++
-	accumulator.requestBytes += nonNegativeInt64(item.RequestBytes)
-	accumulator.responseBytes += nonNegativeInt64(item.ResponseBytes)
-	accumulator.upstreamBytes += nonNegativeInt64(item.UpstreamBytes)
-}
-
-func meteringTrafficItems(values map[string]*meteringTrafficAccumulator, limit int) []MeteringTrafficItem {
-	items := make([]MeteringTrafficItem, 0, len(values))
-	for key, accumulator := range values {
-		if accumulator == nil || strings.TrimSpace(key) == "" {
-			continue
-		}
-		items = append(items, MeteringTrafficItem{
-			Key:           key,
-			RequestCount:  accumulator.requestCount,
-			RequestBytes:  accumulator.requestBytes,
-			ResponseBytes: accumulator.responseBytes,
-			UpstreamBytes: accumulator.upstreamBytes,
-		})
-	}
-	sort.Slice(items, func(i int, j int) bool {
-		if items[i].ResponseBytes == items[j].ResponseBytes {
-			if items[i].RequestCount == items[j].RequestCount {
-				return items[i].Key < items[j].Key
-			}
-			return items[i].RequestCount > items[j].RequestCount
-		}
-		return items[i].ResponseBytes > items[j].ResponseBytes
-	})
-	if limit > 0 && len(items) > limit {
-		items = items[:limit]
-	}
-	return items
-}
-
-func buildAccessLogURLKey(item *model.NodeAccessLog) string {
-	if item == nil {
-		return ""
-	}
-	host := strings.TrimSpace(item.Host)
-	path := strings.TrimSpace(item.Path)
-	if host == "" {
-		return path
-	}
-	if path == "" {
-		return host
-	}
-	return host + path
 }
 
 func normalizeAccessLogCacheStatus(status string) string {
@@ -858,10 +1018,6 @@ func normalizeAccessLogCacheStatus(status string) string {
 	default:
 		return ""
 	}
-}
-
-func formatStatusCode(statusCode int) string {
-	return strconv.Itoa(statusCode)
 }
 
 func meteringNodeOnline(node *model.Node, now time.Time) bool {
@@ -875,69 +1031,6 @@ func meteringNodeOnline(node *model.Node, now time.Time) bool {
 		return false
 	}
 	return now.Sub(node.LastSeenAt) <= common.NodeOfflineThreshold
-}
-
-func buildMeteringBandwidthTrend(now time.Time, snapshots []*model.NodeMetricSnapshot) []MeteringBandwidthPoint {
-	start := now.Truncate(time.Hour).Add(-(observabilityTrendBuckets - 1) * time.Hour)
-	points := make([]MeteringBandwidthPoint, observabilityTrendBuckets)
-	for index := range points {
-		points[index].BucketStartedAt = start.Add(time.Duration(index) * time.Hour)
-	}
-	if len(snapshots) == 0 {
-		return points
-	}
-
-	sort.Slice(snapshots, func(i int, j int) bool {
-		if snapshots[i] == nil || snapshots[j] == nil {
-			return snapshots[i] != nil
-		}
-		if snapshots[i].CapturedAt.Equal(snapshots[j].CapturedAt) {
-			return snapshots[i].NodeID < snapshots[j].NodeID
-		}
-		return snapshots[i].CapturedAt.Before(snapshots[j].CapturedAt)
-	})
-
-	type bandwidthCounterState struct {
-		rx   int64
-		tx   int64
-		seen bool
-	}
-	previousByNode := make(map[string]bandwidthCounterState)
-	for _, snapshot := range snapshots {
-		if snapshot == nil {
-			continue
-		}
-		nodeKey := strings.TrimSpace(snapshot.NodeID)
-		if nodeKey == "" {
-			nodeKey = "__unknown__"
-		}
-		previous := previousByNode[nodeKey]
-		previousByNode[nodeKey] = bandwidthCounterState{
-			rx:   snapshot.OpenrestyRxBytes,
-			tx:   snapshot.OpenrestyTxBytes,
-			seen: true,
-		}
-		if !previous.seen {
-			continue
-		}
-		index, ok := trendBucketIndex(snapshot.CapturedAt, start)
-		if !ok {
-			continue
-		}
-		rxDelta := snapshot.OpenrestyRxBytes - previous.rx
-		txDelta := snapshot.OpenrestyTxBytes - previous.tx
-		if rxDelta < 0 {
-			rxDelta = 0
-		}
-		if txDelta < 0 {
-			txDelta = 0
-		}
-		points[index].Bytes += rxDelta + txDelta
-	}
-	for index := range points {
-		points[index].Bps = float64(points[index].Bytes) / 3600
-	}
-	return points
 }
 
 func buildMeteringBandwidthTrendFromCounterBuckets(now time.Time, buckets []*model.NodeMetricSnapshotCounterDeltaBucket) []MeteringBandwidthPoint {
@@ -1013,9 +1106,10 @@ func listNodeNameMap(logs []*model.NodeAccessLog) (map[string]string, error) {
 func normalizeAccessLogQuery(input AccessLogQuery) AccessLogQuery {
 	return AccessLogQuery{
 		NodeID:      strings.TrimSpace(input.NodeID),
-		RemoteAddr:  strings.TrimSpace(input.RemoteAddr),
-		Host:        strings.TrimSpace(input.Host),
+		RemoteAddr:  normalizeAccessLogRemoteAddrFilter(input.RemoteAddr),
+		Host:        normalizeAccessLogHostFilter(input.Host),
 		Path:        strings.TrimSpace(input.Path),
+		Cursor:      strings.TrimSpace(input.Cursor),
 		Page:        normalizeAccessLogPage(input.Page),
 		PageSize:    normalizeAccessLogPageSize(input.PageSize),
 		SortBy:      normalizeAccessLogSortBy(input.SortBy),
@@ -1027,8 +1121,8 @@ func normalizeAccessLogQuery(input AccessLogQuery) AccessLogQuery {
 func normalizeAccessLogIPSummaryQuery(input AccessLogIPSummaryQuery) AccessLogIPSummaryQuery {
 	return AccessLogIPSummaryQuery{
 		NodeID:     strings.TrimSpace(input.NodeID),
-		RemoteAddr: strings.TrimSpace(input.RemoteAddr),
-		Host:       strings.TrimSpace(input.Host),
+		RemoteAddr: normalizeAccessLogRemoteAddrFilter(input.RemoteAddr),
+		Host:       normalizeAccessLogHostFilter(input.Host),
 		Page:       normalizeAccessLogPage(input.Page),
 		PageSize:   normalizeAccessLogPageSize(input.PageSize),
 		SortBy:     normalizeIPSummarySortBy(input.SortBy),
@@ -1037,7 +1131,7 @@ func normalizeAccessLogIPSummaryQuery(input AccessLogIPSummaryQuery) AccessLogIP
 }
 
 func normalizeAccessLogIPTrendQuery(input AccessLogIPTrendQuery) (AccessLogIPTrendQuery, error) {
-	remoteAddr := strings.TrimSpace(input.RemoteAddr)
+	remoteAddr := normalizeAccessLogRemoteAddrFilter(input.RemoteAddr)
 	if remoteAddr == "" {
 		return AccessLogIPTrendQuery{}, errors.New("remote_addr 不能为空")
 	}
@@ -1060,10 +1154,87 @@ func normalizeAccessLogIPTrendQuery(input AccessLogIPTrendQuery) (AccessLogIPTre
 	return AccessLogIPTrendQuery{
 		NodeID:        strings.TrimSpace(input.NodeID),
 		RemoteAddr:    remoteAddr,
-		Host:          strings.TrimSpace(input.Host),
+		Host:          normalizeAccessLogHostFilter(input.Host),
 		Hours:         hours,
 		BucketMinutes: bucketMinutes,
 	}, nil
+}
+
+func normalizeAccessLogRemoteAddrFilter(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if normalizedIP := normalizeAccessLogIP(trimmed); normalizedIP != "" {
+		return normalizedIP
+	}
+	return trimmed
+}
+
+func normalizeAccessLogHostFilter(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(value); err == nil && parsed.Host != "" {
+		value = parsed.Host
+	} else if strings.Contains(value, "://") {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	value = strings.Trim(value, "[]")
+	if slash := strings.IndexAny(value, "/?#"); slash >= 0 {
+		value = value[:slash]
+	}
+	if colon := strings.LastIndex(value, ":"); colon > -1 && !strings.Contains(value[:colon], ":") {
+		value = value[:colon]
+	}
+	value = strings.TrimSuffix(value, ".")
+	value = strings.TrimPrefix(value, "*.")
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsAny(value, " \t\r\n") {
+		return ""
+	}
+	return value
+}
+
+func accessLogQuerySupportsCursor(query AccessLogQuery) bool {
+	return query.SortBy == defaultAccessLogSortBy
+}
+
+func encodeAccessLogCursor(item *model.NodeAccessLog) string {
+	if item == nil || item.ID == 0 || item.LoggedAt.IsZero() {
+		return ""
+	}
+	raw, err := json.Marshal(accessLogCursor{
+		LoggedAt: item.LoggedAt.UTC(),
+		ID:       item.ID,
+	})
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeAccessLogCursor(raw string) (time.Time, uint, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}, 0, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(trimmed)
+	if err != nil {
+		return time.Time{}, 0, errors.New("invalid access log cursor")
+	}
+	var cursor accessLogCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil {
+		return time.Time{}, 0, errors.New("invalid access log cursor")
+	}
+	if cursor.ID == 0 || cursor.LoggedAt.IsZero() {
+		return time.Time{}, 0, errors.New("invalid access log cursor")
+	}
+	return cursor.LoggedAt.UTC(), cursor.ID, nil
 }
 
 func normalizeAccessLogPage(page int) int {
