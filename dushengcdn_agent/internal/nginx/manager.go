@@ -118,12 +118,16 @@ func (r *OSCommandRunner) Run(ctx context.Context, name string, args ...string) 
 type PathExecutor struct {
 	Path       string
 	ConfigPath string
+	PrefixPath string
 	Runner     CommandRunner
 }
 
 func (e *PathExecutor) Test(ctx context.Context) error {
 	slog.Debug("running openresty test with binary", "path", e.Path, "config", e.ConfigPath)
-	output, err := e.Runner.Run(ctx, e.Path, "-t", "-c", e.ConfigPath)
+	if err := e.preparePrefix(); err != nil {
+		return err
+	}
+	output, err := e.Runner.Run(ctx, e.Path, e.commandArgs("-t")...)
 	if err != nil {
 		return fmt.Errorf("openresty -t failed: %w: %s", err, sanitizeOpenRestyCommandOutput(output))
 	}
@@ -133,12 +137,15 @@ func (e *PathExecutor) Test(ctx context.Context) error {
 
 func (e *PathExecutor) Reload(ctx context.Context) error {
 	slog.Debug("running openresty reload with binary", "path", e.Path, "config", e.ConfigPath)
-	output, err := e.Runner.Run(ctx, e.Path, "-s", "reload", "-c", e.ConfigPath)
+	if err := e.preparePrefix(); err != nil {
+		return err
+	}
+	output, err := e.Runner.Run(ctx, e.Path, e.commandArgs("-s", "reload")...)
 	if err != nil {
 		outputText := sanitizeOpenRestyCommandOutput(output)
 		if isOpenrestyNotRunningError(string(output)) {
 			slog.Warn("openresty reload reported runtime is not running, starting binary", "path", e.Path)
-			startOutput, startErr := e.Runner.Run(ctx, e.Path, "-c", e.ConfigPath)
+			startOutput, startErr := e.Runner.Run(ctx, e.Path, e.commandArgs()...)
 			if startErr != nil {
 				return fmt.Errorf("openresty reload failed: %w: %s; start failed: %v: %s", err, outputText, startErr, sanitizeOpenRestyCommandOutput(startOutput))
 			}
@@ -163,18 +170,44 @@ func (e *PathExecutor) CheckHealth(ctx context.Context) error {
 
 func (e *PathExecutor) Restart(ctx context.Context) error {
 	slog.Info("restarting openresty with binary", "path", e.Path, "config", e.ConfigPath)
-	output, err := e.Runner.Run(ctx, e.Path, "-s", "quit", "-c", e.ConfigPath)
+	if err := e.preparePrefix(); err != nil {
+		return err
+	}
+	output, err := e.Runner.Run(ctx, e.Path, e.commandArgs("-s", "quit")...)
 	if err != nil {
 		text := sanitizeOpenRestyCommandOutput(output)
 		if !isIgnorableOpenrestyStopError(text) {
 			return fmt.Errorf("openresty stop failed: %w: %s", err, text)
 		}
 	}
-	output, err = e.Runner.Run(ctx, e.Path, "-c", e.ConfigPath)
+	output, err = e.Runner.Run(ctx, e.Path, e.commandArgs()...)
 	if err != nil {
 		return fmt.Errorf("openresty start failed: %w: %s", err, sanitizeOpenRestyCommandOutput(output))
 	}
 	slog.Info("openresty restart succeeded with binary", "path", e.Path)
+	return nil
+}
+
+func (e *PathExecutor) commandArgs(args ...string) []string {
+	command := make([]string, 0, len(args)+4)
+	if prefix := strings.TrimSpace(e.PrefixPath); prefix != "" {
+		command = append(command, "-p", prefix)
+	}
+	command = append(command, args...)
+	if configPath := strings.TrimSpace(e.ConfigPath); configPath != "" {
+		command = append(command, "-c", configPath)
+	}
+	return command
+}
+
+func (e *PathExecutor) preparePrefix() error {
+	prefix := strings.TrimSpace(e.PrefixPath)
+	if prefix == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(prefix, "logs"), 0o755); err != nil {
+		return fmt.Errorf("prepare openresty prefix %s failed: %w", prefix, err)
+	}
 	return nil
 }
 
@@ -1183,8 +1216,21 @@ func NewExecutor(options ExecutorOptions) Executor {
 	return &PathExecutor{
 		Path:       strings.TrimSpace(options.NginxPath),
 		ConfigPath: strings.TrimSpace(options.MainConfigPath),
+		PrefixPath: managedOpenRestyPrefix(options.MainConfigPath),
 		Runner:     runner,
 	}
+}
+
+func managedOpenRestyPrefix(mainConfigPath string) string {
+	configPath := strings.TrimSpace(mainConfigPath)
+	if configPath == "" {
+		return ""
+	}
+	configDir := filepath.Dir(configPath)
+	if configDir == "." || configDir == "" {
+		return ""
+	}
+	return configDir
 }
 
 func DetectVersion(ctx context.Context, options ExecutorOptions) string {

@@ -121,6 +121,45 @@ func TestPathExecutorCommands(t *testing.T) {
 	}
 }
 
+func TestPathExecutorUsesManagedPrefix(t *testing.T) {
+	prefix := t.TempDir()
+	configPath := filepath.Join(prefix, "nginx.conf")
+	runner := &fakeRunner{}
+	executor := &PathExecutor{
+		Path:       "/usr/bin/openresty",
+		ConfigPath: configPath,
+		PrefixPath: prefix,
+		Runner:     runner,
+	}
+
+	if err := executor.Test(context.Background()); err != nil {
+		t.Fatalf("Test failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(prefix, "logs")); err != nil {
+		t.Fatalf("expected prefix logs directory to be prepared: %v", err)
+	}
+	expected := []runCall{
+		{name: "/usr/bin/openresty", args: []string{"-p", prefix, "-t", "-c", configPath}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls: %#v", runner.calls)
+	}
+}
+
+func TestNewExecutorUsesMainConfigDirectoryAsPrefix(t *testing.T) {
+	mainConfigPath := filepath.Join(t.TempDir(), "etc", "nginx", "nginx.conf")
+	executor, ok := NewExecutor(ExecutorOptions{
+		NginxPath:      "/usr/bin/openresty",
+		MainConfigPath: mainConfigPath,
+	}).(*PathExecutor)
+	if !ok {
+		t.Fatalf("expected PathExecutor, got %T", executor)
+	}
+	if executor.PrefixPath != filepath.Dir(mainConfigPath) {
+		t.Fatalf("unexpected prefix path: %s", executor.PrefixPath)
+	}
+}
+
 func TestPathExecutorEnsureRuntimeNoop(t *testing.T) {
 	runner := &fakeRunner{}
 	executor := &PathExecutor{
