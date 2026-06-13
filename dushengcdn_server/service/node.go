@@ -535,11 +535,12 @@ func applyNodeViewTargetConfig(view *NodeView, node *model.Node) {
 	view.TargetConfigVersion = version.Version
 	view.TargetConfigChecksum = artifact.Checksum
 	currentChecksum := strings.TrimSpace(node.CurrentChecksum)
+	targetChecksum := strings.TrimSpace(artifact.Checksum)
 	if currentChecksum != "" {
-		view.ConfigInSync = currentChecksum == artifact.Checksum
+		view.ConfigInSync = currentChecksum == targetChecksum
 		return
 	}
-	view.ConfigInSync = strings.TrimSpace(node.CurrentVersion) == version.Version
+	view.ConfigInSync = targetChecksum == "" && strings.TrimSpace(node.CurrentVersion) == version.Version
 }
 
 func nodeViewLastSeenAt(node *model.Node) any {

@@ -280,6 +280,91 @@ func TestConfigReleasePlanCompletionActivatesOnlyItsNodePool(t *testing.T) {
 	}
 }
 
+func TestActiveConfigReleaseTargetIgnoresCompletedPlanTargets(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := seedConfigReleasePlanTestNode(t, "node-active-target-history", "hk")
+	version := &model.ConfigVersion{
+		Version:        "20260613-active-target",
+		Checksum:       "global-checksum",
+		MainConfig:     "events {}",
+		RenderedConfig: "server {}",
+		CreatedBy:      "root",
+	}
+	if err := model.DB.Create(version).Error; err != nil {
+		t.Fatalf("create config version: %v", err)
+	}
+	artifact := &model.ConfigVersionArtifact{
+		ConfigVersionID: version.ID,
+		PoolName:        "hk",
+		Checksum:        "running-checksum",
+		RenderedConfig:  "server { # hk }",
+	}
+	if err := model.DB.Create(artifact).Error; err != nil {
+		t.Fatalf("create config version artifact: %v", err)
+	}
+
+	runningPlan := &model.ConfigReleasePlan{
+		ConfigVersionID: version.ID,
+		Status:          ConfigReleaseStatusRunning,
+		CanaryPoolName:  "hk",
+		Checksum:        "running-checksum",
+		CreatedBy:       "root",
+	}
+	if err := model.DB.Create(runningPlan).Error; err != nil {
+		t.Fatalf("create running plan: %v", err)
+	}
+	runningTarget := &model.ConfigReleaseTarget{
+		PlanID:          runningPlan.ID,
+		ConfigVersionID: version.ID,
+		NodeID:          node.NodeID,
+		PoolName:        "hk",
+		Checksum:        "running-checksum",
+		StageIndex:      1,
+		Status:          ConfigReleaseTargetApplying,
+	}
+	if err := model.DB.Create(runningTarget).Error; err != nil {
+		t.Fatalf("create running target: %v", err)
+	}
+
+	completedPlan := &model.ConfigReleasePlan{
+		ConfigVersionID: version.ID,
+		Status:          ConfigReleaseStatusCompleted,
+		CanaryPoolName:  "hk",
+		Checksum:        "completed-checksum",
+		CreatedBy:       "root",
+	}
+	if err := model.DB.Create(completedPlan).Error; err != nil {
+		t.Fatalf("create completed plan: %v", err)
+	}
+	if err := model.DB.Create(&model.ConfigReleaseTarget{
+		PlanID:          completedPlan.ID,
+		ConfigVersionID: version.ID,
+		NodeID:          node.NodeID,
+		PoolName:        "hk",
+		Checksum:        "completed-checksum",
+		StageIndex:      1,
+		Status:          ConfigReleaseTargetSucceeded,
+	}).Error; err != nil {
+		t.Fatalf("create completed target: %v", err)
+	}
+
+	plan, target, err := model.GetActiveConfigReleaseTargetForNodeID(node.NodeID)
+	if err != nil {
+		t.Fatalf("GetActiveConfigReleaseTargetForNodeID failed: %v", err)
+	}
+	if plan.ID != runningPlan.ID || target.ID != runningTarget.ID || target.Checksum != runningTarget.Checksum {
+		t.Fatalf("expected running target despite newer completed target, got plan=%+v target=%+v", plan, target)
+	}
+	meta, err := GetActiveConfigMetaForAgentNode(node)
+	if err != nil {
+		t.Fatalf("GetActiveConfigMetaForAgentNode failed: %v", err)
+	}
+	if meta.Checksum != runningTarget.Checksum {
+		t.Fatalf("expected active config meta to use running target checksum, got %+v", meta)
+	}
+}
+
 func seedConfigReleasePlanTestNode(t *testing.T, nodeID string, poolName string) *model.Node {
 	t.Helper()
 	node := &model.Node{

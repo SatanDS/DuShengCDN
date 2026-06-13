@@ -93,14 +93,22 @@ func GetActiveConfigReleaseTargetForNodeID(nodeID string) (*ConfigReleasePlan, *
 		return nil, nil, gorm.ErrRecordNotFound
 	}
 	target := &ConfigReleaseTarget{}
-	err := DB.Where("node_id = ? AND status IN ?", nodeID, []string{"pending", "applying", "observing", "succeeded"}).
-		Order("id desc").
-		First(target).Error
-	if err != nil {
-		return nil, nil, err
+	result := DB.Model(&ConfigReleaseTarget{}).
+		Select("config_release_targets.*").
+		Joins("JOIN config_release_plans ON config_release_plans.id = config_release_targets.plan_id").
+		Where("config_release_targets.node_id = ? AND config_release_targets.status IN ?", nodeID, []string{"pending", "applying", "observing", "succeeded"}).
+		Where("config_release_plans.status IN ?", []string{"running", "observing"}).
+		Order("config_release_targets.id desc").
+		Limit(1).
+		Find(target)
+	if result.Error != nil {
+		return nil, nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil, gorm.ErrRecordNotFound
 	}
 	plan := &ConfigReleasePlan{}
-	if err = DB.Where("id = ? AND status IN ?", target.PlanID, []string{"running", "observing"}).First(plan).Error; err != nil {
+	if err := DB.First(plan, target.PlanID).Error; err != nil {
 		return nil, nil, err
 	}
 	return plan, target, nil

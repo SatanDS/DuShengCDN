@@ -794,8 +794,8 @@ func TestListNodeViewsReportsConfigSyncByPoolArtifactChecksum(t *testing.T) {
 	if legacy.CurrentChecksum != "" {
 		t.Fatalf("expected legacy agent node to have no current checksum, got %+v", legacy)
 	}
-	if !legacy.ConfigInSync || legacy.TargetConfigVersion != version.Version || legacy.TargetConfigChecksum != "checksum-edge-a" {
-		t.Fatalf("expected legacy agent to fall back to version sync, got %+v", legacy)
+	if legacy.ConfigInSync || legacy.TargetConfigVersion != version.Version || legacy.TargetConfigChecksum != "checksum-edge-a" {
+		t.Fatalf("expected missing checksum to report config_in_sync=false when target has checksum, got %+v", legacy)
 	}
 }
 
