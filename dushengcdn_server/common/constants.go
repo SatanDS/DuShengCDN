@@ -109,6 +109,7 @@ var DNSSourceDatabaseOperatorCIDRFiles = "chinanet.txt chinanet6.txt cmcc.txt cm
 var AgentHeartbeatInterval = 10000 // milliseconds
 var AgentWebsocketUpgradeEnabled = true
 var AgentUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"
+var AccessLogPersistenceEnabled = false
 var GeoIPProvider = "ipinfo"
 var DatabaseAutoCleanupEnabled = false
 var DatabaseAutoCleanupRetentionDays = 30

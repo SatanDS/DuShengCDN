@@ -1,6 +1,7 @@
 package service
 
 import (
+	"dushengcdn/common"
 	"dushengcdn/model"
 	"errors"
 	"fmt"
@@ -156,6 +157,9 @@ func loadNodeObservabilityQueryData(nodeID string, since time.Time, trendSince t
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := queries.listNodeAccessLogRegionCounts(nodeID, since, 8)
 			data.accessLogRegions = rows
 			return err

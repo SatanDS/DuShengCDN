@@ -1,6 +1,7 @@
 package service
 
 import (
+	"dushengcdn/common"
 	"dushengcdn/model"
 	"dushengcdn/utils/geoip"
 	"dushengcdn/utils/security"
@@ -449,6 +450,9 @@ func persistNodeMetricsAndTrafficReports(tx *gorm.DB, nodeID string, snapshot *A
 }
 
 func persistAccessLogsBestEffort(nodeID string, logs []AgentNodeAccessLog, bufferedRecords []AgentBufferedObservabilityRecord, reportedAt time.Time) error {
+	if !common.AccessLogPersistenceEnabled {
+		return nil
+	}
 	batches := collectNodeAccessLogBatches(logs, bufferedRecords)
 	if len(batches) == 0 {
 		return nil

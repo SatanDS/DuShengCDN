@@ -1,6 +1,7 @@
 package service
 
 import (
+	"dushengcdn/common"
 	"dushengcdn/model"
 	"errors"
 	"strconv"
@@ -10,6 +11,15 @@ import (
 	"testing"
 	"time"
 )
+
+func withAccessLogMeteringEnabled(t *testing.T) {
+	t.Helper()
+	previous := common.AccessLogPersistenceEnabled
+	common.AccessLogPersistenceEnabled = true
+	t.Cleanup(func() {
+		common.AccessLogPersistenceEnabled = previous
+	})
+}
 
 func TestRunConcurrentQueriesRunsAllQueriesConcurrently(t *testing.T) {
 	const queryCount = 5
@@ -985,6 +995,7 @@ func TestBuildAggregatedObservabilityMeteringOverviewFallsBackToAccessLogCacheSu
 
 func TestGetObservabilityMeteringOverviewUsesAggregatedAccessLogs(t *testing.T) {
 	setupServiceTestDB(t)
+	withAccessLogMeteringEnabled(t)
 
 	now := time.Now().UTC().Truncate(time.Hour)
 	if err := model.DB.Create(&model.Node{

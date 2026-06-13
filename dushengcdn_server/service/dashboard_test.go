@@ -10,6 +10,8 @@ import (
 )
 
 func TestLoadDashboardOverviewQueryDataRunsQueriesConcurrently(t *testing.T) {
+	withAccessLogPersistenceEnabled(t)
+
 	const queryCount = 10
 	started := make(chan struct{}, queryCount)
 	release := make(chan struct{})

@@ -38,6 +38,8 @@ func (p *countingAccessLogGeoProvider) Close() error {
 }
 
 func TestLoadNodeObservabilityQueryDataRunsQueriesConcurrently(t *testing.T) {
+	withAccessLogPersistenceEnabled(t)
+
 	const queryCount = 8
 	started := make(chan struct{}, queryCount)
 	release := make(chan struct{})

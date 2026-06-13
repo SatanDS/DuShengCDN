@@ -115,6 +115,9 @@ func applyEnvironmentOverrides() {
 	if os.Getenv("DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED") != "" {
 		AgentLegacyGlobalTokenEnabled = readBoolEnv("DUSHENGCDN_AGENT_LEGACY_GLOBAL_TOKEN_ENABLED")
 	}
+	if os.Getenv("DUSHENGCDN_ACCESS_LOG_PERSISTENCE_ENABLED") != "" {
+		AccessLogPersistenceEnabled = readBoolEnv("DUSHENGCDN_ACCESS_LOG_PERSISTENCE_ENABLED")
+	}
 	if os.Getenv("REDIS_REQUIRED") != "" {
 		RedisRequired = readBoolEnv("REDIS_REQUIRED")
 	}

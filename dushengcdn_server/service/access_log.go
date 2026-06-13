@@ -814,36 +814,57 @@ func buildObservabilityMeteringOverview() (*ObservabilityMeteringOverview, error
 	var nodes []*model.Node
 	if err := runConcurrentQueries(
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			value, err := model.GetNodeAccessLogMeteringSummary(since)
 			summary = value
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := model.ListNodeAccessLogStatusDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: limit})
 			statusCodes = rows
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := model.ListNodeAccessLogURLDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: limit})
 			topURLs = rows
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := model.ListNodeAccessLogIPDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: limit})
 			topIPs = rows
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := model.ListNodeAccessLogRegionDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: limit})
 			topRegions = rows
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := model.ListNodeAccessLogMeteringTrafficByHost(since, limit)
 			siteTraffic = rows
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := model.ListNodeAccessLogMeteringTrafficByNode(since, limit)
 			nodeTraffic = rows
 			return err

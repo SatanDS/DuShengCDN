@@ -1,6 +1,7 @@
 package service
 
 import (
+	"dushengcdn/common"
 	"dushengcdn/model"
 	"sort"
 	"time"
@@ -287,16 +288,25 @@ func loadDashboardOverviewQueryData(since time.Time, now time.Time, queries dash
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := queries.listAccessLogStatusDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: 8})
 			data.accessLogStatus = rows
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := queries.listAccessLogHostDistributions(model.NodeAccessLogDistributionQuery{Since: since, Limit: 8})
 			data.accessLogTopDomains = rows
 			return err
 		},
 		func() error {
+			if !common.AccessLogPersistenceEnabled {
+				return nil
+			}
 			rows, err := queries.listAccessLogRegionCounts("", since, 8)
 			data.accessLogRegions = rows
 			return err

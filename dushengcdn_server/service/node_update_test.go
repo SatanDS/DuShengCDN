@@ -64,6 +64,15 @@ func (f *fakeAccessLogGeoProvider) Close() error {
 	return nil
 }
 
+func withAccessLogPersistenceEnabled(t *testing.T) {
+	t.Helper()
+	previous := common.AccessLogPersistenceEnabled
+	common.AccessLogPersistenceEnabled = true
+	t.Cleanup(func() {
+		common.AccessLogPersistenceEnabled = previous
+	})
+}
+
 func withFakeGeoIPProvider(t *testing.T, info *geoip.GeoInfo) {
 	t.Helper()
 	previous := geoip.CurrentProvider
@@ -934,6 +943,7 @@ func TestAgentWSConnectionMarksNodeViewOnline(t *testing.T) {
 
 func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	setupServiceTestDB(t)
+	withAccessLogPersistenceEnabled(t)
 	withFakeAccessLogGeoProvider(t, &geoip.GeoInfo{
 		ISOCode:  "US",
 		Name:     "United States",
@@ -1095,6 +1105,7 @@ func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 
 func TestHeartbeatNodeKeepsMetricsWhenAccessLogPersistenceFails(t *testing.T) {
 	setupServiceTestDB(t)
+	withAccessLogPersistenceEnabled(t)
 
 	node := &model.Node{
 		NodeID:       "node-access-log-fail",
@@ -1164,6 +1175,69 @@ func TestHeartbeatNodeKeepsMetricsWhenAccessLogPersistenceFails(t *testing.T) {
 	}
 }
 
+func TestHeartbeatNodeSkipsAccessLogsWhenPersistenceDisabled(t *testing.T) {
+	setupServiceTestDB(t)
+	previous := common.AccessLogPersistenceEnabled
+	common.AccessLogPersistenceEnabled = false
+	t.Cleanup(func() {
+		common.AccessLogPersistenceEnabled = previous
+	})
+
+	node := &model.Node{
+		NodeID:       "node-access-log-disabled",
+		Name:         "access-log-disabled-edge",
+		IP:           "10.0.0.34",
+		AgentToken:   "token-access-log-disabled",
+		AgentVersion: "v0.6.0",
+		Status:       NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to seed node: %v", err)
+	}
+
+	reportedAt := time.Now().Add(-30 * time.Second)
+	_, err := HeartbeatNode(node, AgentNodePayload{
+		NodeID:       node.NodeID,
+		Name:         node.Name,
+		IP:           node.IP,
+		AgentVersion: node.AgentVersion,
+		Snapshot: &AgentNodeMetricSnapshot{
+			CapturedAtUnix:       reportedAt.Unix(),
+			CPUUsagePercent:      18.5,
+			MemoryUsedBytes:      1024,
+			MemoryTotalBytes:     4096,
+			OpenrestyConnections: 9,
+		},
+		AccessLogs: []AgentNodeAccessLog{
+			{
+				LoggedAtUnix: reportedAt.Unix(),
+				RemoteAddr:   "203.0.113.34",
+				Host:         "disabled.example.com",
+				Path:         "/skip",
+				StatusCode:   200,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected heartbeat to succeed: %v", err)
+	}
+
+	snapshots, err := model.ListNodeMetricSnapshots(node.NodeID, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("expected node snapshots query to succeed: %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].OpenrestyConnections != 9 {
+		t.Fatalf("expected metric snapshot to persist, got %+v", snapshots)
+	}
+	totalRecords, _, err := model.CountNodeAccessLogs(model.NodeAccessLogQuery{NodeID: node.NodeID})
+	if err != nil {
+		t.Fatalf("expected access log count query to succeed: %v", err)
+	}
+	if totalRecords != 0 {
+		t.Fatalf("expected disabled access log persistence to skip writes, got %d records", totalRecords)
+	}
+}
+
 func TestHeartbeatNodeClampsFutureMetricSnapshotTime(t *testing.T) {
 	setupServiceTestDB(t)
 
@@ -1213,6 +1287,7 @@ func TestHeartbeatNodeClampsFutureMetricSnapshotTime(t *testing.T) {
 
 func TestHeartbeatNodePersistsBufferedObservabilityPayload(t *testing.T) {
 	setupServiceTestDB(t)
+	withAccessLogPersistenceEnabled(t)
 	withFakeAccessLogGeoProvider(t, &geoip.GeoInfo{
 		ISOCode: "CN",
 		Name:    "China",
@@ -1456,6 +1531,7 @@ func TestCollectNodeAccessLogBatchesCombinesBufferedRecords(t *testing.T) {
 
 func TestPersistAccessLogsBestEffortReturnsCombinedBatchError(t *testing.T) {
 	setupServiceTestDB(t)
+	withAccessLogPersistenceEnabled(t)
 
 	forcedErr := fmt.Errorf("forced access log create failure")
 	failedOnce := false
@@ -1906,6 +1982,7 @@ func TestCleanupNodeHealthEvents(t *testing.T) {
 
 func TestGetDashboardOverview(t *testing.T) {
 	setupServiceTestDB(t)
+	withAccessLogPersistenceEnabled(t)
 
 	now := time.Now()
 	if err := model.DB.Create(&model.ConfigVersion{
