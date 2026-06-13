@@ -52,7 +52,12 @@ func (c *Client) Heartbeat(ctx context.Context, payload protocol.NodePayload) (*
 	if !resp.Success {
 		return nil, errors.New(resp.Message)
 	}
+	serverNodeID := ""
+	if resp.Data != nil {
+		serverNodeID = strings.TrimSpace(resp.Data.NodeID)
+	}
 	return &protocol.HeartbeatResult{
+		ServerNodeID:     serverNodeID,
 		AgentSettings:    resp.AgentSettings,
 		ActiveConfig:     resp.ActiveConfig,
 		DNSWorkerUpdates: resp.DNSWorkerUpdates,

@@ -797,6 +797,44 @@ func TestRunnerDiscoveryRegisterUpdatesTokenAndNodeID(t *testing.T) {
 	}
 }
 
+func TestRunnerHeartbeatReconcilesServerNodeID(t *testing.T) {
+	stateStore := state.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	if err := stateStore.Save(&state.Snapshot{NodeID: "node-local-random"}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	heartbeatService := &fakeHeartbeatService{
+		heartbeatResults: []*protocol.HeartbeatResult{{
+			ServerNodeID: "node-server-bound",
+		}},
+	}
+	runner := &Runner{
+		Config: &config.Config{
+			NodeName:     "edge",
+			NodeIP:       "127.0.0.1",
+			AgentVersion: "v1.0.0",
+			NginxVersion: "test",
+		},
+		StateStore:       stateStore,
+		HeartbeatService: heartbeatService,
+		SyncService:      &fakeSyncService{},
+	}
+
+	_, updatedNodeID, err := runner.performHeartbeatCycle(context.Background(), "node-local-random", false)
+	if err != nil {
+		t.Fatalf("performHeartbeatCycle failed: %v", err)
+	}
+	if updatedNodeID != "node-server-bound" {
+		t.Fatalf("expected returned node id to be reconciled, got %q", updatedNodeID)
+	}
+	snapshot, err := stateStore.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if snapshot.NodeID != "node-server-bound" {
+		t.Fatalf("expected state node id to be reconciled, got %q", snapshot.NodeID)
+	}
+}
+
 func TestRunnerHandlesWebSocketActiveConfigMessage(t *testing.T) {
 	syncService := &fakeSyncService{}
 	runner := &Runner{SyncService: syncService}
@@ -1100,10 +1138,10 @@ func TestRunnerRestoresDNSWorkerUpdateResultAfterHeartbeatFailure(t *testing.T) 
 	}
 	runner.recordDNSWorkerUpdateResult(protocol.DNSWorkerUpdateRequest{WorkerID: "dns-worker-1"}, true, "installer completed")
 
-	if _, err := runner.performHeartbeatCycle(context.Background(), "node-1", false); err == nil {
+	if _, _, err := runner.performHeartbeatCycle(context.Background(), "node-1", false); err == nil {
 		t.Fatal("expected first heartbeat to fail")
 	}
-	if _, err := runner.performHeartbeatCycle(context.Background(), "node-1", false); err != nil {
+	if _, _, err := runner.performHeartbeatCycle(context.Background(), "node-1", false); err != nil {
 		t.Fatalf("expected second heartbeat to succeed: %v", err)
 	}
 	if len(heartbeatService.heartbeatPayloads) != 2 {

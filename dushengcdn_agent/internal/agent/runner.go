@@ -109,8 +109,10 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	slog.Info("agent runner started", "node_id", nodeID, "node", r.Config.NodeName, "ip", r.Config.NodeIP)
 	if r.hasAgentToken() {
-		if _, hbErr := r.performHeartbeatCycle(ctx, nodeID, true); hbErr != nil {
+		if _, updatedNodeID, hbErr := r.performHeartbeatCycle(ctx, nodeID, true); hbErr != nil {
 			slog.Error("agent startup heartbeat failed", "error", hbErr)
+		} else {
+			nodeID = updatedNodeID
 		}
 	} else if err = r.tryRegister(ctx, &nodeID); err != nil {
 		slog.Error("agent initial discovery register failed", "error", err)
@@ -154,8 +156,10 @@ func (r *Runner) Run(ctx context.Context) error {
 			nextWSAttempt = time.Now().Add(delay)
 			slog.Debug("agent ws disconnected; resuming http heartbeat", "retry_after", delay, "error", wsErr)
 			if r.hasAgentToken() {
-				if _, hbErr := r.performHeartbeatCycle(ctx, nodeID, false); hbErr != nil {
+				if _, updatedNodeID, hbErr := r.performHeartbeatCycle(ctx, nodeID, false); hbErr != nil {
 					slog.Error("agent heartbeat after ws disconnect failed", "error", hbErr)
+				} else {
+					nodeID = updatedNodeID
 				}
 			}
 		case <-heartbeatTicker.C:
@@ -168,9 +172,10 @@ func (r *Runner) Run(ctx context.Context) error {
 				}
 				continue
 			}
-			if changed, hbErr := r.performHeartbeatCycle(ctx, nodeID, false); hbErr != nil {
+			if changed, updatedNodeID, hbErr := r.performHeartbeatCycle(ctx, nodeID, false); hbErr != nil {
 				slog.Error("agent heartbeat failed", "error", hbErr)
 			} else {
+				nodeID = updatedNodeID
 				if changed {
 					heartbeatTicker.Reset(r.Config.HeartbeatInterval.Duration())
 				}
@@ -180,18 +185,19 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 }
 
-func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, startup bool) (bool, error) {
+func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, startup bool) (bool, string, error) {
 	r.refreshOpenrestyHealth(ctx)
 	payload, ackWindows := r.prepareHeartbeatPayload(ctx, nodeID)
 	heartbeatResult, err := r.HeartbeatService.Heartbeat(ctx, payload)
 	if err != nil {
 		r.restoreDNSWorkerUpdateResults(payload.DNSWorkerUpdateResults)
-		return false, err
+		return false, nodeID, err
 	}
 	r.ackObservabilityWindows(ackWindows)
 	if heartbeatResult == nil {
 		heartbeatResult = &protocol.HeartbeatResult{}
 	}
+	nodeID = r.reconcileServerNodeID(nodeID, heartbeatResult.ServerNodeID)
 	mode := "periodic"
 	if startup {
 		mode = "startup"
@@ -212,7 +218,26 @@ func (r *Runner) performHeartbeatCycle(ctx context.Context, nodeID string, start
 	r.handleDNSWorkerUpdates(ctx, heartbeatResult.DNSWorkerUpdates)
 	r.tryRestartOpenresty(ctx)
 	r.tryAutoUpdate(ctx)
-	return changed, nil
+	return changed, nodeID, nil
+}
+
+func (r *Runner) reconcileServerNodeID(currentNodeID string, serverNodeID string) string {
+	serverNodeID = strings.TrimSpace(serverNodeID)
+	if serverNodeID == "" || serverNodeID == strings.TrimSpace(currentNodeID) || r.StateStore == nil {
+		return currentNodeID
+	}
+	snapshot, err := r.StateStore.Load()
+	if err != nil {
+		slog.Error("load state before reconciling server node id failed", "error", err)
+		return currentNodeID
+	}
+	snapshot.NodeID = serverNodeID
+	if err = r.StateStore.Save(snapshot); err != nil {
+		slog.Error("save state after reconciling server node id failed", "error", err, "server_node_id", serverNodeID)
+		return currentNodeID
+	}
+	slog.Info("agent node id reconciled with server", "from", currentNodeID, "to", serverNodeID)
+	return serverNodeID
 }
 
 func (r *Runner) shouldUseWebSocket() bool {

@@ -11,16 +11,21 @@ type APIResponse[T any] struct {
 type HeartbeatAPIResponse struct {
 	Success          bool                     `json:"success"`
 	Message          string                   `json:"message"`
-	Data             any                      `json:"data"`
+	Data             *HeartbeatNode           `json:"data,omitempty"`
 	AgentSettings    *AgentSettings           `json:"agent_settings,omitempty"`
 	ActiveConfig     *ActiveConfigMeta        `json:"active_config,omitempty"`
 	DNSWorkerUpdates []DNSWorkerUpdateRequest `json:"dns_worker_updates,omitempty"`
 }
 
 type HeartbeatResult struct {
+	ServerNodeID     string
 	AgentSettings    *AgentSettings
 	ActiveConfig     *ActiveConfigMeta
 	DNSWorkerUpdates []DNSWorkerUpdateRequest
+}
+
+type HeartbeatNode struct {
+	NodeID string `json:"node_id"`
 }
 
 type AgentSettings struct {

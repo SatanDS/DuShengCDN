@@ -46,6 +46,29 @@ func TestClientHeartbeatExplainsAgentTokenAuthFailure(t *testing.T) {
 	}
 }
 
+func TestClientHeartbeatReadsServerNodeID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/nodes/heartbeat" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"node_id":"node-server-bound"},"active_config":{"version":"20260614-001","checksum":"checksum-1"}}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "agent-token", time.Second)
+	result, err := client.Heartbeat(context.Background(), protocol.NodePayload{NodeID: "node-local-random"})
+	if err != nil {
+		t.Fatalf("Heartbeat failed: %v", err)
+	}
+	if result.ServerNodeID != "node-server-bound" {
+		t.Fatalf("expected server node id to be decoded, got %q", result.ServerNodeID)
+	}
+	if result.ActiveConfig == nil || result.ActiveConfig.Checksum != "checksum-1" {
+		t.Fatalf("expected active config to be decoded, got %+v", result.ActiveConfig)
+	}
+}
+
 func TestClientRegisterExplainsServerURLNotFound(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()
