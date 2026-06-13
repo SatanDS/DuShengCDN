@@ -480,15 +480,27 @@ func TestLoadRejectsGeoIPLookupTokenAndTokenFileTogetherInConfig(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsRemoteHTTPServerURL(t *testing.T) {
+func TestLoadAllowsRemoteHTTPServerURL(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "agent.json")
 	if err := os.WriteFile(configPath, []byte(`{"server_url":"http://edge.example.com:3000","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8"}`), 0o644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
 	}
 
+	if _, err := Load(configPath); err != nil {
+		t.Fatalf("expected remote http server_url to be allowed: %v", err)
+	}
+}
+
+func TestLoadRejectsUnsupportedServerURLScheme(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(configPath, []byte(`{"server_url":"ftp://edge.example.com","agent_token":"token","node_name":"edge-01","node_ip":"10.0.0.8"}`), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
 	if _, err := Load(configPath); err == nil {
-		t.Fatal("expected remote http server_url to be rejected")
+		t.Fatal("expected unsupported server_url scheme to be rejected")
 	}
 }
 

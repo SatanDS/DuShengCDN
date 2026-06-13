@@ -505,25 +505,11 @@ func validateServerURL(value string) error {
 	}
 	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
 	switch scheme {
-	case "https":
+	case "http", "https":
 		return nil
-	case "http":
-		if isLoopbackServerHost(parsed.Hostname()) {
-			return nil
-		}
-		return errors.New("server_url must use https unless it points to localhost or a loopback IP")
 	default:
-		return errors.New("server_url scheme must be https")
+		return errors.New("server_url scheme must be http or https")
 	}
-}
-
-func isLoopbackServerHost(host string) bool {
-	host = strings.ToLower(strings.TrimSpace(host))
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func (cfg *Config) InitialAuthToken() string {
