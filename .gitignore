@@ -42,6 +42,7 @@ go.work.sum
 
 # env file
 .env
+/dushengcdn_server/initial-root-password.txt
 
 # Editor/IDE
 # .idea/
