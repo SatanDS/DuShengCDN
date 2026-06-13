@@ -20,6 +20,7 @@ const (
 	ConfigReleaseStatusObserving = "observing"
 	ConfigReleaseStatusFailed    = "failed"
 	ConfigReleaseStatusCompleted = "completed"
+	ConfigReleaseStatusCanceled  = "canceled"
 
 	ConfigReleaseTargetPending    = "pending"
 	ConfigReleaseTargetApplying   = "applying"
@@ -244,6 +245,13 @@ func CreateConfigReleasePlan(createdBy string, input ConfigReleasePlanInput) (*C
 		if err := ensureConfigReleaseChecksumNotBlockedForPool(nodePool, artifact.Checksum); err != nil {
 			return nil, err
 		}
+	}
+	if activeVersion, activeArtifact, err := model.GetActiveConfigVersionArtifactForPool(nodePool); err == nil {
+		if activeVersion.ID != 0 && activeArtifact.Checksum == artifact.Checksum && !input.Force {
+			return nil, fmt.Errorf("node pool %s has no config changes to release", nodePool)
+		}
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
 	}
 	activeVersion, err := activeVersionForReleasePlanRollback(nodePool)
 	var rollbackVersionID *uint
@@ -496,10 +504,17 @@ func FailConfigReleasePlan(id uint, reason string) error {
 		return err
 	}
 	switch plan.Status {
+	case ConfigReleaseStatusRunning, ConfigReleaseStatusObserving:
 	case ConfigReleaseStatusFailed:
 		return nil
 	case ConfigReleaseStatusCompleted:
 		return fmt.Errorf("release plan %d is already completed", id)
+	case ConfigReleaseStatusDraft:
+		return errors.New("draft release plan should be canceled, not failed")
+	case ConfigReleaseStatusCanceled:
+		return fmt.Errorf("release plan %d is already canceled", id)
+	default:
+		return fmt.Errorf("release plan %d cannot fail from status %s", id, plan.Status)
 	}
 	targets, err := model.ListConfigReleaseTargets(plan.ID)
 	if err != nil {
@@ -554,6 +569,35 @@ func FailConfigReleasePlan(id uint, reason string) error {
 	}
 	forceSyncConfigReleaseRollbackTargets(plan, targets)
 	return nil
+}
+
+func CancelConfigReleasePlan(id uint) (*ConfigReleasePlanView, error) {
+	plan, err := model.GetConfigReleasePlanByID(id)
+	if err != nil {
+		return nil, err
+	}
+	switch plan.Status {
+	case ConfigReleaseStatusCanceled:
+		return GetConfigReleasePlan(id)
+	case ConfigReleaseStatusDraft:
+	default:
+		return nil, fmt.Errorf("release plan %d cannot be canceled from status %s", id, plan.Status)
+	}
+	now := time.Now()
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(plan).Updates(map[string]any{
+			"status":       ConfigReleaseStatusCanceled,
+			"completed_at": &now,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.ConfigReleaseTarget{}).
+			Where("plan_id = ? AND status = ?", plan.ID, ConfigReleaseTargetPending).
+			Updates(map[string]any{"status": ConfigReleaseTargetRolledBack, "completed_at": &now}).Error
+	}); err != nil {
+		return nil, err
+	}
+	return GetConfigReleasePlan(id)
 }
 
 func forceSyncConfigReleaseRollbackTargets(plan *model.ConfigReleasePlan, targets []*model.ConfigReleaseTarget) {

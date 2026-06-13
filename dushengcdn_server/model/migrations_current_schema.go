@@ -175,6 +175,9 @@ func applyCurrentSchema(db *gorm.DB, backend string) error {
 	if err := ensureObservabilityShardQueryIndexes(db, backend); err != nil {
 		return err
 	}
+	if err := ensureConfigReleaseActivePoolIndex(db); err != nil {
+		return err
+	}
 	if err := EnsureProxyRouteNormalizedTablesBackfilled(db); err != nil {
 		return err
 	}
@@ -221,7 +224,10 @@ func applyCurrentSchemaMaintenanceWithCache(db *gorm.DB, backend string, schemaC
 	if err := ensureDNSRollupObservabilityIndex(db); err != nil {
 		return err
 	}
-	return ensureObservabilityShardQueryIndexesWithCache(db, backend, schemaCache)
+	if err := ensureObservabilityShardQueryIndexesWithCache(db, backend, schemaCache); err != nil {
+		return err
+	}
+	return ensureConfigReleaseActivePoolIndex(db)
 }
 
 func ensureGSLBSchedulingStateScopeIndex(db *gorm.DB) error {
@@ -261,6 +267,17 @@ func ensureDNSRollupObservabilityIndex(db *gorm.DB) error {
 		return fmt.Errorf("create dns query rollup observability index failed: %w", err)
 	}
 	return nil
+}
+
+func ensureConfigReleaseActivePoolIndex(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&ConfigReleasePlan{}) {
+		return nil
+	}
+	const indexName = "idx_config_release_active_pool"
+	if db.Migrator().HasIndex(&ConfigReleasePlan{}, indexName) {
+		return nil
+	}
+	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_config_release_active_pool ON config_release_plans(canary_pool_name) WHERE status IN ('running', 'observing')`).Error
 }
 
 func ensureObservabilityShardQueryIndexes(db *gorm.DB, backend string) error {

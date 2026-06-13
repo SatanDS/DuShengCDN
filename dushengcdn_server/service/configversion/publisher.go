@@ -51,11 +51,35 @@ func CleanupVersions(keepCount int) (int64, error) {
 	if len(keepIDs) < keepCount {
 		return 0, nil
 	}
+	protectedIDs := append([]uint{}, keepIDs...)
+	var activePoolVersionIDs []uint
+	if err := model.DB.Model(&model.ConfigPoolActiveVersion{}).
+		Select("config_version_id").
+		Pluck("config_version_id", &activePoolVersionIDs).Error; err != nil {
+		return 0, err
+	}
+	protectedIDs = append(protectedIDs, activePoolVersionIDs...)
+	var activePlanVersionIDs []uint
+	if err := model.DB.Model(&model.ConfigReleasePlan{}).
+		Select("config_version_id").
+		Where("status IN ?", []string{"running", "observing"}).
+		Pluck("config_version_id", &activePlanVersionIDs).Error; err != nil {
+		return 0, err
+	}
+	protectedIDs = append(protectedIDs, activePlanVersionIDs...)
+	var activePlanRollbackIDs []uint
+	if err := model.DB.Model(&model.ConfigReleasePlan{}).
+		Select("rollback_version_id").
+		Where("status IN ? AND rollback_version_id IS NOT NULL", []string{"running", "observing"}).
+		Pluck("rollback_version_id", &activePlanRollbackIDs).Error; err != nil {
+		return 0, err
+	}
+	protectedIDs = append(protectedIDs, activePlanRollbackIDs...)
 	var deleteIDs []uint
 	if err := model.DB.Model(&model.ConfigVersion{}).
 		Select("id").
 		Where("is_active = ?", false).
-		Where("id NOT IN ?", keepIDs).
+		Where("id NOT IN ?", uniqueConfigVersionIDs(protectedIDs)).
 		Pluck("id", &deleteIDs).Error; err != nil {
 		return 0, err
 	}
@@ -72,4 +96,23 @@ func CleanupVersions(keepCount int) (int64, error) {
 		return result.Error
 	})
 	return deleted, err
+}
+
+func uniqueConfigVersionIDs(ids []uint) []uint {
+	if len(ids) == 0 {
+		return ids
+	}
+	seen := make(map[uint]struct{}, len(ids))
+	result := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
 }

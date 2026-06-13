@@ -174,6 +174,7 @@ func TestConfigReleasePlansAreIsolatedByNodePool(t *testing.T) {
 	usPlan, err := CreateConfigReleasePlan("root", ConfigReleasePlanInput{
 		ConfigVersionID: &candidate.Version.ID,
 		NodePool:        "us",
+		Force:           true,
 	})
 	if err != nil {
 		t.Fatalf("expected us plan to be allowed while hk plan is running: %v", err)
@@ -277,6 +278,96 @@ func TestConfigReleasePlanCompletionActivatesOnlyItsNodePool(t *testing.T) {
 	}
 	if usMeta.Checksum != activeUSArtifact.Checksum {
 		t.Fatalf("expected us agent meta to stay on active checksum, got %+v", usMeta)
+	}
+}
+
+func TestBrokenPoolActiveConfigDoesNotFallbackToGlobal(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := seedConfigReleasePlanTestNode(t, "node-broken-pool-active", "hk")
+	seedConfigReleasePlanTestRoute(t, "broken-pool-active", "broken-pool-active.example.com", "http://8.8.8.8", "hk")
+	activeRelease, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if err := model.DB.Model(&model.ConfigPoolActiveVersion{}).
+		Where("pool_name = ?", "hk").
+		Updates(map[string]any{
+			"config_version_id": activeRelease.Version.ID,
+			"artifact_id":       uint(999999),
+			"checksum":          "missing-artifact",
+			"activated_at":      time.Now(),
+		}).Error; err != nil {
+		t.Fatalf("break pool active version: %v", err)
+	}
+
+	_, err = GetActiveConfigMetaForAgentNode(node)
+	if err == nil || !strings.Contains(err.Error(), "active config reference is broken") {
+		t.Fatalf("expected broken pool active reference to be reported, got %v", err)
+	}
+}
+
+func TestCreateConfigReleasePlanRejectsUnchangedPoolUnlessForced(t *testing.T) {
+	setupServiceTestDB(t)
+
+	seedConfigReleasePlanTestNode(t, "node-unchanged-us", "us")
+	seedConfigReleasePlanTestRoute(t, "unchanged-us", "unchanged-us.example.com", "http://8.8.4.4", "us")
+	activeRelease, err := PublishConfigVersion("root", false)
+	if err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if _, err := CreateConfigReleasePlan("root", ConfigReleasePlanInput{
+		ConfigVersionID: &activeRelease.Version.ID,
+		NodePool:        "us",
+	}); err == nil || !strings.Contains(err.Error(), "no config changes") {
+		t.Fatalf("expected unchanged pool release to be rejected, got %v", err)
+	}
+	forced, err := CreateConfigReleasePlan("root", ConfigReleasePlanInput{
+		ConfigVersionID: &activeRelease.Version.ID,
+		NodePool:        "us",
+		Force:           true,
+	})
+	if err != nil {
+		t.Fatalf("expected forced unchanged pool release to be allowed: %v", err)
+	}
+	if forced.Plan.Checksum == "" {
+		t.Fatalf("expected forced plan checksum, got %+v", forced.Plan)
+	}
+}
+
+func TestDraftConfigReleasePlanCanBeCanceledButNotFailed(t *testing.T) {
+	setupServiceTestDB(t)
+
+	seedConfigReleasePlanTestNode(t, "node-cancel-draft", "hk")
+	route := seedConfigReleasePlanTestRoute(t, "cancel-draft", "cancel-draft.example.com", "http://8.8.8.8", "hk")
+	if _, err := PublishConfigVersion("root", false); err != nil {
+		t.Fatalf("PublishConfigVersion failed: %v", err)
+	}
+	if _, err := UpdateProxyRoute(route.ID, ProxyRouteInput{
+		SiteName:  "cancel-draft",
+		Domain:    "cancel-draft.example.com",
+		OriginURL: "http://9.9.9.9",
+		NodePool:  "hk",
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("UpdateProxyRoute failed: %v", err)
+	}
+	plan, err := CreateConfigReleasePlan("root", ConfigReleasePlanInput{NodePool: "hk"})
+	if err != nil {
+		t.Fatalf("CreateConfigReleasePlan failed: %v", err)
+	}
+	if err := FailConfigReleasePlan(plan.Plan.ID, "operator clicked fail"); err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("expected draft fail to be rejected with cancel guidance, got %v", err)
+	}
+	if _, err := model.GetConfigReleaseBlockedChecksumForPool("hk", plan.Plan.Checksum); err == nil {
+		t.Fatal("expected draft fail rejection not to create blocked checksum")
+	}
+	canceled, err := CancelConfigReleasePlan(plan.Plan.ID)
+	if err != nil {
+		t.Fatalf("CancelConfigReleasePlan failed: %v", err)
+	}
+	if canceled.Plan.Status != ConfigReleaseStatusCanceled {
+		t.Fatalf("expected canceled plan, got %+v", canceled.Plan)
 	}
 }
 

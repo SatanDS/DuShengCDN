@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCleanupConfigVersionsDeletesOnlyOldInactiveRows(t *testing.T) {
@@ -92,6 +93,69 @@ func TestCleanupConfigVersionsDeletesOnlyOldInactiveRows(t *testing.T) {
 	}
 	if deletedArtifactCount != 0 {
 		t.Fatalf("expected deleted version artifacts to be removed, got %d", deletedArtifactCount)
+	}
+}
+
+func TestCleanupConfigVersionsPreservesPoolActiveVersion(t *testing.T) {
+	setupServiceTestDB(t)
+
+	var poolActiveVersion *model.ConfigVersion
+	var poolActiveArtifact *model.ConfigVersionArtifact
+	for i := 1; i <= 5; i++ {
+		version := &model.ConfigVersion{
+			Version:          fmt.Sprintf("2026060600000%d", i),
+			SnapshotJSON:     "{}",
+			MainConfig:       "main",
+			RenderedConfig:   "rendered",
+			SupportFilesJSON: "[]",
+			Checksum:         fmt.Sprintf("pool-checksum-%d", i),
+			IsActive:         i == 1,
+			CreatedBy:        "root",
+		}
+		if err := model.DB.Create(version).Error; err != nil {
+			t.Fatalf("seed config version %d: %v", i, err)
+		}
+		artifact := &model.ConfigVersionArtifact{
+			ConfigVersionID:     version.ID,
+			PoolName:            "hk",
+			Checksum:            version.Checksum,
+			MainConfigChecksum:  fmt.Sprintf("pool-main-checksum-%d", i),
+			RouteConfigChecksum: fmt.Sprintf("pool-route-checksum-%d", i),
+			RenderedConfig:      "server {}",
+			SupportFilesJSON:    "[]",
+			RouteCount:          1,
+		}
+		if err := model.DB.Create(artifact).Error; err != nil {
+			t.Fatalf("seed config version artifact %d: %v", i, err)
+		}
+		if i == 2 {
+			poolActiveVersion = version
+			poolActiveArtifact = artifact
+		}
+	}
+	if err := model.DB.Create(&model.ConfigPoolActiveVersion{
+		PoolName:        "hk",
+		ConfigVersionID: poolActiveVersion.ID,
+		ArtifactID:      poolActiveArtifact.ID,
+		Checksum:        poolActiveArtifact.Checksum,
+		ActivatedAt:     time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("seed pool active version: %v", err)
+	}
+
+	deleted, err := CleanupConfigVersions(3)
+	if err != nil {
+		t.Fatalf("CleanupConfigVersions failed: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected pool active old version to be preserved, deleted %d", deleted)
+	}
+	version, artifact, err := model.GetActiveConfigVersionArtifactForPool("hk")
+	if err != nil {
+		t.Fatalf("GetActiveConfigVersionArtifactForPool failed: %v", err)
+	}
+	if version.ID != poolActiveVersion.ID || artifact.ID != poolActiveArtifact.ID {
+		t.Fatalf("expected hk pool active version/artifact to survive cleanup, got version=%+v artifact=%+v", version, artifact)
 	}
 }
 

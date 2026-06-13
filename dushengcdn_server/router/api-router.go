@@ -138,6 +138,7 @@ func SetApiRouter(router *gin.Engine) {
 			configReleasePlanRoute.POST("/:id/advance", controller.AdvanceConfigReleasePlan)
 			configReleasePlanRoute.POST("/:id/complete", controller.CompleteConfigReleasePlan)
 			configReleasePlanRoute.POST("/:id/fail", controller.FailConfigReleasePlan)
+			configReleasePlanRoute.POST("/:id/cancel", controller.CancelConfigReleasePlan)
 		}
 		configReleaseRoute := apiRouter.Group("/config-release")
 		configReleaseRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())

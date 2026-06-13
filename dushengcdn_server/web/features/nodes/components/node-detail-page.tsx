@@ -487,7 +487,8 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
       setRevealedAgentToken(token.agent_token ?? '');
       setFeedback({
         tone: 'success',
-        message: 'Agent token rotated. Copy the install command before leaving this page.',
+        message:
+          'Agent token rotated. Copy the full token or install command before leaving this page.',
       });
       await invalidateNodeData();
     },
@@ -683,13 +684,18 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     deploymentProtocol,
     serverUrl,
   );
+  const visibleAgentToken = (
+    revealedAgentToken ||
+    node.agent_token ||
+    ''
+  ).trim();
   const nodeInstallCommand =
-    normalizedServerUrl && revealedAgentToken
-      ? buildNodeInstallCommand(normalizedServerUrl, revealedAgentToken)
+    normalizedServerUrl && visibleAgentToken
+      ? buildNodeInstallCommand(normalizedServerUrl, visibleAgentToken)
       : '';
   const nodeDockerInstallCommand =
-    normalizedServerUrl && revealedAgentToken
-      ? buildNodeDockerInstallCommand(normalizedServerUrl, revealedAgentToken)
+    normalizedServerUrl && visibleAgentToken
+      ? buildNodeDockerInstallCommand(normalizedServerUrl, visibleAgentToken)
       : '';
   const updateMode = getUpdateMode(node);
   const selectedAgentRelease =
@@ -1808,6 +1814,19 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                         ? 'Rotating...'
                         : 'Rotate token'}
                     </SecondaryButton>
+                    {visibleAgentToken ? (
+                      <SecondaryButton
+                        type="button"
+                        onClick={() =>
+                          void handleCopy(
+                            visibleAgentToken,
+                            'Agent token copied. Paste it when the installer asks for Agent token.',
+                          )
+                        }
+                      >
+                        Copy token
+                      </SecondaryButton>
+                    ) : null}
                     {nodeInstallCommand ? (
                       <PrimaryButton
                         type="button"
@@ -1852,11 +1871,20 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
                         节点密钥
                       </p>
                       <p className="mt-2 text-sm break-all text-[var(--foreground-primary)]">
-                        {node.agent_token_prefix
+                        {visibleAgentToken
+                          ? visibleAgentToken
+                          : node.agent_token_prefix
                           ? `${node.agent_token_prefix}...`
                           : node.agent_token_available
                             ? 'configured'
                             : 'unconfigured'}
+                      </p>
+                      <p className="mt-2 text-xs leading-5 text-[var(--foreground-secondary)]">
+                        {visibleAgentToken
+                          ? 'Full token is shown once after rotation. Paste it when the install script asks for Agent token; terminal input is hidden.'
+                          : node.agent_token_prefix
+                            ? 'Only the token prefix is stored here. Rotate token to reveal a new full token for reinstall.'
+                            : 'No node token is configured yet. Rotate token before installing this Agent.'}
                       </p>
                     </div>
                   </div>

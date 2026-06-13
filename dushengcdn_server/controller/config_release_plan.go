@@ -199,12 +199,39 @@ func FailConfigReleasePlan(c *gin.Context) {
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			respondBadRequest(c, "invalid request payload")
+			return
+		}
+	}
 	if err := service.FailConfigReleasePlan(id, req.Reason); err != nil {
 		respondFailure(c, err.Error())
 		return
 	}
 	plan, err := service.GetConfigReleasePlan(id)
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, plan)
+}
+
+// CancelConfigReleasePlan godoc
+// @Summary Cancel draft config release plan
+// @Tags ConfigVersions
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Plan ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Router /api/config-release-plans/{id}/cancel [post]
+func CancelConfigReleasePlan(c *gin.Context) {
+	id, ok := parseUintParamWithMessage(c, "id", "invalid id")
+	if !ok {
+		return
+	}
+	plan, err := service.CancelConfigReleasePlan(id)
 	if err != nil {
 		respondFailure(c, err.Error())
 		return

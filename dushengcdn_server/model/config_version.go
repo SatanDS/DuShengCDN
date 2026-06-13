@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type ConfigVersionSummary struct {
 	ID        uint      `json:"id"`
@@ -47,6 +50,20 @@ type ConfigPoolActiveVersion struct {
 	ActivatedAt       time.Time `json:"activated_at"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+type BrokenConfigPoolActiveVersionError struct {
+	PoolName        string
+	ConfigVersionID uint
+	ArtifactID      uint
+	Cause           error
+}
+
+func (err *BrokenConfigPoolActiveVersionError) Error() string {
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("node pool %s active config reference is broken (version_id=%d, artifact_id=%d): %v", err.PoolName, err.ConfigVersionID, err.ArtifactID, err.Cause)
 }
 
 func ListConfigVersionSummaries() (versions []*ConfigVersionSummary, err error) {
@@ -110,11 +127,31 @@ func GetActiveConfigVersionArtifactForPool(poolName string) (*ConfigVersion, *Co
 	}
 	version, err := GetConfigVersionByID(active.ConfigVersionID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, &BrokenConfigPoolActiveVersionError{
+			PoolName:        active.PoolName,
+			ConfigVersionID: active.ConfigVersionID,
+			ArtifactID:      active.ArtifactID,
+			Cause:           err,
+		}
 	}
-	artifact, err := GetConfigVersionArtifact(version.ID, poolName)
+	artifact := &ConfigVersionArtifact{}
+	err = DB.First(artifact, active.ArtifactID).Error
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, &BrokenConfigPoolActiveVersionError{
+			PoolName:        active.PoolName,
+			ConfigVersionID: active.ConfigVersionID,
+			ArtifactID:      active.ArtifactID,
+			Cause:           err,
+		}
+	}
+	if artifact.ConfigVersionID != active.ConfigVersionID || artifact.PoolName != active.PoolName {
+		return nil, nil, &BrokenConfigPoolActiveVersionError{
+			PoolName:        active.PoolName,
+			ConfigVersionID: active.ConfigVersionID,
+			ArtifactID:      active.ArtifactID,
+			Cause: fmt.Errorf("artifact points to version_id=%d pool=%q",
+				artifact.ConfigVersionID, artifact.PoolName),
+		}
 	}
 	return version, artifact, nil
 }
@@ -126,11 +163,32 @@ func GetActiveConfigVersionArtifactMetaForPool(poolName string) (*ConfigVersion,
 	}
 	version, err := GetConfigVersionMetaByID(active.ConfigVersionID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, &BrokenConfigPoolActiveVersionError{
+			PoolName:        active.PoolName,
+			ConfigVersionID: active.ConfigVersionID,
+			ArtifactID:      active.ArtifactID,
+			Cause:           err,
+		}
 	}
-	artifact, err := GetConfigVersionArtifactMeta(version.ID, poolName)
+	artifact := &ConfigVersionArtifact{}
+	err = DB.Select("id", "config_version_id", "pool_name", "checksum", "main_config_checksum", "route_config_checksum", "route_count", "created_at").
+		First(artifact, active.ArtifactID).Error
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, &BrokenConfigPoolActiveVersionError{
+			PoolName:        active.PoolName,
+			ConfigVersionID: active.ConfigVersionID,
+			ArtifactID:      active.ArtifactID,
+			Cause:           err,
+		}
+	}
+	if artifact.ConfigVersionID != active.ConfigVersionID || artifact.PoolName != active.PoolName {
+		return nil, nil, &BrokenConfigPoolActiveVersionError{
+			PoolName:        active.PoolName,
+			ConfigVersionID: active.ConfigVersionID,
+			ArtifactID:      active.ArtifactID,
+			Cause: fmt.Errorf("artifact points to version_id=%d pool=%q",
+				artifact.ConfigVersionID, artifact.PoolName),
+		}
 	}
 	return version, artifact, nil
 }
