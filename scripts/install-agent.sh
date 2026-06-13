@@ -1573,17 +1573,17 @@ else
 fi
 trap - EXIT
 
-# Generate config
-CONFIG_FILE="${INSTALL_DIR}/agent.json"
-if [[ -f "$CONFIG_FILE" && ( "$REINSTALL" != "true" || "$WIPE_DATA" != "true" ) ]]; then
-  echo "Preserving existing agent.json: ${CONFIG_FILE}"
-elif [[ -n "$AGENT_TOKEN" ]]; then
-  echo "Generating agent.json..."
+write_agent_config() {
+  local credential_name="$1"
+  local credential_value="$2"
+  local credential_line
+
+  credential_line="  \"${credential_name}\": \"$(json_escape "$credential_value")\","
   if [[ "$NEEDS_ROOT" == "true" ]]; then
     write_file_as_root "$CONFIG_FILE" 0600 <<CFGEOF
 {
   "server_url": "$(json_escape "$SERVER_URL")",
-  "agent_token": "$(json_escape "$AGENT_TOKEN")",
+${credential_line}
   "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
   "geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
@@ -1596,7 +1596,7 @@ CFGEOF
     cat > "$CONFIG_FILE" <<CFGEOF
 {
   "server_url": "$(json_escape "$SERVER_URL")",
-  "agent_token": "$(json_escape "$AGENT_TOKEN")",
+${credential_line}
   "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
   "data_dir": "${INSTALL_DIR}/data",
   "geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
@@ -1607,36 +1607,28 @@ CFGEOF
 CFGEOF
     chmod 0600 "$CONFIG_FILE"
   fi
+}
+
+# Generate config. Re-running the installer with a node token must refresh agent.json;
+# otherwise the updated binary can keep connecting as the old node.
+CONFIG_FILE="${INSTALL_DIR}/agent.json"
+if [[ -f "$CONFIG_FILE" ]]; then
+  CONFIG_BACKUP="${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  echo "Existing agent.json found; backing up and refreshing connection settings: ${CONFIG_FILE}"
+  if [[ "$NEEDS_ROOT" == "true" ]]; then
+    run_as_root cp -p -- "$CONFIG_FILE" "$CONFIG_BACKUP"
+  else
+    cp -p -- "$CONFIG_FILE" "$CONFIG_BACKUP"
+  fi
+  echo "Previous agent.json backup: ${CONFIG_BACKUP}"
 else
   echo "Generating agent.json..."
-  if [[ "$NEEDS_ROOT" == "true" ]]; then
-    write_file_as_root "$CONFIG_FILE" 0600 <<CFGEOF
-{
-  "server_url": "$(json_escape "$SERVER_URL")",
-  "discovery_token": "$(json_escape "$DISCOVERY_TOKEN")",
-  "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
-  "data_dir": "${INSTALL_DIR}/data",
-  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
-  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
-  "heartbeat_interval": 30000,
-  "request_timeout": 10000$(geoip_api_config_json)
-}
-CFGEOF
-  else
-    cat > "$CONFIG_FILE" <<CFGEOF
-{
-  "server_url": "$(json_escape "$SERVER_URL")",
-  "discovery_token": "$(json_escape "$DISCOVERY_TOKEN")",
-  "openresty_path": "$(json_escape "$OPENRESTY_PATH")",
-  "data_dir": "${INSTALL_DIR}/data",
-  "geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
-  "openresty_geoip_database_path": "${INSTALL_DIR}/data/var/lib/dushengcdn/geoip/GeoLite2-Country.mmdb",
-  "heartbeat_interval": 30000,
-  "request_timeout": 10000$(geoip_api_config_json)
-}
-CFGEOF
-    chmod 0600 "$CONFIG_FILE"
-  fi
+fi
+
+if [[ -n "$AGENT_TOKEN" ]]; then
+  write_agent_config "agent_token" "$AGENT_TOKEN"
+else
+  write_agent_config "discovery_token" "$DISCOVERY_TOKEN"
 fi
 
 if [[ "$CREATE_SERVICE" == "true" && "$OS" == "linux" && -d /etc/systemd/system && "$SYSTEMCTL_AVAILABLE" == "true" && "$SERVICE_USER" != "root" ]]; then

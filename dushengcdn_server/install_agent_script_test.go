@@ -81,6 +81,12 @@ func TestInstallerScriptsAvoidSecretArgvExposure(t *testing.T) {
 	requireScriptContains(t, agentScript, `NoNewPrivileges=true`)
 	requireScriptContains(t, agentScript, `ProtectSystem=strict`)
 	requireScriptContains(t, agentScript, `ReadWritePaths=${INSTALL_DIR}/data ${CONFIG_FILE}`)
+	requireScriptContains(t, agentScript, `Existing agent.json found; backing up and refreshing connection settings`)
+	requireScriptContains(t, agentScript, `write_agent_config "agent_token" "$AGENT_TOKEN"`)
+	requireScriptContains(t, agentScript, `write_agent_config "discovery_token" "$DISCOVERY_TOKEN"`)
+	if strings.Contains(agentScript, `Preserving existing agent.json`) {
+		t.Fatal("agent installer must refresh connection settings on rerun instead of preserving stale agent.json credentials")
+	}
 	if strings.Contains(agentScript, `run_as_root chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"`) {
 		t.Fatal("agent installer must not make the binary and install scripts service-user writable")
 	}
