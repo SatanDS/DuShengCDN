@@ -2049,6 +2049,8 @@ func setupServiceTestDB(t *testing.T) {
 	nodeAgentTokenCache.reset()
 	resetGSLBDNSSchedulingDataCache()
 	resetAuthoritativeDNSSnapshotCache()
+	resetDashboardOverviewCache()
+	resetObservabilityMeteringOverviewCache()
 	previousSQLitePath := common.SQLitePath
 	previousSQLDSN := common.SQLDSN
 	previousInitialRootPassword := common.InitialRootPassword
@@ -2067,6 +2069,8 @@ func setupServiceTestDB(t *testing.T) {
 		nodeAgentTokenCache.reset()
 		resetGSLBDNSSchedulingDataCache()
 		resetAuthoritativeDNSSnapshotCache()
+		resetDashboardOverviewCache()
+		resetObservabilityMeteringOverviewCache()
 		if err := model.CloseDB(); err != nil {
 			t.Fatalf("failed to close db: %v", err)
 		}

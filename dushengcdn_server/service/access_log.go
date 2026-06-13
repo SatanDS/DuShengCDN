@@ -117,6 +117,12 @@ var accessLogIPSummaryCountCache = accessLogSingleCountCacheStore{
 	values: make(map[string]accessLogSingleCountCacheEntry),
 }
 
+var observabilityMeteringOverviewCache = shortTTLResultCache[*ObservabilityMeteringOverview]{
+	values:     make(map[string]shortTTLResultCacheEntry[*ObservabilityMeteringOverview]),
+	ttl:        10 * time.Second,
+	maxEntries: 8,
+}
+
 type FoldedAccessLogView struct {
 	BucketStartedAt  time.Time `json:"bucket_started_at"`
 	RequestCount     int64     `json:"request_count"`
@@ -784,6 +790,14 @@ func GetAccessLogIPTrend(input AccessLogIPTrendQuery) (*AccessLogIPTrendView, er
 }
 
 func GetObservabilityMeteringOverview() (*ObservabilityMeteringOverview, error) {
+	return observabilityMeteringOverviewCache.load(serviceRuntimeCacheKey("observability-metering-overview"), buildObservabilityMeteringOverview)
+}
+
+func resetObservabilityMeteringOverviewCache() {
+	observabilityMeteringOverviewCache.reset()
+}
+
+func buildObservabilityMeteringOverview() (*ObservabilityMeteringOverview, error) {
 	now := time.Now().UTC()
 	since := now.Add(-24 * time.Hour)
 	const limit = 8

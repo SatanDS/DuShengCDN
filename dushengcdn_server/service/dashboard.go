@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+var dashboardOverviewCache = shortTTLResultCache[*DashboardOverviewView]{
+	values:     make(map[string]shortTTLResultCacheEntry[*DashboardOverviewView]),
+	ttl:        10 * time.Second,
+	maxEntries: 8,
+}
+
 type DashboardOverviewView struct {
 	GeneratedAt   time.Time             `json:"generated_at"`
 	Summary       DashboardSummary      `json:"summary"`
@@ -114,6 +120,14 @@ var defaultDashboardOverviewQueries = dashboardOverviewQueries{
 }
 
 func GetDashboardOverview() (*DashboardOverviewView, error) {
+	return dashboardOverviewCache.load(serviceRuntimeCacheKey("dashboard-overview"), buildDashboardOverview)
+}
+
+func resetDashboardOverviewCache() {
+	dashboardOverviewCache.reset()
+}
+
+func buildDashboardOverview() (*DashboardOverviewView, error) {
 	now := time.Now()
 	since := now.Add(-24 * time.Hour)
 

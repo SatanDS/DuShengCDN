@@ -1076,6 +1076,29 @@ func TestGetObservabilityMeteringOverviewUsesAggregatedAccessLogs(t *testing.T) 
 	}
 }
 
+func TestObservabilityMeteringOverviewCacheReusesRecentResult(t *testing.T) {
+	setupServiceTestDB(t)
+
+	first, err := GetObservabilityMeteringOverview()
+	if err != nil {
+		t.Fatalf("GetObservabilityMeteringOverview failed: %v", err)
+	}
+	if err := model.DB.Create(&model.Node{
+		NodeID: "node-metering-cache",
+		Name:   "Metering Cache",
+		Status: NodeStatusOnline,
+	}).Error; err != nil {
+		t.Fatalf("seed node after cache: %v", err)
+	}
+	second, err := GetObservabilityMeteringOverview()
+	if err != nil {
+		t.Fatalf("GetObservabilityMeteringOverview cached call failed: %v", err)
+	}
+	if first != second {
+		t.Fatal("expected recent metering overview calls to reuse cached result")
+	}
+}
+
 func TestPersistNodeAccessLogsTruncatesLongPath(t *testing.T) {
 	setupServiceTestDB(t)
 

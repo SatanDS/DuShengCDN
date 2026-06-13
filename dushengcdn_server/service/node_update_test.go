@@ -2171,3 +2171,26 @@ func TestGetDashboardOverviewReturnsEmptyNodeSlice(t *testing.T) {
 		t.Fatalf("expected empty nodes, got %+v", view.Nodes)
 	}
 }
+
+func TestDashboardOverviewCacheReusesRecentResult(t *testing.T) {
+	setupServiceTestDB(t)
+
+	first, err := GetDashboardOverview()
+	if err != nil {
+		t.Fatalf("GetDashboardOverview failed: %v", err)
+	}
+	if err := model.DB.Create(&model.Node{
+		NodeID: "node-dashboard-cache",
+		Name:   "Dashboard Cache",
+		Status: NodeStatusOnline,
+	}).Error; err != nil {
+		t.Fatalf("seed node after cache: %v", err)
+	}
+	second, err := GetDashboardOverview()
+	if err != nil {
+		t.Fatalf("GetDashboardOverview cached call failed: %v", err)
+	}
+	if first != second {
+		t.Fatal("expected recent dashboard overview calls to reuse cached result")
+	}
+}
