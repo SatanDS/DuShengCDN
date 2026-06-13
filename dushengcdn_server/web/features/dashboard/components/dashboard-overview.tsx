@@ -147,12 +147,12 @@ export function DashboardOverview() {
   const overviewQuery = useQuery({
     queryKey: ['dashboard', 'overview'],
     queryFn: getDashboardOverview,
-    refetchInterval: 10000,
+    refetchInterval: 15000,
   });
   const meteringQuery = useQuery({
     queryKey: ['access-logs', 'metering-overview'],
     queryFn: getObservabilityMeteringOverview,
-    refetchInterval: 10000,
+    refetchInterval: 30000,
   });
 
   if (overviewQuery.isLoading) {

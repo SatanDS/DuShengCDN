@@ -63,26 +63,26 @@ export function DashboardTopbar() {
   const stableReleaseQuery = useQuery({
     queryKey: ['update', 'latest-release', 'stable'],
     queryFn: () => getLatestRelease('stable'),
-    enabled: isRoot,
+    enabled: isRoot && isVersionModalOpen,
     refetchInterval: (query) => {
       const release = query.state.data;
-      if (isVersionModalOpen && release?.in_progress) {
+      if (release?.in_progress) {
         return upgradeStatusPollInterval;
       }
-      return 60 * 60 * 1000;
+      return false;
     },
   });
 
   const previewReleaseQuery = useQuery({
     queryKey: ['update', 'latest-release', 'preview'],
     queryFn: () => getLatestRelease('preview'),
-    enabled: isRoot,
+    enabled: isRoot && isVersionModalOpen,
     refetchInterval: (query) => {
       const release = query.state.data;
-      if (isVersionModalOpen && release?.in_progress) {
+      if (release?.in_progress) {
         return upgradeStatusPollInterval;
       }
-      return 60 * 60 * 1000;
+      return false;
     },
   });
 
@@ -251,10 +251,6 @@ export function DashboardTopbar() {
     setManualUpgradeStatus(null);
     setManualUpgradeError(null);
     setIsVersionModalOpen(true);
-    if (isRoot) {
-      void stableReleaseQuery.refetch();
-      void previewReleaseQuery.refetch();
-    }
   };
 
   const handleUpgrade = () => {

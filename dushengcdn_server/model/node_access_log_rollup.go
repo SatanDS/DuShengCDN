@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -14,7 +16,11 @@ import (
 	"gorm.io/sharding"
 )
 
-const nodeAccessLogRollupBucketMinutes = 1
+const (
+	nodeAccessLogRollupBucketMinutes       = 1
+	nodeAccessLogDerivedRollupRefreshDelay = 2 * time.Second
+	nodeAccessLogDerivedRollupRetryDelay   = 10 * time.Second
+)
 
 const (
 	nodeAccessLogBucketIdentityKindIP   = "ip"
@@ -120,11 +126,21 @@ type nodeAccessLogBucketRollupAggregateRow struct {
 	LastSeenEpoch    int64
 }
 
+var nodeAccessLogDerivedRollupRefreshState = struct {
+	sync.Mutex
+	pending map[int64]time.Time
+	timer   *time.Timer
+	running bool
+}{}
+
 func (log *NodeAccessLog) AfterCreate(tx *gorm.DB) error {
 	if log == nil {
 		return nil
 	}
-	return upsertNodeAccessLogRollups(tx, []*NodeAccessLog{log})
+	if err := upsertNodeAccessLogRollups(tx, []*NodeAccessLog{log}); err != nil {
+		slog.Warn("access log rollup update failed after raw log create", "node_id", log.NodeID, "error", err)
+	}
+	return nil
 }
 
 func ensureNodeAccessLogRollupSchema(db *gorm.DB) error {
@@ -257,7 +273,11 @@ func nodeAccessLogRollupRowsForShard(db *gorm.DB, table string) ([]*NodeAccessLo
 
 func upsertNodeAccessLogRollups(db *gorm.DB, records []*NodeAccessLog) error {
 	rows := aggregateNodeAccessLogRollups(records)
-	return upsertNodeAccessLogRollupRows(db, rows)
+	if err := upsertNodeAccessLogRollupRowsWithRefresh(db, rows, false); err != nil {
+		return fmt.Errorf("upsert access log detailed rollups failed: %w", err)
+	}
+	enqueueNodeAccessLogDerivedRollupRefresh(db, rows)
+	return nil
 }
 
 func aggregateNodeAccessLogRollups(records []*NodeAccessLog) []*NodeAccessLogRollup {
@@ -427,6 +447,144 @@ func upsertNodeAccessLogRollupRowsWithRefresh(db *gorm.DB, rows []*NodeAccessLog
 		return refreshNodeAccessLogBucketRollupsForRows(db, rows)
 	}
 	return nil
+}
+
+func enqueueNodeAccessLogDerivedRollupRefresh(_ *gorm.DB, rows []*NodeAccessLogRollup) {
+	buckets := nodeAccessLogDerivedRollupBuckets(rows)
+	if len(buckets) == 0 {
+		return
+	}
+	if DB == nil {
+		return
+	}
+	nodeAccessLogDerivedRollupRefreshState.Lock()
+	defer nodeAccessLogDerivedRollupRefreshState.Unlock()
+	if nodeAccessLogDerivedRollupRefreshState.pending == nil {
+		nodeAccessLogDerivedRollupRefreshState.pending = make(map[int64]time.Time)
+	}
+	for _, bucket := range buckets {
+		nodeAccessLogDerivedRollupRefreshState.pending[bucket.Unix()] = bucket
+	}
+	if nodeAccessLogDerivedRollupRefreshState.timer == nil && !nodeAccessLogDerivedRollupRefreshState.running {
+		nodeAccessLogDerivedRollupRefreshState.timer = time.AfterFunc(nodeAccessLogDerivedRollupRefreshDelay, runNodeAccessLogDerivedRollupRefresh)
+	}
+}
+
+func nodeAccessLogDerivedRollupBuckets(rows []*NodeAccessLogRollup) []time.Time {
+	if len(rows) == 0 {
+		return nil
+	}
+	seen := make(map[int64]time.Time, len(rows))
+	for _, row := range rows {
+		if row == nil || row.BucketStartedAt.IsZero() {
+			continue
+		}
+		bucket := nodeAccessLogRollupBucketStart(row.BucketStartedAt)
+		seen[bucket.Unix()] = bucket
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	buckets := make([]time.Time, 0, len(seen))
+	for _, bucket := range seen {
+		buckets = append(buckets, bucket)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].Before(buckets[j])
+	})
+	return buckets
+}
+
+func runNodeAccessLogDerivedRollupRefresh() {
+	buckets := takeNodeAccessLogDerivedRollupRefreshBatch()
+	if len(buckets) == 0 {
+		return
+	}
+	err := refreshNodeAccessLogBucketRollupsForBuckets(DB, buckets)
+	finishNodeAccessLogDerivedRollupRefresh(buckets, err)
+	if err != nil {
+		slog.Warn("refresh node access log derived rollups failed", "bucket_count", len(buckets), "error", err)
+	}
+}
+
+func takeNodeAccessLogDerivedRollupRefreshBatch() []time.Time {
+	nodeAccessLogDerivedRollupRefreshState.Lock()
+	defer nodeAccessLogDerivedRollupRefreshState.Unlock()
+	if nodeAccessLogDerivedRollupRefreshState.running || len(nodeAccessLogDerivedRollupRefreshState.pending) == 0 {
+		return nil
+	}
+	if nodeAccessLogDerivedRollupRefreshState.timer != nil {
+		nodeAccessLogDerivedRollupRefreshState.timer.Stop()
+		nodeAccessLogDerivedRollupRefreshState.timer = nil
+	}
+	buckets := make([]time.Time, 0, len(nodeAccessLogDerivedRollupRefreshState.pending))
+	for _, bucket := range nodeAccessLogDerivedRollupRefreshState.pending {
+		buckets = append(buckets, bucket)
+	}
+	nodeAccessLogDerivedRollupRefreshState.pending = make(map[int64]time.Time)
+	nodeAccessLogDerivedRollupRefreshState.running = true
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].Before(buckets[j])
+	})
+	return buckets
+}
+
+func finishNodeAccessLogDerivedRollupRefresh(buckets []time.Time, refreshErr error) {
+	nodeAccessLogDerivedRollupRefreshState.Lock()
+	defer nodeAccessLogDerivedRollupRefreshState.Unlock()
+	nodeAccessLogDerivedRollupRefreshState.running = false
+	delay := nodeAccessLogDerivedRollupRefreshDelay
+	if refreshErr != nil {
+		if nodeAccessLogDerivedRollupRefreshState.pending == nil {
+			nodeAccessLogDerivedRollupRefreshState.pending = make(map[int64]time.Time)
+		}
+		for _, bucket := range buckets {
+			if bucket.IsZero() {
+				continue
+			}
+			nodeAccessLogDerivedRollupRefreshState.pending[bucket.Unix()] = bucket
+		}
+		delay = nodeAccessLogDerivedRollupRetryDelay
+	}
+	if len(nodeAccessLogDerivedRollupRefreshState.pending) > 0 {
+		nodeAccessLogDerivedRollupRefreshState.timer = time.AfterFunc(delay, runNodeAccessLogDerivedRollupRefresh)
+		return
+	}
+	nodeAccessLogDerivedRollupRefreshState.timer = nil
+}
+
+func flushNodeAccessLogDerivedRollups() error {
+	for {
+		for {
+			nodeAccessLogDerivedRollupRefreshState.Lock()
+			running := nodeAccessLogDerivedRollupRefreshState.running
+			nodeAccessLogDerivedRollupRefreshState.Unlock()
+			if !running {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		buckets := takeNodeAccessLogDerivedRollupRefreshBatch()
+		if len(buckets) == 0 {
+			return nil
+		}
+		err := refreshNodeAccessLogBucketRollupsForBuckets(DB, buckets)
+		finishNodeAccessLogDerivedRollupRefresh(buckets, err)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func resetNodeAccessLogDerivedRollupRefresh() {
+	nodeAccessLogDerivedRollupRefreshState.Lock()
+	defer nodeAccessLogDerivedRollupRefreshState.Unlock()
+	if nodeAccessLogDerivedRollupRefreshState.timer != nil {
+		nodeAccessLogDerivedRollupRefreshState.timer.Stop()
+	}
+	nodeAccessLogDerivedRollupRefreshState.pending = nil
+	nodeAccessLogDerivedRollupRefreshState.timer = nil
+	nodeAccessLogDerivedRollupRefreshState.running = false
 }
 
 func clearNodeAccessLogBucketRollups(db *gorm.DB) error {
@@ -1268,6 +1426,9 @@ func nodeAccessLogRollupQueryDB() (*gorm.DB, bool) {
 }
 
 func nodeAccessLogBucketRollupQueryDB() (*gorm.DB, bool) {
+	if !nodeAccessLogDerivedRollupRefreshIdle() {
+		return nil, false
+	}
 	db := nodeAccessLogRollupSession(DB)
 	if db == nil || !nodeAccessLogBucketRollupTablesExist(db) {
 		return nil, false
@@ -1332,6 +1493,9 @@ func nodeAccessLogBucketFilterIdentityRollupTableExists(db *gorm.DB) bool {
 }
 
 func nodeAccessLogBucketFilterIdentityRollupQueryDB() (*gorm.DB, bool) {
+	if !nodeAccessLogDerivedRollupRefreshIdle() {
+		return nil, false
+	}
 	db := nodeAccessLogRollupSession(DB)
 	if db == nil || !nodeAccessLogBucketFilterIdentityRollupTableExists(db) {
 		return nil, false
@@ -1389,6 +1553,9 @@ func nodeAccessLogBucketFilterIdentityRollupsCanServe(db *gorm.DB, query NodeAcc
 	if !nodeAccessLogRollupCanServeSince(query.Since) {
 		return false
 	}
+	if !nodeAccessLogDerivedRollupRefreshIdle() {
+		return false
+	}
 	db = nodeAccessLogRollupSession(db)
 	if db == nil || !nodeAccessLogBucketFilterIdentityRollupTableExists(db) {
 		return false
@@ -1396,6 +1563,12 @@ func nodeAccessLogBucketFilterIdentityRollupsCanServe(db *gorm.DB, query NodeAcc
 	var count int64
 	err := nodeAccessLogBucketFilterIdentityRollupTableDB(db).Limit(1).Count(&count).Error
 	return err == nil && count > 0
+}
+
+func nodeAccessLogDerivedRollupRefreshIdle() bool {
+	nodeAccessLogDerivedRollupRefreshState.Lock()
+	defer nodeAccessLogDerivedRollupRefreshState.Unlock()
+	return !nodeAccessLogDerivedRollupRefreshState.running && len(nodeAccessLogDerivedRollupRefreshState.pending) == 0
 }
 
 func countNodeAccessLogIdentitiesFromFilterRollups(query NodeAccessLogQuery, identityKind string) (int64, bool, error) {

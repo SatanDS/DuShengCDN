@@ -96,18 +96,16 @@ export function ProxyRouteConfigPage({
       const updatedRoute = await updateProxyRoute(numericRouteID, payload);
       return { updatedRoute, context };
     },
-    onSuccess: async ({ updatedRoute, context }) => {
+    onSuccess: ({ updatedRoute, context }) => {
       queryClient.setQueryData(
         ['proxy-routes', 'detail', numericRouteID],
         updatedRoute,
       );
       setFeedback({ tone: 'success', message: context.message });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
-        queryClient.invalidateQueries({
-          queryKey: ['config-versions', 'diff'],
-        }),
-      ]);
+      void queryClient.invalidateQueries({ queryKey: ['proxy-routes'] });
+      void queryClient.invalidateQueries({
+        queryKey: ['config-versions', 'diff'],
+      });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });

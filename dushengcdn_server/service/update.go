@@ -30,6 +30,7 @@ const (
 	githubReleasesAPIBase        = "https://api.github.com/repos/%s/releases"
 	manualServerBinaryTTL        = 15 * time.Minute
 	uploadedBinaryVersionTimeout = 10 * time.Second
+	latestGitHubReleaseCacheTTL  = 5 * time.Minute
 )
 
 var manualServerBinaryMaxBytes int64 = 200 * 1024 * 1024
@@ -70,6 +71,10 @@ const (
 )
 
 var updateHTTPClient = security.NewPublicHTTPClient(30*time.Second, true)
+var latestGitHubReleaseCache = shortTTLResultCache[*githubReleaseResponse]{
+	ttl:        latestGitHubReleaseCacheTTL,
+	maxEntries: 8,
+}
 
 var serverUpgradeState struct {
 	sync.Mutex
@@ -390,6 +395,18 @@ func fetchLatestRelease(ctx context.Context, channel ReleaseChannel) (*githubRel
 }
 
 func fetchLatestGitHubRelease(ctx context.Context, repo string, channel ReleaseChannel) (*githubReleaseResponse, error) {
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	normalizedChannel := normalizeReleaseChannel(string(channel))
+	cacheKey := repo + "\x00" + normalizedChannel.String()
+	return latestGitHubReleaseCache.load(cacheKey, func() (*githubReleaseResponse, error) {
+		return fetchLatestGitHubReleaseUncached(ctx, repo, normalizedChannel)
+	})
+}
+
+func fetchLatestGitHubReleaseUncached(ctx context.Context, repo string, channel ReleaseChannel) (*githubReleaseResponse, error) {
 	switch normalizeReleaseChannel(string(channel)) {
 	case ReleaseChannelPreview:
 		return fetchLatestPreviewGitHubRelease(ctx, repo)
@@ -1620,6 +1637,7 @@ func UpdateHTTPClientForTest() *http.Client {
 
 func SetUpdateHTTPClientForTest(client *http.Client) {
 	updateHTTPClient = client
+	latestGitHubReleaseCache.reset()
 }
 
 func ServerBinaryUpgradeExecutorForTest() func(string, string) error {

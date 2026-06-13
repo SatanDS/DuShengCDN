@@ -1402,7 +1402,9 @@ func TestNodeAccessLogRollupsServeAggregationsWithoutRawShards(t *testing.T) {
 	previousDB := DB
 	DB = db
 	t.Cleanup(func() {
+		_ = flushNodeAccessLogDerivedRollups()
 		DB = previousDB
+		resetNodeAccessLogDerivedRollupRefresh()
 	})
 
 	baseTime := time.Date(2026, 6, 4, 8, 12, 0, 0, time.UTC)
@@ -1456,6 +1458,9 @@ func TestNodeAccessLogRollupsServeAggregationsWithoutRawShards(t *testing.T) {
 	}
 	if inserted != int64(len(fixtures)) {
 		t.Fatalf("expected %d inserted logs, got %d", len(fixtures), inserted)
+	}
+	if err := flushNodeAccessLogDerivedRollups(); err != nil {
+		t.Fatalf("flush derived rollups failed: %v", err)
 	}
 
 	rawDB := sessionIgnoringSharding(db)
@@ -1580,7 +1585,9 @@ func TestNodeAccessLogBucketRollupsServeBucketsWithoutDetailedRollups(t *testing
 	previousDB := DB
 	DB = db
 	t.Cleanup(func() {
+		_ = flushNodeAccessLogDerivedRollups()
 		DB = previousDB
+		resetNodeAccessLogDerivedRollupRefresh()
 	})
 
 	baseTime := time.Date(2026, 6, 4, 8, 12, 0, 0, time.UTC)
@@ -1620,6 +1627,9 @@ func TestNodeAccessLogBucketRollupsServeBucketsWithoutDetailedRollups(t *testing
 		t.Fatalf("InsertNewNodeAccessLogs failed: %v", err)
 	} else if inserted != int64(len(fixtures)) {
 		t.Fatalf("expected %d inserted logs, got %d", len(fixtures), inserted)
+	}
+	if err := flushNodeAccessLogDerivedRollups(); err != nil {
+		t.Fatalf("flush derived rollups failed: %v", err)
 	}
 
 	rawDB := sessionIgnoringSharding(db)
@@ -1694,7 +1704,9 @@ func TestNodeAccessLogFilterIdentityRollupsServeComplexDistinctCounts(t *testing
 	previousDB := DB
 	DB = db
 	t.Cleanup(func() {
+		_ = flushNodeAccessLogDerivedRollups()
 		DB = previousDB
+		resetNodeAccessLogDerivedRollupRefresh()
 	})
 
 	baseTime := time.Date(2026, 6, 4, 8, 10, 0, 0, time.UTC)
@@ -1752,6 +1764,9 @@ func TestNodeAccessLogFilterIdentityRollupsServeComplexDistinctCounts(t *testing
 		t.Fatalf("InsertNewNodeAccessLogs failed: %v", err)
 	} else if inserted != int64(len(fixtures)) {
 		t.Fatalf("expected %d inserted logs, got %d", len(fixtures), inserted)
+	}
+	if err := flushNodeAccessLogDerivedRollups(); err != nil {
+		t.Fatalf("flush derived rollups failed: %v", err)
 	}
 
 	rawDB := sessionIgnoringSharding(db)
@@ -1886,7 +1901,9 @@ func TestDeleteNodeAccessLogsRefreshesRollups(t *testing.T) {
 	previousDB := DB
 	DB = db
 	t.Cleanup(func() {
+		_ = flushNodeAccessLogDerivedRollups()
 		DB = previousDB
+		resetNodeAccessLogDerivedRollupRefresh()
 	})
 
 	baseTime := time.Date(2026, 6, 4, 8, 12, 0, 0, time.UTC)
@@ -1917,6 +1934,9 @@ func TestDeleteNodeAccessLogsRefreshesRollups(t *testing.T) {
 	}
 	if inserted != 2 {
 		t.Fatalf("expected two inserted logs, got %d", inserted)
+	}
+	if err := flushNodeAccessLogDerivedRollups(); err != nil {
+		t.Fatalf("flush derived rollups failed: %v", err)
 	}
 	deleted, err := DeleteNodeAccessLogsByNodeBefore(db, "node-a", baseTime)
 	if err != nil {
@@ -2174,7 +2194,9 @@ func TestInsertNewNodeAccessLogsDeduplicatesBatchAndExistingRows(t *testing.T) {
 	previousDB := DB
 	DB = db
 	t.Cleanup(func() {
+		_ = flushNodeAccessLogDerivedRollups()
 		DB = previousDB
+		resetNodeAccessLogDerivedRollupRefresh()
 	})
 
 	existing := &NodeAccessLog{
@@ -2248,6 +2270,66 @@ func TestInsertNewNodeAccessLogsDeduplicatesBatchAndExistingRows(t *testing.T) {
 	}
 	if totalRecords != 2 || totalIPs != 2 {
 		t.Fatalf("unexpected totals after bulk insert: records=%d ips=%d", totalRecords, totalIPs)
+	}
+}
+
+func TestInsertNewNodeAccessLogsPersistsRawLogsWhenRollupFails(t *testing.T) {
+	db := openBareTestSQLiteDB(t, "access-log-rollup-degraded.db")
+	if err := registerSharding(db, "sqlite"); err != nil {
+		t.Fatalf("register sharding: %v", err)
+	}
+	if err := applyCurrentSchema(db, "sqlite"); err != nil {
+		t.Fatalf("applyCurrentSchema: %v", err)
+	}
+
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() {
+		_ = flushNodeAccessLogDerivedRollups()
+		DB = previousDB
+		resetNodeAccessLogDerivedRollupRefresh()
+	})
+
+	forcedErr := fmt.Errorf("forced access log rollup failure")
+	const callbackName = "dushengcdn:test_access_log_rollup_degraded"
+	createCallback := db.Callback().Create()
+	if err := createCallback.Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx == nil || tx.Statement == nil {
+			return
+		}
+		if tx.Statement.Table == (NodeAccessLogRollup{}).TableName() {
+			tx.AddError(forcedErr)
+		}
+	}); err != nil {
+		t.Fatalf("register rollup failure callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = createCallback.Remove(callbackName)
+	})
+
+	inserted, err := InsertNewNodeAccessLogs(db, []*NodeAccessLog{
+		{
+			NodeID:     "node-rollup-degraded",
+			LoggedAt:   time.Date(2026, 6, 4, 9, 10, 0, 0, time.UTC),
+			RemoteAddr: "198.51.100.10",
+			Host:       "rollup-degraded.example.com",
+			Path:       "/raw-ok",
+			StatusCode: 200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("InsertNewNodeAccessLogs should not fail when rollup update fails: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("expected one inserted access log, got %d", inserted)
+	}
+
+	totalRecords, totalIPs, err := CountNodeAccessLogs(NodeAccessLogQuery{NodeID: "node-rollup-degraded"})
+	if err != nil {
+		t.Fatalf("CountNodeAccessLogs failed: %v", err)
+	}
+	if totalRecords != 1 || totalIPs != 1 {
+		t.Fatalf("expected raw access log to remain queryable, records=%d ips=%d", totalRecords, totalIPs)
 	}
 }
 

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"dushengcdn/service"
 	"errors"
 	"io"
@@ -28,7 +29,9 @@ type serverUpgradeRequest struct {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/update/latest-release [get]
 func GetLatestRelease(c *gin.Context) {
-	release, err := service.GetLatestServerRelease(c.Request.Context(), c.Query("channel"))
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	release, err := service.GetLatestServerRelease(ctx, c.Query("channel"))
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,

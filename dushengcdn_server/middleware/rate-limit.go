@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,15 +16,25 @@ import (
 	"github.com/google/uuid"
 )
 
-const redisRateLimitTimeout = time.Second
+const (
+	redisRateLimitTimeout              = 250 * time.Millisecond
+	redisRateLimitCircuitOpenDuration  = 15 * time.Second
+	redisRateLimitCircuitFailureWindow = 3
+)
 
 var inMemoryRateLimiter ratelimit.InMemoryRateLimiter
 var redisRateLimitSequence uint64
 var redisRateLimitInstanceID = uuid.NewString()
+var redisRateLimitCircuit = struct {
+	sync.Mutex
+	failures  int
+	openUntil time.Time
+}{}
 
 func ResetRateLimiterForTest() {
 	inMemoryRateLimiter = ratelimit.InMemoryRateLimiter{}
 	atomic.StoreUint64(&redisRateLimitSequence, 0)
+	resetRedisRateLimitCircuit()
 }
 
 var redisRateLimitScript = redis.NewScript(`
@@ -56,6 +67,10 @@ func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark st
 		memoryRateLimiter(c, maxRequestNum, duration, mark)
 		return
 	}
+	if redisRateLimitCircuitOpen(time.Now()) {
+		memoryRateLimiter(c, maxRequestNum, duration, mark)
+		return
+	}
 
 	key := "rateLimit:" + mark + c.ClientIP()
 	nowMillis := time.Now().UnixMilli()
@@ -80,10 +95,16 @@ func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark st
 		ttlMillis,
 	).Result()
 	if err != nil {
-		slog.Warn("redis rate limiter script failed; falling back to memory limiter", "error", err)
+		opened := recordRedisRateLimitFailure(time.Now())
+		if opened {
+			slog.Warn("redis rate limiter circuit opened; falling back to memory limiter", "duration", redisRateLimitCircuitOpenDuration, "error", err)
+		} else {
+			slog.Warn("redis rate limiter script failed; falling back to memory limiter", "error", err)
+		}
 		memoryRateLimiter(c, maxRequestNum, duration, mark)
 		return
 	}
+	recordRedisRateLimitSuccess()
 	allowed, ok := result.(int64)
 	if !ok {
 		slog.Warn("redis rate limiter returned unexpected result; falling back to memory limiter", "result", result)
@@ -95,6 +116,49 @@ func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark st
 		c.Abort()
 		return
 	}
+}
+
+func redisRateLimitCircuitOpen(now time.Time) bool {
+	redisRateLimitCircuit.Lock()
+	defer redisRateLimitCircuit.Unlock()
+	if redisRateLimitCircuit.openUntil.IsZero() {
+		return false
+	}
+	if now.Before(redisRateLimitCircuit.openUntil) {
+		return true
+	}
+	redisRateLimitCircuit.openUntil = time.Time{}
+	redisRateLimitCircuit.failures = 0
+	return false
+}
+
+func recordRedisRateLimitFailure(now time.Time) bool {
+	redisRateLimitCircuit.Lock()
+	defer redisRateLimitCircuit.Unlock()
+	if !redisRateLimitCircuit.openUntil.IsZero() && now.Before(redisRateLimitCircuit.openUntil) {
+		return true
+	}
+	redisRateLimitCircuit.failures++
+	if redisRateLimitCircuit.failures < redisRateLimitCircuitFailureWindow {
+		return false
+	}
+	redisRateLimitCircuit.failures = 0
+	redisRateLimitCircuit.openUntil = now.Add(redisRateLimitCircuitOpenDuration)
+	return true
+}
+
+func recordRedisRateLimitSuccess() {
+	redisRateLimitCircuit.Lock()
+	defer redisRateLimitCircuit.Unlock()
+	redisRateLimitCircuit.failures = 0
+	redisRateLimitCircuit.openUntil = time.Time{}
+}
+
+func resetRedisRateLimitCircuit() {
+	redisRateLimitCircuit.Lock()
+	defer redisRateLimitCircuit.Unlock()
+	redisRateLimitCircuit.failures = 0
+	redisRateLimitCircuit.openUntil = time.Time{}
 }
 
 func memoryRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark string) {

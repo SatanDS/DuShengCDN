@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"sort"
@@ -804,7 +805,7 @@ func InsertNewNodeAccessLogs(db *gorm.DB, records []*NodeAccessLog) (inserted in
 		insertedRecords = append(insertedRecords, batch...)
 	}
 	if err := upsertNodeAccessLogRollups(rawDB, insertedRecords); err != nil {
-		return inserted, err
+		slog.Warn("access log rollup update failed; raw logs were persisted and rollups can be rebuilt", "inserted", inserted, "error", err)
 	}
 	return inserted, nil
 }

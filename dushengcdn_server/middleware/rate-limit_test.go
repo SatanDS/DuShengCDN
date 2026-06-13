@@ -1,11 +1,13 @@
 package middleware
 
 import (
-	"dushengcdn/common"
-	"dushengcdn/utils/ratelimit"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"dushengcdn/common"
+	"dushengcdn/utils/ratelimit"
 
 	"github.com/gin-gonic/gin"
 )
@@ -139,6 +141,36 @@ func TestRateLimiterIgnoresSpoofedForwardedForWhenProxyHeadersDisabled(t *testin
 	router.ServeHTTP(second, req)
 	if second.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected spoofed forwarded-for to share remote address quota, got %d", second.Code)
+	}
+}
+
+func TestRedisRateLimiterCircuitOpensAfterRepeatedFailures(t *testing.T) {
+	resetRedisRateLimitCircuit()
+	t.Cleanup(func() {
+		resetRedisRateLimitCircuit()
+	})
+
+	now := time.Now()
+	if recordRedisRateLimitFailure(now) {
+		t.Fatal("expected first failure not to open circuit")
+	}
+	if recordRedisRateLimitFailure(now) {
+		t.Fatal("expected second failure not to open circuit")
+	}
+	if !recordRedisRateLimitFailure(now) {
+		t.Fatal("expected third failure to open circuit")
+	}
+	if !redisRateLimitCircuitOpen(now.Add(time.Second)) {
+		t.Fatal("expected redis rate limit circuit to stay open")
+	}
+	if redisRateLimitCircuitOpen(now.Add(redisRateLimitCircuitOpenDuration + time.Second)) {
+		t.Fatal("expected redis rate limit circuit to close after open duration")
+	}
+
+	recordRedisRateLimitFailure(now)
+	recordRedisRateLimitSuccess()
+	if redisRateLimitCircuitOpen(now) {
+		t.Fatal("expected success to close redis rate limit circuit")
 	}
 }
 

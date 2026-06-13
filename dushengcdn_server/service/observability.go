@@ -170,7 +170,7 @@ func persistHeartbeatObservability(nodeID string, payload AgentNodePayload, repo
 		return err
 	}
 	if err := persistAccessLogsBestEffort(nodeID, accessLogs, bufferedRecords, reportedAt); err != nil {
-		return err
+		slog.Warn("access log persistence skipped after heartbeat observability commit", "node_id", nodeID, "error", err)
 	}
 	return nil
 }

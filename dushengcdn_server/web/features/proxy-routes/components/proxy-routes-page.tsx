@@ -631,14 +631,12 @@ export function ProxyRoutesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: deleteProxyRoute,
-    onSuccess: async () => {
+    onSuccess: () => {
       setFeedback({ tone: 'success', message: '网站已删除。' });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
-        queryClient.invalidateQueries({
-          queryKey: ['config-versions', 'diff'],
-        }),
-      ]);
+      void queryClient.invalidateQueries({ queryKey: ['proxy-routes'] });
+      void queryClient.invalidateQueries({
+        queryKey: ['config-versions', 'diff'],
+      });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -647,17 +645,15 @@ export function ProxyRoutesPage() {
 
   const publishMutation = useMutation({
     mutationFn: publishConfigVersion,
-    onSuccess: async (version) => {
+    onSuccess: (version) => {
       setFeedback({
         tone: 'success',
         message: `配置已发布，版本号 ${version.version}。`,
       });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['config-versions'] }),
-        queryClient.invalidateQueries({
-          queryKey: ['config-versions', 'diff'],
-        }),
-      ]);
+      void queryClient.invalidateQueries({ queryKey: ['config-versions'] });
+      void queryClient.invalidateQueries({
+        queryKey: ['config-versions', 'diff'],
+      });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -672,17 +668,19 @@ export function ProxyRoutesPage() {
       payload: ProxyRouteMutationPayload;
       context: SaveContext;
     }) => updateProxyRoute(route.id, payload),
-    onSuccess: async (updatedRoute, variables) => {
+    onSuccess: (updatedRoute, variables) => {
       setFeedback({ tone: 'success', message: variables.context.message });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['proxy-routes'] }),
-        queryClient.invalidateQueries({
-          queryKey: ['proxy-routes', 'detail', updatedRoute.id],
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ['config-versions', 'diff'],
-        }),
-      ]);
+      queryClient.setQueryData(
+        ['proxy-routes', 'detail', updatedRoute.id],
+        updatedRoute,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['proxy-routes'] });
+      void queryClient.invalidateQueries({
+        queryKey: ['proxy-routes', 'detail', updatedRoute.id],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ['config-versions', 'diff'],
+      });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });

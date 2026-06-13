@@ -691,6 +691,7 @@ func InitDB() (err error) {
 }
 
 func CloseDB() error {
+	resetNodeAccessLogDerivedRollupRefresh()
 	sqlDB, err := DB.DB()
 	if err != nil {
 		return err

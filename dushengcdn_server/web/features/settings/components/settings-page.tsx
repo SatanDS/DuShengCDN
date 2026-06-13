@@ -870,7 +870,7 @@ export function SettingsPage() {
     mutationFn: rotateBootstrapToken,
     onSuccess: async (data: BootstrapTokenPayload) => {
       setFeedback({ tone: 'success', message: '接入令牌已重新生成。' });
-      await queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ['settings', 'bootstrap-token'],
       });
       if (data.discovery_token) {
@@ -1017,8 +1017,8 @@ export function SettingsPage() {
     syncedOptionKeysRef.current = new Set(entries.map(([key]) => key));
     await updateOptions(entries.map(([key, value]) => ({ key, value })));
 
-    await queryClient.invalidateQueries({ queryKey: settingsQueryKey });
-    await queryClient.invalidateQueries({ queryKey: ['public-status'] });
+    void queryClient.invalidateQueries({ queryKey: settingsQueryKey });
+    void queryClient.invalidateQueries({ queryKey: ['public-status'] });
     setFeedback({ tone: 'success', message: successMessage });
   };
 
@@ -1204,10 +1204,8 @@ export function SettingsPage() {
           display_name: profileFields.display_name.trim(),
           password: profileFields.password,
         });
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['settings', 'profile'] }),
-          refreshUser(),
-        ]);
+        void queryClient.invalidateQueries({ queryKey: ['settings', 'profile'] });
+        await refreshUser();
         setProfileFields((previous) => ({ ...previous, password: '' }));
         setFeedback({ tone: 'success', message: '个人资料已更新。' });
       },
@@ -1250,10 +1248,8 @@ export function SettingsPage() {
       async () => {
         await bindEmail(emailAddress.trim(), emailCode.trim());
         setEmailCode('');
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['settings', 'profile'] }),
-          refreshUser(),
-        ]);
+        void queryClient.invalidateQueries({ queryKey: ['settings', 'profile'] });
+        await refreshUser();
         setFeedback({ tone: 'success', message: '邮箱已绑定。' });
       },
       '绑定邮箱',
@@ -1287,7 +1283,7 @@ export function SettingsPage() {
       `auth-source-unbind-${id}`,
       async () => {
         await deleteExternalAccountBinding(id);
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: externalAccountBindingsQueryKey,
         });
         setFeedback({ tone: 'success', message: '第三方账号已解绑。' });
@@ -1427,7 +1423,7 @@ export function SettingsPage() {
       async () => {
         await installCommercialLicense(token);
         setCommercialLicenseToken('');
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: commercialLicenseQueryKey,
         });
         setFeedback({ tone: 'success', message: '商业授权已安装。' });
@@ -1441,7 +1437,7 @@ export function SettingsPage() {
       'commercial-license-activate',
       async () => {
         await activateCommercialLicense();
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: commercialLicenseQueryKey,
         });
         setFeedback({ tone: 'success', message: '在线授权租约已更新。' });
@@ -1553,7 +1549,7 @@ export function SettingsPage() {
           customer_id: record.customer_id,
           reason: 'manual revoke',
         });
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: commercialLicenseActivationsQueryKey,
         });
         setFeedback({
@@ -1576,7 +1572,7 @@ export function SettingsPage() {
       `commercial-license-restore-${licenseID}`,
       async () => {
         await restoreCommercialLicense({ license_id: licenseID });
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: commercialLicenseActivationsQueryKey,
         });
         setFeedback({
@@ -1605,7 +1601,7 @@ export function SettingsPage() {
       'commercial-license-clear',
       async () => {
         await clearCommercialLicense();
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: commercialLicenseQueryKey,
         });
         setFeedback({
@@ -1641,10 +1637,10 @@ export function SettingsPage() {
           license_id: licenseID,
           customer_id: record.customer_id,
         });
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: commercialLicenseActivationsQueryKey,
         });
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: commercialLicenseQueryKey,
         });
         setFeedback({ tone: 'success', message: '授权记录已删除。' });
@@ -1688,7 +1684,7 @@ export function SettingsPage() {
           tone: result.started ? 'success' : 'info',
           message: result.message,
         });
-        await queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: dnsSourceDatabaseMirrorStatusQueryKey,
         });
       },
@@ -2002,10 +1998,8 @@ export function SettingsPage() {
         error={authSourcesQuery.error}
         onClose={() => setAuthSourceModalOpen(false)}
         onChanged={async () => {
-          await Promise.all([
-            queryClient.invalidateQueries({ queryKey: authSourcesQueryKey }),
-            queryClient.invalidateQueries({ queryKey: ['public-status'] }),
-          ]);
+          void queryClient.invalidateQueries({ queryKey: authSourcesQueryKey });
+          void queryClient.invalidateQueries({ queryKey: ['public-status'] });
         }}
       />
 

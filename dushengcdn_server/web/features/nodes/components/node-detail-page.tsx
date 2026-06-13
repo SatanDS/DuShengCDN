@@ -86,7 +86,7 @@ const nodesQueryKey = ['nodes'];
 const nodeDetailQueryKey = (nodeId: string) =>
   ['nodes', 'detail', nodeId] as const;
 const settingsQueryKey = ['settings', 'options'] as const;
-const nodeDashboardRefreshIntervalMs = 10000;
+const nodeDashboardRefreshIntervalMs = 15000;
 const nodeInfoRefreshIntervalMs = 30000;
 const nodeObservabilityRefreshIntervalMs = 30000;
 
@@ -406,20 +406,18 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
     }
   }, [isServerUrlOverridden, optionsQuery.data]);
 
-  const invalidateNodeData = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: nodesQueryKey, exact: true }),
-      queryClient.invalidateQueries({ queryKey: nodeDetailQueryKey(nodeId) }),
-    ]);
+  const invalidateNodeData = () => {
+    void queryClient.invalidateQueries({ queryKey: nodesQueryKey, exact: true });
+    void queryClient.invalidateQueries({ queryKey: nodeDetailQueryKey(nodeId) });
   };
 
   const saveMutation = useMutation({
     mutationFn: async (payload: Parameters<typeof updateNode>[1]) =>
       updateNode(requireNodeId(), payload),
-    onSuccess: async () => {
+    onSuccess: () => {
       setFeedback({ tone: 'success', message: '节点已更新。' });
       setIsEditorOpen(false);
-      await invalidateNodeData();
+      invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -435,7 +433,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
             ? release.tag_name || undefined
             : undefined,
       }),
-    onSuccess: async (updatedNode) => {
+    onSuccess: (updatedNode) => {
       setFeedback({
         tone: 'success',
         message: `已向节点 ${updatedNode.name} 下发${updatedNode.update_channel === 'preview' ? '预览版' : '正式版'}更新指令。`,
@@ -444,7 +442,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
         tone: 'success',
         message: `节点将在下一次心跳后执行${updatedNode.update_channel === 'preview' ? '预览版' : '正式版'} Agent 更新。`,
       });
-      await invalidateNodeData();
+      invalidateNodeData();
     },
     onError: (error) => {
       const message = getErrorMessage(error);
@@ -455,12 +453,12 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
   const restartOpenrestyMutation = useMutation({
     mutationFn: () => requestNodeOpenrestyRestart(requireNodeId()),
-    onSuccess: async (updatedNode) => {
+    onSuccess: (updatedNode) => {
       setFeedback({
         tone: 'success',
         message: `已向节点 ${updatedNode.name} 下发代理服务重启指令。`,
       });
-      await invalidateNodeData();
+      invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -474,7 +472,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
         tone: 'success',
         message: `已向节点 ${updatedNode.name} 下发强制同步指令，无视当前错误拦截。`,
       });
-      void invalidateNodeData();
+      invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -483,14 +481,14 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
   const rotateAgentTokenMutation = useMutation({
     mutationFn: () => rotateNodeAgentToken(requireNodeId()),
-    onSuccess: async (token) => {
+    onSuccess: (token) => {
       setRevealedAgentToken(token.agent_token ?? '');
       setFeedback({
         tone: 'success',
         message:
           'Agent token rotated. Copy the full token or install command before leaving this page.',
       });
-      await invalidateNodeData();
+      invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -499,12 +497,12 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteNode(requireNodeId()),
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       setFeedback({
         tone: result.uninstall_agent_requested ? 'success' : 'info',
         message: result.uninstall_agent_message || '节点已删除。',
       });
-      await queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: nodesQueryKey,
         exact: true,
       });
@@ -517,7 +515,7 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
   const cleanupHealthEventsMutation = useMutation({
     mutationFn: () => cleanupNodeHealthEvents(requireNodeId()),
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       setFeedback({
         tone: 'success',
         message:
@@ -526,12 +524,10 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
             : '当前没有可清理的健康事件日志。',
       });
       setHealthEventCleanupModalOpen(false);
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: ['node-observability', nodeId],
-        }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'overview'] }),
-      ]);
+      void queryClient.invalidateQueries({
+        queryKey: ['node-observability', nodeId],
+      });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard', 'overview'] });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });

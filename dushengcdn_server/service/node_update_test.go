@@ -1093,7 +1093,7 @@ func TestHeartbeatNodePersistsObservabilityPayload(t *testing.T) {
 	}
 }
 
-func TestHeartbeatNodeReturnsErrorAndKeepsMetricsWhenAccessLogPersistenceFails(t *testing.T) {
+func TestHeartbeatNodeKeepsMetricsWhenAccessLogPersistenceFails(t *testing.T) {
 	setupServiceTestDB(t)
 
 	node := &model.Node{
@@ -1144,8 +1144,8 @@ func TestHeartbeatNodeReturnsErrorAndKeepsMetricsWhenAccessLogPersistenceFails(t
 			},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected heartbeat to return access log persistence error")
+	if err != nil {
+		t.Fatalf("expected heartbeat to ignore access log persistence error: %v", err)
 	}
 
 	snapshots, err := model.ListNodeMetricSnapshots(node.NodeID, time.Time{}, 10)
@@ -1154,6 +1154,13 @@ func TestHeartbeatNodeReturnsErrorAndKeepsMetricsWhenAccessLogPersistenceFails(t
 	}
 	if len(snapshots) != 1 || snapshots[0].OpenrestyConnections != 7 {
 		t.Fatalf("expected metric snapshot to persist despite access log failure, got %+v", snapshots)
+	}
+	totalRecords, _, err := model.CountNodeAccessLogs(model.NodeAccessLogQuery{NodeID: node.NodeID})
+	if err != nil {
+		t.Fatalf("expected access log count query to succeed: %v", err)
+	}
+	if totalRecords != 0 {
+		t.Fatalf("expected failed access log batch to be skipped, got %d records", totalRecords)
 	}
 }
 

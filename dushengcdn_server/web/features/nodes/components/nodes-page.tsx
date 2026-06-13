@@ -461,13 +461,13 @@ export function NodesPage() {
   const nodesQuery = useQuery({
     queryKey: nodesQueryKey,
     queryFn: getNodes,
-    refetchInterval: 5000,
+    refetchInterval: 15000,
   });
 
   const configVersionsQuery = useQuery({
     queryKey: ['config-versions'],
     queryFn: getConfigVersions,
-    refetchInterval: 5000,
+    refetchInterval: 30000,
   });
 
   const saveMutation = useMutation({
@@ -476,7 +476,7 @@ export function NodesPage() {
         ? updateNode(editingNode.id, payload)
         : createNode(payload);
     },
-    onSuccess: async () => {
+    onSuccess: () => {
       setFeedback({
         tone: 'success',
         message:
@@ -486,7 +486,7 @@ export function NodesPage() {
       });
       setEditingNode(null);
       setIsEditorOpen(false);
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: nodesQueryKey });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -512,13 +512,13 @@ export function NodesPage() {
         geo_manual_override: false,
       });
     },
-    onSuccess: async (node) => {
+    onSuccess: (node) => {
       setFeedback({
         tone: 'success',
         message: `边缘池 ${node.pool_name} 已创建，请进入详情补充节点 IP。`,
       });
       setIsPoolCreateOpen(false);
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: nodesQueryKey });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -527,13 +527,13 @@ export function NodesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: deleteNode,
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       setFeedback({
         tone: result.uninstall_agent_requested ? 'success' : 'info',
         message: result.uninstall_agent_message || '节点已删除。',
       });
       setEditingNode(null);
-      await queryClient.invalidateQueries({ queryKey: nodesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: nodesQueryKey });
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });

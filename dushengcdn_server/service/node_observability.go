@@ -195,6 +195,9 @@ func CleanupNodeHealthEvents(id uint) (*NodeHealthEventCleanupResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if deletedCount > 0 {
+		resetNodeObservabilityCache()
+	}
 	return &NodeHealthEventCleanupResult{
 		NodeID:       node.NodeID,
 		DeletedCount: deletedCount,

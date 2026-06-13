@@ -340,6 +340,50 @@ func TestGetLatestServerReleasePreviewWithoutPrereleaseReturnsUnavailable(t *tes
 	}
 }
 
+func TestGetLatestServerReleaseCachesGitHubResponse(t *testing.T) {
+	originalClient := UpdateHTTPClientForTest()
+	originalRepo := common.ServerUpdateRepo
+	originalVersion := common.Version
+	common.ServerUpdateRepo = "SatanDS/SatanDS-DuShengCDN-releases"
+	common.Version = "v0.4.0"
+	requests := 0
+	SetUpdateHTTPClientForTest(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{
+					"tag_name":"v1.0.0",
+					"html_url":"https://github.com/SatanDS/SatanDS-DuShengCDN-releases/releases/tag/v1.0.0"
+				}`)),
+			}, nil
+		}),
+	})
+	t.Cleanup(func() {
+		SetUpdateHTTPClientForTest(originalClient)
+		common.ServerUpdateRepo = originalRepo
+		common.Version = originalVersion
+		resetServerUpgradeTestState(t)
+	})
+
+	first, err := GetLatestServerRelease(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("GetLatestServerRelease first call failed: %v", err)
+	}
+	second, err := GetLatestServerRelease(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("GetLatestServerRelease second call failed: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("expected one GitHub request, got %d", requests)
+	}
+	if !first.HasUpdate || !second.HasUpdate {
+		t.Fatalf("expected cached release to remain available, first=%+v second=%+v", first, second)
+	}
+}
+
 func TestUploadManualServerBinary(t *testing.T) {
 	originalVersion := common.Version
 	common.Version = "v0.4.0"
