@@ -141,6 +141,59 @@ func TestLoadNodeObservabilityQueryDataReturnsQueryError(t *testing.T) {
 	}
 }
 
+func TestGetNodeObservabilityCacheReusesRecentResult(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := &model.Node{
+		NodeID:     "node-observability-cache",
+		Name:       "cache-edge",
+		IP:         "10.0.0.64",
+		AgentToken: "token-observability-cache",
+		Status:     NodeStatusOnline,
+	}
+	if err := node.Insert(); err != nil {
+		t.Fatalf("failed to insert node: %v", err)
+	}
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:           node.NodeID,
+		CapturedAt:       time.Now(),
+		CPUUsagePercent:  12,
+		MemoryUsedBytes:  256,
+		MemoryTotalBytes: 1024,
+	}).Insert(); err != nil {
+		t.Fatalf("failed to insert first metric snapshot: %v", err)
+	}
+
+	first, err := GetNodeObservability(node.ID, NodeObservabilityQuery{Hours: 24, Limit: 10})
+	if err != nil {
+		t.Fatalf("GetNodeObservability first call failed: %v", err)
+	}
+	if len(first.MetricSnapshots) != 1 {
+		t.Fatalf("expected first call to load one metric snapshot, got %d", len(first.MetricSnapshots))
+	}
+
+	if err := (&model.NodeMetricSnapshot{
+		NodeID:           node.NodeID,
+		CapturedAt:       time.Now().Add(time.Second),
+		CPUUsagePercent:  88,
+		MemoryUsedBytes:  512,
+		MemoryTotalBytes: 1024,
+	}).Insert(); err != nil {
+		t.Fatalf("failed to insert second metric snapshot: %v", err)
+	}
+
+	second, err := GetNodeObservability(node.ID, NodeObservabilityQuery{Hours: 24, Limit: 10})
+	if err != nil {
+		t.Fatalf("GetNodeObservability cached call failed: %v", err)
+	}
+	if len(second.MetricSnapshots) != 1 {
+		t.Fatalf("expected cached call to reuse previous metric snapshots, got %d", len(second.MetricSnapshots))
+	}
+	if second.MetricSnapshots[0].CPUUsagePercent != first.MetricSnapshots[0].CPUUsagePercent {
+		t.Fatalf("expected cached metric snapshot to be reused, got %+v want %+v", second.MetricSnapshots[0], first.MetricSnapshots[0])
+	}
+}
+
 func TestPersistNodeAccessLogsMemoizesGeoLookupPerBatch(t *testing.T) {
 	setupServiceTestDB(t)
 

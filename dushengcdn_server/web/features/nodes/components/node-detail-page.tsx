@@ -88,7 +88,7 @@ const nodeDetailQueryKey = (nodeId: string) =>
 const settingsQueryKey = ['settings', 'options'] as const;
 const nodeDashboardRefreshIntervalMs = 10000;
 const nodeInfoRefreshIntervalMs = 30000;
-const nodeObservabilityRefreshIntervalMs = 15000;
+const nodeObservabilityRefreshIntervalMs = 30000;
 
 type HealthEventFilter = 'all' | 'active' | 'resolved';
 type NodeDetailTab = 'dashboard' | 'info';
@@ -469,12 +469,12 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
   const forceSyncMutation = useMutation({
     mutationFn: () => requestNodeForceSync(requireNodeId()),
-    onSuccess: async (updatedNode) => {
+    onSuccess: (updatedNode) => {
       setFeedback({
         tone: 'success',
         message: `已向节点 ${updatedNode.name} 下发强制同步指令，无视当前错误拦截。`,
       });
-      await invalidateNodeData();
+      void invalidateNodeData();
     },
     onError: (error) => {
       setFeedback({ tone: 'danger', message: getErrorMessage(error) });
@@ -786,22 +786,19 @@ export function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const handleRefresh = async () => {
     setFeedback(null);
     setManualRefreshPending(true);
-    try {
-      await Promise.all([
-        invalidateNodeData(),
-        queryClient.invalidateQueries({
-          queryKey: ['apply-logs', node.node_id],
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ['config-versions'],
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ['node-observability', nodeId],
-        }),
-      ]);
-    } finally {
+    void invalidateNodeData();
+    void queryClient.invalidateQueries({
+      queryKey: ['apply-logs', node.node_id],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ['config-versions'],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ['node-observability', nodeId],
+    });
+    window.setTimeout(() => {
       setManualRefreshPending(false);
-    }
+    }, 600);
   };
 
   return (

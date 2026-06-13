@@ -3,6 +3,7 @@ package service
 import (
 	"dushengcdn/model"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -69,6 +70,12 @@ type nodeObservabilityQueries struct {
 	listNodeHealthEvents           func(string, bool, int) ([]*model.NodeHealthEvent, error)
 }
 
+var nodeObservabilityCache = shortTTLResultCache[*NodeObservabilityView]{
+	values:     make(map[string]shortTTLResultCacheEntry[*NodeObservabilityView]),
+	ttl:        10 * time.Second,
+	maxEntries: 128,
+}
+
 var defaultNodeObservabilityQueries = nodeObservabilityQueries{
 	getNodeSystemProfile:           model.GetNodeSystemProfile,
 	listNodeMetricSnapshots:        model.ListNodeMetricSnapshots,
@@ -81,23 +88,34 @@ var defaultNodeObservabilityQueries = nodeObservabilityQueries{
 }
 
 func GetNodeObservability(id uint, query NodeObservabilityQuery) (*NodeObservabilityView, error) {
-	now := time.Now()
 	node, err := model.GetNodeByID(id)
 	if err != nil {
 		return nil, err
 	}
 
 	limit := normalizeObservabilityLimit(query.Limit)
-	since := now.Add(-normalizeObservabilityWindow(query.Hours))
+	window := normalizeObservabilityWindow(query.Hours)
+	key := serviceRuntimeCacheKey(fmt.Sprintf("node-observability:%s:%d:%d", node.NodeID, int64(window.Seconds()), limit))
+	return nodeObservabilityCache.load(key, func() (*NodeObservabilityView, error) {
+		return buildNodeObservabilityView(node.NodeID, window, limit, time.Now())
+	})
+}
+
+func resetNodeObservabilityCache() {
+	nodeObservabilityCache.reset()
+}
+
+func buildNodeObservabilityView(nodeID string, window time.Duration, limit int, now time.Time) (*NodeObservabilityView, error) {
+	since := now.Add(-window)
 	trendSince := now.Add(-24 * time.Hour)
 
-	data, err := loadNodeObservabilityQueryData(node.NodeID, since, trendSince, now, limit, defaultNodeObservabilityQueries)
+	data, err := loadNodeObservabilityQueryData(nodeID, since, trendSince, now, limit, defaultNodeObservabilityQueries)
 	if err != nil {
 		return nil, err
 	}
 
 	return &NodeObservabilityView{
-		NodeID:          node.NodeID,
+		NodeID:          nodeID,
 		Profile:         data.profile,
 		MetricSnapshots: data.snapshots,
 		TrafficReports:  data.reports,
