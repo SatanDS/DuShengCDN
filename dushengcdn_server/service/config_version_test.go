@@ -4,12 +4,15 @@ import (
 	"context"
 	"dushengcdn/model"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestCleanupConfigVersionsDeletesOnlyOldInactiveRows(t *testing.T) {
@@ -156,6 +159,148 @@ func TestCleanupConfigVersionsPreservesPoolActiveVersion(t *testing.T) {
 	}
 	if version.ID != poolActiveVersion.ID || artifact.ID != poolActiveArtifact.ID {
 		t.Fatalf("expected hk pool active version/artifact to survive cleanup, got version=%+v artifact=%+v", version, artifact)
+	}
+}
+
+func TestCleanupConfigVersionsPreservesPoolActiveArtifactReference(t *testing.T) {
+	setupServiceTestDB(t)
+
+	versions := make([]*model.ConfigVersion, 0, 5)
+	artifacts := make([]*model.ConfigVersionArtifact, 0, 5)
+	for i := 1; i <= 5; i++ {
+		version := &model.ConfigVersion{
+			Version:          fmt.Sprintf("2026060700000%d", i),
+			SnapshotJSON:     "{}",
+			MainConfig:       "main",
+			RenderedConfig:   "rendered",
+			SupportFilesJSON: "[]",
+			Checksum:         fmt.Sprintf("artifact-ref-checksum-%d", i),
+			CreatedBy:        "root",
+		}
+		if err := model.DB.Create(version).Error; err != nil {
+			t.Fatalf("seed config version %d: %v", i, err)
+		}
+		artifact := &model.ConfigVersionArtifact{
+			ConfigVersionID:     version.ID,
+			PoolName:            "hk",
+			Checksum:            version.Checksum,
+			MainConfigChecksum:  fmt.Sprintf("artifact-ref-main-%d", i),
+			RouteConfigChecksum: fmt.Sprintf("artifact-ref-route-%d", i),
+			RenderedConfig:      "server {}",
+			SupportFilesJSON:    "[]",
+			RouteCount:          1,
+		}
+		if err := model.DB.Create(artifact).Error; err != nil {
+			t.Fatalf("seed config version artifact %d: %v", i, err)
+		}
+		versions = append(versions, version)
+		artifacts = append(artifacts, artifact)
+	}
+	if err := model.DB.Create(&model.ConfigPoolActiveVersion{
+		PoolName:        "hk",
+		ConfigVersionID: versions[4].ID,
+		ArtifactID:      artifacts[1].ID,
+		Checksum:        artifacts[1].Checksum,
+		ActivatedAt:     time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("seed mismatched pool active version: %v", err)
+	}
+
+	deleted, err := CleanupConfigVersions(3)
+	if err != nil {
+		t.Fatalf("CleanupConfigVersions failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected only unreferenced old version to be deleted, got %d", deleted)
+	}
+	var referencedVersionCount int64
+	if err := model.DB.Model(&model.ConfigVersion{}).Where("id = ?", versions[1].ID).Count(&referencedVersionCount).Error; err != nil {
+		t.Fatalf("count referenced artifact owner version: %v", err)
+	}
+	if referencedVersionCount != 1 {
+		t.Fatal("expected version owning pool-active artifact reference to be preserved")
+	}
+	var referencedArtifactCount int64
+	if err := model.DB.Model(&model.ConfigVersionArtifact{}).Where("id = ?", artifacts[1].ID).Count(&referencedArtifactCount).Error; err != nil {
+		t.Fatalf("count referenced pool active artifact: %v", err)
+	}
+	if referencedArtifactCount != 1 {
+		t.Fatal("expected pool-active artifact reference to be preserved")
+	}
+	var deletedArtifactCount int64
+	if err := model.DB.Model(&model.ConfigVersionArtifact{}).Where("id = ?", artifacts[0].ID).Count(&deletedArtifactCount).Error; err != nil {
+		t.Fatalf("count deleted unreferenced artifact: %v", err)
+	}
+	if deletedArtifactCount != 0 {
+		t.Fatal("expected unreferenced old artifact to be deleted")
+	}
+}
+
+func TestGetActiveConfigVersionArtifactForNodeFallsBackOnlyWhenPoolActiveRowMissing(t *testing.T) {
+	setupServiceTestDB(t)
+
+	version := &model.ConfigVersion{
+		Version:          "20260608000001",
+		SnapshotJSON:     "{}",
+		MainConfig:       "main",
+		RenderedConfig:   "rendered",
+		SupportFilesJSON: "[]",
+		Checksum:         "fallback-checksum",
+		IsActive:         true,
+		CreatedBy:        "root",
+	}
+	if err := model.DB.Create(version).Error; err != nil {
+		t.Fatalf("seed active config version: %v", err)
+	}
+	artifact := &model.ConfigVersionArtifact{
+		ConfigVersionID:     version.ID,
+		PoolName:            "default",
+		Checksum:            version.Checksum,
+		MainConfigChecksum:  "fallback-main",
+		RouteConfigChecksum: "fallback-route",
+		RenderedConfig:      "server {}",
+		SupportFilesJSON:    "[]",
+		RouteCount:          1,
+	}
+	if err := model.DB.Create(artifact).Error; err != nil {
+		t.Fatalf("seed active config artifact: %v", err)
+	}
+
+	fallbackVersion, fallbackArtifact, err := getActiveConfigVersionArtifactForNode(nil)
+	if err != nil {
+		t.Fatalf("expected missing pool active row to fallback to active config version: %v", err)
+	}
+	if fallbackVersion.ID != version.ID || fallbackArtifact.ID != artifact.ID {
+		t.Fatalf("unexpected fallback version/artifact: version=%+v artifact=%+v", fallbackVersion, fallbackArtifact)
+	}
+
+	if err := model.DB.Create(&model.ConfigPoolActiveVersion{
+		PoolName:        "default",
+		ConfigVersionID: version.ID,
+		ArtifactID:      artifact.ID + 10000,
+		Checksum:        "missing-artifact",
+		ActivatedAt:     time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("seed broken pool active version: %v", err)
+	}
+	_, _, err = model.GetActiveConfigVersionArtifactForPool("default")
+	if err == nil {
+		t.Fatal("expected broken pool active row to return an error")
+	}
+	var brokenErr *model.BrokenConfigPoolActiveVersionError
+	if !errors.As(err, &brokenErr) {
+		t.Fatalf("expected BrokenConfigPoolActiveVersionError, got %T: %v", err, err)
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatal("broken pool active row must not look like a missing row")
+	}
+	_, _, err = getActiveConfigVersionArtifactForNode(nil)
+	if err == nil {
+		t.Fatal("expected broken pool active row to stop agent fallback")
+	}
+	brokenErr = nil
+	if !errors.As(err, &brokenErr) {
+		t.Fatalf("expected agent path to return BrokenConfigPoolActiveVersionError, got %T: %v", err, err)
 	}
 }
 

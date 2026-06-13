@@ -49,12 +49,60 @@ func ListNodes() (nodes []*Node, err error) {
 	return nodes, err
 }
 
+func ListNodesByPool(poolName string) (nodes []*Node, err error) {
+	poolName = strings.TrimSpace(poolName)
+	if poolName == "" {
+		poolName = "default"
+	}
+	err = DB.Where("pool_name = ?", poolName).Order("id desc").Find(&nodes).Error
+	return nodes, err
+}
+
+func ListOnlineNodesByPool(poolName string, lastSeenAfter time.Time, connectedNodeIDs []string) (nodes []*Node, err error) {
+	poolName = strings.TrimSpace(poolName)
+	if poolName == "" {
+		poolName = "default"
+	}
+	connectedNodeIDs = normalizeNodeIDs(connectedNodeIDs)
+	query := DB.Where("pool_name = ?", poolName)
+	switch {
+	case !lastSeenAfter.IsZero() && len(connectedNodeIDs) > 0:
+		query = query.Where("(last_seen_at >= ? OR node_id IN ?)", lastSeenAfter, connectedNodeIDs)
+	case !lastSeenAfter.IsZero():
+		query = query.Where("last_seen_at >= ?", lastSeenAfter)
+	case len(connectedNodeIDs) > 0:
+		query = query.Where("node_id IN ?", connectedNodeIDs)
+	default:
+		return []*Node{}, nil
+	}
+	err = query.Order("last_seen_at desc").Order("id desc").Find(&nodes).Error
+	return nodes, err
+}
+
 func ListNodesByNodeIDs(nodeIDs []string) (nodes []*Node, err error) {
+	nodeIDs = normalizeNodeIDs(nodeIDs)
 	if len(nodeIDs) == 0 {
 		return []*Node{}, nil
 	}
 	err = DB.Where("node_id IN ?", nodeIDs).Find(&nodes).Error
 	return nodes, err
+}
+
+func normalizeNodeIDs(nodeIDs []string) []string {
+	seen := make(map[string]struct{}, len(nodeIDs))
+	normalized := make([]string, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		nodeID = strings.TrimSpace(nodeID)
+		if nodeID == "" {
+			continue
+		}
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		normalized = append(normalized, nodeID)
+	}
+	return normalized
 }
 
 func GetNodeByNodeID(nodeID string) (*Node, error) {

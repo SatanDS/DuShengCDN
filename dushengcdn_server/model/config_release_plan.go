@@ -92,26 +92,85 @@ func GetActiveConfigReleaseTargetForNodeID(nodeID string) (*ConfigReleasePlan, *
 	if nodeID == "" {
 		return nil, nil, gorm.ErrRecordNotFound
 	}
+	target, err := firstActiveConfigReleaseTargetForNodeID(nodeID, []string{"pending", "applying", "observing"})
+	if err == nil {
+		plan, err := GetConfigReleasePlanByID(target.PlanID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return plan, target, nil
+	}
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return nil, nil, err
+	}
+
+	targets, err := listActiveConfigReleaseTargetsForNodeID(nodeID, []string{"succeeded"})
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	for _, target := range targets {
+		plan, err := GetConfigReleasePlanByID(target.PlanID)
+		if err != nil {
+			return nil, nil, err
+		}
+		ok, err := succeededConfigReleaseTargetStillActive(plan, target, now)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok {
+			return plan, target, nil
+		}
+	}
+	return nil, nil, gorm.ErrRecordNotFound
+}
+
+func firstActiveConfigReleaseTargetForNodeID(nodeID string, statuses []string) (*ConfigReleaseTarget, error) {
 	target := &ConfigReleaseTarget{}
 	result := DB.Model(&ConfigReleaseTarget{}).
 		Select("config_release_targets.*").
 		Joins("JOIN config_release_plans ON config_release_plans.id = config_release_targets.plan_id").
-		Where("config_release_targets.node_id = ? AND config_release_targets.status IN ?", nodeID, []string{"pending", "applying", "observing", "succeeded"}).
+		Where("config_release_targets.node_id = ? AND config_release_targets.status IN ?", nodeID, statuses).
 		Where("config_release_plans.status IN ?", []string{"running", "observing"}).
 		Order("config_release_targets.id desc").
 		Limit(1).
-		Find(target)
+		First(target)
 	if result.Error != nil {
-		return nil, nil, result.Error
+		return nil, result.Error
 	}
-	if result.RowsAffected == 0 {
-		return nil, nil, gorm.ErrRecordNotFound
+	return target, nil
+}
+
+func listActiveConfigReleaseTargetsForNodeID(nodeID string, statuses []string) ([]*ConfigReleaseTarget, error) {
+	var targets []*ConfigReleaseTarget
+	err := DB.Model(&ConfigReleaseTarget{}).
+		Select("config_release_targets.*").
+		Joins("JOIN config_release_plans ON config_release_plans.id = config_release_targets.plan_id").
+		Where("config_release_targets.node_id = ? AND config_release_targets.status IN ?", nodeID, statuses).
+		Where("config_release_plans.status IN ?", []string{"running", "observing"}).
+		Order("config_release_targets.id desc").
+		Find(&targets).Error
+	return targets, err
+}
+
+func succeededConfigReleaseTargetStillActive(plan *ConfigReleasePlan, target *ConfigReleaseTarget, now time.Time) (bool, error) {
+	if plan == nil || target == nil {
+		return false, nil
 	}
-	plan := &ConfigReleasePlan{}
-	if err := DB.First(plan, target.PlanID).Error; err != nil {
-		return nil, nil, err
+	if target.CompletedAt != nil && plan.ObserveSeconds > 0 {
+		expiresAt := target.CompletedAt.Add(time.Duration(plan.ObserveSeconds) * time.Second)
+		if !expiresAt.Before(now) {
+			return true, nil
+		}
 	}
-	return plan, target, nil
+	var activeTargetCount int64
+	err := DB.Model(&ConfigReleaseTarget{}).
+		Where("plan_id = ? AND status IN ?", plan.ID, []string{"pending", "applying", "observing"}).
+		Count(&activeTargetCount).Error
+	if err != nil {
+		return false, err
+	}
+	return activeTargetCount > 0, nil
 }
 
 func CountActiveConfigReleasePlans(excludeID uint) (int64, error) {

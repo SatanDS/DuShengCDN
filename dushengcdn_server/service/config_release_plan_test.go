@@ -1,11 +1,16 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"dushengcdn/model"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestConfigReleasePlanFailureRollsBackCanaryTargetAndBlocksChecksum(t *testing.T) {
@@ -187,6 +192,164 @@ func TestConfigReleasePlansAreIsolatedByNodePool(t *testing.T) {
 		NodePool:        "hk",
 	}); err == nil || !strings.Contains(err.Error(), "hk") {
 		t.Fatalf("expected second hk plan to be rejected by pool mutex, got %v", err)
+	}
+}
+
+func TestSelectConfigReleasePlanNodesUsesPoolOnlineQuery(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now()
+	nodes := []*model.Node{
+		{
+			NodeID:       "node-hk-new",
+			Name:         "node-hk-new",
+			IP:           "203.0.113.21",
+			PoolName:     "hk",
+			Status:       NodeStatusOnline,
+			AgentVersion: "v1.0.0",
+			LastSeenAt:   now,
+		},
+		{
+			NodeID:       "node-hk-recent-stored-offline",
+			Name:         "node-hk-recent-stored-offline",
+			IP:           "203.0.113.22",
+			PoolName:     "hk",
+			Status:       NodeStatusOffline,
+			AgentVersion: "v1.0.0",
+			LastSeenAt:   now.Add(-time.Second),
+		},
+		{
+			NodeID:       "node-hk-stale",
+			Name:         "node-hk-stale",
+			IP:           "203.0.113.23",
+			PoolName:     "hk",
+			Status:       NodeStatusOnline,
+			AgentVersion: "v1.0.0",
+			LastSeenAt:   now.Add(-10 * time.Minute),
+		},
+		{
+			NodeID:       "node-us-new",
+			Name:         "node-us-new",
+			IP:           "203.0.113.24",
+			PoolName:     "us",
+			Status:       NodeStatusOnline,
+			AgentVersion: "v1.0.0",
+			LastSeenAt:   now,
+		},
+	}
+	for _, node := range nodes {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node %s: %v", node.NodeID, err)
+		}
+	}
+
+	var selected []*model.Node
+	queries, err := captureConfigReleasePlanSQL(t, func() error {
+		var selectErr error
+		selected, selectErr = selectReleasePlanNodes("hk", 0)
+		return selectErr
+	})
+	if err != nil {
+		t.Fatalf("selectReleasePlanNodes failed: %v", err)
+	}
+	if len(selected) != 2 || selected[0].NodeID != "node-hk-new" || selected[1].NodeID != "node-hk-recent-stored-offline" {
+		t.Fatalf("expected only recent hk nodes sorted by heartbeat, got %+v", selected)
+	}
+	nodeQueries := configReleasePlanNodeSelectQueries(queries)
+	if len(nodeQueries) != 1 {
+		t.Fatalf("expected one nodes query, got %d: %#v", len(nodeQueries), queries)
+	}
+	normalizedQuery := strings.ToLower(nodeQueries[0])
+	if !strings.Contains(normalizedQuery, "pool_name") || !strings.Contains(normalizedQuery, "last_seen_at") {
+		t.Fatalf("expected pool-scoped online nodes query, got %s", nodeQueries[0])
+	}
+}
+
+func TestEvaluateConfigReleasePlanUsesTargetNodeIDQuery(t *testing.T) {
+	setupServiceTestDB(t)
+
+	now := time.Now()
+	version := &model.ConfigVersion{
+		Version:        "20260613-evaluate-target-query",
+		Checksum:       "global-checksum",
+		MainConfig:     "events {}",
+		RenderedConfig: "server {}",
+		CreatedBy:      "root",
+	}
+	if err := model.DB.Create(version).Error; err != nil {
+		t.Fatalf("create config version: %v", err)
+	}
+	targetNode := &model.Node{
+		NodeID:          "node-evaluate-target",
+		Name:            "node-evaluate-target",
+		IP:              "203.0.113.25",
+		PoolName:        "hk",
+		Status:          NodeStatusOffline,
+		AgentVersion:    "v1.0.0",
+		CurrentChecksum: "target-checksum",
+		LastSeenAt:      now,
+	}
+	unrelatedNode := &model.Node{
+		NodeID:          "node-evaluate-unrelated",
+		Name:            "node-evaluate-unrelated",
+		IP:              "203.0.113.26",
+		PoolName:        "us",
+		Status:          NodeStatusOnline,
+		AgentVersion:    "v1.0.0",
+		CurrentChecksum: "target-checksum",
+		LastSeenAt:      now,
+	}
+	for _, node := range []*model.Node{targetNode, unrelatedNode} {
+		if err := node.Insert(); err != nil {
+			t.Fatalf("insert node %s: %v", node.NodeID, err)
+		}
+	}
+	plan := &model.ConfigReleasePlan{
+		ConfigVersionID: version.ID,
+		Status:          ConfigReleaseStatusRunning,
+		CanaryPoolName:  "hk",
+		ObserveSeconds:  60,
+		Checksum:        "target-checksum",
+		CreatedBy:       "root",
+	}
+	if err := model.DB.Create(plan).Error; err != nil {
+		t.Fatalf("create release plan: %v", err)
+	}
+	if err := model.DB.Create(&model.ConfigReleaseTarget{
+		PlanID:          plan.ID,
+		ConfigVersionID: version.ID,
+		NodeID:          targetNode.NodeID,
+		PoolName:        "hk",
+		Checksum:        "target-checksum",
+		StageIndex:      1,
+		Status:          ConfigReleaseTargetApplying,
+		StartedAt:       &now,
+	}).Error; err != nil {
+		t.Fatalf("create release target: %v", err)
+	}
+
+	var evaluation *ConfigReleasePlanEvaluation
+	queries, err := captureConfigReleasePlanSQL(t, func() error {
+		var evalErr error
+		evaluation, evalErr = EvaluateConfigReleasePlan(plan.ID)
+		return evalErr
+	})
+	if err != nil {
+		t.Fatalf("EvaluateConfigReleasePlan failed: %v", err)
+	}
+	if !evaluation.Healthy || evaluation.SucceededTargets != 1 || evaluation.TargetCount != 1 {
+		t.Fatalf("unexpected evaluation: %+v", evaluation)
+	}
+	nodeQueries := configReleasePlanNodeSelectQueries(queries)
+	if len(nodeQueries) != 1 {
+		t.Fatalf("expected one nodes query, got %d: %#v", len(nodeQueries), queries)
+	}
+	normalizedQuery := strings.ToLower(nodeQueries[0])
+	if !strings.Contains(normalizedQuery, "node_id") || !strings.Contains(normalizedQuery, " in ") {
+		t.Fatalf("expected target node_id query, got %s", nodeQueries[0])
+	}
+	if strings.Contains(normalizedQuery, unrelatedNode.NodeID) {
+		t.Fatalf("expected unrelated node to stay out of target lookup query, got %s", nodeQueries[0])
 	}
 }
 
@@ -456,6 +619,159 @@ func TestActiveConfigReleaseTargetIgnoresCompletedPlanTargets(t *testing.T) {
 	}
 }
 
+func TestActiveConfigReleaseTargetIgnoresExpiredSucceededTarget(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := seedConfigReleasePlanTestNode(t, "node-expired-succeeded-target", "hk")
+	activeVersion := seedAgentTestActiveConfigVersionWithArtifacts(t, "20260613-active-pool", "global-active-checksum", map[string]string{
+		"hk": "active-pool-checksum",
+	})
+	if _, _, err := ActivateConfigVersionForPool(activeVersion.ID, "hk", nil); err != nil {
+		t.Fatalf("ActivateConfigVersionForPool failed: %v", err)
+	}
+	if err := model.DB.Model(node).Updates(map[string]any{
+		"current_version":  activeVersion.Version,
+		"current_checksum": "active-pool-checksum",
+	}).Error; err != nil {
+		t.Fatalf("seed node active checksum failed: %v", err)
+	}
+
+	candidateVersion := &model.ConfigVersion{
+		Version:        "20260613-expired-target",
+		Checksum:       "candidate-global-checksum",
+		MainConfig:     "events {}",
+		RenderedConfig: "server {}",
+		CreatedBy:      "root",
+	}
+	if err := model.DB.Create(candidateVersion).Error; err != nil {
+		t.Fatalf("create candidate config version: %v", err)
+	}
+	candidateArtifact := &model.ConfigVersionArtifact{
+		ConfigVersionID:  candidateVersion.ID,
+		PoolName:         "hk",
+		Checksum:         "expired-target-checksum",
+		RenderedConfig:   "server { # expired }",
+		SupportFilesJSON: "[]",
+	}
+	if err := model.DB.Create(candidateArtifact).Error; err != nil {
+		t.Fatalf("create candidate artifact: %v", err)
+	}
+	completedAt := time.Now().Add(-10 * time.Minute)
+	plan := &model.ConfigReleasePlan{
+		ConfigVersionID: candidateVersion.ID,
+		Status:          ConfigReleaseStatusRunning,
+		CanaryPoolName:  "hk",
+		ObserveSeconds:  1,
+		Checksum:        candidateArtifact.Checksum,
+		CreatedBy:       "root",
+	}
+	if err := model.DB.Create(plan).Error; err != nil {
+		t.Fatalf("create running plan: %v", err)
+	}
+	if err := model.DB.Create(&model.ConfigReleaseTarget{
+		PlanID:          plan.ID,
+		ConfigVersionID: candidateVersion.ID,
+		NodeID:          node.NodeID,
+		PoolName:        "hk",
+		Checksum:        candidateArtifact.Checksum,
+		StageIndex:      1,
+		Status:          ConfigReleaseTargetSucceeded,
+		CompletedAt:     &completedAt,
+	}).Error; err != nil {
+		t.Fatalf("create expired succeeded target: %v", err)
+	}
+
+	if _, target, err := model.GetActiveConfigReleaseTargetForNodeID(node.NodeID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected expired succeeded target to be ignored, target=%+v err=%v", target, err)
+	}
+	meta, err := GetActiveConfigMetaForAgentNode(node)
+	if err != nil {
+		t.Fatalf("GetActiveConfigMetaForAgentNode failed: %v", err)
+	}
+	if meta.Checksum != "active-pool-checksum" {
+		t.Fatalf("expected active pool checksum after expired succeeded target, got %+v", meta)
+	}
+	view, err := GetNodeView(node.ID)
+	if err != nil {
+		t.Fatalf("GetNodeView failed: %v", err)
+	}
+	if !view.ConfigInSync || view.TargetConfigChecksum != "active-pool-checksum" {
+		t.Fatalf("expected node view to be synced against active pool checksum, got %+v", view)
+	}
+}
+
+func TestActiveConfigReleaseTargetKeepsRecentSucceededTargetDuringObserveWindow(t *testing.T) {
+	setupServiceTestDB(t)
+
+	node := seedConfigReleasePlanTestNode(t, "node-recent-succeeded-target", "hk")
+	activeVersion := seedAgentTestActiveConfigVersionWithArtifacts(t, "20260613-observe-active", "global-active-checksum", map[string]string{
+		"hk": "observe-active-checksum",
+	})
+	if _, _, err := ActivateConfigVersionForPool(activeVersion.ID, "hk", nil); err != nil {
+		t.Fatalf("ActivateConfigVersionForPool failed: %v", err)
+	}
+	candidateVersion := &model.ConfigVersion{
+		Version:        "20260613-observe-target",
+		Checksum:       "observe-candidate-global",
+		MainConfig:     "events {}",
+		RenderedConfig: "server {}",
+		CreatedBy:      "root",
+	}
+	if err := model.DB.Create(candidateVersion).Error; err != nil {
+		t.Fatalf("create candidate config version: %v", err)
+	}
+	candidateArtifact := &model.ConfigVersionArtifact{
+		ConfigVersionID:  candidateVersion.ID,
+		PoolName:         "hk",
+		Checksum:         "observe-target-checksum",
+		RenderedConfig:   "server { # observe }",
+		SupportFilesJSON: "[]",
+	}
+	if err := model.DB.Create(candidateArtifact).Error; err != nil {
+		t.Fatalf("create candidate artifact: %v", err)
+	}
+	completedAt := time.Now()
+	plan := &model.ConfigReleasePlan{
+		ConfigVersionID: candidateVersion.ID,
+		Status:          ConfigReleaseStatusRunning,
+		CanaryPoolName:  "hk",
+		ObserveSeconds:  120,
+		Checksum:        candidateArtifact.Checksum,
+		CreatedBy:       "root",
+	}
+	if err := model.DB.Create(plan).Error; err != nil {
+		t.Fatalf("create running plan: %v", err)
+	}
+	target := &model.ConfigReleaseTarget{
+		PlanID:          plan.ID,
+		ConfigVersionID: candidateVersion.ID,
+		NodeID:          node.NodeID,
+		PoolName:        "hk",
+		Checksum:        candidateArtifact.Checksum,
+		StageIndex:      1,
+		Status:          ConfigReleaseTargetSucceeded,
+		CompletedAt:     &completedAt,
+	}
+	if err := model.DB.Create(target).Error; err != nil {
+		t.Fatalf("create recent succeeded target: %v", err)
+	}
+
+	activePlan, activeTarget, err := model.GetActiveConfigReleaseTargetForNodeID(node.NodeID)
+	if err != nil {
+		t.Fatalf("GetActiveConfigReleaseTargetForNodeID failed: %v", err)
+	}
+	if activePlan.ID != plan.ID || activeTarget.ID != target.ID {
+		t.Fatalf("expected recent succeeded target during observe window, got plan=%+v target=%+v", activePlan, activeTarget)
+	}
+	meta, err := GetActiveConfigMetaForAgentNode(node)
+	if err != nil {
+		t.Fatalf("GetActiveConfigMetaForAgentNode failed: %v", err)
+	}
+	if meta.Checksum != candidateArtifact.Checksum {
+		t.Fatalf("expected observe target checksum, got %+v", meta)
+	}
+}
+
 func seedConfigReleasePlanTestNode(t *testing.T, nodeID string, poolName string) *model.Node {
 	t.Helper()
 	node := &model.Node{
@@ -487,4 +803,62 @@ func seedConfigReleasePlanTestRoute(t *testing.T, siteName string, domain string
 		t.Fatalf("CreateProxyRoute(%s) failed: %v", domain, err)
 	}
 	return route
+}
+
+type releasePlanSQLCaptureLogger struct {
+	mu      sync.Mutex
+	queries []string
+}
+
+func (capture *releasePlanSQLCaptureLogger) LogMode(logger.LogLevel) logger.Interface {
+	return capture
+}
+
+func (capture *releasePlanSQLCaptureLogger) Info(context.Context, string, ...interface{}) {
+}
+
+func (capture *releasePlanSQLCaptureLogger) Warn(context.Context, string, ...interface{}) {
+}
+
+func (capture *releasePlanSQLCaptureLogger) Error(context.Context, string, ...interface{}) {
+}
+
+func (capture *releasePlanSQLCaptureLogger) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+	sql, _ := fc()
+	capture.mu.Lock()
+	capture.queries = append(capture.queries, sql)
+	capture.mu.Unlock()
+}
+
+func (capture *releasePlanSQLCaptureLogger) snapshot() []string {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	queries := make([]string, len(capture.queries))
+	copy(queries, capture.queries)
+	return queries
+}
+
+func captureConfigReleasePlanSQL(t *testing.T, fn func() error) ([]string, error) {
+	t.Helper()
+	capture := &releasePlanSQLCaptureLogger{}
+	originalDB := model.DB
+	model.DB = model.DB.Session(&gorm.Session{Logger: capture})
+	defer func() {
+		model.DB = originalDB
+	}()
+	err := fn()
+	return capture.snapshot(), err
+}
+
+func configReleasePlanNodeSelectQueries(queries []string) []string {
+	nodeQueries := make([]string, 0)
+	for _, query := range queries {
+		normalizedQuery := strings.ToLower(query)
+		if strings.Contains(normalizedQuery, "from `nodes`") ||
+			strings.Contains(normalizedQuery, `from "nodes"`) ||
+			strings.Contains(normalizedQuery, "from nodes") {
+			nodeQueries = append(nodeQueries, query)
+		}
+	}
+	return nodeQueries
 }

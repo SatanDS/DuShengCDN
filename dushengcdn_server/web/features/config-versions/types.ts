@@ -14,6 +14,22 @@ export interface ConfigVersionDetail extends ConfigVersionSummary {
   support_files_json: string;
 }
 
+export interface ActiveConfigPoolStatus {
+  pool_name: string;
+  version?: string;
+  config_version_id: number;
+  artifact_id: number;
+  checksum: string;
+  version_checksum?: string;
+  main_config_checksum?: string;
+  route_config_checksum?: string;
+  route_count: number;
+  activated_by_plan_id?: number;
+  activated_at: string;
+  reference_ok: boolean;
+  reference_error?: string;
+}
+
 export interface SupportFile {
   path: string;
   content: string;

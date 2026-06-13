@@ -1,6 +1,7 @@
 package service
 
 import (
+	"dushengcdn/common"
 	"dushengcdn/model"
 	"errors"
 	"fmt"
@@ -378,7 +379,7 @@ func EvaluateConfigReleasePlan(id uint) (*ConfigReleasePlanEvaluation, error) {
 	if !configReleasePlanActive(plan) {
 		return summarizeConfigReleasePlan(plan, targets), nil
 	}
-	nodes, err := model.ListNodes()
+	nodes, err := model.ListNodesByNodeIDs(configReleaseTargetNodeIDs(targets))
 	if err != nil {
 		// A transient DB error must not be mistaken for missing nodes.
 		return nil, err
@@ -687,7 +688,12 @@ func releasePlanVersion(createdBy string, input ConfigReleasePlanInput) (*model.
 }
 
 func selectReleasePlanNodes(poolName string, limit int) ([]*model.Node, error) {
-	nodes, err := model.ListNodes()
+	poolName = normalizeConfigReleasePoolName(poolName)
+	nodes, err := model.ListOnlineNodesByPool(
+		poolName,
+		time.Now().Add(-common.NodeOfflineThreshold),
+		uniqueAgentWSClientNodeIDs(snapshotAgentWSClients()),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -708,6 +714,27 @@ func selectReleasePlanNodes(poolName string, limit int) ([]*model.Node, error) {
 		selected = selected[:limit]
 	}
 	return selected, nil
+}
+
+func configReleaseTargetNodeIDs(targets []*model.ConfigReleaseTarget) []string {
+	seen := make(map[string]struct{}, len(targets))
+	nodeIDs := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		nodeID := strings.TrimSpace(target.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	sort.Strings(nodeIDs)
+	return nodeIDs
 }
 
 func expandConfigReleasePlan(plan *model.ConfigReleasePlan, percent int) (*ConfigReleasePlanView, error) {
@@ -876,7 +903,9 @@ func evaluateConfigReleaseTargetFromHeartbeat(node *model.Node) {
 		}).Error
 		return
 	}
-	if target.StartedAt != nil && time.Since(*target.StartedAt) > time.Duration(plan.ObserveSeconds)*time.Second {
+	if target.Status != ConfigReleaseTargetSucceeded &&
+		target.StartedAt != nil &&
+		time.Since(*target.StartedAt) > time.Duration(plan.ObserveSeconds)*time.Second {
 		reason := fmt.Sprintf("node %s did not report checksum %s within %ds", target.NodeID, target.Checksum, plan.ObserveSeconds)
 		_ = markConfigReleaseTargetFailed(target, reason)
 		_ = FailConfigReleasePlan(plan.ID, reason)

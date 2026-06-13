@@ -52,13 +52,27 @@ func CleanupVersions(keepCount int) (int64, error) {
 		return 0, nil
 	}
 	protectedIDs := append([]uint{}, keepIDs...)
-	var activePoolVersionIDs []uint
+	var activePoolRows []model.ConfigPoolActiveVersion
 	if err := model.DB.Model(&model.ConfigPoolActiveVersion{}).
-		Select("config_version_id").
-		Pluck("config_version_id", &activePoolVersionIDs).Error; err != nil {
+		Select("config_version_id", "artifact_id").
+		Find(&activePoolRows).Error; err != nil {
 		return 0, err
 	}
-	protectedIDs = append(protectedIDs, activePoolVersionIDs...)
+	activeArtifactIDs := make([]uint, 0, len(activePoolRows))
+	for _, active := range activePoolRows {
+		protectedIDs = append(protectedIDs, active.ConfigVersionID)
+		activeArtifactIDs = append(activeArtifactIDs, active.ArtifactID)
+	}
+	if activeArtifactIDs = uniqueConfigVersionIDs(activeArtifactIDs); len(activeArtifactIDs) > 0 {
+		var activeArtifactVersionIDs []uint
+		if err := model.DB.Model(&model.ConfigVersionArtifact{}).
+			Select("config_version_id").
+			Where("id IN ?", activeArtifactIDs).
+			Pluck("config_version_id", &activeArtifactVersionIDs).Error; err != nil {
+			return 0, err
+		}
+		protectedIDs = append(protectedIDs, activeArtifactVersionIDs...)
+	}
 	var activePlanVersionIDs []uint
 	if err := model.DB.Model(&model.ConfigReleasePlan{}).
 		Select("config_version_id").
@@ -88,7 +102,11 @@ func CleanupVersions(keepCount int) (int64, error) {
 	}
 	var deleted int64
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("config_version_id IN ?", deleteIDs).Delete(&model.ConfigVersionArtifact{}).Error; err != nil {
+		artifactDelete := tx.Where("config_version_id IN ?", deleteIDs)
+		if len(activeArtifactIDs) > 0 {
+			artifactDelete = artifactDelete.Where("id NOT IN ?", activeArtifactIDs)
+		}
+		if err := artifactDelete.Delete(&model.ConfigVersionArtifact{}).Error; err != nil {
 			return err
 		}
 		result := tx.Where("id IN ?", deleteIDs).Delete(&model.ConfigVersion{})

@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"encoding/json"
+	"io"
+
 	"dushengcdn/service"
 
 	"github.com/gin-gonic/gin"
@@ -199,10 +202,17 @@ func FailConfigReleasePlan(c *gin.Context) {
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	if c.Request.ContentLength > 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
+	if c.Request.Body != nil {
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
 			respondBadRequest(c, "invalid request payload")
 			return
+		}
+		if len(body) > 0 {
+			if err := json.Unmarshal(body, &req); err != nil {
+				respondBadRequest(c, "invalid request payload")
+				return
+			}
 		}
 	}
 	if err := service.FailConfigReleasePlan(id, req.Reason); err != nil {

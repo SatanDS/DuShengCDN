@@ -60,6 +60,22 @@ func GetActiveConfigVersion(c *gin.Context) {
 	respondSuccess(c, version)
 }
 
+// GetActiveConfigVersionPools godoc
+// @Summary List active config versions by pool
+// @Tags ConfigVersions
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/config-versions/active-pools [get]
+func GetActiveConfigVersionPools(c *gin.Context) {
+	pools, err := service.ListActiveConfigPools()
+	if err != nil {
+		respondFailure(c, err.Error())
+		return
+	}
+	respondSuccess(c, pools)
+}
+
 // PreviewConfigVersion godoc
 // @Summary Preview config rendering
 // @Tags ConfigVersions

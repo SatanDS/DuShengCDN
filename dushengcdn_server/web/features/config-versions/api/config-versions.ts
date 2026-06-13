@@ -1,6 +1,7 @@
 import { apiRequest } from '@/lib/api/client';
 
 import type {
+  ActiveConfigPoolStatus,
   ConfigDiffResult,
   ConfigPreviewResult,
   ConfigVersionDetail,
@@ -17,6 +18,10 @@ export function getConfigVersion(id: number) {
 
 export function getActiveConfigVersion() {
   return apiRequest<ConfigVersionDetail>('/config-versions/active');
+}
+
+export function getActiveConfigPools() {
+  return apiRequest<ActiveConfigPoolStatus[]>('/config-versions/active-pools');
 }
 
 export function getConfigVersionPreview() {

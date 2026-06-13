@@ -231,6 +231,79 @@ func TestPhase1PublishLifecycle(t *testing.T) {
 	}
 }
 
+func TestFailConfigReleasePlanRejectsMalformedUnknownLengthJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	common.RedisEnabled = false
+	setupTestDB(t)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-secret"))))
+	router.SetApiRouter(engine)
+
+	loginCookie := loginAsRoot(t, engine)
+	version := &model.ConfigVersion{
+		Version:          "20260613-router-fail-json",
+		SnapshotJSON:     "{}",
+		MainConfig:       "events {}",
+		RenderedConfig:   "server {}",
+		SupportFilesJSON: "[]",
+		Checksum:         "router-fail-json-checksum",
+		CreatedBy:        "root",
+	}
+	if err := model.DB.Create(version).Error; err != nil {
+		t.Fatalf("create config version: %v", err)
+	}
+	startedAt := time.Now()
+	plan := &model.ConfigReleasePlan{
+		ConfigVersionID: version.ID,
+		Status:          service.ConfigReleaseStatusRunning,
+		Strategy:        "canary",
+		CanaryPoolName:  "hk",
+		CurrentStage:    1,
+		CanaryPercent:   100,
+		ObserveSeconds:  1,
+		Checksum:        "router-fail-json-checksum",
+		CreatedBy:       "root",
+		StartedAt:       &startedAt,
+	}
+	if err := model.DB.Create(plan).Error; err != nil {
+		t.Fatalf("create release plan: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config-release-plans/"+toString(plan.ID)+"/fail", strings.NewReader(`{"reason":`))
+	req.ContentLength = -1
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(loginCookie)
+	addSessionCSRFHeader(t, engine, req, loginCookie)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected malformed fail payload to return bad request, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode malformed fail response: %v", err)
+	}
+	if resp.Success || !strings.Contains(resp.Message, "invalid request payload") {
+		t.Fatalf("expected invalid payload response, got %+v", resp)
+	}
+
+	var persisted model.ConfigReleasePlan
+	if err := model.DB.First(&persisted, plan.ID).Error; err != nil {
+		t.Fatalf("reload release plan: %v", err)
+	}
+	if persisted.Status != service.ConfigReleaseStatusRunning || persisted.FailedAt != nil || persisted.FailureReason != "" {
+		t.Fatalf("expected malformed payload not to fail plan, got %+v", persisted)
+	}
+	var blockedCount int64
+	if err := model.DB.Model(&model.ConfigReleaseBlockedChecksum{}).Where("plan_id = ?", plan.ID).Count(&blockedCount).Error; err != nil {
+		t.Fatalf("count blocked checksums: %v", err)
+	}
+	if blockedCount != 0 {
+		t.Fatalf("expected malformed payload not to block checksum, got %d rows", blockedCount)
+	}
+}
+
 func TestPhase1HTTPSAndCertificateImportLifecycle(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	common.RedisEnabled = false
